@@ -1,0 +1,13 @@
+# This app is deliberately NOT part of the ninja-live-status pnpm workspace
+# (that one globs artifacts/*, lib/*, lib/integrations/*, scripts). This file
+# exists so MOJO Expense is its own pnpm root and carries the same
+# supply-chain defence the parent repo insists on.
+
+# SECURITY: a package version must have been published for at least 1 day
+# before pnpm will install it. Malicious npm releases are usually caught and
+# pulled within hours, so the delay is a strong safety buffer.
+# DO NOT DISABLE. See the parent repo's pnpm-workspace.yaml for the rationale.
+minimumReleaseAge: 1440
+
+onlyBuiltDependencies:
+  - esbuild

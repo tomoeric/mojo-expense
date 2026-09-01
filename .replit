@@ -1,0 +1,11 @@
+modules = ["nodejs-24"]
+run = "pnpm run dev"
+
+[deployment]
+deploymentTarget = "autoscale"
+build = ["pnpm", "run", "build"]
+run = ["pnpm", "run", "start"]
+
+[[ports]]
+localPort = 5000
+externalPort = 80
