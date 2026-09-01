@@ -31,6 +31,8 @@ export function toLine(row: Row): ExpenseLine {
     reimbursable: asBool(pick(row, "Reimbursable", "IsReimbursable", "reimbursable"), true),
     billable: asBool(pick(row, "Billable", "IsBillable", "billable"), false),
     hasReceipt: asBool(pick(row, "HasReceipt", "ReceiptAttached", "hasReceipt", "receipt"), false),
+    receiptId: asString(pick(row, "ReceiptID", "ReceiptId", "receiptId", "receipt_id", "AttachmentID")),
+    receiptUrl: asString(pick(row, "ReceiptURL", "ReceiptUrl", "receiptUrl", "receipt_url", "ImageURL")),
     glCode: asString(pick(row, "GLCode", "GlCode", "AccountCode", "glCode", "gl_code")),
     note: asString(pick(row, "Note", "Notes", "Reason", "note", "memo")),
   };

@@ -1,23 +1,30 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { X, ReceiptText, AlertTriangle } from "lucide-react";
-import type { ExpenseReport } from "@/lib/api";
+import type { ExpenseLine, ExpenseReport } from "@/lib/api";
 import { moneyExact, shortDate } from "@/lib/format";
 import { StatusPill } from "./ui";
+import { ReceiptViewer } from "./receipt-viewer";
 
 /** Line-level detail for one report — what a reviewer actually reads before approving. */
 export function ReportDrawer({ report, onClose }: { report: ExpenseReport; onClose: () => void }) {
-  // Only warn-level flags tint a row. Info flags (large line, weekend date)
-  // match most of a report, and tinting those would drown the real signal.
+  const [viewing, setViewing] = useState<ExpenseLine | null>(null);
+
   // Escape closes the drawer — it covers the table behind it, so a reviewer
   // scanning the queue needs to dismiss it without reaching for the mouse.
+  // `viewing` MUST stay in the dep list: the receipt viewer sits on top and
+  // handles its own Escape, so without it this closure keeps the value from
+  // first render and one Escape would dismiss both layers at once.
   useEffect(() => {
+    if (viewing) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, viewing]);
 
+  // Only warn-level flags tint a row. Info flags (large line, weekend date)
+  // match most of a report, and tinting those would drown the real signal.
   const flaggedLineIds = new Set(
     report.flags.filter((f) => f.severity === "warn").flatMap((f) => f.lineIds),
   );
@@ -108,7 +115,15 @@ export function ReportDrawer({ report, onClose }: { report: ExpenseReport; onClo
                         <td className="px-3 py-2 text-muted-foreground">{l.merchant}</td>
                         <td className="px-3 py-2 text-center">
                           {l.hasReceipt ? (
-                            <ReceiptText className="mx-auto h-4 w-4 text-emerald-600" aria-label="Receipt attached" />
+                            <button
+                              type="button"
+                              onClick={() => setViewing(l)}
+                              title="View receipt"
+                              className="mx-auto flex items-center gap-1 rounded px-1.5 py-1 text-emerald-700 transition-colors hover:bg-emerald-50"
+                            >
+                              <ReceiptText className="h-4 w-4" />
+                              <span className="text-[11px] font-semibold">View</span>
+                            </button>
                           ) : (
                             <span className="text-xs font-semibold text-amber-600">none</span>
                           )}
@@ -123,6 +138,8 @@ export function ReportDrawer({ report, onClose }: { report: ExpenseReport; onClo
           </section>
         </div>
       </aside>
+
+      {viewing && <ReceiptViewer line={viewing} onClose={() => setViewing(null)} />}
     </div>
   );
 }

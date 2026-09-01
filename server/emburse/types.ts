@@ -43,6 +43,14 @@ export type ExpenseLine = {
   reimbursable: boolean;
   billable: boolean;
   hasReceipt: boolean;
+  /** Tenant's own receipt id, when the line exposes one. */
+  receiptId: string;
+  /**
+   * Absolute receipt URL, when the line carries one instead of an id. Only
+   * ever fetched server-side, and only when the host matches the Emburse API
+   * host — see `receipts.ts`.
+   */
+  receiptUrl: string;
   glCode: string;
   note: string;
 };

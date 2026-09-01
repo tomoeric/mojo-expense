@@ -169,8 +169,28 @@ collection, paged with `index`.
 - **All Reports** — every report in the window, filtered by status, department
   or free text.
 - **Analytics** — spend by month, category and department.
-- **Report drawer** — line-level detail with receipt state, with the lines that
-  triggered a warning tinted.
+- **Report drawer** — line-level detail with the lines that triggered a warning
+  tinted, and **View** on any receipted line to see the receipt itself.
+
+### Receipts
+
+Receipts are fetched **through this server**, never straight from Emburse. The
+browser asks for `/api/receipts/<lineId>`; the server resolves that line from
+its cached report set and fetches the bytes using the API credentials, which
+never leave the process. The client cannot supply a URL, so this is not an open
+proxy — and a receipt URL that arrives inside an Emburse payload is only
+followed when its host matches `EMBURSE_API_URL`, so a mangled or hostile
+record cannot point the server at an internal address.
+
+Images render in an `<img>` (so an SVG payload cannot execute), PDFs in an
+`<object>` with a link-out fallback. Responses carry `nosniff` and a sandbox
+CSP, and only image and PDF types are served at all — anything else is refused
+rather than echoed back from our own origin.
+
+Set `EMBURSE_RECEIPTS_PATH` if your tenant's receipt collection is not
+`receipts`. Both response shapes are handled: raw bytes, or JSON carrying
+base64 (with or without a `data:` prefix). Until Emburse is connected, **View**
+shows a drawn placeholder stamped SAMPLE.
 
 ### Review flags
 

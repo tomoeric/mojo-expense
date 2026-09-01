@@ -20,6 +20,8 @@ export type ExpenseLine = {
   reimbursable: boolean;
   billable: boolean;
   hasReceipt: boolean;
+  receiptId: string;
+  receiptUrl: string;
   glCode: string;
   note: string;
 };

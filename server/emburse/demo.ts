@@ -122,10 +122,16 @@ export class DemoProvider implements EmburseProvider {
           // Deliberately leave some larger lines without a receipt so the
           // missing-receipt flag has something to catch.
           hasReceipt: amount < 25 ? rand() < 0.4 : rand() > 0.18,
+          receiptId: "",
+          receiptUrl: "",
           glCode: `6${100 + Math.floor(rand() * 40)}`,
           note: rand() < 0.25 ? "Approved by regional manager" : "",
         });
       }
+
+      // A receipted demo line gets an id so the viewer has something to open;
+      // `receipts.ts` renders a placeholder image for any DEMO- id.
+      for (const l of lines) if (l.hasReceipt) l.receiptId = `${l.id}-R`;
 
       // Seed one exact-duplicate pair every few reports.
       if (i % 7 === 3 && lines[0]) {

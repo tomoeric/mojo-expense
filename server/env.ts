@@ -52,6 +52,7 @@ export const env = {
     /** Resource paths, relative to baseUrl. */
     reportsPath: str("EMBURSE_REPORTS_PATH", "expensereports"),
     expensesPath: str("EMBURSE_EXPENSES_PATH", "expenses"),
+    receiptsPath: str("EMBURSE_RECEIPTS_PATH", "receipts"),
     usersPath: str("EMBURSE_USERS_PATH", "users"),
     departmentsPath: str("EMBURSE_DEPARTMENTS_PATH", "departments"),
 

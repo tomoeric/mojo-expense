@@ -5,6 +5,7 @@ import { HttpError } from "./http.js";
 import { resolveProvider } from "./emburse/provider.js";
 import { isAuthConfigured, requireAuth } from "./auth/index.js";
 import type { ExpenseReport, ProviderResult } from "./emburse/types.js";
+import { fetchReceipt, ReceiptError } from "./emburse/receipts.js";
 
 const cache = new TtlCache<ProviderResult & { demo: boolean }>(env.emburse.cacheTtlSec * 1000);
 
@@ -111,6 +112,48 @@ api.get("/reports/:id", requireAuth, async (req, res) => {
     }
     res.json({ report, demo: data.demo });
   } catch (err) {
+    res.status(502).json({ error: describe(err) });
+  }
+});
+
+/**
+ * Streams one line's receipt through this server.
+ *
+ * The client passes only a line id, which is resolved against the cached
+ * report set — it can never supply a URL, so this is not an open proxy. The
+ * response headers below matter because we are serving externally-sourced
+ * bytes from our own origin: `nosniff` stops the browser second-guessing the
+ * type, and the CSP sandbox neutralises anything active inside an SVG or PDF.
+ */
+api.get("/receipts/:lineId", requireAuth, async (req, res) => {
+  const blocked = refusesUnauthenticated();
+  if (blocked) {
+    res.status(503).json({ error: blocked });
+    return;
+  }
+
+  const window = readWindow(req.query as Record<string, unknown>);
+  try {
+    const data = await load(window, false);
+    const line = data.reports.flatMap((r) => r.lines).find((l) => l.id === req.params.lineId);
+    if (!line) {
+      res.status(404).json({ error: "Line not found in the current window" });
+      return;
+    }
+
+    const receipt = await fetchReceipt(line);
+    res.setHeader("content-type", receipt.contentType);
+    res.setHeader("x-content-type-options", "nosniff");
+    res.setHeader("content-security-policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'");
+    res.setHeader("content-disposition", `inline; filename="receipt-${encodeURIComponent(line.id)}"`);
+    // Private: a receipt is one user's data, never shared-cacheable.
+    res.setHeader("cache-control", "private, max-age=300");
+    res.send(receipt.body);
+  } catch (err) {
+    if (err instanceof ReceiptError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
     res.status(502).json({ error: describe(err) });
   }
 });
