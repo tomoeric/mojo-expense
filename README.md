@@ -49,8 +49,15 @@ pnpm run start  # production
 
 ### On Replit
 
-Import this directory as its own Repl, then add the secrets below. The run and
-deploy commands are already in `.replit`.
+Import the repo as a new Repl, then add the secrets below. The run and deploy
+commands are already in `.replit`.
+
+If the shell says `pnpm: command not found`, enable it once — the
+`packageManager` field pins the version:
+
+```bash
+corepack enable && corepack prepare --activate
+```
 
 ## Connecting Emburse
 
