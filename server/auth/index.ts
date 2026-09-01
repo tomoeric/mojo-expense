@@ -25,15 +25,27 @@ export function isAuthConfigured(): boolean {
 
 /**
  * Optional allow-list, on top of the tenant restriction the issuer already
- * enforces. Comma-separated emails and/or bare domains:
- *   AUTH_ALLOWED="ap@mojocarwash.com, finance.mojocarwash.com"
+ * enforces. Emails and/or domains:
+ *   AUTH_ALLOWED=ap@mojocarwash.com, eric.s@mojocarwash.com
+ *   AUTH_ALLOWED=mojocarwash.com
  * Empty (the default) means anyone in the tenant may sign in.
+ *
+ * Parsing is deliberately forgiving, because this is typed into a Secrets box
+ * by hand: entries may be separated by commas, spaces or newlines; surrounding
+ * quotes are stripped (pasting `"a@b.com"` should not silently lock everyone
+ * out); and a domain written `@mojocarwash.com` is accepted as well as bare.
  */
 function allowList(): string[] {
   return (process.env.AUTH_ALLOWED ?? "")
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
+    .split(/[,\s]+/)
+    .map((s) => s.trim().toLowerCase().replace(/^["']|["']$/g, ""))
+    .map((s) => (s.startsWith("@") ? s.slice(1) : s))
     .filter(Boolean);
+}
+
+/** Entry count, for the boot log — never the addresses themselves. */
+export function allowListSize(): number {
+  return allowList().length;
 }
 
 export function isAllowed(email: string): boolean {

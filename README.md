@@ -80,6 +80,44 @@ The issuer is tenant-scoped (`login.microsoftonline.com/<tenant>/v2.0`), so
 only accounts in your Entra tenant can sign in at all. `AUTH_ALLOWED` narrows
 that further to named reviewers; leave it unset to admit the whole tenant.
 
+### AUTH_ALLOWED format
+
+Individual reviewers — separate with commas:
+
+```
+AUTH_ALLOWED=eric.s@mojocarwash.com,ap@mojocarwash.com,jane.d@mojocarwash.com
+```
+
+A whole domain — everyone with that email suffix:
+
+```
+AUTH_ALLOWED=mojocarwash.com
+```
+
+Mixed, if a contractor on another domain needs in:
+
+```
+AUTH_ALLOWED=mojocarwash.com,auditor@partnerfirm.com
+```
+
+Parsing is forgiving on purpose, since this gets hand-typed into a Secrets box:
+
+- commas, spaces or newlines all work as separators
+- case-insensitive — `Eric.S@MojoCarWash.com` matches `eric.s@mojocarwash.com`
+- surrounding quotes are stripped, so a pasted `"a@b.com"` still works
+- a domain written `@mojocarwash.com` is accepted as well as bare
+
+Someone in the tenant but not on the list gets a clear "Access denied" page
+naming their address, not a silent failure. The boot log prints how many
+entries were parsed (never the addresses) so you can confirm it took effect:
+
+```
+AUTH_ALLOWED: 3 entries
+```
+
+**Changing it requires a restart** — it is read from the environment at
+request time, but Replit only re-reads Secrets when the process restarts.
+
 **Sessions have no database.** A session is an HMAC-signed, httpOnly cookie
 holding only the user's id, name and email — no access or refresh token ever
 reaches the browser. It lasts 8 hours; after that the user is bounced back

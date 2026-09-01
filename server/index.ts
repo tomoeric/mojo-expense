@@ -5,7 +5,7 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { env } from "./env.js";
 import { api } from "./routes.js";
-import { authMiddleware, authRouter, isAuthConfigured } from "./auth/index.js";
+import { allowListSize, authMiddleware, authRouter, isAuthConfigured } from "./auth/index.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -48,4 +48,10 @@ app.listen(env.port, "0.0.0.0", () => {
   console.log(`MOJO Expense listening on :${env.port} (${env.isProd ? "production" : "development"})`);
   console.log(`Emburse product: ${env.emburse.product}`);
   console.log(`Microsoft sign-in: ${isAuthConfigured() ? "configured" : "NOT configured"}`);
+  const allowed = allowListSize();
+  console.log(
+    allowed > 0
+      ? `AUTH_ALLOWED: ${allowed} entr${allowed === 1 ? "y" : "ies"}`
+      : "AUTH_ALLOWED: not set — anyone in the tenant may sign in",
+  );
 });
