@@ -52,12 +52,11 @@ pnpm run start  # production
 Import the repo as a new Repl, then add the secrets below. The run and deploy
 commands are already in `.replit`.
 
-If the shell says `pnpm: command not found`, enable it once — the
-`packageManager` field pins the version:
-
-```bash
-corepack enable && corepack prepare --activate
-```
+Replit ships pnpm, so nothing extra is needed. Do **not** add a
+`packageManager` field to `package.json`: pnpm 10 then tries to self-install
+that exact version, which fails inside Replit's sandbox and retries in a loop
+until the container runs out of threads (`pthread_create: Resource temporarily
+unavailable`). If you ever hit that, delete the field.
 
 ## Connecting Emburse
 

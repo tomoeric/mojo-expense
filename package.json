@@ -3,7 +3,6 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@10.33.0",
   "description": "MOJO Expense — reviewer console over the Emburse expense-report API",
   "scripts": {
     "dev": "NODE_ENV=development tsx watch server/index.ts",
