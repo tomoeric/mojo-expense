@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { X, ReceiptText, AlertTriangle } from "lucide-react";
 import type { ExpenseReport } from "@/lib/api";
 import { moneyExact, shortDate } from "@/lib/format";
@@ -7,6 +8,16 @@ import { StatusPill } from "./ui";
 export function ReportDrawer({ report, onClose }: { report: ExpenseReport; onClose: () => void }) {
   // Only warn-level flags tint a row. Info flags (large line, weekend date)
   // match most of a report, and tinting those would drown the real signal.
+  // Escape closes the drawer — it covers the table behind it, so a reviewer
+  // scanning the queue needs to dismiss it without reaching for the mouse.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   const flaggedLineIds = new Set(
     report.flags.filter((f) => f.severity === "warn").flatMap((f) => f.lineIds),
   );
