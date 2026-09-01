@@ -3,6 +3,7 @@ import { env, isEmburseConfigured } from "./env.js";
 import { TtlCache } from "./cache.js";
 import { HttpError } from "./http.js";
 import { resolveProvider } from "./emburse/provider.js";
+import { isAuthConfigured, requireAuth } from "./auth/index.js";
 import type { ExpenseReport, ProviderResult } from "./emburse/types.js";
 
 const cache = new TtlCache<ProviderResult & { demo: boolean }>(env.emburse.cacheTtlSec * 1000);
@@ -39,11 +40,27 @@ api.get("/healthz", (_req, res) => {
   res.json({ ok: true, uptimeSec: Math.round(process.uptime()) });
 });
 
+/**
+ * Fail closed exactly where it matters. Sign-in being unconfigured leaves the
+ * app open so a fresh import is explorable — but the moment real Emburse
+ * credentials exist, serving expense data to anonymous callers would be a
+ * genuine leak. So: real data requires sign-in; demo data does not.
+ */
+function refusesUnauthenticated(): string | null {
+  if (isAuthConfigured()) return null;
+  if (!isEmburseConfigured()) return null;
+  return (
+    "Emburse is connected but Microsoft sign-in is not configured, so real expense " +
+    "data will not be served. Set AZURE_TENANT_ID, AZURE_CLIENT_ID and AZURE_CLIENT_SECRET."
+  );
+}
+
 /** What the UI needs to render its "connected / not connected" state. */
 api.get("/config", (_req, res) => {
   const configured = isEmburseConfigured();
   res.json({
     configured,
+    authConfigured: isAuthConfigured(),
     product: env.emburse.product,
     baseUrl: configured ? env.emburse.baseUrl : null,
     policy: env.policy,
@@ -56,7 +73,12 @@ api.get("/config", (_req, res) => {
   });
 });
 
-api.get("/reports", async (req, res) => {
+api.get("/reports", requireAuth, async (req, res) => {
+  const blocked = refusesUnauthenticated();
+  if (blocked) {
+    res.status(503).json({ error: blocked });
+    return;
+  }
   const window = readWindow(req.query as Record<string, unknown>);
   try {
     const data = await load(window, req.query.refresh === "1");
@@ -73,7 +95,12 @@ api.get("/reports", async (req, res) => {
   }
 });
 
-api.get("/reports/:id", async (req, res) => {
+api.get("/reports/:id", requireAuth, async (req, res) => {
+  const blocked = refusesUnauthenticated();
+  if (blocked) {
+    res.status(503).json({ error: blocked });
+    return;
+  }
   const window = readWindow(req.query as Record<string, unknown>);
   try {
     const data = await load(window, false);

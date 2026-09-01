@@ -58,6 +58,45 @@ that exact version, which fails inside Replit's sandbox and retries in a loop
 until the container runs out of threads (`pthread_create: Resource temporarily
 unavailable`). If you ever hit that, delete the field.
 
+## Microsoft SSO
+
+Sign-in is Entra ID (OpenID Connect + PKCE), using the **same app registration
+as ninja-live-status** — so no new Azure setup beyond one redirect URI.
+
+1. In the Entra app registration → **Authentication** → **Web**, add the
+   redirect URI:
+   `https://<your-repl>.replit.app/api/callback`
+2. Add these Secrets:
+
+| Secret | Notes |
+|---|---|
+| `AZURE_TENANT_ID` | same value as ninja-live-status |
+| `AZURE_CLIENT_ID` | same |
+| `AZURE_CLIENT_SECRET` | same |
+| `SESSION_SECRET` | **required in production** — `openssl rand -hex 32` |
+| `AUTH_ALLOWED` | optional; comma-separated emails and/or domains |
+
+The issuer is tenant-scoped (`login.microsoftonline.com/<tenant>/v2.0`), so
+only accounts in your Entra tenant can sign in at all. `AUTH_ALLOWED` narrows
+that further to named reviewers; leave it unset to admit the whole tenant.
+
+**Sessions have no database.** A session is an HMAC-signed, httpOnly cookie
+holding only the user's id, name and email — no access or refresh token ever
+reaches the browser. It lasts 8 hours; after that the user is bounced back
+through Entra, which is silent while their Microsoft session is alive.
+
+### The fail-closed rule
+
+| Emburse | Sign-in | Behaviour |
+|---|---|---|
+| not set | not set | Open. Demo data only — nothing real to leak. |
+| not set | set | Sign-in required; demo data behind it. |
+| **set** | **not set** | **`/api/reports` returns 503 and serves nothing.** |
+| set | set | Normal operation. |
+
+The third row is the point: the moment real credentials exist, real data is
+never served to an anonymous caller — even if sign-in was never wired up.
+
 ## Connecting Emburse
 
 Add these as Replit Secrets (or a local `.env` — see `.env.example`):

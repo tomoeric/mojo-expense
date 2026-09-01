@@ -62,8 +62,13 @@ export type ReportsResponse = {
   summary: Summary;
 };
 
+export type SessionUser = { id: string; email: string; name: string; exp: number };
+
+export type AuthResponse = { user: SessionUser | null; authConfigured: boolean };
+
 export type ConfigResponse = {
   configured: boolean;
+  authConfigured: boolean;
   product: "professional" | "enterprise" | "spend";
   baseUrl: string | null;
   policy: { receiptRequiredOver: number; largeLineOver: number; ageingAfterDays: number };
@@ -79,12 +84,23 @@ async function get<T>(path: string): Promise<T> {
   return (await res.json()) as T;
 }
 
+export function useAuth() {
+  return useQuery({
+    queryKey: ["auth"],
+    queryFn: () => get<AuthResponse>("/api/auth/user"),
+    // Re-check on focus: a session can lapse while the tab sits open.
+    refetchOnWindowFocus: true,
+    staleTime: 60_000,
+  });
+}
+
 export function useConfig() {
   return useQuery({ queryKey: ["config"], queryFn: () => get<ConfigResponse>("/api/config") });
 }
 
-export function useReports(days: number) {
+export function useReports(days: number, enabled = true) {
   return useQuery({
+    enabled,
     queryKey: ["reports", days],
     queryFn: () => {
       const end = new Date();

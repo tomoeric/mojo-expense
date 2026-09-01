@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ListChecks, FileText, BarChart3, Loader2 } from "lucide-react";
-import { useConfig, useReports, type ExpenseReport } from "@/lib/api";
+import { useAuth, useConfig, useReports, type ExpenseReport } from "@/lib/api";
 import { SectionTitle, LiveStrip, SegmentedControl, Empty } from "@/components/ui";
 import { NotConnected } from "@/components/not-connected";
+import { SignIn } from "@/components/sign-in";
+import { UserMenu } from "@/components/user-menu";
 import { ReportDrawer } from "@/components/report-drawer";
 import { QueuePage } from "@/pages/queue";
 import { ReportsPage } from "@/pages/reports";
@@ -53,11 +55,28 @@ export function App() {
   const [open, setOpen] = useState<ExpenseReport | null>(null);
 
   const queryClient = useQueryClient();
+  const auth = useAuth();
   const config = useConfig();
-  const reports = useReports(Number(days));
+
+  // Only fetch reports once we know the viewer is allowed to see them —
+  // otherwise every anonymous page load fires a request that 401s.
+  const signedIn = Boolean(auth.data?.user) || auth.data?.authConfigured === false;
+  const reports = useReports(Number(days), signedIn);
 
   const active = RAIL.find((r) => r.key === route) ?? RAIL[0];
   const data = reports.data;
+
+  if (auth.isPending) {
+    return (
+      <div className="grid min-h-screen place-items-center">
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (auth.data && !auth.data.user && auth.data.authConfigured) {
+    return <SignIn authConfigured />;
+  }
 
   // A refetch can replace the open report; keep the drawer showing live data.
   const openReport = open ? (data?.reports.find((r) => r.id === open.id) ?? open) : null;
@@ -70,9 +89,12 @@ export function App() {
             <span className="text-base font-extrabold tracking-tight">MOJO Expense</span>
             <span className="text-xs text-white/60">Emburse reviewer console</span>
           </div>
-          <span className="text-xs text-white/60">
-            {config.data?.configured ? config.data.product : "demo mode"}
-          </span>
+          <div className="flex items-center gap-3">
+            <span className="hidden text-xs text-white/60 sm:inline">
+              {config.data?.configured ? config.data.product : "demo mode"}
+            </span>
+            {auth.data?.user && <UserMenu user={auth.data.user} />}
+          </div>
         </div>
       </header>
 

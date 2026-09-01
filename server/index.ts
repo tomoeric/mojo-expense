@@ -1,15 +1,21 @@
 import express from "express";
+import cookieParser from "cookie-parser";
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { env } from "./env.js";
 import { api } from "./routes.js";
+import { authMiddleware, authRouter, isAuthConfigured } from "./auth/index.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 app.disable("x-powered-by");
 app.use(express.json({ limit: "1mb" }));
+app.use(cookieParser());
+// Populates req.user from the session cookie before anything reads it.
+app.use(authMiddleware);
+app.use("/api", authRouter);
 app.use("/api", api);
 
 if (env.isProd) {
@@ -41,4 +47,5 @@ if (env.isProd) {
 app.listen(env.port, "0.0.0.0", () => {
   console.log(`MOJO Expense listening on :${env.port} (${env.isProd ? "production" : "development"})`);
   console.log(`Emburse product: ${env.emburse.product}`);
+  console.log(`Microsoft sign-in: ${isAuthConfigured() ? "configured" : "NOT configured"}`);
 });
