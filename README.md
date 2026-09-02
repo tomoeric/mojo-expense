@@ -187,6 +187,45 @@ Images render in an `<img>` (so an SVG payload cannot execute), PDFs in an
 CSP, and only image and PDF types are served at all — anything else is refused
 rather than echoed back from our own origin.
 
+### Checking the receipt against the claim
+
+**Check N receipts** in the report drawer reads each receipt image with Claude
+vision and compares the printed total to the claimed amount. Four outcomes:
+
+| Badge | Meaning |
+|---|---|
+| **Over $X** | The claim is more than the receipt total. **The one worth a reviewer's time.** |
+| **Under** | The receipt total is larger than the claim — usually a split bill. |
+| **Match** | Agrees within tolerance. |
+| **Unread** | The receipt arrived but no total could be read from it. |
+
+**A difference is a prompt to look, not proof of an error.** Split bills, tips
+added after printing, excluded personal items and currency conversion all
+produce a legitimate difference. Only over-claims are styled as a problem —
+colouring the benign cases red would train reviewers to ignore the badge.
+
+The model is never told the claimed amount; it reads the receipt cold and the
+comparison happens in code, so it cannot be nudged into agreeing.
+
+Requires `ANTHROPIC_API_KEY`. Configuration:
+
+| Variable | Default | Notes |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | — | Absent = the check is unavailable; everything else still works |
+| `RECEIPT_AUDIT_MODEL` | `claude-opus-5` | Runs at low effort — extraction, not reasoning |
+| `RECEIPT_AUDIT_TOLERANCE` | `0.02` | Absolute dollar slack |
+| `RECEIPT_AUDIT_TOLERANCE_PCT` | `0.01` | Proportional slack, for conversion and rounding |
+
+It is **on demand, per report** — never automatic. Each check is a model call
+with an image attached, so auditing every line of every report on page load
+would cost real money for data nobody asked to see. Results are cached in
+memory, so re-opening a report is free; **that cache is lost on restart, so
+this is not an audit trail.** Persisting verdicts needs a real table.
+
+Until Emburse is connected the verdicts are simulated (labelled SAMPLE) so the
+flow is demonstrable — no model calls are made against our own placeholder
+images.
+
 Set `EMBURSE_RECEIPTS_PATH` if your tenant's receipt collection is not
 `receipts`. Both response shapes are handled: raw bytes, or JSON carrying
 base64 (with or without a `data:` prefix). Until Emburse is connected, **View**

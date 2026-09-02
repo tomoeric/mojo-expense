@@ -1,11 +1,12 @@
 import { Router } from "express";
-import { env, isEmburseConfigured } from "./env.js";
+import { env, isAuditConfigured, isEmburseConfigured } from "./env.js";
 import { TtlCache } from "./cache.js";
 import { HttpError } from "./http.js";
 import { resolveProvider } from "./emburse/provider.js";
 import { isAuthConfigured, requireAuth } from "./auth/index.js";
 import type { ExpenseReport, ProviderResult } from "./emburse/types.js";
 import { fetchReceipt, ReceiptError } from "./emburse/receipts.js";
+import { auditLine, cachedAudit } from "./emburse/receipt-audit.js";
 
 const cache = new TtlCache<ProviderResult & { demo: boolean }>(env.emburse.cacheTtlSec * 1000);
 
@@ -62,6 +63,7 @@ api.get("/config", (_req, res) => {
   res.json({
     configured,
     authConfigured: isAuthConfigured(),
+    auditConfigured: isAuditConfigured(),
     product: env.emburse.product,
     baseUrl: configured ? env.emburse.baseUrl : null,
     policy: env.policy,
@@ -154,6 +156,85 @@ api.get("/receipts/:lineId", requireAuth, async (req, res) => {
       res.status(err.status).json({ error: err.message });
       return;
     }
+    res.status(502).json({ error: describe(err) });
+  }
+});
+
+/**
+ * Reads the receipt for one line and compares its total to the claim.
+ *
+ * POST rather than GET: each call can spend money at the model API, so it must
+ * never be triggered by a prefetch, a crawler, or a browser retry.
+ */
+api.post("/receipts/:lineId/audit", requireAuth, async (req, res) => {
+  const blocked = refusesUnauthenticated();
+  if (blocked) {
+    res.status(503).json({ error: blocked });
+    return;
+  }
+
+  const window = readWindow(req.query as Record<string, unknown>);
+  try {
+    const data = await load(window, false);
+    const line = data.reports.flatMap((r) => r.lines).find((l) => l.id === req.params.lineId);
+    if (!line) {
+      res.status(404).json({ error: "Line not found in the current window" });
+      return;
+    }
+    res.json(await auditLine(line, req.query.force === "1"));
+  } catch (err) {
+    res.status(502).json({ error: describe(err) });
+  }
+});
+
+/**
+ * Audits every receipted line in one report. Concurrency is capped: a report
+ * with twenty lines should not open twenty model requests at once, and a
+ * reviewer would rather wait two seconds than trip a rate limit.
+ */
+api.post("/reports/:id/audit", requireAuth, async (req, res) => {
+  const blocked = refusesUnauthenticated();
+  if (blocked) {
+    res.status(503).json({ error: blocked });
+    return;
+  }
+
+  const window = readWindow(req.query as Record<string, unknown>);
+  try {
+    const data = await load(window, false);
+    const report = data.reports.find((r) => r.id === req.params.id);
+    if (!report) {
+      res.status(404).json({ error: "Report not found in the current window" });
+      return;
+    }
+
+    const queue = report.lines.filter((l) => l.hasReceipt);
+    const results: Awaited<ReturnType<typeof auditLine>>[] = [];
+    const CONCURRENCY = 4;
+    for (let i = 0; i < queue.length; i += CONCURRENCY) {
+      results.push(...(await Promise.all(queue.slice(i, i + CONCURRENCY).map((l) => auditLine(l)))));
+    }
+    res.json({ reportId: report.id, results });
+  } catch (err) {
+    res.status(502).json({ error: describe(err) });
+  }
+});
+
+/** Whatever has already been checked, with no new model calls. */
+api.get("/reports/:id/audit", requireAuth, async (req, res) => {
+  const window = readWindow(req.query as Record<string, unknown>);
+  try {
+    const data = await load(window, false);
+    const report = data.reports.find((r) => r.id === req.params.id);
+    if (!report) {
+      res.status(404).json({ error: "Report not found in the current window" });
+      return;
+    }
+    res.json({
+      reportId: report.id,
+      results: report.lines.map((l) => cachedAudit(l)).filter((r) => r !== null),
+    });
+  } catch (err) {
     res.status(502).json({ error: describe(err) });
   }
 });

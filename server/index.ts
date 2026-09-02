@@ -18,6 +18,13 @@ app.use(authMiddleware);
 app.use("/api", authRouter);
 app.use("/api", api);
 
+// Anything left under /api is a genuine 404. Without this it falls through to
+// the SPA catch-all below and a mistyped endpoint answers 200 with HTML, which
+// surfaces on the client as an unintelligible JSON parse error.
+app.use("/api", (_req, res) => {
+  res.status(404).json({ error: "No such endpoint" });
+});
+
 if (env.isProd) {
   // The bundled server sits in dist/, next to the Vite output in dist/public.
   const staticDir = path.resolve(here, "public");

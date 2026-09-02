@@ -176,7 +176,14 @@ export function App() {
         </main>
       </div>
 
-      {openReport && <ReportDrawer report={openReport} onClose={() => setOpen(null)} />}
+      {openReport && (
+        <ReportDrawer
+          report={openReport}
+          onClose={() => setOpen(null)}
+          days={Number(days)}
+          auditConfigured={config.data?.auditConfigured ?? false}
+        />
+      )}
     </div>
   );
 }

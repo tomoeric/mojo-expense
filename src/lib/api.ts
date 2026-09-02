@@ -45,6 +45,43 @@ export type ExpenseReport = {
   flags: PolicyFlag[];
 };
 
+export type AuditVerdict =
+  | "match"
+  | "claimed-more"
+  | "claimed-less"
+  | "unreadable"
+  | "unavailable";
+
+export type AuditResult = {
+  lineId: string;
+  verdict: AuditVerdict;
+  claimed: number;
+  receiptTotal: number | null;
+  difference: number | null;
+  message: string;
+  checkedAt: string;
+  demo: boolean;
+};
+
+export async function auditReport(reportId: string, days: number): Promise<AuditResult[]> {
+  const end = new Date();
+  const start = new Date(end.getTime() - days * 86_400_000);
+  const qs = new URLSearchParams({
+    startDate: start.toISOString().slice(0, 10),
+    endDate: end.toISOString().slice(0, 10),
+  });
+  const res = await fetch(`/api/reports/${encodeURIComponent(reportId)}/audit?${qs}`, {
+    method: "POST",
+    headers: { accept: "application/json" },
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(body?.error ?? `Check failed (${res.status})`);
+  }
+  const json = (await res.json()) as { results: AuditResult[] };
+  return json.results;
+}
+
 export type Summary = {
   reportCount: number;
   total: number;
@@ -71,6 +108,7 @@ export type AuthResponse = { user: SessionUser | null; authConfigured: boolean }
 export type ConfigResponse = {
   configured: boolean;
   authConfigured: boolean;
+  auditConfigured: boolean;
   product: "professional" | "enterprise" | "spend";
   baseUrl: string | null;
   policy: { receiptRequiredOver: number; largeLineOver: number; ageingAfterDays: number };

@@ -13,6 +13,13 @@ function str(name: string, fallback = ""): string {
   return (process.env[name] ?? fallback).trim();
 }
 
+function num(name: string, fallback: number): number {
+  const raw = str(name);
+  if (!raw) return fallback;
+  const n = Number.parseFloat(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 function int(name: string, fallback: number): number {
   const raw = str(name);
   if (!raw) return fallback;
@@ -68,6 +75,21 @@ export const env = {
     cacheTtlSec: int("EMBURSE_CACHE_TTL_SEC", 300),
   },
 
+  audit: {
+    /** Anthropic API key. Absent = receipt auditing is unavailable. */
+    apiKey: str("ANTHROPIC_API_KEY"),
+    /**
+     * Opus 5 is the default. Vision extraction is cheap at low effort, and a
+     * misread receipt costs a reviewer more than the tokens save. Override to
+     * trade accuracy for cost.
+     */
+    model: str("RECEIPT_AUDIT_MODEL", "claude-opus-5"),
+    /** Absolute dollar slack before a difference counts (rounding, cents). */
+    toleranceAbs: num("RECEIPT_AUDIT_TOLERANCE", 0.02),
+    /** Proportional slack, for currency conversion and rounding on big lines. */
+    tolerancePct: num("RECEIPT_AUDIT_TOLERANCE_PCT", 0.01),
+  },
+
   policy: {
     /** A line at or above this amount needs an itemised receipt. */
     receiptRequiredOver: int("POLICY_RECEIPT_REQUIRED_OVER", 25),
@@ -79,6 +101,11 @@ export const env = {
 } as const;
 
 /** True once the selected product has enough credentials to make a live call. */
+/** Receipt auditing needs an Anthropic key; everything else works without it. */
+export function isAuditConfigured(): boolean {
+  return Boolean(env.audit.apiKey);
+}
+
 export function isEmburseConfigured(): boolean {
   const e = env.emburse;
   if (e.product === "professional") return Boolean(e.apiKey && e.apiSecret);

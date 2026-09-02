@@ -1,13 +1,42 @@
 import { useEffect, useState } from "react";
-import { X, ReceiptText, AlertTriangle } from "lucide-react";
-import type { ExpenseLine, ExpenseReport } from "@/lib/api";
+import { X, ReceiptText, AlertTriangle, ScanSearch, Loader2 } from "lucide-react";
+import { auditReport, type AuditResult, type ExpenseLine, type ExpenseReport } from "@/lib/api";
 import { moneyExact, shortDate } from "@/lib/format";
 import { StatusPill } from "./ui";
 import { ReceiptViewer } from "./receipt-viewer";
+import { AuditBadge } from "./audit-badge";
 
 /** Line-level detail for one report — what a reviewer actually reads before approving. */
-export function ReportDrawer({ report, onClose }: { report: ExpenseReport; onClose: () => void }) {
+export function ReportDrawer({
+  report,
+  onClose,
+  days,
+  auditConfigured,
+}: {
+  report: ExpenseReport;
+  onClose: () => void;
+  days: number;
+  auditConfigured: boolean;
+}) {
   const [viewing, setViewing] = useState<ExpenseLine | null>(null);
+  const [audits, setAudits] = useState<Map<string, AuditResult>>(new Map());
+  const [checking, setChecking] = useState(false);
+  const [auditError, setAuditError] = useState("");
+
+  const receipted = report.lines.filter((l) => l.hasReceipt).length;
+
+  async function runCheck() {
+    setChecking(true);
+    setAuditError("");
+    try {
+      const results = await auditReport(report.id, days);
+      setAudits(new Map(results.map((r) => [r.lineId, r])));
+    } catch (err) {
+      setAuditError((err as Error).message);
+    } finally {
+      setChecking(false);
+    }
+  }
 
   // Escape closes the drawer — it covers the table behind it, so a reviewer
   // scanning the queue needs to dismiss it without reaching for the mouse.
@@ -85,9 +114,40 @@ export function ReportDrawer({ report, onClose }: { report: ExpenseReport; onClo
           )}
 
           <section>
-            <h3 className="mb-2 text-xs font-bold tracking-wide text-muted-foreground uppercase">
-              Lines ({report.lines.length})
-            </h3>
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-xs font-bold tracking-wide text-muted-foreground uppercase">
+                Lines ({report.lines.length})
+              </h3>
+              {receipted > 0 && (
+                <button
+                  type="button"
+                  onClick={runCheck}
+                  disabled={checking}
+                  title={
+                    auditConfigured
+                      ? `Read each receipt and compare its total to the claim (${receipted} receipts)`
+                      : "Receipt checking needs ANTHROPIC_API_KEY"
+                  }
+                  className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-semibold transition-colors hover:bg-muted disabled:opacity-60"
+                >
+                  {checking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ScanSearch className="h-3.5 w-3.5" />}
+                  {checking ? "Reading receipts…" : `Check ${receipted} receipt${receipted === 1 ? "" : "s"}`}
+                </button>
+              )}
+            </div>
+
+            {auditError && (
+              <p className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                {auditError}
+              </p>
+            )}
+
+            {audits.size > 0 && (
+              <p className="mb-2 text-xs text-muted-foreground">
+                A difference is a prompt to look, not proof of an error — split bills, later tips and
+                excluded personal items all show up here legitimately.
+              </p>
+            )}
             {report.lines.length === 0 ? (
               <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
                 This tenant did not return line detail for the report.
@@ -101,6 +161,7 @@ export function ReportDrawer({ report, onClose }: { report: ExpenseReport; onClo
                       <th className="px-3 py-2 font-semibold">Category</th>
                       <th className="px-3 py-2 font-semibold">Merchant</th>
                       <th className="px-3 py-2 text-center font-semibold">Receipt</th>
+                      {audits.size > 0 && <th className="px-3 py-2 text-center font-semibold">Check</th>}
                       <th className="px-3 py-2 text-right font-semibold">Amount</th>
                     </tr>
                   </thead>
@@ -128,6 +189,15 @@ export function ReportDrawer({ report, onClose }: { report: ExpenseReport; onClo
                             <span className="text-xs font-semibold text-amber-600">none</span>
                           )}
                         </td>
+                        {audits.size > 0 && (
+                          <td className="px-3 py-2 text-center">
+                            {audits.get(l.id) ? (
+                              <AuditBadge result={audits.get(l.id)!} />
+                            ) : (
+                              <span className="text-xs text-muted-foreground">—</span>
+                            )}
+                          </td>
+                        )}
                         <td className="tnum px-3 py-2 text-right font-semibold">{moneyExact(l.amount)}</td>
                       </tr>
                     ))}
