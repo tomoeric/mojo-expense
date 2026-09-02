@@ -23,9 +23,17 @@ export function toLine(row: Row): ExpenseLine {
     reportId: asString(
       pick(row, "ExpenseReportID", "ExpenseReportId", "ReportID", "reportId", "report_id", "expense_report_id"),
     ),
-    date: asDate(pick(row, "ExpenseDate", "TransactionDate", "Date", "date", "transaction_date")),
-    category: asString(pick(row, "Category", "CategoryName", "category", "expense_type"), "Uncategorised"),
-    merchant: asString(pick(row, "Vendor", "Merchant", "Payee", "merchant", "Description", "description"), "—"),
+    date: asDate(
+      pick(row, "ExpenseDate", "TransactionDate", "Date", "date", "transaction_date", "created_at", "posted_at"),
+    ),
+    category: asString(
+      pick(row, "Category", "CategoryName", "category", "category_name", "expense_type", "expense_category"),
+      "Uncategorised",
+    ),
+    merchant: asString(
+      pick(row, "Vendor", "Merchant", "Payee", "merchant", "merchant_name", "Description", "description", "note"),
+      "—",
+    ),
     amount: asNumber(pick(row, "Amount", "amount", "ExpenseAmount", "total", "amount_cents_converted")),
     currency: asString(pick(row, "Currency", "CurrencyCode", "currency"), "USD"),
     reimbursable: asBool(pick(row, "Reimbursable", "IsReimbursable", "reimbursable"), true),

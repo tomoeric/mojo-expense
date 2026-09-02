@@ -30,8 +30,29 @@ function int(name: string, fallback: number): number {
 const PRODUCTS: readonly EmburseProduct[] = ["professional", "enterprise", "spend"];
 
 function product(): EmburseProduct {
-  const raw = str("EMBURSE_PRODUCT", "professional").toLowerCase();
+  const raw = str("EMBURSE_PRODUCT", "spend").toLowerCase();
   return (PRODUCTS as readonly string[]).includes(raw) ? (raw as EmburseProduct) : "professional";
+}
+
+/** Each product answers on its own host. */
+function defaultBaseUrl(): string {
+  switch (product()) {
+    case "professional":
+      return "https://api.certify.com/v1";
+    case "spend":
+    case "enterprise":
+    default:
+      return "https://api.emburse.com/v1";
+  }
+}
+
+/**
+ * Emburse Spend is transaction-shaped, not report-shaped: its primary
+ * collection is transactions rather than expense reports. The path defaults
+ * follow the selected product.
+ */
+function defaultReportsPath(): string {
+  return product() === "professional" ? "expensereports" : "transactions";
 }
 
 export const env = {
@@ -48,16 +69,22 @@ export const env = {
     apiKeyHeader: str("EMBURSE_API_KEY_HEADER", "x-api-key"),
     apiSecretHeader: str("EMBURSE_API_SECRET_HEADER", "x-api-secret"),
 
-    /** Emburse Enterprise / Spend: OAuth2 client credentials. */
+    /** Emburse Spend / Enterprise: OAuth2 client credentials. */
     clientId: str("EMBURSE_CLIENT_ID"),
     clientSecret: str("EMBURSE_CLIENT_SECRET"),
     tokenUrl: str("EMBURSE_TOKEN_URL"),
     scope: str("EMBURSE_SCOPE"),
+    /**
+     * A ready-made bearer token, used INSTEAD of the client-credentials
+     * exchange when present. Emburse issues these directly, and it is usually
+     * the fastest way to a first successful call — no token endpoint needed.
+     */
+    accessToken: str("EMBURSE_ACCESS_TOKEN"),
 
-    baseUrl: str("EMBURSE_API_URL", "https://api.certify.com/v1"),
+    baseUrl: str("EMBURSE_API_URL", defaultBaseUrl()),
 
     /** Resource paths, relative to baseUrl. */
-    reportsPath: str("EMBURSE_REPORTS_PATH", "expensereports"),
+    reportsPath: str("EMBURSE_REPORTS_PATH", defaultReportsPath()),
     expensesPath: str("EMBURSE_EXPENSES_PATH", "expenses"),
     receiptsPath: str("EMBURSE_RECEIPTS_PATH", "receipts"),
     usersPath: str("EMBURSE_USERS_PATH", "users"),
@@ -109,5 +136,7 @@ export function isAuditConfigured(): boolean {
 export function isEmburseConfigured(): boolean {
   const e = env.emburse;
   if (e.product === "professional") return Boolean(e.apiKey && e.apiSecret);
+  // A directly-issued bearer token is enough on its own.
+  if (e.accessToken) return true;
   return Boolean(e.clientId && e.clientSecret && e.tokenUrl);
 }

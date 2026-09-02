@@ -20,17 +20,21 @@ the submit → review → approve workflow:
 | Emburse Spend | Abacus | No — card-led, real-time transactions | OAuth2 client credentials |
 | Emburse Cards | — | No — virtual card issuing | OAuth2 client credentials |
 
-**The default is Emburse Professional**, the mid-market product where a reviewer
-works a queue of company users' expense reports.
+**MOJO is on Emburse Spend** (`spend.emburse.com`), so `spend` is the default:
+base `https://api.emburse.com/v1`, bearer or OAuth2 auth, and `transactions`
+rather than `expensereports` as the primary collection.
 
-To confirm which one MOJO is on, check the URL people log into:
+The other products remain one env var away — `EMBURSE_PRODUCT` changes how the
+app authenticates and which paths it calls, both of which are configuration.
 
-- `pro.emburse.app` or `certify.com` → **Professional** (leave `EMBURSE_PRODUCT=professional`)
-- Chrome River / `chromeriver.com` → **Enterprise** (`EMBURSE_PRODUCT=enterprise`)
-- `spend.emburse.com` → **Spend** (`EMBURSE_PRODUCT=spend`)
+### Getting Spend API access
 
-All three share one code path — the product only changes how the app
-authenticates and which paths it calls, both of which are env vars.
+Unlike Professional, this is **not self-service**. The Spend API is gated to
+Partners and customers on the **Plus** plan; App Integrations in the Spend admin
+UI is Slack-only and will never show an API key. Ask your Emburse Account
+Manager to enable API access, which yields either a bearer token
+(`EMBURSE_ACCESS_TOKEN` — set it alone and the OAuth exchange is skipped) or
+client credentials.
 
 ## Running it
 

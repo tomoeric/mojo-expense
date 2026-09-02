@@ -72,7 +72,7 @@ api.get("/config", (_req, res) => {
       ? []
       : env.emburse.product === "professional"
         ? ["EMBURSE_API_KEY", "EMBURSE_API_SECRET"]
-        : ["EMBURSE_CLIENT_ID", "EMBURSE_CLIENT_SECRET", "EMBURSE_TOKEN_URL"],
+        : ["EMBURSE_ACCESS_TOKEN — or EMBURSE_CLIENT_ID + EMBURSE_CLIENT_SECRET + EMBURSE_TOKEN_URL"],
   });
 });
 

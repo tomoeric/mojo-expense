@@ -33,6 +33,11 @@ export class OAuthProvider extends ProfessionalProvider {
   }
 
   private async ensureToken(): Promise<void> {
+    // A directly-issued token needs no exchange — adopt it and stop.
+    if (env.emburse.accessToken) {
+      this.token = { value: env.emburse.accessToken, expiresAt: Number.MAX_SAFE_INTEGER };
+      return;
+    }
     // 60s of slack so a token cannot expire mid-page-walk.
     if (this.token && this.token.expiresAt > Date.now() + 60_000) return;
     this.inflight ??= this.requestToken().finally(() => {
