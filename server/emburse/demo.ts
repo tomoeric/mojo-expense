@@ -142,6 +142,7 @@ export class DemoProvider implements EmburseProvider {
       reports.push(
         withFlags({
           id,
+          reference: id,
           name: REPORT_TITLES[i % REPORT_TITLES.length]!,
           employeeName: employee[0],
           employeeEmail: `${employee[0].toLowerCase().replace(/[^a-z]+/g, ".")}@mojocarwash.com`,

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ListChecks, FileText, BarChart3, Loader2 } from "lucide-react";
+import { ListChecks, FileText, BarChart3, Loader2, Upload } from "lucide-react";
 import { useAuth, useConfig, useReports, type ExpenseReport } from "@/lib/api";
 import { SectionTitle, LiveStrip, SegmentedControl, Empty } from "@/components/ui";
 import { NotConnected } from "@/components/not-connected";
@@ -10,12 +10,14 @@ import { ReportDrawer } from "@/components/report-drawer";
 import { QueuePage } from "@/pages/queue";
 import { ReportsPage } from "@/pages/reports";
 import { AnalyticsPage } from "@/pages/analytics";
+import { ImportPage } from "@/pages/import";
 import { timeOfDay } from "@/lib/format";
 
 const RAIL = [
   { key: "queue", label: "Review Queue", Icon: ListChecks, description: "Expense reports waiting on a decision, oldest first." },
   { key: "reports", label: "All Reports", Icon: FileText, description: "Every report in the window, filterable by status and department." },
   { key: "analytics", label: "Analytics", Icon: BarChart3, description: "Where the money went — by category, department and month." },
+  { key: "import", label: "Import", Icon: Upload, description: "Upload the daily Emburse export and review what changed." },
 ] as const;
 
 type RailKey = (typeof RAIL)[number]["key"];
@@ -62,6 +64,12 @@ export function App() {
   // otherwise every anonymous page load fires a request that 401s.
   const signedIn = Boolean(auth.data?.user) || auth.data?.authConfigured === false;
   const reports = useReports(Number(days), signedIn);
+
+  useEffect(() => {
+    // The drawer belongs to the list behind it; leaving it open over another
+    // section is disorienting.
+    setOpen(null);
+  }, [route]);
 
   const active = RAIL.find((r) => r.key === route) ?? RAIL[0];
   const data = reports.data;
@@ -137,7 +145,7 @@ export function App() {
 
           {data?.demo && <NotConnected config={config.data} />}
 
-          <LiveStrip
+          {route !== "import" && <LiveStrip
             label={
               data
                 ? `${data.demo ? "Demo data" : "Live"} — ${data.reports.length} reports · updated ${timeOfDay(data.fetchedAt)}`
@@ -145,7 +153,7 @@ export function App() {
             }
             onRefresh={() => queryClient.invalidateQueries({ queryKey: ["reports"] })}
             isRefreshing={reports.isFetching}
-          />
+          />}
 
           {/* Mobile rail. */}
           <div className="md:hidden">
@@ -156,14 +164,14 @@ export function App() {
             />
           </div>
 
-          {reports.isPending && (
+          {reports.isPending && route !== "import" && (
             <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
               Loading expense reports…
             </div>
           )}
 
-          {reports.isError && (
+          {reports.isError && route !== "import" && (
             <Empty>
               <p className="font-semibold text-red-600">Could not load expense reports</p>
               <p className="mt-1">{(reports.error as Error).message}</p>
@@ -173,6 +181,7 @@ export function App() {
           {data && route === "queue" && <QueuePage data={data} config={config.data} onOpen={setOpen} />}
           {data && route === "reports" && <ReportsPage data={data} config={config.data} onOpen={setOpen} />}
           {data && route === "analytics" && <AnalyticsPage data={data} />}
+          {route === "import" && <ImportPage />}
         </main>
       </div>
 

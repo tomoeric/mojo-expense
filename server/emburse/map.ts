@@ -55,6 +55,7 @@ export function toReport(row: Row, linesByReport: Map<string, ExpenseLine[]>): E
 
   return withFlags({
     id,
+    reference: id,
     name: asString(pick(row, "ExpenseReportName", "ReportName", "Name", "Title", "name"), `Report ${id}`),
     employeeName: asString(
       pick(row, "EmployeeName", "UserName", "SubmitterName", "employeeName", "employee_name", "owner_name"),

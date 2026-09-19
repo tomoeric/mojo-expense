@@ -29,6 +29,7 @@ export type ExpenseLine = {
 export type ExpenseReport = {
   id: string;
   name: string;
+  reference: string;
   employeeName: string;
   employeeEmail: string;
   department: string;

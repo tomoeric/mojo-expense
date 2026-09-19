@@ -2,6 +2,8 @@ import { env, isEmburseConfigured } from "../env.js";
 import { ProfessionalProvider } from "./professional.js";
 import { OAuthProvider } from "./oauth.js";
 import { DemoProvider } from "./demo.js";
+import { NeonProvider } from "./neon.js";
+import { isDbConfigured } from "../db.js";
 import type { EmburseProvider } from "./types.js";
 
 /**
@@ -10,6 +12,10 @@ import type { EmburseProvider } from "./types.js";
  * — the response is marked `demo: true` so the UI can say so plainly.
  */
 export function resolveProvider(): { provider: EmburseProvider; demo: boolean } {
+  // Imported data is the real source now: Emburse Spend's API is provisioning
+  // only and cannot serve expenses. A configured database therefore wins over
+  // every API provider below.
+  if (isDbConfigured()) return { provider: new NeonProvider(), demo: false };
   if (!isEmburseConfigured()) return { provider: new DemoProvider(), demo: true };
 
   switch (env.emburse.product) {

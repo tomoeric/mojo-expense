@@ -1,4 +1,5 @@
 import { env, isEmburseConfigured } from "../env.js";
+import { db, isDbConfigured } from "../db.js";
 import type { ExpenseLine } from "./types.js";
 
 /**
@@ -51,6 +52,20 @@ export class ReceiptError extends Error {
 export async function fetchReceipt(line: ExpenseLine): Promise<Receipt> {
   if (!line.hasReceipt && !line.receiptId && !line.receiptUrl) {
     throw new ReceiptError(404, "This line has no receipt attached.");
+  }
+
+  // Imported receipts live in the database, keyed by the expense's dedupe key.
+  if (isDbConfigured()) {
+    const { rows } = await db().query<{ content_type: string; bytes: Buffer }>(
+      `SELECT b.content_type, b.bytes
+         FROM expense_receipts r JOIN receipt_blobs b USING (sha256)
+        WHERE r.dedupe_key = $1
+        ORDER BY r.source_page LIMIT 1`,
+      [line.id],
+    );
+    const hit = rows[0];
+    if (!hit) throw new ReceiptError(404, "No receipt was imported for this expense.");
+    return { contentType: hit.content_type, body: hit.bytes };
   }
 
   if (!isEmburseConfigured()) return demoReceipt(line);

@@ -58,6 +58,8 @@ export type ExpenseLine = {
 export type ExpenseReport = {
   id: string;
   name: string;
+  /** Short human label under the name — a report number, a site, or blank. */
+  reference: string;
   employeeName: string;
   employeeEmail: string;
   department: string;

@@ -69,7 +69,7 @@ export function ReportDrawer({
               <StatusPill status={report.status} />
             </div>
             <p className="mt-0.5 truncate text-sm text-muted-foreground">
-              {report.employeeName} · {report.department} · {report.id}
+              {[report.employeeName, report.department, report.reference].filter(Boolean).join(" · ")}
             </p>
           </div>
           <button

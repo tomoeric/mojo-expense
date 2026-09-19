@@ -139,6 +139,41 @@ through Entra, which is silent while their Microsoft session is alive.
 The third row is the point: the moment real credentials exist, real data is
 never served to an anonymous caller — even if sign-in was never wired up.
 
+## Importing the daily export
+
+Emburse Spend's API is provisioning-only — members, team fields, receipt
+upload — with no endpoint for expenses at any tier. The data therefore comes
+from the **Expenses PDF export**, uploaded on the Import page.
+
+Set `DATABASE_URL` to a Neon connection string; the schema creates itself on
+boot (idempotent `CREATE … IF NOT EXISTS`, no migration step). With a database
+configured the app reads imported expenses and ignores the Emburse API
+entirely.
+
+### What the importer guarantees
+
+| Situation | Behaviour |
+|---|---|
+| Same file uploaded twice | Detected by content hash; nothing is written |
+| An expense already known | Updated, never inserted again |
+| A description edited upstream | Updates the existing row |
+| A row that has left the Emburse inbox | Kept and flagged `in_inbox = false`, never deleted |
+| That row returning later | Re-opened, not duplicated |
+| The same receipt arriving daily | Stored once, by content hash |
+
+**Dedupe key** — the export carries no transaction id, so identity is a hash of
+employee, date, merchant, amount, category, **location** and department.
+Location is in the key because one purchase split across five sites differs in
+nothing else; the note is out of it because submitters edit descriptions, and
+an edit must update a row rather than create a second one.
+
+**Reconciliation** — page 1 of the export prints a TOTAL. Every import compares
+its parsed sum against that figure and records whether it balanced. An import
+that does not reconcile is flagged in the history rather than trusted.
+
+`scripts/verify-import.ts <file.pdf>` reruns the reconciliation and the
+idempotency check against any export.
+
 ## Connecting Emburse
 
 Add these as Replit Secrets (or a local `.env` — see `.env.example`):

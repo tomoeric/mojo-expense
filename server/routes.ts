@@ -7,6 +7,8 @@ import { isAuthConfigured, requireAuth } from "./auth/index.js";
 import type { ExpenseReport, ProviderResult } from "./emburse/types.js";
 import { fetchReceipt, ReceiptError } from "./emburse/receipts.js";
 import { auditLine, cachedAudit } from "./emburse/receipt-audit.js";
+import { db, isDbConfigured } from "./db.js";
+import type { ExpenseLine } from "./emburse/types.js";
 
 const cache = new TtlCache<ProviderResult & { demo: boolean }>(env.emburse.cacheTtlSec * 1000);
 
@@ -136,10 +138,9 @@ api.get("/receipts/:lineId", requireAuth, async (req, res) => {
 
   const window = readWindow(req.query as Record<string, unknown>);
   try {
-    const data = await load(window, false);
-    const line = data.reports.flatMap((r) => r.lines).find((l) => l.id === req.params.lineId);
+    const line = await findLine(String(req.params.lineId ?? ""), window);
     if (!line) {
-      res.status(404).json({ error: "Line not found in the current window" });
+      res.status(404).json({ error: "No such expense line." });
       return;
     }
 
@@ -175,10 +176,9 @@ api.post("/receipts/:lineId/audit", requireAuth, async (req, res) => {
 
   const window = readWindow(req.query as Record<string, unknown>);
   try {
-    const data = await load(window, false);
-    const line = data.reports.flatMap((r) => r.lines).find((l) => l.id === req.params.lineId);
+    const line = await findLine(String(req.params.lineId ?? ""), window);
     if (!line) {
-      res.status(404).json({ error: "Line not found in the current window" });
+      res.status(404).json({ error: "No such expense line." });
       return;
     }
     res.json(await auditLine(line, req.query.force === "1"));
@@ -238,6 +238,39 @@ api.get("/reports/:id/audit", requireAuth, async (req, res) => {
     res.status(502).json({ error: describe(err) });
   }
 });
+
+/**
+ * Find one expense line by id.
+ *
+ * With imported data the id IS the row's primary key, so it is looked up
+ * directly. Routing that through the windowed report cache used to 404 any
+ * line whose date fell outside the caller's window — which is every older
+ * expense, because the receipt viewer does not send a window.
+ */
+async function findLine(lineId: string, window: { startDate: string; endDate: string }): Promise<ExpenseLine | null> {
+  if (isDbConfigured()) {
+    const { rows } = await db().query<{
+      dedupe_key: string; expense_date: Date | null; merchant: string; amount_cents: string;
+      category: string | null; note: string | null; location: string | null; receipts: string;
+    }>(
+      `SELECT e.dedupe_key, e.expense_date, e.merchant, e.amount_cents, e.category, e.note, e.location,
+              (SELECT count(*) FROM expense_receipts r WHERE r.dedupe_key = e.dedupe_key) AS receipts
+         FROM expenses e WHERE e.dedupe_key = $1`,
+      [lineId],
+    );
+    const r = rows[0];
+    if (!r) return null;
+    return {
+      id: r.dedupe_key, reportId: "", date: r.expense_date ? r.expense_date.toISOString().slice(0, 10) : null,
+      category: r.category || "Uncategorised", merchant: r.merchant || "—",
+      amount: Number(r.amount_cents) / 100, currency: "USD",
+      reimbursable: true, billable: false, hasReceipt: Number(r.receipts) > 0,
+      receiptId: r.dedupe_key, receiptUrl: "", glCode: "", note: r.note ?? "",
+    };
+  }
+  const data = await load(window, false);
+  return data.reports.flatMap((r) => r.lines).find((l) => l.id === lineId) ?? null;
+}
 
 function summarise(reports: ExpenseReport[]) {
   const byStatus: Record<string, number> = {};

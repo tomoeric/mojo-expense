@@ -6,16 +6,22 @@ import { fileURLToPath } from "node:url";
 import { env } from "./env.js";
 import { api } from "./routes.js";
 import { allowListSize, authMiddleware, authRouter, isAuthConfigured } from "./auth/index.js";
+import { importRouter } from "./import/routes.js";
+import { ensureSchema, isDbConfigured } from "./db.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 app.disable("x-powered-by");
-app.use(express.json({ limit: "1mb" }));
+// JSON parsing must not touch /api/import, whose body is a raw PDF.
+app.use((req, res, next) =>
+  req.path === "/api/import" ? next() : express.json({ limit: "1mb" })(req, res, next),
+);
 app.use(cookieParser());
 // Populates req.user from the session cookie before anything reads it.
 app.use(authMiddleware);
 app.use("/api", authRouter);
+app.use("/api", importRouter);
 app.use("/api", api);
 
 // Anything left under /api is a genuine 404. Without this it falls through to
@@ -55,6 +61,13 @@ app.listen(env.port, "0.0.0.0", () => {
   console.log(`MOJO Expense listening on :${env.port} (${env.isProd ? "production" : "development"})`);
   console.log(`Emburse product: ${env.emburse.product}`);
   console.log(`Microsoft sign-in: ${isAuthConfigured() ? "configured" : "NOT configured"}`);
+  if (isDbConfigured()) {
+    // Create the tables on boot; the app still serves if this fails so the
+    // error is visible in the UI rather than only in a crash loop.
+    ensureSchema().catch((err: unknown) => console.error("schema bootstrap failed:", err));
+  } else {
+    console.log("DATABASE_URL not set — imports are unavailable.");
+  }
   const allowed = allowListSize();
   console.log(
     allowed > 0
