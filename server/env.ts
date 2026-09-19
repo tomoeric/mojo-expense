@@ -59,6 +59,9 @@ export const env = {
   port: int("PORT", 5000),
   isProd: process.env.NODE_ENV === "production",
 
+  /** Neon connection string. Absent = the app has no store and no imports. */
+  databaseUrl: str("DATABASE_URL"),
+
   emburse: {
     product: product(),
 
