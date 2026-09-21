@@ -3,6 +3,8 @@ import express from "express";
 import { db, ensureSchema, isDbConfigured } from "../db.js";
 import { requireAuth } from "../auth/index.js";
 import { ingestExport } from "./ingest.js";
+import { syncFromSharePoint } from "./sync.js";
+import { isSharePointConfigured } from "./sharepoint.js";
 
 /**
  * Upload and history for the daily Emburse export.
@@ -56,6 +58,15 @@ importRouter.post(
   },
 );
 
+importRouter.post("/import/sync", requireAuth, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  try {
+    res.json(await syncFromSharePoint(req.user?.email ?? "manual"));
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : "Sync failed." });
+  }
+});
+
 importRouter.get("/imports", requireAuth, async (_req: Request, res: Response) => {
   if (!guard(res)) return;
   try {
@@ -75,7 +86,15 @@ importRouter.get("/imports", requireAuth, async (_req: Request, res: Response) =
               (SELECT coalesce(sum(byte_size), 0) FROM receipt_blobs) AS receipt_bytes
          FROM expenses`,
     );
-    res.json({ imports: rows, stats: stat[0] ?? null });
+    // The watched-folder history is only meaningful once sync is set up.
+    let sources: unknown[] = [];
+    if (isSharePointConfigured()) {
+      const seen = await db()
+        .query(`SELECT filename, status, imported_at, error FROM import_sources ORDER BY imported_at DESC LIMIT 10`)
+        .catch(() => ({ rows: [] }));
+      sources = seen.rows;
+    }
+    res.json({ imports: rows, stats: stat[0] ?? null, sharepoint: isSharePointConfigured(), sources });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Could not read import history." });
   }

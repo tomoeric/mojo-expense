@@ -7,6 +7,7 @@ import { env } from "./env.js";
 import { api } from "./routes.js";
 import { allowListSize, authMiddleware, authRouter, isAuthConfigured } from "./auth/index.js";
 import { importRouter } from "./import/routes.js";
+import { startSyncTimer } from "./import/sync.js";
 import { ensureSchema, isDbConfigured } from "./db.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -64,7 +65,9 @@ app.listen(env.port, "0.0.0.0", () => {
   if (isDbConfigured()) {
     // Create the tables on boot; the app still serves if this fails so the
     // error is visible in the UI rather than only in a crash loop.
-    ensureSchema().catch((err: unknown) => console.error("schema bootstrap failed:", err));
+    ensureSchema()
+      .then(() => startSyncTimer())
+      .catch((err: unknown) => console.error("schema bootstrap failed:", err));
   } else {
     console.log("DATABASE_URL not set — imports are unavailable.");
   }

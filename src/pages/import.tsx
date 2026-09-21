@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Upload, Loader2, CheckCircle2, AlertTriangle, Database } from "lucide-react";
+import { Upload, Loader2, CheckCircle2, AlertTriangle, Database, FolderSync } from "lucide-react";
 import { money, timeOfDay } from "@/lib/format";
 import { StatChip, StatChipRow, Empty } from "@/components/ui";
 
@@ -49,6 +49,7 @@ export function ImportPage() {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [error, setError] = useState("");
+  const [syncNote, setSyncNote] = useState("");
   const qc = useQueryClient();
 
   const history = useQuery({
@@ -56,7 +57,12 @@ export function ImportPage() {
     queryFn: async () => {
       const res = await fetch("/api/imports");
       if (!res.ok) throw new Error(((await res.json()) as { error?: string }).error ?? "Failed");
-      return (await res.json()) as { imports: HistoryRow[]; stats: Stats | null };
+      return (await res.json()) as {
+        imports: HistoryRow[];
+        stats: Stats | null;
+        sharepoint: boolean;
+        sources: { filename: string; status: string; imported_at: string; error: string | null }[];
+      };
     },
   });
 
@@ -85,6 +91,35 @@ export function ImportPage() {
   }
 
   const stats = history.data?.stats;
+
+  async function sync() {
+    setBusy(true);
+    setError("");
+    setResult(null);
+    try {
+      const res = await fetch("/api/import/sync", { method: "POST" });
+      const body = (await res.json()) as {
+        checked: number; skipped: number;
+        imported: { name: string; inserted: number; updated: number; receipts: number }[];
+        failed: { name: string; error: string }[];
+        error?: string;
+      };
+      if (!res.ok) throw new Error(body.error ?? `Sync failed (${res.status})`);
+      setSyncNote(
+        body.imported.length === 0
+          ? `Checked ${body.checked} files in SharePoint — nothing new.`
+          : `Imported ${body.imported.length}: ` +
+            body.imported.map((i) => `${i.name} (+${i.inserted} new, ${i.receipts} receipts)`).join(", "),
+      );
+      if (body.failed.length) setError(body.failed.map((f) => `${f.name}: ${f.error}`).join(" · "));
+      void qc.invalidateQueries({ queryKey: ["reports"] });
+      void history.refetch();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <div className="space-y-5">
@@ -115,15 +150,29 @@ export function ImportPage() {
             if (f) void upload(f);
           }}
         />
-        <button
-          type="button"
-          onClick={() => input.current?.click()}
-          disabled={busy}
-          className="mt-4 inline-flex items-center gap-2 rounded-lg bg-black px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-zinc-800 disabled:opacity-60"
-        >
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-          {busy ? "Importing…" : "Choose PDF"}
-        </button>
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+          <button
+            type="button"
+            onClick={() => input.current?.click()}
+            disabled={busy}
+            className="inline-flex items-center gap-2 rounded-lg bg-black px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-zinc-800 disabled:opacity-60"
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+            {busy ? "Working…" : "Choose PDF"}
+          </button>
+          {history.data?.sharepoint && (
+            <button
+              type="button"
+              onClick={() => void sync()}
+              disabled={busy}
+              title="Pull any new exports from the watched SharePoint folder"
+              className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold transition-colors hover:bg-muted disabled:opacity-60"
+            >
+              <FolderSync className="h-4 w-4" />
+              Sync SharePoint
+            </button>
+          )}
+        </div>
       </section>
 
       {error && (
@@ -133,7 +182,32 @@ export function ImportPage() {
         </div>
       )}
 
+      {syncNote && (
+        <div className="rounded-xl border border-border bg-muted px-4 py-3 text-sm">{syncNote}</div>
+      )}
+
       {result && <ImportSummary result={result} />}
+
+      {history.data?.sources && history.data.sources.length > 0 && (
+        <section>
+          <h2 className="mb-2 text-xs font-bold tracking-wide text-muted-foreground uppercase">
+            Watched SharePoint folder
+          </h2>
+          <ul className="divide-y divide-border rounded-xl border border-border">
+            {history.data.sources.map((s) => (
+              <li key={s.filename + s.imported_at} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                <span className="min-w-0 truncate">{s.filename}</span>
+                <span className="flex shrink-0 items-center gap-3">
+                  {s.error && <span className="max-w-72 truncate text-xs text-red-600">{s.error}</span>}
+                  <span className={`text-xs font-semibold ${s.status === "failed" ? "text-red-600" : "text-muted-foreground"}`}>
+                    {s.status}
+                  </span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section>
         <h2 className="mb-2 text-xs font-bold tracking-wide text-muted-foreground uppercase">Recent imports</h2>

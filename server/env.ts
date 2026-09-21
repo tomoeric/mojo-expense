@@ -105,6 +105,24 @@ export const env = {
     cacheTtlSec: int("EMBURSE_CACHE_TTL_SEC", 300),
   },
 
+  /** Entra app registration — shared with sign-in, but app-only for Graph. */
+  azure: {
+    tenantId: str("AZURE_TENANT_ID"),
+    clientId: str("AZURE_CLIENT_ID"),
+    clientSecret: str("AZURE_CLIENT_SECRET"),
+  },
+
+  /**
+   * The SharePoint folder the daily export lands in. Defaults point at
+   * AI Projects → Shared Documents → Emburse Transactions.
+   */
+  sharepoint: {
+    driveId: str("SHAREPOINT_DRIVE_ID", "b!VegnEte7u0m9UoLreL1k7gzPwGK6nyJEhvVReyQS-aNV3-A-6WbnQamyPpjTyWnK"),
+    folderId: str("SHAREPOINT_FOLDER_ID", "01AKEC4WI273BYVMAHNZAJEEVRTHS5DFSA"),
+    /** Minutes between automatic syncs; 0 disables the timer (manual only). */
+    pollMinutes: int("SHAREPOINT_POLL_MINUTES", 60),
+  },
+
   audit: {
     /** Anthropic API key. Absent = receipt auditing is unavailable. */
     apiKey: str("ANTHROPIC_API_KEY"),

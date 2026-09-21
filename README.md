@@ -150,6 +150,42 @@ boot (idempotent `CREATE … IF NOT EXISTS`, no migration step). With a database
 configured the app reads imported expenses and ignores the Emburse API
 entirely.
 
+### Where the file comes from
+
+Two routes, because Emburse supports two very different exports:
+
+| | Scheduled SFTP export | PDF export |
+|---|---|---|
+| Automatable | **yes** | **no** — manual only |
+| Transaction data | yes | yes |
+| **Receipt images** | **no** | **yes** |
+| Cap | — | 2,500 transactions per file |
+
+Emburse does not deliver receipt images over SFTP in any format. Receipts come
+only from Card Transactions / Reimbursements → filter `Receipt: True` →
+Export → PDF, which a person runs. So a fully automated feed gives transactions
+without receipts, and receipts require someone to run the PDF export.
+
+Both land in the same watched SharePoint folder, and because identity is
+derived from the row fields rather than the file, a PDF imported later attaches
+its receipts to rows that already arrived another way.
+
+### SharePoint sync
+
+Set `SHAREPOINT_DRIVE_ID` and `SHAREPOINT_FOLDER_ID` (defaults point at
+AI Projects → Shared Documents → Emburse Transactions) and the app polls that
+folder every `SHAREPOINT_POLL_MINUTES` (default 60), importing anything new.
+There is also a **Sync SharePoint** button on the Import page.
+
+Graph is called **app-only**, so the Entra app registration needs the
+APPLICATION permission `Sites.Read.All` — or `Sites.Selected` granted on this
+site — with admin consent. The delegated scopes used for sign-in are not
+enough, and that mismatch is the usual cause of a 403.
+
+Each SharePoint item is remembered by id and eTag so a file is downloaded once;
+a file that fails to import is recorded with its error and not retried every
+poll, so one malformed export cannot wedge the loop.
+
 ### What the importer guarantees
 
 | Situation | Behaviour |
