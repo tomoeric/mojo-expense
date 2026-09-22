@@ -64,7 +64,7 @@ export function QueuePage({
   // Only the rows on screen: badging the whole queue would ask about hundreds
   // of expenses to show a handful.
   const keys = useMemo(() => active.rows.map((r) => r.line.id), [active.rows]);
-  const { byExpense, pending, browser, decide, cancel, applyNow } = useDecisions(keys);
+  const { byExpense, pending, browser, canDecide, decide, cancel, applyNow } = useDecisions(keys);
   const [error, setError] = useState("");
 
   const rowsWithDecisions: Row[] = useMemo(
@@ -83,6 +83,7 @@ export function QueuePage({
           decision,
           decide: (
             <DecideButtons
+              canDecide={canDecide}
               expense={{
                 dedupeKey: r.line.id, employee: r.employee, merchant: r.line.merchant,
                 amount: r.line.amount, date: r.line.date,
@@ -96,7 +97,7 @@ export function QueuePage({
           ),
         };
       }),
-    [active.rows, byExpense, decide, cancel],
+    [active.rows, byExpense, canDecide, decide, cancel],
   );
 
   return (
@@ -143,6 +144,14 @@ export function QueuePage({
             so this strip is the only place that says they have not landed
             yet. Without it "Approved" on a row would be a claim about Emburse
             that is not true for another minute. */}
+        {!canDecide && (
+          <p className="rounded-lg border border-border bg-muted/40 p-2.5 text-sm text-muted-foreground">
+            To approve or deny, add your Emburse login under{" "}
+            <strong className="text-foreground">Your Emburse login</strong> in the user menu. Decisions
+            are made in Emburse as you, so the approval carries your name rather than somebody else&rsquo;s.
+          </p>
+        )}
+
         {pending.length > 0 && (
           <div className="flex flex-wrap items-center gap-2 rounded-lg border border-sky-500/30 bg-sky-500/5 p-2.5 text-xs">
             <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-600" aria-hidden />

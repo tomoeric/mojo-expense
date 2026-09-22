@@ -27,6 +27,8 @@ export type QueuedDecision = {
 };
 
 export type DecisionsResponse = {
+  /** Whether this person has an Emburse login, without which they cannot decide. */
+  canDecide: boolean;
   pending: QueuedDecision[];
   recent: QueuedDecision[];
   byExpense: Record<string, QueuedDecision>;
@@ -103,6 +105,7 @@ export function useDecisions(keys: string[]) {
 
   return {
     data: q.data,
+    canDecide: q.data?.canDecide ?? false,
     byExpense: q.data?.byExpense ?? {},
     pending: q.data?.pending ?? [],
     recent: q.data?.recent ?? [],

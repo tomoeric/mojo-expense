@@ -48,6 +48,12 @@ the blocks.
   Chromium locks it, so both go through `withBrowser()` in `browser-lock.ts`.
   Anything new that opens a browser must too, or it will collide with the 6am
   export and fail on a lock error that blames nothing.
+- **A decision is applied under the decider's own Emburse login**
+  (`credentialForUser`), never a shared one and never a fallback. Emburse
+  records an approval against whichever account signed in, so the wrong login
+  puts the wrong name on it in the finance system. Somebody with no stored
+  Emburse login is refused at the point of clicking, not left with decisions
+  that can never be carried out.
 - **The target comes from our records, never the request.** It is what the
   browser verifies the Emburse row against; a client that could supply it could
   name one expense and describe another.

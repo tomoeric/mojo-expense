@@ -3,8 +3,7 @@ import { db, isDbConfigured } from "../db.js";
 import { readSettings } from "../import/settings.js";
 import { requireAuth } from "../auth/index.js";
 import { browserQueue, whyWaiting } from "./browser-lock.js";
-import { envLogin } from "./auto-export.js";
-import { credentialForExport } from "./credentials.js";
+import { credentialForUser, hasCredential } from "./credentials.js";
 import { runDecision, type Decision, type Target } from "./decide.js";
 import {
   cancelDecision, decisionsFor, pendingDecisions, queueDecision, recentDecisions,
@@ -69,6 +68,20 @@ decisionRouter.post("/decisions", requireAuth, async (req: Request, res: Respons
     return;
   }
 
+  // Refused now rather than queued and stuck. A decision is applied under the
+  // decider's own Emburse login — Emburse records it against whoever signed
+  // in, and putting somebody else's name on a denial is not a thing to do
+  // quietly — so without one there is nothing that could ever carry it out.
+  const decider = req.user?.email ?? "";
+  if (!(await hasCredential(decider))) {
+    res.status(400).json({
+      error:
+        "Add your Emburse login first, under Your Emburse login in the user menu. " +
+        "Decisions are made in Emburse as you, so the approval carries your name and not somebody else's.",
+    });
+    return;
+  }
+
   const result = await queueDecision({
     dedupeKey,
     decision: decision as Decision,
@@ -92,6 +105,9 @@ decisionRouter.get("/decisions", requireAuth, async (req: Request, res: Response
     .split(",").map((k) => k.trim()).filter(Boolean).slice(0, 500);
 
   res.json({
+    // Whether this person can decide at all. The buttons ask first rather
+    // than letting somebody work through a queue and be refused each time.
+    canDecide: await hasCredential(req.user?.email ?? ""),
     pending: await pendingDecisions(),
     recent: await recentDecisions(50),
     // Keyed by expense, so the queue page can badge each row without a
@@ -135,9 +151,13 @@ decisionRouter.post("/decisions/:id/test", requireAuth, async (req: Request, res
     return;
   }
 
-  const login = (await credentialForExport()) ?? envLogin();
+  // Tested as the person who made it, for the same reason it is applied that
+  // way: a test signed in as somebody else proves the wrong thing.
+  const login = await credentialForUser(queued.decidedBy);
   if (!login) {
-    res.status(400).json({ error: "No Emburse login is stored, so nothing can be tested." });
+    res.status(400).json({
+      error: `${queued.decidedBy} has no Emburse login stored, so this cannot be tested or applied.`,
+    });
     return;
   }
 

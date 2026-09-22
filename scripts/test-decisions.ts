@@ -24,6 +24,8 @@ process.env.EMBURSE_SIGN_IN_WAIT_MS ||= "20000";
 const {
   queueDecision, pendingDecisions, cancelDecision, settleDecision, decisionsFor, recentDecisions,
 } = await import("../server/emburse/decisions.js");
+const { saveCredential, deleteCredential, credentialForUser, hasCredential } =
+  await import("../server/emburse/credentials.js");
 const { runDecisions } = await import("../server/emburse/decide.js");
 
 let failures = 0;
@@ -137,6 +139,37 @@ check("…and it is Brianna's, not Kevin's",
 // Signing in once for the batch is the whole reason it exists.
 const signIns = results.get(3)?.steps.filter((s) => s.name === "sign in").length ?? 0;
 check("the batch signed in once, not once per decision", signIns === 1, `${signIns} sign-in step(s)`);
+
+// ------------------------------------------ whose name ends up on the decision
+// Emburse records an approval against whichever account signed in. Applying
+// Brian's denial under Eric's login would put Eric's name on a decision he
+// did not make — in the finance system, permanently, where nobody would think
+// to doubt it. So a decision is carried out as its decider or not at all.
+console.log("\n8. A decision is applied as the person who made it");
+await deleteCredential("u-brian");
+await deleteCredential("u-eric");
+await saveCredential("u-brian", "brian@example.invalid", "brian@mojocarwash.com", "brians-password");
+
+check("Brian can decide, because the app can act as him", await hasCredential("brian@example.invalid"));
+check("Eric cannot, having stored nothing", !(await hasCredential("eric@example.invalid")));
+check("…and case does not decide it", await hasCredential("Brian@Example.Invalid"));
+
+const brian = await credentialForUser("brian@example.invalid");
+check("Brian's own Emburse login is what comes back",
+  brian?.email === "brian@mojocarwash.com", brian?.email ?? "none");
+check("…with his own password", brian?.password === "brians-password");
+
+check("somebody with no login gets nothing rather than somebody else's",
+  (await credentialForUser("eric@example.invalid")) === null);
+
+// The failure that would be worst: falling back to whoever happens to have a
+// credential stored. There is exactly one stored here, so a fallback would
+// silently hand Eric's decisions to Brian's account.
+const forEric = await credentialForUser("eric@example.invalid");
+check("…and specifically not the only credential that exists",
+  forEric === null, forEric ? `fell back to ${(forEric as { email: string }).email}` : "refused");
+
+await deleteCredential("u-brian");
 
 console.log("\n7. Settling writes the record");
 const pend = await pendingDecisions();

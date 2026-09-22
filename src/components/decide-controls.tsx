@@ -17,6 +17,7 @@ export function DecideButtons({
   expense,
   decision,
   busy,
+  canDecide,
   onApprove,
   onDeny,
   onCancel,
@@ -24,6 +25,8 @@ export function DecideButtons({
   expense: { dedupeKey: string; employee: string; merchant: string; amount: number; date: string | null };
   decision: QueuedDecision | undefined;
   busy: boolean;
+  /** False when this person has no Emburse login, so nothing could carry it out. */
+  canDecide: boolean;
   onApprove: () => void;
   onDeny: (reason: string) => void;
   onCancel: (id: number) => void;
@@ -41,6 +44,8 @@ export function DecideButtons({
       </>
     );
   }
+
+  if (!canDecide) return <span className="text-xs text-muted-foreground">—</span>;
 
   return (
     <div className="flex items-center gap-1">

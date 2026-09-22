@@ -186,6 +186,50 @@ export async function credentialForExport(): Promise<
 }
 
 /**
+ * One person's own Emburse credential.
+ *
+ * Used when applying their approvals and denials, and only then. An approval
+ * is an audit-relevant act: Emburse records it against whichever account
+ * signed in, so applying Brian's denial under Eric's login would put Eric's
+ * name on a decision he did not make — in the finance system, permanently,
+ * where nobody would think to doubt it.
+ *
+ * Returns null when that person has stored nothing. The caller must refuse
+ * rather than fall back to somebody else's login, which is the whole reason
+ * this is separate from `credentialForExport`.
+ */
+export async function credentialForUser(userEmail: string): Promise<
+  { userId: string; email: string; password: string } | null
+> {
+  await ensure();
+  const { rows } = await db().query<{ user_id: string; login_email: string; secret: Buffer }>(
+    "SELECT user_id, login_email, secret FROM emburse_credentials WHERE lower(user_email) = lower($1)",
+    [userEmail],
+  );
+  const row = rows[0];
+  if (!row) return null;
+
+  try {
+    return { userId: row.user_id, email: row.login_email, password: open(row.secret) };
+  } catch {
+    throw new Error(
+      "The stored Emburse password could not be decrypted — SESSION_SECRET or EMBURSE_CREDENTIAL_KEY " +
+        "has changed since it was saved. Its owner needs to enter it again.",
+    );
+  }
+}
+
+/** Whether this person could act in Emburse as themselves, without decrypting. */
+export async function hasCredential(userEmail: string): Promise<boolean> {
+  await ensure();
+  const { rows } = await db().query<{ n: string }>(
+    "SELECT count(*) AS n FROM emburse_credentials WHERE lower(user_email) = lower($1)",
+    [userEmail],
+  );
+  return Number(rows[0]?.n ?? 0) > 0;
+}
+
+/**
  * Record whether the login itself worked.
  *
  * Called only for the sign-in step, never for the run as a whole: a stored

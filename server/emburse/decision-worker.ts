@@ -1,7 +1,6 @@
 import { isDbConfigured } from "../db.js";
 import { readSettings } from "../import/settings.js";
-import { envLogin } from "./auto-export.js";
-import { credentialForExport } from "./credentials.js";
+import { credentialForUser } from "./credentials.js";
 import { runDecisions, type BatchItem } from "./decide.js";
 import { pendingDecisions, settleDecision } from "./decisions.js";
 
@@ -34,38 +33,53 @@ async function tick(): Promise<void> {
   if (running) return;
   running = true;
   try {
-    const items = await pendingDecisions();
-    if (items.length === 0) return;
-
-    const login = (await credentialForExport()) ?? envLogin();
-    if (!login) {
-      // Not a failure of the decisions — a failure to be able to act on any of
-      // them. Left pending rather than marked failed, so they go through once
-      // a login exists instead of needing to be made again.
-      console.warn(`decisions: ${items.length} waiting, but no Emburse login is stored`);
-      return;
-    }
+    const waiting = await pendingDecisions();
+    if (waiting.length === 0) return;
 
     const settings = await readSettings();
-    const batch: BatchItem[] = items.map((d) => ({
-      id: d.id, decision: d.decision, target: d.target, reason: d.reason,
-    }));
 
-    console.log(`decisions: applying ${batch.length}`);
-    const results = await runDecisions(batch, settings.selectors, settings.emburseUrl, login);
-
-    for (const item of items) {
-      const run = results.get(item.id);
-      if (!run) continue; // never attempted; stays pending for the next pass
-      await settleDecision(
-        item.id,
-        run.ok
-          ? { ok: true, matchedRow: run.matchedRow }
-          : { ok: false, error: run.steps.find((s) => !s.ok)?.detail ?? "The decision did not go through." },
-      );
+    // Grouped by who decided, and applied under that person's own Emburse
+    // login. Emburse records an approval against whichever account signed in,
+    // so applying one person's decision under another's would put the wrong
+    // name on it in the finance system — permanently, and where nobody would
+    // think to doubt it. One batch each is the cost of that being true.
+    const byDecider = new Map<string, typeof waiting>();
+    for (const d of waiting) {
+      (byDecider.get(d.decidedBy) ?? byDecider.set(d.decidedBy, []).get(d.decidedBy)!).push(d);
     }
-    const applied = [...results.values()].filter((r) => r.ok).length;
-    console.log(`decisions: ${applied} of ${batch.length} applied`);
+
+    for (const [decider, items] of byDecider) {
+      const login = await credentialForUser(decider);
+      if (!login) {
+        // Left pending, not failed: the decision is sound, it just cannot be
+        // carried out yet. Marking it failed would make somebody decide twice
+        // for a problem that is theirs to fix in one place.
+        console.warn(
+          `decisions: ${items.length} from ${decider} waiting — they have no Emburse login stored`,
+        );
+        continue;
+      }
+
+      const batch: BatchItem[] = items.map((d) => ({
+        id: d.id, decision: d.decision, target: d.target, reason: d.reason,
+      }));
+
+      console.log(`decisions: applying ${batch.length} as ${decider}`);
+      const results = await runDecisions(batch, settings.selectors, settings.emburseUrl, login);
+
+      for (const item of items) {
+        const run = results.get(item.id);
+        if (!run) continue; // never attempted; stays pending for the next pass
+        await settleDecision(
+          item.id,
+          run.ok
+            ? { ok: true, matchedRow: run.matchedRow }
+            : { ok: false, error: run.steps.find((s) => !s.ok)?.detail ?? "The decision did not go through." },
+        );
+      }
+      const applied = [...results.values()].filter((r) => r.ok).length;
+      console.log(`decisions: ${applied} of ${batch.length} applied as ${decider}`);
+    }
   } catch (err) {
     console.error("decision worker:", err);
   } finally {
