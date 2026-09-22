@@ -62,7 +62,6 @@ const selectors: Selectors = {
   loginSubmit: 'button[type="submit"]',
   loggedIn: 'a:has-text("Transactions")',
   adminTab: 'a:has-text("ADMIN")',
-  grid: "table",
   exportButton: 'a[href="/dialog"] button',
   formatSelect: 'a:has-text("Select a format")',
   exportsNav: 'a:has-text("Exports")',
@@ -449,6 +448,37 @@ check("a logged-out page on the right host is not the app",
   !inApp("https://spend.emburse.com/logged-out?next=x", "https://spend.emburse.com"));
 check("the dashboard is", inApp("https://spend.emburse.com/home", "https://spend.emburse.com"));
 await fetch(`${mock.url}/__app?paintMs=0&nav=true`, { method: "POST" });
+
+// ------------------------------------------- a grid that is not a <table>
+// The real failure: the grid was on screen, with "34 items, $42,249.94" printed
+// above it, and the run timed out waiting for `table` to become visible.
+console.log("\n15. Grids that do not look like a <table>");
+
+for (const [shape, why] of [
+  ["ghost", "a hidden measuring table comes first in the DOM"],
+  ["divs", "there is no <table> at all, only ARIA roles"],
+] as const) {
+  await forgetDevice();
+  mock.reset();
+  await fetch(`${mock.url}/__app?grid=${shape}`, { method: "POST" });
+
+  run = await runAutoExport(settings, selectors, LOGIN, { dryRun: true });
+  const gridStep = run.steps.find((st) => st.name === "open the filtered grid");
+  check(`the grid is found when ${why}`, gridStep?.ok === true, gridStep?.detail?.slice(0, 90) ?? "no step");
+  check(`…and the run gets past it`, run.ok, run.steps.find((st) => !st.ok)?.name ?? "");
+}
+
+// And the guard: a page with no grid and no count line must still fail, or
+// "look harder" quietly becomes "accept anything".
+await forgetDevice();
+mock.reset();
+run = await runAutoExport(settings, { ...selectors, grid: "#nothing-here", itemCount: "#nor-here" },
+  LOGIN, { dryRun: true });
+detail = run.steps.find((st) => st.name === "open the filtered grid")?.detail ?? "";
+check("a page with neither still fails", !run.ok);
+check("…and names both things it looked for",
+  /#nothing-here/.test(detail) && /#nor-here/.test(detail), detail.slice(0, 110));
+await fetch(`${mock.url}/__app?grid=table`, { method: "POST" });
 
 await mock.close();
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}\n`);

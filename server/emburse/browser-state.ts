@@ -1,5 +1,5 @@
 import type { BrowserContext } from "playwright";
-import { db, ensureSchema } from "../db.js";
+import { db, ensureSchema, isDbConfigured } from "../db.js";
 import { open, seal } from "./credentials.js";
 
 /**
@@ -48,6 +48,9 @@ type Cookie = Parameters<BrowserContext["addCookies"]>[0][number];
  * existed — so it is logged and stepped over rather than thrown.
  */
 export async function restoreCookies(context: BrowserContext): Promise<number> {
+  // No database is a legitimate way to run — the app boots without one, and so
+  // should this. Silently, because there is nothing wrong to report.
+  if (!isDbConfigured()) return 0;
   try {
     await ensure();
     const { rows } = await db().query<{ state: Buffer }>(
@@ -79,6 +82,7 @@ export async function restoreCookies(context: BrowserContext): Promise<number> {
  * device check.
  */
 export async function rememberCookies(context: BrowserContext): Promise<number> {
+  if (!isDbConfigured()) return 0;
   try {
     await ensure();
     const { cookies } = await context.storageState();
@@ -98,12 +102,14 @@ export async function rememberCookies(context: BrowserContext): Promise<number> 
 
 /** Forget the remembered device — the escape hatch when a jar goes stale. */
 export async function forgetCookies(): Promise<void> {
+  if (!isDbConfigured()) return;
   await ensure();
   await db().query("DELETE FROM emburse_browser_state");
 }
 
 /** When the jar was last written, for showing whether a device is remembered. */
 export async function cookiesSavedAt(): Promise<string | null> {
+  if (!isDbConfigured()) return null;
   await ensure();
   const { rows } = await db().query<{ updated_at: Date }>(
     "SELECT updated_at FROM emburse_browser_state WHERE id",

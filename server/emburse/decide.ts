@@ -1,7 +1,7 @@
 import type { Page } from "playwright";
 import { env } from "../env.js";
 import {
-  explainLaunch, gridUrl, makeStepper, openBrowser, safeUrl, signIn,
+  explainLaunch, firstVisible, gridUrl, makeStepper, openBrowser, safeUrl, signIn,
   type Login, type StepResult,
 } from "./auto-export.js";
 
@@ -213,7 +213,11 @@ async function drive(
     await page.goto(gridUrl(emburseUrl, { query: term, path: sel.gridPath }), {
       waitUntil: "domcontentloaded",
     });
-    await page.locator(sel.grid!).first().waitFor({ state: "visible" });
+    // Any visible match, not element number one: a grid's hidden measuring
+    // rows come first in the DOM and never become visible.
+    if (!(await firstVisible(page, sel.grid!, env.emburseLogin.stepTimeoutMs))) {
+      throw new Error(`the results grid did not appear at ${safeUrl(page.url())}.`);
+    }
 
     const rows = page.locator(sel.resultRow!);
     const count = await rows.count();

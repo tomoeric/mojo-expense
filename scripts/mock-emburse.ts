@@ -43,6 +43,16 @@ type State = {
   appPaintMs: number;
   /** When false, the signed-in app contains nothing the loggedIn selector matches. */
   showNavLabel: boolean;
+  /**
+   * How the transactions grid is drawn.
+   *
+   *   "table"  — a plain <table>.
+   *   "ghost"  — a hidden measuring <table> first, then the real one. This is
+   *              what data grids actually emit, and what defeats a wait on
+   *              `.first()`: element number one never becomes visible.
+   *   "divs"   — no <table> at all, ARIA roles only, like Emburse's own.
+   */
+  gridShape: "table" | "ghost" | "divs";
   /** Codes submitted to the verification screen, right or wrong. */
   codeAttempts: number;
   /** Whether the last accepted code arrived with "remember this device" ticked. */
@@ -73,6 +83,7 @@ const state: State = {
   rememberedDevice: false,
   appPaintMs: 0,
   showNavLabel: true,
+  gridShape: "table",
   search: "",
   format: "CSV",
   requestedAt: null,
@@ -92,13 +103,28 @@ const ROWS = [
 const grid = (search: string) => {
   const term = search.trim().toLowerCase();
   const shown = term ? ROWS.filter((r) => r.merchant.toLowerCase().includes(term)) : ROWS;
-  return `<table><thead><tr><th>Date</th><th>Merchant</th><th>Employee</th><th>Amount</th><th></th></tr></thead>
-    <tbody>${shown
-      .map(
-        (r) => `<tr><td>${r.date}</td><td>${r.merchant}</td><td>${r.who}</td><td>$${r.amount}</td>
-        <td><button>APPROVE</button> <button aria-label="more">&#8942;</button></td></tr>`,
-      )
-      .join("")}</tbody></table>`;
+  const cells = (r: (typeof ROWS)[number]) =>
+    `${r.date}</td><td>${r.merchant}</td><td>${r.who}</td><td>$${r.amount}</td>
+     <td><button>APPROVE</button> <button aria-label="more">&#8942;</button>`;
+
+  const realTable = `<table><thead><tr><th>Date</th><th>Merchant</th><th>Employee</th><th>Amount</th><th></th></tr></thead>
+    <tbody>${shown.map((r) => `<tr><td>${cells(r)}</td></tr>`).join("")}</tbody></table>`;
+
+  if (state.gridShape === "ghost") {
+    // The measuring table a data grid renders to size its columns. It is a
+    // <table>, it comes first, and it is never visible — so a wait on the
+    // first match sits on it until it times out, next to a grid that loaded
+    // immediately.
+    return `<table style="display:none"><tbody><tr><td>sizing</td></tr></tbody></table>${realTable}`;
+  }
+  if (state.gridShape === "divs") {
+    return `<div role="grid">
+      <div role="rowgroup">${shown
+        .map((r) => `<div role="row"><div role="cell">${cells(r).replace(/<\/?td>/g, "")}</div></div>`)
+        .join("")}</div>
+    </div>`;
+  }
+  return realTable;
 };
 
 const page = (body: string) => `<!doctype html><html><body style="font-family:sans-serif">${body}</body></html>`;
@@ -336,6 +362,7 @@ app.post("/__app", (req, res) => {
   const q = req.query as Record<string, string>;
   if ("paintMs" in q) state.appPaintMs = Number(q["paintMs"]) || 0;
   if ("nav" in q) state.showNavLabel = q["nav"] !== "false";
+  if ("grid" in q) state.gridShape = q["grid"] as State["gridShape"];
   res.json({ ok: true });
 });
 app.post("/__reset", (_req, res) => {

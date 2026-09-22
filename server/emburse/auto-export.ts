@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import type { BrowserContext, Page } from "playwright";
+import type { BrowserContext, Locator, Page } from "playwright";
 import { env } from "../env.js";
 import { rememberCookies, restoreCookies } from "./browser-state.js";
 import type { ExportSettings } from "../import/settings.js";
@@ -110,7 +110,9 @@ export const DEFAULT_SELECTORS: Selectors = {
   mfaRemember: 'input[type="checkbox"]',
 
   adminTab: 'text=ADMIN',
-  grid: 'table',
+  // Not just <table>: most data grids of this vintage are divs that announce
+  // themselves through ARIA instead. Emburse's is one of them.
+  grid: 'table, [role="grid"], [role="table"], [role="rowgroup"]',
   // The "34 items, $42,249.94" line above the grid.
   itemCount: 'text=/\\d[\\d,]* items?, \\$[\\d,]+\\.\\d{2}/',
 
@@ -172,7 +174,7 @@ export const SELECTOR_HELP: Record<SelectorKey, string> = {
   mfaSubmit: "The button that submits that code.",
   mfaRemember: "The \u201cremember this device\u201d tick box. Ticking it is what stops the code being asked for every run.",
   adminTab: "The ADMIN tab, top left. PERSONAL would export one person's expenses.",
-  grid: "The transactions table itself — used to tell the page has loaded.",
+  grid: "The transactions table itself — used to tell the page has loaded. The item-count line is accepted instead, so this missing is not fatal.",
   itemCount: "The \u201cN items, $X\u201d line above the grid.",
   gridPath: "Path to the transactions grid. Filters are added as query parameters.",
   exportButton: "The EXPORT button above the grid, not the one in the dialog.",
@@ -434,6 +436,21 @@ export function explainLaunch(err: unknown): string {
  * email, then the password on a second screen. Filling both at once fills one
  * box and submits nothing.
  */
+/**
+ * Has the transactions grid loaded? Say how we know, or null.
+ *
+ * Both signals are given the full budget rather than being tried in sequence,
+ * since either arriving is the answer.
+ */
+async function gridLoaded(page: Page, sel: Selectors): Promise<string | null> {
+  const ms = env.emburseLogin.stepTimeoutMs;
+  const [grid, count] = await Promise.all([
+    firstVisible(page, sel.grid, ms).then((l) => (l ? "the grid is on screen" : null)),
+    firstVisible(page, sel.itemCount, ms).then((l) => (l ? "the item count is on screen" : null)),
+  ]);
+  return grid ?? count;
+}
+
 export async function signIn(
   page: Page,
   sel: Selectors,
@@ -695,6 +712,35 @@ async function typeCode(page: Page, sel: Selectors, code: string): Promise<void>
   await first.pressSequentially(code, { delay: 20 });
 }
 
+/**
+ * The first element matching `selector` that is actually visible.
+ *
+ * `locator(sel).first()` is the trap: it picks element number one and waits
+ * for *that* to become visible. Data grids routinely render hidden siblings —
+ * a measuring table, a virtualised header, an empty template — so the first
+ * match can be a ghost that will never be visible, and the wait times out
+ * beside a grid that has been on screen the whole time.
+ *
+ * Waiting for "any of these is visible" is the question actually being asked.
+ */
+export async function firstVisible(
+  page: Page,
+  selector: string,
+  timeoutMs: number,
+): Promise<Locator | null> {
+  const deadline = Date.now() + timeoutMs;
+  const all = page.locator(selector);
+  do {
+    const n = await all.count().catch(() => 0);
+    for (let i = 0; i < n; i++) {
+      const one = all.nth(i);
+      if (await one.isVisible().catch(() => false)) return one;
+    }
+    await page.waitForTimeout(250);
+  } while (Date.now() < deadline);
+  return null;
+}
+
 /** The page's words, flattened — what both the diagnosis and the prompt read. */
 const pageText = async (page: Page): Promise<string> =>
   ((await page.locator("body").innerText().catch(() => "")) || "").replace(/\s+/g, " ").trim();
@@ -893,8 +939,21 @@ async function runSteps(
     // FILTERS dialog and no toggle whose state could be misread and inverted.
     const target = gridUrl(url, { receiptsOnly: settings.receiptsOnly, path: sel.gridPath });
     await page.goto(target, { waitUntil: "domcontentloaded" });
-    await page.locator(sel.grid).first().waitFor({ state: "visible" });
-    return settings.receiptsOnly ? "receipts only, via the URL" : "unfiltered, via the URL";
+
+    // Two independent ways to know the grid arrived, because one selector for
+    // it is one guess. The count line is the sturdier of the two — "34 items,
+    // $42,249.94" is Emburse's own words about its own grid, and it cannot be
+    // there unless the rows are.
+    const how = await gridLoaded(page, sel);
+    if (!how) {
+      throw new Error(
+        `the grid did not appear at ${safeUrl(page.url())}. Tried the grid selector ` +
+          `(${sel.grid}) and the item-count line (${sel.itemCount}); neither matched anything ` +
+          `visible. The page reads: "${snippet(await pageText(page))}"`,
+      );
+    }
+    const scope = settings.receiptsOnly ? "receipts only, via the URL" : "unfiltered, via the URL";
+    return `${scope} — ${how}`;
   }))) return false;
 
   await step("read the item count", async () => {
@@ -907,7 +966,12 @@ async function runSteps(
 
   if (!(await step("open the export dialog", async () => {
     await page.locator(sel.exportButton).first().click();
-    await page.locator(sel.dialog).first().waitFor({ state: "visible" });
+    if (!(await firstVisible(page, sel.dialog, env.emburseLogin.stepTimeoutMs))) {
+      throw new Error(
+        `the export dialog did not open — nothing visible matched ${sel.dialog} at ` +
+          `${safeUrl(page.url())}.`,
+      );
+    }
     return "Export Expenses dialog open";
   }))) return false;
 
@@ -930,7 +994,12 @@ async function runSteps(
         if ((await isChipOn(chip)) === want.has(name)) continue;
 
         await chip.click();
-        await page.locator(sel.dialog).first().waitFor({ state: "visible" });
+        if (!(await firstVisible(page, sel.dialog, env.emburseLogin.stepTimeoutMs))) {
+      throw new Error(
+        `the export dialog did not open — nothing visible matched ${sel.dialog} at ` +
+          `${safeUrl(page.url())}.`,
+      );
+    }
         changed.push(`${want.has(name) ? "+" : "-"}${name}`);
         clicked = true;
         break;
