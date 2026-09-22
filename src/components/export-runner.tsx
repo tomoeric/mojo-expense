@@ -1,9 +1,35 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Play, FlaskConical, Loader2, CheckCircle2, XCircle, Image, ChevronDown, Wrench, ShieldQuestion } from "lucide-react";
+import {
+  Play, FlaskConical, Loader2, CheckCircle2, XCircle, Image, ChevronDown, Wrench,
+  ShieldQuestion, ShieldCheck,
+} from "lucide-react";
 import { SelectorEditor } from "@/components/selector-editor";
 
 type Step = { name: string; ok: boolean; detail: string; ms: number };
+
+/**
+ * Read a response that is supposed to be JSON, and say something useful when
+ * it is not.
+ *
+ * The proxy in front of the app answers a request it gave up on with
+ * `upstream request timeout` in plain text, which `res.json()` reports as
+ * `Unexpected token 'u'` — a message that sends you looking at the wrong
+ * thing entirely.
+ */
+async function readJson<T>(res: Response): Promise<T> {
+  const body = await res.text();
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    throw new Error(
+      res.status === 504 || /timeout/i.test(body)
+        ? "The request timed out on the way to the server. The run itself may still be going — " +
+          "give the list below a moment."
+        : `The server replied with something unexpected (${res.status}): ${body.slice(0, 120)}`,
+    );
+  }
+}
 
 type Challenge = {
   id: string;
@@ -17,6 +43,21 @@ type Challenge = {
   attemptsLeft: number;
   lastError: string | null;
 };
+
+/**
+ * Is this run still going?
+ *
+ * A run records itself before it starts and updates itself when it finishes,
+ * so `ok === null` means in progress — unless the process died in between, in
+ * which case the row would say that forever and the buttons would stay
+ * disabled. The server closes those out on boot; this is the belt to that
+ * braces, for a row orphaned by something else.
+ */
+const isRunning = (r: Run) =>
+  r.ok === null && Date.now() - new Date(r.startedAt).getTime() < 30 * 60_000;
+
+const live = (d: { runs?: Run[]; challenge?: Challenge | null } | undefined) =>
+  Boolean(d?.challenge) || (d?.runs ?? []).some(isRunning);
 
 type Run = {
   id: number;
@@ -74,40 +115,70 @@ export function ExportRunner({
     queryKey: ["export-runs"],
     queryFn: async () => {
       const res = await fetch("/api/export-runs");
-      if (!res.ok) throw new Error(((await res.json()) as { error?: string }).error ?? "Failed");
-      return (await res.json()) as {
+      const body = await readJson<{
+        error?: string;
         configured: boolean;
         due: { due: boolean; attempt: number; reason: string };
         runs: Run[];
         challenge: Challenge | null;
+        deviceRememberedAt: string | null;
+      }>(res);
+      if (!res.ok) throw new Error(body.error ?? "Failed");
+      return body as {
+        configured: boolean;
+        due: { due: boolean; attempt: number; reason: string };
+        runs: Run[];
+        challenge: Challenge | null;
+        deviceRememberedAt: string | null;
       };
     },
     // While a run is going, the list is the only progress indicator there is.
     // The slow poll when idle is for the parked-sign-in case: a challenge can
     // be waiting from a run somebody started in another tab, and a browser
     // held open with nobody looking at it is the whole thing to avoid.
-    refetchInterval: (query) => (busy || query.state.data?.challenge ? 3000 : 20_000),
+    refetchInterval: (query) => (live(query.state.data) ? 3000 : 20_000),
+    // Keep polling with the tab in the background. This is not a nicety: the
+    // one moment the page most needs to be current is while its owner is in
+    // their email app looking for the code it is about to ask for. Stopping
+    // then is how a prompt goes unseen until it has already timed out.
+    refetchIntervalInBackground: true,
   });
 
   const challenge = q.data?.challenge ?? null;
+  // Derived from the data rather than from whether this tab started the run,
+  // so a reload, a second tab, or a request the proxy dropped all still show
+  // a run in progress.
+  const running = (q.data?.runs ?? []).some(isRunning);
+  const working = busy !== "" || running;
 
   async function run(dry: boolean) {
     setBusy(dry ? "dry" : "real");
     setError("");
     try {
+      // Returns as soon as the run has an id. Everything after that — progress,
+      // a verification code prompt, the result — arrives through the poll,
+      // which is the only way this can survive a run that outlives a request.
       const res = await fetch(`/api/export-run${dry ? "?dryRun=1" : ""}`, { method: "POST" });
-      const body = (await res.json()) as { error?: string; id?: number };
+      const body = await readJson<{ error?: string; id?: number }>(res);
       if (!res.ok) throw new Error(body.error ?? `Run failed (${res.status})`);
       if (body.id) setOpen(body.id);
       await qc.invalidateQueries({ queryKey: ["export-runs"] });
-      await qc.invalidateQueries({ queryKey: ["imports"] });
-      await qc.invalidateQueries({ queryKey: ["reports"] });
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setBusy("");
     }
   }
+
+  // A finished run refreshes the import and report pages once, so they pick it
+  // up without anybody reloading. The request that starts a run no longer waits
+  // for it, so this is the only place that knows when one has actually landed.
+  const newestDone = q.data?.runs?.find((r) => r.ok !== null)?.id ?? null;
+  useEffect(() => {
+    if (newestDone === null) return;
+    void qc.invalidateQueries({ queryKey: ["imports"] });
+    void qc.invalidateQueries({ queryKey: ["reports"] });
+  }, [newestDone, qc]);
 
   async function sendCode() {
     setAnswering(true);
@@ -118,7 +189,7 @@ export function ExportRunner({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ code }),
       });
-      const body = (await res.json()) as { error?: string };
+      const body = await readJson<{ error?: string }>(res);
       if (!res.ok) throw new Error(body.error ?? `Could not send the code (${res.status})`);
       setCode("");
       // The run carries on inside the request that started it; the poll below
@@ -131,11 +202,22 @@ export function ExportRunner({
     }
   }
 
+  async function forgetDevice() {
+    setError("");
+    try {
+      const res = await fetch("/api/export-device", { method: "DELETE" });
+      if (!res.ok) throw new Error((await readJson<{ error?: string }>(res)).error ?? "Could not forget it");
+      await qc.invalidateQueries({ queryKey: ["export-runs"] });
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
   async function giveUp() {
     setCodeError("");
     try {
       const res = await fetch("/api/export-challenge", { method: "DELETE" });
-      if (!res.ok) throw new Error(((await res.json()) as { error?: string }).error ?? "Could not cancel");
+      if (!res.ok) throw new Error((await readJson<{ error?: string }>(res)).error ?? "Could not cancel");
       await qc.invalidateQueries({ queryKey: ["export-runs"] });
     } catch (err) {
       setCodeError((err as Error).message);
@@ -171,30 +253,57 @@ export function ExportRunner({
         </p>
       )}
 
+      {/* Whether Emburse still trusts this browser. Worth stating, because the
+          alternative is discovering it only when a run stops to ask for a
+          code — and because a jar that has gone stale needs a way out. */}
+      <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        {q.data?.deviceRememberedAt ? (
+          <>
+            <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" aria-hidden />
+            Emburse trusts this browser — remembered {new Date(q.data.deviceRememberedAt).toLocaleString()}.
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => void forgetDevice()}
+                className="underline underline-offset-2 hover:text-foreground"
+              >
+                Forget it
+              </button>
+            )}
+          </>
+        ) : (
+          <>
+            <ShieldQuestion className="h-3.5 w-3.5" aria-hidden />
+            Emburse does not know this browser yet, so the next run may ask for a verification code.
+          </>
+        )}
+      </p>
+
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
-          disabled={!isAdmin || busy !== ""}
+          disabled={!isAdmin || working}
           onClick={() => void run(true)}
           className="inline-flex items-center gap-2 rounded-lg border border-border px-3.5 py-2 text-sm font-semibold transition-colors hover:bg-muted disabled:opacity-40"
         >
-          {busy === "dry" ? <Loader2 className="h-4 w-4 animate-spin" /> : <FlaskConical className="h-4 w-4" />}
-          {busy === "dry" ? "Testing…" : "Test run"}
+          {working ? <Loader2 className="h-4 w-4 animate-spin" /> : <FlaskConical className="h-4 w-4" />}
+          {working ? "Testing…" : "Test run"}
         </button>
 
         <button
           type="button"
-          disabled={!isAdmin || busy !== ""}
+          disabled={!isAdmin || working}
           onClick={() => void run(false)}
           className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-3.5 py-2 text-sm font-semibold text-white transition-colors hover:bg-sky-500 disabled:opacity-40"
         >
-          {busy === "real" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-          {busy === "real" ? "Running…" : "Run export now"}
+          {working ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+          {working ? "Running…" : "Run export now"}
         </button>
 
-        {busy !== "" && (
+        {working && (
           <span className="text-xs text-muted-foreground">
-            Emburse queues the export, so a real run can take several minutes.
+            Running on the server — you can leave this page and come back. Emburse queues the export,
+            so a real run takes several minutes.
           </span>
         )}
       </div>

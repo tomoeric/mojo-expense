@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import type { BrowserContext, Page } from "playwright";
 import { env } from "../env.js";
+import { rememberCookies, restoreCookies } from "./browser-state.js";
 import type { ExportSettings } from "../import/settings.js";
 
 /**
@@ -255,6 +256,10 @@ export async function openBrowser(): Promise<{ context: BrowserContext; close: (
       viewport: { width: 1600, height: 1000 },
       acceptDownloads: true,
     });
+    // The profile directory carries trust between runs; the database carries
+    // it between deployments, which rebuild that directory and would otherwise
+    // lose the device every time the app ships.
+    await restoreCookies(context);
     return { context, close: () => context.close() };
   }
 
@@ -264,6 +269,7 @@ export async function openBrowser(): Promise<{ context: BrowserContext; close: (
     acceptDownloads: true,
     viewport: { width: 1600, height: 1000 },
   });
+  await restoreCookies(context);
   return { context, close: () => browser.close() };
 }
 
@@ -345,6 +351,14 @@ export async function runAutoExport(
     page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
 
     const ok = await runSteps(page, settings, selectors, login, step, opts, (v) => (itemLine = v), (b) => (pdf = b));
+
+    // Whatever Emburse issued for getting this far — including for passing a
+    // device check — is kept, so the next run does not start as a stranger.
+    // After the steps rather than after sign-in, because the cookies that
+    // matter are only set once the app has actually loaded.
+    if (steps.find((st) => st.name === "sign in")?.ok) {
+      await rememberCookies(opened.context);
+    }
 
     const screenshot = ok ? null : (await page.screenshot({ fullPage: false })).toString("base64");
     return { ok, signInFailed: signInBroke(steps), credentialFault, steps, screenshot, pdf, itemLine };

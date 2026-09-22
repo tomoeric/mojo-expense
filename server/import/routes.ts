@@ -11,6 +11,7 @@ import { DEFAULT_SELECTORS, SELECTOR_HELP, STEP_SELECTORS, envLogin } from "../e
 import { credentialStatus, deleteCredential, listCredentials, saveCredential } from "../emburse/credentials.js";
 import { attemptExport, nextDue, recentRuns, runScreenshot } from "../emburse/export-scheduler.js";
 import { answerChallenge, cancelChallenge, currentChallenge } from "../emburse/challenge.js";
+import { cookiesSavedAt, forgetCookies } from "../emburse/browser-state.js";
 
 /**
  * Upload and history for the daily Emburse export.
@@ -198,15 +199,22 @@ importRouter.post("/export-run", requireAuth, requireAdmin, async (req: Request,
   if (!guard(res)) return;
   const dryRun = req.query.dryRun === "1";
   try {
-    // Through the scheduler, so a manual run is recorded like any other and
-    // shows up in the same history. Tagged separately so it cannot eat one of
-    // the day's scheduled attempts.
-    const { id, run, importId } = await attemptExport(dryRun ? "dry-run" : "manual",
-      req.user?.email ?? "manual", { dryRun });
-    res.json({
-      id, ok: run.ok, steps: run.steps, itemLine: run.itemLine,
-      screenshot: run.screenshot, pdfBytes: run.pdf?.length ?? 0, importId,
+    // Start it, do not wait for it. A run takes minutes — longer still when it
+    // stops to ask somebody for a verification code — and the proxy in front
+    // of the app gives up well before that, answering the page with
+    // `upstream request timeout` as plain text. The run carried on regardless,
+    // invisibly, while the page showed a JSON parse error and the code prompt
+    // it was supposed to be watching for never got polled.
+    //
+    // So this returns as soon as the run has an id, and the page follows it
+    // through the run list it already polls.
+    const id = await new Promise<number>((resolve, reject) => {
+      void attemptExport(dryRun ? "dry-run" : "manual", req.user?.email ?? "manual", {
+        dryRun,
+        onStarted: resolve,
+      }).catch(reject); // only reaches here if it failed before recording itself
     });
+    res.status(202).json({ id, running: true });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Export run failed." });
   }
@@ -245,6 +253,10 @@ importRouter.get("/export-runs", requireAuth, async (req: Request, res: Response
       // `mine` rather than making the page compare emails: only the owner can
       // answer, and the page should say who is being waited on either way.
       challenge: challenge && { ...challenge, mine: challenge.owner === (req.user?.email ?? "") },
+      // When the browser last kept a session. The only visible sign that a
+      // device is still trusted, and the thing to look at when a code gets
+      // asked for that should not have been.
+      deviceRememberedAt: await cookiesSavedAt(),
     });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Could not read export runs." });
@@ -270,6 +282,20 @@ importRouter.post("/export-challenge", requireAuth, requireAdmin, (req: Request,
   }
   // The run itself carries on in the request that started it; the page finds
   // out how it went by polling the run list, as it already does.
+  res.json({ ok: true });
+});
+
+/**
+ * Forget the remembered device.
+ *
+ * The escape hatch for a cookie jar that has gone stale — an Emburse session
+ * that is somehow half-valid can be worse than none, because it gets the run
+ * past sign-in and then fails somewhere stranger. Clearing it costs one
+ * verification code.
+ */
+importRouter.delete("/export-device", requireAuth, requireAdmin, async (_req: Request, res: Response) => {
+  if (!guard(res)) return;
+  await forgetCookies();
   res.json({ ok: true });
 });
 

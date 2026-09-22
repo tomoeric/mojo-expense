@@ -229,10 +229,11 @@ export const env = {
      * How long a sign-in will wait for somebody to type a verification code.
      *
      * A parked run holds a live browser and the profile lock, so this cannot be
-     * generous. Five minutes is long enough to unlock a phone and read a text,
-     * and short enough that a run abandoned mid-way frees itself.
+     * unbounded. Five minutes proved too mean: Emburse mails the code rather
+     * than texting it, and finding a mail, on a phone, while a timer nobody
+     * can see runs down, is not five minutes of work. Ten.
      */
-    challengeTimeoutMs: int("EMBURSE_CHALLENGE_TIMEOUT_MS", 5 * 60_000),
+    challengeTimeoutMs: int("EMBURSE_CHALLENGE_TIMEOUT_MS", 10 * 60_000),
     /**
      * How long to let the app paint after the password goes in.
      *

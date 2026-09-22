@@ -76,16 +76,28 @@ const settings = {
 } as ExportSettings;
 
 /**
- * Throw away the browser's memory of this device.
+ * Throw away the browser's memory of this device — all of it.
  *
  * The profile is shared by every run here, which is the point of section 7 —
  * and a nuisance everywhere after it, because a device trusted once is never
  * asked again. Any section that needs to meet a challenge has to arrive as a
  * stranger, so it says so out loud rather than depending on what ran before.
+ *
+ * There are two places that memory lives, and forgetting one is not enough:
+ * the profile directory, and the cookie jar in the database that was added
+ * precisely because a deploy wipes the directory. Clearing only the directory
+ * made every challenge section here pass trivially — a good sign for the
+ * feature, and a useless test.
  */
 const profileDir = process.env.EMBURSE_PROFILE_DIR ?? ".emburse-profile";
-const forgetDevice = () => fs.rmSync(profileDir, { recursive: true, force: true });
-forgetDevice();
+const { forgetCookies } = await import("../server/emburse/browser-state.js");
+const forgetDevice = async () => {
+  fs.rmSync(profileDir, { recursive: true, force: true });
+  // No database configured is a fine way to run this suite; there is then no
+  // jar to clear and nothing to report.
+  await forgetCookies().catch(() => {});
+};
+await forgetDevice();
 
 let failures = 0;
 const check = (label: string, ok: boolean, detail = "") => {
@@ -250,7 +262,7 @@ await fetch(`${mock.url}/__outcome/ok`, { method: "POST" });
 // ------------------------------------------------ the code a person types in
 console.log("\n8. A verification code, entered by a person");
 const { GOOD_CODE } = await import("./mock-emburse.js");
-forgetDevice();
+await forgetDevice();
 mock.reset();
 await fetch(`${mock.url}/__outcome/code`, { method: "POST" });
 
@@ -307,7 +319,7 @@ console.log("\n9. Answering through the registry, as the app does");
 const { waitForCode, answerChallenge, cancelChallenge, currentChallenge } =
   await import("../server/emburse/challenge.js");
 
-forgetDevice();
+await forgetDevice();
 mock.reset();
 await fetch(`${mock.url}/__outcome/code`, { method: "POST" });
 
@@ -362,7 +374,7 @@ check("the challenge is cleared afterwards", currentChallenge() === null);
 // on a server nobody is looking at — this is also what the timeout does when
 // it fires, by the same path.
 console.log("\n10. Nobody answers");
-forgetDevice();
+await forgetDevice();
 mock.reset();
 await fetch(`${mock.url}/__outcome/code`, { method: "POST" });
 
@@ -385,7 +397,7 @@ check("nothing is waiting, so there is nothing to answer", !answerChallenge(GOOD
 // the browser must let go by itself. Without this the server keeps a half-open
 // sign-in and the profile lock indefinitely, and the next run cannot start.
 console.log("\n11. Nobody comes back at all");
-forgetDevice();
+await forgetDevice();
 mock.reset();
 await fetch(`${mock.url}/__outcome/code`, { method: "POST" });
 
@@ -407,7 +419,7 @@ await fetch(`${mock.url}/__outcome/ok`, { method: "POST" });
 // seconds looking at a dashboard that had not painted, and reported that the
 // app never appeared. The screenshot taken a second later showed it loaded.
 console.log("\n12. A signed-in app that has not painted yet");
-forgetDevice();
+await forgetDevice();
 mock.reset();
 await fetch(`${mock.url}/__app?paintMs=6000`, { method: "POST" });
 
@@ -417,7 +429,7 @@ check("waits for the app rather than judging a blank page", run.ok, detail.slice
 check("and reports a plain sign-in", /signed in as bot@example.invalid$/.test(detail), detail);
 
 console.log("\n13. A signed-in app the loggedIn selector no longer matches");
-forgetDevice();
+await forgetDevice();
 mock.reset();
 // The app is there and rendered; only the word the selector looks for is gone.
 await fetch(`${mock.url}/__app?nav=false`, { method: "POST" });

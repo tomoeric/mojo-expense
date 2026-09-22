@@ -67,9 +67,21 @@ Three things follow, and all three are easy to break:
   and a failed run names the step, quotes what it looked for, and hands back a
   screenshot. Never hard-code a new one; add it to `DEFAULT_SELECTORS`,
   `SELECTOR_HELP` and `STEP_SELECTORS` so it can be corrected without a deploy.
-- **The browser profile is persistent** (`EMBURSE_PROFILE_DIR`). That is what
-  makes Emburse's "remember this device" mean anything. Anything that launches
-  a fresh browser per run silently undoes it.
+- **The remembered device lives in two places, and needs both.** The browser
+  profile (`EMBURSE_PROFILE_DIR`) carries Emburse's "remember this device"
+  between runs — but it sits in the app directory, which **Replit rebuilds on
+  every deploy**, so on its own the device is forgotten every time the app
+  ships. The cookie jar in `emburse_browser_state` (sealed with the credential
+  key) is what carries it across deploys. Anything that launches a fresh
+  browser per run, or skips `restoreCookies`, silently puts somebody back to
+  reading a verification code every morning.
+- **No request waits for a run.** A run takes minutes; the proxy in front of
+  the app gives up long before that and answers with `upstream request
+  timeout` as plain text. `POST /api/export-run` returns as soon as the run
+  has an id, and the page follows it by polling `/api/export-runs` — which is
+  also how a parked verification-code prompt reaches the screen. Never make
+  the page await a run, and never `res.json()` a response without checking it
+  is JSON.
 - **Absence is never success.** A selector that matches nothing must fail, not
   be read as "already done". That mistake shipped once and turned a failed
   login into three green steps.

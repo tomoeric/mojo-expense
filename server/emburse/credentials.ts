@@ -78,7 +78,7 @@ function key(): Buffer {
   return crypto.scryptSync(material, "mojo-expense.emburse-credential.v1", 32);
 }
 
-function seal(plain: string): Buffer {
+export function seal(plain: string): Buffer {
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv(ALGO, key(), iv);
   const body = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
@@ -86,7 +86,7 @@ function seal(plain: string): Buffer {
   return Buffer.concat([iv, cipher.getAuthTag(), body]);
 }
 
-function open(sealed: Buffer): string {
+export function open(sealed: Buffer): string {
   const iv = sealed.subarray(0, 12);
   const tag = sealed.subarray(12, 28);
   const decipher = crypto.createDecipheriv(ALGO, key(), iv);

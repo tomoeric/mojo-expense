@@ -144,12 +144,32 @@ The test run stops and asks you for it, in the page, with a picture of what
 Emburse is showing. Type the code in and the run carries on from where it
 stopped.
 
-That should happen **once**. The app ticks *remember this device*, and the
-browser keeps a persistent profile (`EMBURSE_PROFILE_DIR`), so the next run
-signs straight in. If you are asked again on the next run, the tick did not take
-— check the `mfaRemember` selector against that screen, because the default
-matches the first checkbox on the page and a tenant may put something else
-there.
+That should happen **once**, including across deploys. Three things have to hold
+for that, and each has failed at least once:
+
+1. The app ticks *remember this device* before submitting the code.
+2. The browser keeps a persistent profile (`EMBURSE_PROFILE_DIR`), so the
+   trust survives between runs.
+3. The cookies are also kept in the database (`emburse_browser_state`), so the
+   trust survives a **deploy** — which rebuilds the profile directory.
+
+The run page says which state you are in: *"Emburse trusts this browser —
+remembered &lt;when&gt;"*, or that it does not know the browser yet. If you are
+asked for a code when it says it is trusted, the jar has gone stale: press
+**Forget it** and pass one more code.
+
+If you are asked again right after passing one, the tick did not take — check
+the `mfaRemember` selector, because the default matches the first checkbox on
+the page and a tenant may put something else there.
+
+Prove the whole chain without a tenant:
+
+```bash
+pnpm exec tsx scripts/test-browser-state.ts    # needs DATABASE_URL + a browser
+```
+
+It passes a code, wipes the profile directory the way a deploy does, and
+requires the next run to sign in with nobody there to ask.
 
 Two things it deliberately will not do:
 

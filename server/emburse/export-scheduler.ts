@@ -164,7 +164,21 @@ export async function runScreenshot(id: number): Promise<Buffer | null> {
 export async function attemptExport(
   trigger: "scheduled" | "manual" | "dry-run",
   by: string,
-  opts: { dryRun?: boolean } = {},
+  opts: {
+    dryRun?: boolean;
+    /**
+     * Called with the run's id the moment it is recorded, before any browser
+     * starts.
+     *
+     * A run takes minutes, and the proxy in front of the app gives up on a
+     * request long before that — returning `upstream request timeout` as plain
+     * text to a page expecting JSON. So the request that starts a run must not
+     * be the request that waits for it. This is how the caller gets an id to
+     * hand back immediately, while the run carries on in the background and
+     * reports its progress through the run list.
+     */
+    onStarted?: (id: number) => void;
+  } = {},
 ): Promise<{ id: number; run: ExportRun; importId: number | null }> {
   await ensure();
   const settings = await readSettings();
@@ -177,6 +191,7 @@ export async function attemptExport(
     [day, trigger],
   );
   const id = Number(rows[0]!.id);
+  opts.onStarted?.(id);
 
   let run: ExportRun = {
     ok: false, signInFailed: false, credentialFault: false,
@@ -257,6 +272,26 @@ let running = false;
  * two cheap queries, and being a few minutes late to a daily export costs
  * nothing.
  */
+/**
+ * Close out runs the process was in the middle of when it stopped.
+ *
+ * A run records itself before it starts and updates itself when it finishes,
+ * so a restart in between leaves a row that says "Running" and never stops —
+ * which also blocks the buttons on a page that waits for the current run to
+ * end. Nothing else can finish those rows, because the browser they were
+ * driving died with the process.
+ */
+export async function closeOrphanedRuns(): Promise<number> {
+  await ensure();
+  const { rowCount } = await db().query(
+    `UPDATE export_runs
+        SET finished_at = now(), ok = false,
+            error = 'The server restarted while this run was going, so it was stopped.'
+      WHERE finished_at IS NULL`,
+  );
+  return rowCount ?? 0;
+}
+
 export function startExportScheduler(): void {
   if (timer) return;
   // No credential check at boot: one can be added in the app at any time, and a
@@ -287,6 +322,12 @@ export function startExportScheduler(): void {
       running = false;
     }
   };
+
+  // Before anything else: a run interrupted by the restart that just happened
+  // is not running, and saying otherwise blocks the page that shows it.
+  void closeOrphanedRuns()
+    .then((n) => n > 0 && console.log(`export: closed ${n} run(s) interrupted by a restart`))
+    .catch((err) => console.error("export: could not close interrupted runs:", err));
 
   // A minute after boot, so a restart during a due window picks it up without
   // waiting for the next tick.
