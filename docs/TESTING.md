@@ -16,6 +16,9 @@ Runs anywhere, including here. No credentials, no Emburse, no SharePoint.
 
 ```bash
 pnpm exec tsx scripts/verify-schedule.ts       # 26 boundary cases
+pnpm exec tsx scripts/test-browser-lock.ts     # one browser at a time
+pnpm exec tsx scripts/test-receipt-cleanup.ts  # releasing approved receipts (needs DATABASE_URL)
+pnpm exec tsx scripts/test-decisions.ts        # the decision queue (needs DATABASE_URL + a browser)
 pnpm exec tsx scripts/test-settings-check.ts   # the export-scope warning
 pnpm exec tsx scripts/verify-import.ts <export.pdf>
 ```

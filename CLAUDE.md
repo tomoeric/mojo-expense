@@ -38,6 +38,26 @@ Neither block is optional; a reply that ends without both is incomplete. If a
 step beyond restart is needed (re-run the import, change a secret), say so after
 the blocks.
 
+## Approving and denying
+
+- **Deciding records; a worker applies.** Clicking Approve/Deny writes a row in
+  `expense_decisions` and returns. `decision-worker.ts` applies the queue in one
+  browser session that signs in once — because on the real tenant a sign-in is
+  ~50s and a decision that drove Emburse on the click would be ~90s each.
+- **One browser, shared.** The export and decisions drive the same profile and
+  Chromium locks it, so both go through `withBrowser()` in `browser-lock.ts`.
+  Anything new that opens a browser must too, or it will collide with the 6am
+  export and fail on a lock error that blames nothing.
+- **The target comes from our records, never the request.** It is what the
+  browser verifies the Emburse row against; a client that could supply it could
+  name one expense and describe another.
+- **A denial needs a reason**, enforced in `queueDecision` rather than only in
+  the dialog.
+- **Receipts are released only once an export confirms the expense left the
+  inbox.** An approval is known to have taken only then, and by that point the
+  image can never be fetched again. Links go first, images only when nothing
+  references them — they are shared by content hash.
+
 ## Shape
 
 - Standalone app. Not part of ninja-live-status: own repo, own Replit app, own

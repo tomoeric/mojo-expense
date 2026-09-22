@@ -24,11 +24,15 @@ export type Row = {
   /** Warn-level flags naming this specific line. */
   flags: string[];
   ageDays: number | null;
+  /** The decision on this expense, when there is one. */
+  decision?: { state: string } | undefined;
+  /** The control for deciding it, supplied by whoever renders the table. */
+  decide?: React.ReactNode;
 };
 
 type ColumnKey =
   | "date" | "employee" | "merchant" | "category" | "department"
-  | "note" | "receipt" | "changed" | "age" | "flags" | "amount";
+  | "note" | "receipt" | "changed" | "age" | "flags" | "amount" | "decide";
 
 type Column = {
   key: ColumnKey;
@@ -51,10 +55,10 @@ const COLUMNS: Column[] = [
     value: (r) => r.line.date ?? "",
     render: (r) => <span className="whitespace-nowrap">{r.line.date ? shortDate(r.line.date) : "—"}</span> },
   { key: "employee", label: "Employee", pct: 11, value: (r) => r.employee },
-  { key: "merchant", label: "Merchant", pct: 16, value: (r) => r.line.merchant },
-  { key: "category", label: "Category", pct: 11, value: (r) => r.line.category },
+  { key: "merchant", label: "Merchant", pct: 13, value: (r) => r.line.merchant },
+  { key: "category", label: "Category", pct: 9, value: (r) => r.line.category },
   { key: "department", label: "Department", pct: 10, value: (r) => r.department },
-  { key: "note", label: "Note", pct: 14, value: (r) => r.line.note },
+  { key: "note", label: "Note", pct: 10, value: (r) => r.line.note },
   { key: "receipt", label: "Receipt", pct: 6,
     value: (r) => (r.line.hasReceipt ? 1 : 0),
     render: (r) =>
@@ -100,6 +104,11 @@ const COLUMNS: Column[] = [
   { key: "amount", label: "Amount", pct: 7, numeric: true,
     value: (r) => r.line.amount,
     render: (r) => <span className="font-semibold">{money(r.line.amount)}</span> },
+  // Last by default, and sortable by state so everything still waiting to
+  // reach Emburse can be brought together.
+  { key: "decide", label: "Decision", pct: 12,
+    value: (r) => r.decision?.state ?? "",
+    render: (r) => r.decide ?? <span className="text-xs text-muted-foreground">—</span> },
 ];
 
 const DEFAULT_ORDER: ColumnKey[] = COLUMNS.map((c) => c.key);
