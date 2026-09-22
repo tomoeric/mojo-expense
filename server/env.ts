@@ -55,12 +55,45 @@ function defaultReportsPath(): string {
   return product() === "professional" ? "expensereports" : "transactions";
 }
 
+/**
+ * Connection string, in precedence order.
+ *
+ * `DATABASE_URL` is checked LAST on purpose. Replit injects that name itself
+ * whenever a managed Postgres is attached to a Repl, and the injected value
+ * can win over a hand-set secret — so an app pointed at an external Neon
+ * project silently talks to the wrong database instead of failing. Setting
+ * NEON_DATABASE_URL sidesteps the collision entirely.
+ */
+const DB_VARS = ["NEON_DATABASE_URL", "EXTERNAL_DATABASE_URL", "DATABASE_URL"] as const;
+
+function databaseUrl(): string {
+  for (const name of DB_VARS) {
+    const value = str(name);
+    if (value) return value;
+  }
+  return "";
+}
+
+/** Which variable supplied it — for the boot log. Never the value. */
+export function databaseUrlSource(): string {
+  return DB_VARS.find((n) => str(n)) ?? "none";
+}
+
+/** Host only, so the boot log can prove which database it reached. */
+export function databaseHost(): string {
+  try {
+    return new URL(env.databaseUrl).host;
+  } catch {
+    return "unparseable";
+  }
+}
+
 export const env = {
   port: int("PORT", 5000),
   isProd: process.env.NODE_ENV === "production",
 
   /** Neon connection string. Absent = the app has no store and no imports. */
-  databaseUrl: str("DATABASE_URL"),
+  databaseUrl: databaseUrl(),
 
   emburse: {
     product: product(),

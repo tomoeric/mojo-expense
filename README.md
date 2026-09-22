@@ -145,10 +145,29 @@ Emburse Spend's API is provisioning-only — members, team fields, receipt
 upload — with no endpoint for expenses at any tier. The data therefore comes
 from the **Expenses PDF export**, uploaded on the Import page.
 
-Set `DATABASE_URL` to a Neon connection string; the schema creates itself on
-boot (idempotent `CREATE … IF NOT EXISTS`, no migration step). With a database
+Point the app at a Neon connection string; the schema creates itself on boot
+(idempotent `CREATE … IF NOT EXISTS`, no migration step). With a database
 configured the app reads imported expenses and ignores the Emburse API
 entirely.
+
+**Which variable to use.** Three names are read, in this order:
+
+1. `NEON_DATABASE_URL` — **prefer this**
+2. `EXTERNAL_DATABASE_URL`
+3. `DATABASE_URL`
+
+`DATABASE_URL` is last deliberately. Replit injects that name itself whenever a
+managed Postgres is attached to a Repl, and the injected value can win over a
+hand-set secret — so an app aimed at an external Neon project silently reads
+the wrong database instead of failing. Using `NEON_DATABASE_URL` avoids the
+collision. The boot log names the source and host it resolved:
+
+```
+Database: ep-xyz-pooler.us-east-2.aws.neon.tech (from NEON_DATABASE_URL)
+```
+
+Use Neon's **pooled** connection string (hostname contains `-pooler`): Replit
+opens and drops connections freely and the pooler is built for that.
 
 ### Where the file comes from
 

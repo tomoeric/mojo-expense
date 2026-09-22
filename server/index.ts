@@ -3,7 +3,7 @@ import cookieParser from "cookie-parser";
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import { env } from "./env.js";
+import { env, databaseHost, databaseUrlSource } from "./env.js";
 import { api } from "./routes.js";
 import { allowListSize, authMiddleware, authRouter, isAuthConfigured } from "./auth/index.js";
 import { importRouter } from "./import/routes.js";
@@ -63,13 +63,16 @@ app.listen(env.port, "0.0.0.0", () => {
   console.log(`Emburse product: ${env.emburse.product}`);
   console.log(`Microsoft sign-in: ${isAuthConfigured() ? "configured" : "NOT configured"}`);
   if (isDbConfigured()) {
+    // Name the source and host so a wrong-database mix-up is visible at a
+    // glance rather than showing up as mysteriously empty data.
+    console.log(`Database: ${databaseHost()} (from ${databaseUrlSource()})`);
     // Create the tables on boot; the app still serves if this fails so the
     // error is visible in the UI rather than only in a crash loop.
     ensureSchema()
       .then(() => startSyncTimer())
       .catch((err: unknown) => console.error("schema bootstrap failed:", err));
   } else {
-    console.log("DATABASE_URL not set — imports are unavailable.");
+    console.log("No database configured (NEON_DATABASE_URL / EXTERNAL_DATABASE_URL / DATABASE_URL) — imports are unavailable.");
   }
   const allowed = allowListSize();
   console.log(
