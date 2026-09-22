@@ -1,5 +1,6 @@
 import { db, ensureSchema } from "../db.js";
 import { env } from "../env.js";
+import { DEFAULT_SELECTORS } from "../emburse/auto-export.js";
 
 /**
  * What the daily Emburse export is supposed to contain.
@@ -21,6 +22,12 @@ import { env } from "../env.js";
  */
 
 export type ExportSettings = {
+  /**
+   * Selectors the browser automation uses. Stored rather than compiled in
+   * because Emburse's markup cannot be known from outside their tenant, and
+   * correcting one after a failed run should not need a deploy.
+   */
+  selectors: Record<string, string>;
   /** Emburse Section chips expected in the export dialog. */
   sections: string[];
   /** Whether the Receipts: true filter is expected. */
@@ -82,6 +89,7 @@ ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS first_run       text;
 ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS retry_hours     integer;
 ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS attempts_per_day integer;
 ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS grace_minutes   integer;
+ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS selectors       jsonb;
 `;
 
 let ready: Promise<void> | null = null;
@@ -96,14 +104,18 @@ export async function readSettings(): Promise<ExportSettings> {
     sections: string[]; receipts_only: boolean; updated_at: Date; updated_by: string | null;
     timezone: string | null; first_run: string | null;
     retry_hours: number | null; attempts_per_day: number | null; grace_minutes: number | null;
+    selectors: Record<string, string> | null;
   }>(`SELECT sections, receipts_only, updated_at, updated_by,
-             timezone, first_run, retry_hours, attempts_per_day, grace_minutes
+             timezone, first_run, retry_hours, attempts_per_day, grace_minutes, selectors
         FROM export_settings WHERE id`);
 
   const row = rows[0];
   const fallback = envSchedule();
   if (!row) {
-    return { sections: DEFAULT_SECTIONS, receiptsOnly: true, schedule: fallback, updatedAt: null, updatedBy: null };
+    return {
+      sections: DEFAULT_SECTIONS, receiptsOnly: true, schedule: fallback,
+      selectors: { ...DEFAULT_SELECTORS }, updatedAt: null, updatedBy: null,
+    };
   }
   return {
     sections: row.sections,
@@ -117,6 +129,9 @@ export async function readSettings(): Promise<ExportSettings> {
       attemptsPerDay: row.attempts_per_day ?? fallback.attemptsPerDay,
       graceMinutes: row.grace_minutes ?? fallback.graceMinutes,
     },
+    // Merged over the defaults, so a key added in a later build appears without
+    // anyone having to re-save, and a stored key always wins.
+    selectors: { ...DEFAULT_SELECTORS, ...(row.selectors ?? {}) },
     updatedAt: row.updated_at.toISOString(),
     updatedBy: row.updated_by,
   };
@@ -126,6 +141,7 @@ export async function writeSettings(
   sections: string[],
   receiptsOnly: boolean,
   schedule: Schedule,
+  selectors: Record<string, string>,
   updatedBy: string,
 ): Promise<ExportSettings> {
   await ensure();
@@ -133,16 +149,17 @@ export async function writeSettings(
   const ordered = ALL_SECTIONS.filter((s) => sections.includes(s));
   await db().query(
     `INSERT INTO export_settings (id, sections, receipts_only, timezone, first_run,
-                                  retry_hours, attempts_per_day, grace_minutes, updated_at, updated_by)
-     VALUES (true, $1, $2, $3, $4, $5, $6, $7, now(), $8)
+                                  retry_hours, attempts_per_day, grace_minutes, selectors,
+                                  updated_at, updated_by)
+     VALUES (true, $1, $2, $3, $4, $5, $6, $7, $8, now(), $9)
      ON CONFLICT (id) DO UPDATE SET
        sections = EXCLUDED.sections, receipts_only = EXCLUDED.receipts_only,
        timezone = EXCLUDED.timezone, first_run = EXCLUDED.first_run,
        retry_hours = EXCLUDED.retry_hours, attempts_per_day = EXCLUDED.attempts_per_day,
-       grace_minutes = EXCLUDED.grace_minutes,
+       grace_minutes = EXCLUDED.grace_minutes, selectors = EXCLUDED.selectors,
        updated_at = now(), updated_by = EXCLUDED.updated_by`,
     [ordered, receiptsOnly, schedule.timezone, schedule.firstRun, schedule.retryHours,
-     schedule.attemptsPerDay, schedule.graceMinutes, updatedBy],
+     schedule.attemptsPerDay, schedule.graceMinutes, JSON.stringify(selectors), updatedBy],
   );
   return readSettings();
 }

@@ -189,6 +189,31 @@ export const env = {
     graceMinutes: int("EXPORT_GRACE_MINUTES", 90),
   },
 
+  /**
+   * The Emburse account the browser automation signs in as.
+   *
+   * A dedicated service account, not a person: a password change by a human
+   * would otherwise stop the export, and its actions stay distinguishable in
+   * Emburse's audit trail. MFA has to be off for it — no bot can satisfy a
+   * challenge — which is exactly why it should be an account that can do
+   * nothing but read and export.
+   */
+  emburseLogin: {
+    url: str("EMBURSE_LOGIN_URL", "https://app.spend.emburse.com"),
+    email: str("EMBURSE_LOGIN_EMAIL"),
+    password: str("EMBURSE_LOGIN_PASSWORD"),
+    /** Per-step patience. Emburse's grid re-renders are not instant. */
+    stepTimeoutMs: int("EMBURSE_STEP_TIMEOUT_MS", 30_000),
+    /** How long to keep polling for the queued export to finish. */
+    exportWaitMs: int("EMBURSE_EXPORT_WAIT_MS", 15 * 60_000),
+    /**
+     * A Chromium binary to use instead of the one Playwright downloaded.
+     * Needed wherever the host supplies its own browser, since Playwright
+     * insists on the exact build it shipped with and fails outright otherwise.
+     */
+    chromiumPath: str("PLAYWRIGHT_CHROMIUM_PATH"),
+  },
+
   audit: {
     /**
      * Anthropic credentials. Two shapes are accepted, checked in this order:

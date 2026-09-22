@@ -7,6 +7,7 @@ import { syncFromSharePoint, syncOnPageLoad } from "./sync.js";
 import { isSharePointConfigured } from "./sharepoint.js";
 import { describeSchedule } from "./schedule.js";
 import { ALL_SECTIONS, cleanSchedule, readSettings, writeSettings } from "./settings.js";
+import { DEFAULT_SELECTORS, isAutoExportConfigured, runAutoExport } from "../emburse/auto-export.js";
 
 /**
  * Upload and history for the daily Emburse export.
@@ -136,7 +137,7 @@ importRouter.get("/export-settings", requireAuth, async (_req: Request, res: Res
 importRouter.put("/export-settings", requireAuth, requireAdmin, async (req: Request, res: Response) => {
   if (!guard(res)) return;
 
-  const body = req.body as { sections?: unknown; receiptsOnly?: unknown; schedule?: unknown };
+  const body = req.body as { sections?: unknown; receiptsOnly?: unknown; schedule?: unknown; selectors?: unknown };
   const sections = Array.isArray(body.sections) ? body.sections.filter((s): s is string => typeof s === "string") : null;
   if (!sections) {
     res.status(400).json({ error: "sections must be an array of section names." });
@@ -158,6 +159,7 @@ importRouter.put("/export-settings", requireAuth, requireAdmin, async (req: Requ
       sections,
       body.receiptsOnly !== false,
       cleanSchedule(body.schedule as never, current.schedule),
+      cleanSelectors(body.selectors, current.selectors),
       req.user?.email ?? "unknown",
     );
     res.json({ ...saved, allSections: ALL_SECTIONS });
@@ -165,3 +167,59 @@ importRouter.put("/export-settings", requireAuth, requireAdmin, async (req: Requ
     res.status(500).json({ error: err instanceof Error ? err.message : "Could not save settings." });
   }
 });
+
+
+/**
+ * Drive Emburse and fetch today's export.
+ *
+ * `dryRun` stops at the point of clicking Export, which is the setting to use
+ * while correcting selectors: it exercises sign-in, navigation, the filter and
+ * the whole dialog without asking Emburse to produce a file or sending anybody
+ * an email. Only a real run imports.
+ *
+ * The response is the step list either way. A failed run is not an error to be
+ * swallowed — it is the diagnostic, naming the step that broke and carrying a
+ * screenshot of the page it broke on.
+ */
+importRouter.post("/export-run", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  if (!isAutoExportConfigured()) {
+    res.status(503).json({
+      error:
+        "Browser automation is not configured. Set EMBURSE_LOGIN_EMAIL and EMBURSE_LOGIN_PASSWORD " +
+        "(a dedicated Emburse service account with MFA off) and restart.",
+    });
+    return;
+  }
+
+  const dryRun = req.query.dryRun === "1";
+  try {
+    const settings = await readSettings();
+    const run = await runAutoExport(settings, settings.selectors as never, { dryRun });
+
+    let imported = null;
+    if (run.ok && run.pdf) {
+      imported = await ingestExport(run.pdf, `emburse-${new Date().toISOString().slice(0, 10)}.pdf`,
+        req.user?.email ?? "auto-export");
+    }
+    res.json({ ...run, pdf: undefined, pdfBytes: run.pdf?.length ?? 0, imported });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "Export run failed." });
+  }
+});
+
+/**
+ * Keep only known selector keys, as non-empty strings.
+ *
+ * These are fed straight to Playwright, so an unbounded object from the client
+ * would be both a way to grow the stored blob without limit and a way to smuggle
+ * keys a later build might start trusting.
+ */
+function cleanSelectors(raw: unknown, current: Record<string, string>): Record<string, string> {
+  if (!raw || typeof raw !== "object") return current;
+  const out = { ...current };
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (k in DEFAULT_SELECTORS && typeof v === "string" && v.trim()) out[k] = v.trim().slice(0, 500);
+  }
+  return out;
+}
