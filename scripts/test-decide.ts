@@ -76,5 +76,58 @@ accepts("a two-letter merchant is skipped rather than mismatched",
 check("…and the row still had to match on person, amount and date",
   !rowMatches("9/13/2026 SOMETHING ELSE Kevin McBride $26.40", bp).ok);
 
+
+// ---------------------------------------------------------------------------
+// The browser half. Runs against the stand-in Emburse, whose grid deliberately
+// contains rows that differ from the target by one field each — a different
+// person at the same amount, and the same person at $126.40 against $26.40.
+// ---------------------------------------------------------------------------
+
+const { startMock } = await import("./mock-emburse.js");
+const mock = await startMock(5402, "/dev/null");
+
+process.env.EMBURSE_LOGIN_EMAIL ||= "bot@example.invalid";
+process.env.EMBURSE_LOGIN_PASSWORD ||= "not-a-real-password";
+process.env.EMBURSE_STEP_TIMEOUT_MS ||= "12000";
+
+const { runDecision } = await import("../server/emburse/decide.js");
+
+const SEL = {
+  loginEmail: 'input[name="email"]',
+  loginPassword: 'input[name="password"]',
+  loginSubmit: 'button[type="submit"]',
+  loggedIn: 'a:has-text("Transactions")',
+  adminTab: 'a:has-text("ADMIN")',
+  grid: "table",
+  gridPath: "/transactions/team",
+  resultRow: "table tbody tr",
+  approveButton: 'button:has-text("APPROVE")',
+};
+const LOGIN = { userId: null, email: "bot@example.invalid", password: "x" };
+
+const decide = (t: Target, dry = true) =>
+  runDecision("approve", t, "", SEL, mock.url, LOGIN, { dryRun: dry });
+
+console.log("\n7. Finding the row in a real grid");
+mock.reset();
+let run = await decide(TARGET);
+for (const s of run.steps) console.log(`     ${s.ok ? "·" : "✗"} ${s.name.padEnd(28)} ${s.detail.slice(0, 80)}`);
+check("found and verified the right row", run.ok);
+check("the matched row is Brianna's $26.40",
+  /Brianna Ruth/.test(run.matchedRow ?? "") && /26\.40/.test(run.matchedRow ?? ""),
+  run.matchedRow ?? "none");
+check("it is not the $126.40 row", !/126\.40/.test(run.matchedRow ?? ""));
+
+console.log("\n8. An expense that is not there");
+run = await decide({ ...TARGET, amount: 999.99 });
+check("refused", !run.ok);
+check("said none matched", /none of the .* rows match/.test(run.steps.find((s) => !s.ok)?.detail ?? ""),
+  run.steps.find((s) => !s.ok)?.detail ?? "");
+
+console.log("\n9. A person whose expense it is not");
+run = await decide({ ...TARGET, employee: "Nobody Here" });
+check("refused rather than taking the same-amount row", !run.ok);
+
+await mock.close();
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}\n`);
 process.exit(failures === 0 ? 0 : 1);

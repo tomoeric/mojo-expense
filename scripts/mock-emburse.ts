@@ -28,6 +28,7 @@ type State = {
   receiptsFilter: boolean;
   sections: Record<string, boolean>;
   rowsTicked: number;
+  search: string;
   format: string;
   requestedAt: number | null;
 };
@@ -47,12 +48,33 @@ const state: State = {
     "Pending Submission": false, Denied: true, Completed: false,
   },
   rowsTicked: 0,
+  search: "",
   format: "CSV",
   requestedAt: null,
 };
 
 /** How long the fake export takes to become downloadable. */
 const EXPORT_MS = 2000;
+
+/** A handful of rows, deliberately including two that are nearly identical. */
+const ROWS = [
+  { date: "9/13/2026", merchant: "DOORDASH INC.", who: "Brianna Ruth", amount: "26.40" },
+  { date: "9/13/2026", merchant: "DOORDASH INC.", who: "Kevin McBride", amount: "26.40" },
+  { date: "9/12/2026", merchant: "DOORDASH INC.", who: "Brianna Ruth", amount: "126.40" },
+  { date: "9/13/2026", merchant: "SHELL OIL", who: "Brianna Ruth", amount: "44.10" },
+];
+
+const grid = (search: string) => {
+  const term = search.trim().toLowerCase();
+  const shown = term ? ROWS.filter((r) => r.merchant.toLowerCase().includes(term)) : ROWS;
+  return `<table><thead><tr><th>Date</th><th>Merchant</th><th>Employee</th><th>Amount</th><th></th></tr></thead>
+    <tbody>${shown
+      .map(
+        (r) => `<tr><td>${r.date}</td><td>${r.merchant}</td><td>${r.who}</td><td>$${r.amount}</td>
+        <td><button>APPROVE</button> <button aria-label="more">&#8942;</button></td></tr>`,
+      )
+      .join("")}</tbody></table>`;
+};
 
 const page = (body: string) => `<!doctype html><html><body style="font-family:sans-serif">${body}</body></html>`;
 
@@ -86,7 +108,13 @@ app.get("/admin", (_req, res) => {
   res.redirect("/transactions");
 });
 
-app.get("/transactions", (_req, res) => {
+app.get(["/transactions", "/transactions/team"], (req, res) => {
+  // Filters arrive in the query string, as Emburse's own URLs do:
+  //   /transactions/team?filters[section]=inbox&filters[receipt]=true
+  const q = req.query as Record<string, string>;
+  if ("filters[receipt]" in q) state.receiptsFilter = q["filters[receipt]"] === "true";
+  state.search = q["filters[query]"] ?? "";
+
   const count = state.receiptsFilter ? 193 : 275;
   const total = state.receiptsFilter ? "39,706.03" : "52,110.44";
   res.send(page(`
@@ -96,7 +124,7 @@ app.get("/transactions", (_req, res) => {
     <form method="post" action="/tick"><button type="submit">Tick a row</button></form>
     <p>rows ticked: ${state.rowsTicked}</p>
     <a href="/dialog"><button>EXPORT</button></a>
-    <table><tr><th>Date</th></tr><tr><td>Sep 13</td></tr></table>`));
+    ${grid(state.search)}`));
 });
 
 app.get("/filters", (_req, res) => {
@@ -187,7 +215,7 @@ app.post("/__reset", (_req, res) => {
 const reset = () =>
   Object.assign(state, {
     signedIn: false, admin: false, receiptsFilter: false, rowsTicked: 0,
-    format: "CSV", requestedAt: null,
+    search: "", format: "CSV", requestedAt: null,
     sections: {
       "Needs Review": true, "Needs Manager Review": false,
       "Pending Submission": false, Denied: true, Completed: false,

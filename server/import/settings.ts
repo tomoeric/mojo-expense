@@ -23,6 +23,14 @@ import { DEFAULT_SELECTORS } from "../emburse/auto-export.js";
 
 export type ExportSettings = {
   /**
+   * Where Emburse lives for this tenant.
+   *
+   * Editable rather than an env var because it is a guess until somebody
+   * checks their address bar, and a wrong guess should not need a redeploy to
+   * correct — the default was wrong exactly once already.
+   */
+  emburseUrl: string;
+  /**
    * Selectors the browser automation uses. Stored rather than compiled in
    * because Emburse's markup cannot be known from outside their tenant, and
    * correcting one after a failed run should not need a deploy.
@@ -90,6 +98,7 @@ ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS retry_hours     integer;
 ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS attempts_per_day integer;
 ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS grace_minutes   integer;
 ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS selectors       jsonb;
+ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS emburse_url     text;
 `;
 
 let ready: Promise<void> | null = null;
@@ -104,9 +113,10 @@ export async function readSettings(): Promise<ExportSettings> {
     sections: string[]; receipts_only: boolean; updated_at: Date; updated_by: string | null;
     timezone: string | null; first_run: string | null;
     retry_hours: number | null; attempts_per_day: number | null; grace_minutes: number | null;
-    selectors: Record<string, string> | null;
+    selectors: Record<string, string> | null; emburse_url: string | null;
   }>(`SELECT sections, receipts_only, updated_at, updated_by,
-             timezone, first_run, retry_hours, attempts_per_day, grace_minutes, selectors
+             timezone, first_run, retry_hours, attempts_per_day, grace_minutes, selectors,
+             emburse_url
         FROM export_settings WHERE id`);
 
   const row = rows[0];
@@ -114,7 +124,8 @@ export async function readSettings(): Promise<ExportSettings> {
   if (!row) {
     return {
       sections: DEFAULT_SECTIONS, receiptsOnly: true, schedule: fallback,
-      selectors: { ...DEFAULT_SELECTORS }, updatedAt: null, updatedBy: null,
+      selectors: { ...DEFAULT_SELECTORS }, emburseUrl: env.emburseLogin.url,
+      updatedAt: null, updatedBy: null,
     };
   }
   return {
@@ -132,6 +143,7 @@ export async function readSettings(): Promise<ExportSettings> {
     // Merged over the defaults, so a key added in a later build appears without
     // anyone having to re-save, and a stored key always wins.
     selectors: { ...DEFAULT_SELECTORS, ...(row.selectors ?? {}) },
+    emburseUrl: row.emburse_url || env.emburseLogin.url,
     updatedAt: row.updated_at.toISOString(),
     updatedBy: row.updated_by,
   };
@@ -142,6 +154,7 @@ export async function writeSettings(
   receiptsOnly: boolean,
   schedule: Schedule,
   selectors: Record<string, string>,
+  emburseUrl: string,
   updatedBy: string,
 ): Promise<ExportSettings> {
   await ensure();
@@ -150,16 +163,18 @@ export async function writeSettings(
   await db().query(
     `INSERT INTO export_settings (id, sections, receipts_only, timezone, first_run,
                                   retry_hours, attempts_per_day, grace_minutes, selectors,
-                                  updated_at, updated_by)
-     VALUES (true, $1, $2, $3, $4, $5, $6, $7, $8, now(), $9)
+                                  emburse_url, updated_at, updated_by)
+     VALUES (true, $1, $2, $3, $4, $5, $6, $7, $8, $9, now(), $10)
      ON CONFLICT (id) DO UPDATE SET
        sections = EXCLUDED.sections, receipts_only = EXCLUDED.receipts_only,
        timezone = EXCLUDED.timezone, first_run = EXCLUDED.first_run,
        retry_hours = EXCLUDED.retry_hours, attempts_per_day = EXCLUDED.attempts_per_day,
        grace_minutes = EXCLUDED.grace_minutes, selectors = EXCLUDED.selectors,
+       emburse_url = EXCLUDED.emburse_url,
        updated_at = now(), updated_by = EXCLUDED.updated_by`,
     [ordered, receiptsOnly, schedule.timezone, schedule.firstRun, schedule.retryHours,
-     schedule.attemptsPerDay, schedule.graceMinutes, JSON.stringify(selectors), updatedBy],
+     schedule.attemptsPerDay, schedule.graceMinutes, JSON.stringify(selectors),
+     cleanUrl(emburseUrl, env.emburseLogin.url), updatedBy],
   );
   return readSettings();
 }
@@ -236,4 +251,16 @@ export function checkAgainstSettings(
   }
 
   return warnings;
+}
+
+
+/** Only an https URL, and only its origin — paths would break every goto. */
+export function cleanUrl(raw: unknown, fallback: string): string {
+  if (typeof raw !== "string" || !raw.trim()) return fallback;
+  try {
+    const u = new URL(raw.trim().startsWith("http") ? raw.trim() : `https://${raw.trim()}`);
+    return u.protocol === "https:" ? u.origin : fallback;
+  } catch {
+    return fallback;
+  }
 }

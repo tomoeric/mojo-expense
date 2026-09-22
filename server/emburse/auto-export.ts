@@ -61,7 +61,7 @@ export type Selectors = Record<SelectorKey, string>;
 export type SelectorKey =
   | "loginEmail" | "loginPassword" | "loginSubmit" | "loggedIn"
   | "adminTab" | "transactionsNav" | "grid" | "itemCount"
-  | "advancedFilters" | "receiptsFilter" | "applyFilters"
+  | "gridPath"
   | "exportButton" | "dialog" | "dialogRoot" | "dialogScope" | "formatSelect"
   | "dialogExport" | "exportStarted"
   | "exportsNav" | "newestExportReady" | "newestExportDownload";
@@ -78,9 +78,8 @@ export const DEFAULT_SELECTORS: Selectors = {
   // The "34 items, $42,249.94" line above the grid.
   itemCount: 'text=/\\d[\\d,]* items?, \\$[\\d,]+\\.\\d{2}/',
 
-  advancedFilters: 'text=ADVANCED FILTERS',
-  receiptsFilter: 'text=Receipt',
-  applyFilters: 'button:has-text("Apply")',
+  // A path, not a selector: the grid's filters live in the query string.
+  gridPath: "/transactions/team",
 
   exportButton: 'button:has-text("EXPORT")',
   dialog: 'text=Export Expenses',
@@ -117,7 +116,7 @@ export const STEP_SELECTORS: Record<string, SelectorKey[]> = {
   "sign in": ["loginEmail", "loginPassword", "loginSubmit", "loggedIn"],
   "switch to ADMIN": ["adminTab"],
   "open Transactions": ["transactionsNav", "grid"],
-  "filter Receipts: true": ["advancedFilters", "receiptsFilter", "applyFilters"],
+  "filter Receipts: true": ["gridPath"],
   "read the item count": ["itemCount"],
   "open the export dialog": ["exportButton", "dialog"],
   "set the sections": ["dialogRoot", "dialog"],
@@ -137,9 +136,7 @@ export const SELECTOR_HELP: Record<SelectorKey, string> = {
   transactionsNav: "Cards → Transactions in the left nav.",
   grid: "The transactions table itself — used to tell the page has loaded.",
   itemCount: "The \u201cN items, $X\u201d line above the grid.",
-  advancedFilters: "The ADVANCED FILTERS link.",
-  receiptsFilter: "The Receipt control inside the filter panel.",
-  applyFilters: "The Apply button in the filter panel.",
+  gridPath: "Path to the transactions grid. Filters are added as query parameters.",
   exportButton: "The EXPORT button above the grid, not the one in the dialog.",
   dialog: "Text that proves the Export Expenses dialog is open.",
   dialogRoot: "The dialog element itself; section chips are looked for inside it.",
@@ -151,6 +148,28 @@ export const SELECTOR_HELP: Record<SelectorKey, string> = {
   newestExportReady: "The newest export's row once it reads Complete.",
   newestExportDownload: "The Download link on that row.",
 };
+
+/**
+ * The transactions grid, with its filters already applied.
+ *
+ * Emburse keeps the grid's filters in the query string —
+ * `/transactions/team?filters[section]=inbox&filters[receipt]=true` — which
+ * means the whole ADVANCED FILTERS dance is avoidable. Navigating straight to
+ * the filtered view removes three clicks, two of them on toggles whose state
+ * had to be read before being changed; a URL has no state to misread.
+ *
+ * `query` fills the search box, used when looking for one expense to decide on.
+ */
+export function gridUrl(
+  base: string,
+  opts: { section?: string; receiptsOnly?: boolean; query?: string; path?: string } = {},
+): string {
+  const url = new URL(opts.path ?? "/transactions/team", base);
+  url.searchParams.set("filters[section]", opts.section ?? "inbox");
+  if (opts.receiptsOnly) url.searchParams.set("filters[receipt]", "true");
+  url.searchParams.set("filters[query]", opts.query ?? "");
+  return url.toString();
+}
 
 export function envLogin(): Login | null {
   const { email, password } = env.emburseLogin;
@@ -309,6 +328,13 @@ export function explainLaunch(err: unknown): string {
       raw.split("\n")[0]
     );
   }
+  if (/ERR_NAME_NOT_RESOLVED|getaddrinfo|ENOTFOUND/i.test(raw)) {
+    return (
+      "That Emburse address does not exist — the hostname did not resolve. Open Emburse in a " +
+      "browser, copy what is in the address bar, and set it as the Emburse address in Export " +
+      "settings. Details: " + raw.split("\n")[0]
+    );
+  }
   // Anything else: the first line only. The rest is a stack nobody reads here.
   return raw.split("\n")[0]!;
 }
@@ -325,7 +351,8 @@ async function runSteps(
   setItemLine: (v: string) => void,
   setPdf: (b: Buffer) => void,
 ): Promise<boolean> {
-  const { url } = env.emburseLogin;
+  // From settings, so a wrong host can be corrected without a redeploy.
+  const url = settings.emburseUrl || env.emburseLogin.url;
 
   if (!(await step("open Emburse", async () => {
     await page.goto(url, { waitUntil: "domcontentloaded" });
@@ -365,22 +392,15 @@ async function runSteps(
     return "grid visible";
   }))) return false;
 
-  if (settings.receiptsOnly) {
-    if (!(await step("filter Receipts: true", async () => {
-      await page.locator(sel.advancedFilters).first().click();
-
-      // The receipts control is a toggle, like the section chips. Emburse
-      // remembers the last filter, so on the second run of the day a blind
-      // click turns it OFF — and the run then exports everything, succeeds,
-      // and reports a larger item count nobody is checking.
-      const control = page.locator(sel.receiptsFilter).first();
-      const on = await isOn(control);
-      if (!on) await control.click();
-
-      await page.locator(sel.applyFilters).first().click();
-      return on ? "already on" : "switched on";
-    }))) return false;
-  }
+  if (!(await step("filter Receipts: true", async () => {
+    // Straight to the filtered grid rather than clicking ADVANCED FILTERS and
+    // a checkbox. The filters live in the query string, so there is no toggle
+    // whose state could be misread and silently inverted.
+    const target = gridUrl(url, { receiptsOnly: settings.receiptsOnly, path: sel.gridPath });
+    await page.goto(target, { waitUntil: "domcontentloaded" });
+    await page.locator(sel.grid).first().waitFor({ state: "visible" });
+    return settings.receiptsOnly ? "receipts only, via the URL" : "unfiltered, via the URL";
+  }))) return false;
 
   await step("read the item count", async () => {
     // Not fatal: the count is a cross-check, not a precondition. A run that
@@ -508,21 +528,6 @@ function chipLocator(page: Page, sel: Selectors, name: string) {
 }
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-/**
- * Whether a toggle is on, for a checkbox or anything dressed as one.
- *
- * `isChecked` is the truth for a real checkbox and throws for everything else,
- * so the aria and class reading is the fallback rather than the other way
- * round — a chip that merely looks checked should not outvote one that says so.
- */
-async function isOn(el: ReturnType<Page["locator"]>): Promise<boolean> {
-  try {
-    return await el.isChecked();
-  } catch {
-    return isChipOn(el);
-  }
-}
 
 /**
  * Whether a section chip is switched on.

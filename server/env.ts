@@ -204,7 +204,7 @@ export const env = {
   credentialKey: str("EMBURSE_CREDENTIAL_KEY"),
 
   emburseLogin: {
-    url: str("EMBURSE_LOGIN_URL", "https://app.spend.emburse.com"),
+    url: str("EMBURSE_LOGIN_URL", "https://spend.emburse.com"),
     email: str("EMBURSE_LOGIN_EMAIL"),
     password: str("EMBURSE_LOGIN_PASSWORD"),
     /** Per-step patience. Emburse's grid re-renders are not instant. */

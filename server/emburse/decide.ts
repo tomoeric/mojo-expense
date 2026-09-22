@@ -1,7 +1,7 @@
 import type { Browser, Page } from "playwright";
 import { env } from "../env.js";
 import {
-  explainLaunch, loadPlaywright, makeStepper, systemChromium,
+  explainLaunch, gridUrl, loadPlaywright, makeStepper, systemChromium,
   type Login, type StepResult,
 } from "./auto-export.js";
 
@@ -49,11 +49,10 @@ export type DecisionRun = {
 };
 
 export type DecisionSelectorKey =
-  | "search" | "resultRow" | "approveButton" | "rowMenu"
+  | "resultRow" | "approveButton" | "rowMenu"
   | "denyButton" | "denyReason" | "denyConfirm" | "decisionApplied";
 
 export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
-  search: 'input[placeholder*="Search" i]',
   // Scoped to the grid body so the header row is never a candidate.
   resultRow: "table tbody tr",
   approveButton: 'button:has-text("APPROVE")',
@@ -65,7 +64,6 @@ export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
 };
 
 export const DECISION_SELECTOR_HELP: Record<DecisionSelectorKey, string> = {
-  search: "The Search box above the transactions grid.",
   resultRow: "One row of the results table.",
   approveButton: "The APPROVE button on a row.",
   rowMenu: "The ⋮ menu at the end of a row, which holds Deny.",
@@ -76,7 +74,7 @@ export const DECISION_SELECTOR_HELP: Record<DecisionSelectorKey, string> = {
 };
 
 export const DECISION_STEP_SELECTORS: Record<string, DecisionSelectorKey[]> = {
-  "search for the expense": ["search", "resultRow"],
+  "search for the expense": ["resultRow"],
   "verify it is the right row": ["resultRow"],
   approve: ["approveButton", "decisionApplied"],
   deny: ["rowMenu", "denyButton", "denyReason", "denyConfirm", "decisionApplied"],
@@ -140,6 +138,7 @@ export async function runDecision(
   target: Target,
   reason: string,
   selectors: Record<string, string>,
+  emburseUrl: string,
   login: Login,
   opts: { dryRun?: boolean } = {},
 ): Promise<DecisionRun> {
@@ -162,7 +161,7 @@ export async function runDecision(
     page = await context.newPage();
     page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
 
-    const ok = await drive(page, decision, target, reason, sel, login, step, opts, (t) => (matchedRow = t));
+    const ok = await drive(page, decision, target, reason, sel, emburseUrl, login, step, opts, (t) => (matchedRow = t));
     const screenshot = ok ? null : (await page.screenshot()).toString("base64");
     return { ok, steps, screenshot, matchedRow };
   } catch (err) {
@@ -179,13 +178,14 @@ async function drive(
   target: Target,
   reason: string,
   sel: Record<string, string>,
+  emburseUrl: string,
   login: Login,
   step: (name: string, fn: () => Promise<string>) => Promise<boolean>,
   opts: { dryRun?: boolean },
   setRow: (text: string) => void,
 ): Promise<boolean> {
   if (!(await step("open Emburse", async () => {
-    await page.goto(env.emburseLogin.url, { waitUntil: "domcontentloaded" });
+    await page.goto(emburseUrl, { waitUntil: "domcontentloaded" });
     return `loaded ${page.url()}`;
   }))) return false;
 
@@ -206,25 +206,17 @@ async function drive(
     return "clicked ADMIN";
   }))) return false;
 
-  if (!(await step("open Transactions", async () => {
-    const grid = page.locator(sel.grid!).first();
-    if (await grid.isVisible().catch(() => false)) return "already on the grid";
-    await page.locator(sel.transactionsNav!).first().click();
-    await grid.waitFor({ state: "visible" });
-    return "grid visible";
-  }))) return false;
-
   let row: ReturnType<Page["locator"]> | null = null;
 
   if (!(await step("search for the expense", async () => {
-    // Search by merchant: it is the most distinguishing field that Emburse's
-    // single search box actually matches on, and the verification below is
-    // what makes a loose search safe.
-    const box = page.locator(sel.search!).first();
-    await box.fill("");
-    await box.fill(target.merchant.trim().split(/\s+/).slice(0, 2).join(" "));
-    await box.press("Enter");
-    await page.waitForTimeout(1500);
+    // The search box is a query parameter, so navigate to the filtered grid
+    // rather than typing into it. One less thing that can be focused wrong,
+    // debounced, or left holding a previous search.
+    const term = target.merchant.trim().split(/\s+/).slice(0, 2).join(" ");
+    await page.goto(gridUrl(emburseUrl, { query: term, path: sel.gridPath }), {
+      waitUntil: "domcontentloaded",
+    });
+    await page.locator(sel.grid!).first().waitFor({ state: "visible" });
 
     const rows = page.locator(sel.resultRow!);
     const count = await rows.count();
