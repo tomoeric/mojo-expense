@@ -233,6 +233,16 @@ export const env = {
      * and short enough that a run abandoned mid-way frees itself.
      */
     challengeTimeoutMs: int("EMBURSE_CHALLENGE_TIMEOUT_MS", 5 * 60_000),
+    /**
+     * How long to let the app paint after the password goes in.
+     *
+     * Deliberately much longer than a step timeout. This is the slowest moment
+     * in the whole run: Emburse hands back from its identity host and the
+     * dashboard cold-renders, which has been seen to take past thirty seconds
+     * on a fresh browser profile. Giving up at the step timeout meant judging a
+     * blank page and calling a successful sign-in a failure.
+     */
+    signInWaitMs: int("EMBURSE_SIGN_IN_WAIT_MS", 120_000),
   },
 
   audit: {

@@ -33,6 +33,16 @@ type State = {
   rowsTicked: number;
   pendingUser: string;
   loginOutcome: "ok" | "rejected" | "mfa" | "device" | "code";
+  /**
+   * Milliseconds the signed-in app spends blank before it paints.
+   *
+   * Emburse's dashboard cold-renders after the identity hand-off, and a real
+   * run gave up on it at thirty seconds — reporting that sign-in failed while
+   * the screenshot taken a second later showed the app fully loaded.
+   */
+  appPaintMs: number;
+  /** When false, the signed-in app contains nothing the loggedIn selector matches. */
+  showNavLabel: boolean;
   /** Codes submitted to the verification screen, right or wrong. */
   codeAttempts: number;
   /** Whether the last accepted code arrived with "remember this device" ticked. */
@@ -61,6 +71,8 @@ const state: State = {
   loginOutcome: "ok",
   codeAttempts: 0,
   rememberedDevice: false,
+  appPaintMs: 0,
+  showNavLabel: true,
   search: "",
   format: "CSV",
   requestedAt: null,
@@ -98,9 +110,23 @@ app.get("/", (_req, res) => {
     res.redirect("/identity");
     return;
   }
-  res.send(page(`
-    <a href="/admin">ADMIN</a> <a href="/personal">PERSONAL</a>
-    <a href="/transactions">Transactions</a>`));
+  const nav = `<a href="/admin">ADMIN</a> <a href="/personal">PERSONAL</a>` +
+    (state.showNavLabel ? ` <a href="/transactions">Transactions</a>` : ` <a href="/transactions">Spend</a>`);
+
+  if (state.appPaintMs > 0) {
+    // Blank first, then the app — the shape that broke a real run. A check
+    // that reads the page once, early, sees nothing here and concludes the
+    // sign-in failed.
+    res.send(page(`
+      <div id="app"></div>
+      <script>
+        setTimeout(function () {
+          document.getElementById("app").innerHTML = ${JSON.stringify(nav)};
+        }, ${state.appPaintMs});
+      </script>`));
+    return;
+  }
+  res.send(page(nav));
 });
 
 app.get("/identity", (_req, res) => {
@@ -304,6 +330,12 @@ app.post("/__outcome/:kind", (req, res) => {
   state.loginOutcome = (req.params.kind ?? "ok") as State["loginOutcome"];
   state.signedIn = false;
   state.pendingUser = "";
+  res.json({ ok: true });
+});
+app.post("/__app", (req, res) => {
+  const q = req.query as Record<string, string>;
+  if ("paintMs" in q) state.appPaintMs = Number(q["paintMs"]) || 0;
+  if ("nav" in q) state.showNavLabel = q["nav"] !== "false";
   res.json({ ok: true });
 });
 app.post("/__reset", (_req, res) => {

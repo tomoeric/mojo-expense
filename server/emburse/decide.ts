@@ -1,7 +1,7 @@
 import type { Page } from "playwright";
 import { env } from "../env.js";
 import {
-  explainLaunch, gridUrl, makeStepper, openBrowser, signIn,
+  explainLaunch, gridUrl, makeStepper, openBrowser, safeUrl, signIn,
   type Login, type StepResult,
 } from "./auto-export.js";
 
@@ -183,13 +183,13 @@ async function drive(
 ): Promise<boolean> {
   if (!(await step("open Emburse", async () => {
     await page.goto(emburseUrl, { waitUntil: "domcontentloaded" });
-    return `loaded ${page.url()}`;
+    return `loaded ${safeUrl(page.url())}`;
   }))) return false;
 
   // The same sign-in the export uses, not a second copy of it: the subtleties
   // (two-step identity page, absence not meaning success) are worth having in
   // exactly one place.
-  if (!(await step("sign in", async () => signIn(page, sel as never, login)))) return false;
+  if (!(await step("sign in", async () => signIn(page, sel as never, login, emburseUrl)))) return false;
 
   if (!(await step("switch to ADMIN", async () => {
     const tab = page.locator(sel.adminTab!).first();

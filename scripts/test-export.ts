@@ -46,7 +46,7 @@ process.env.EMBURSE_EXPORT_WAIT_MS ||= "60000";
 // for a test suite.
 process.env.EMBURSE_CHALLENGE_TIMEOUT_MS ||= "20000";
 
-const { runAutoExport, DEFAULT_SELECTORS, challengeKind, credentialsRejected, isCredentialFault, safeUrl } =
+const { runAutoExport, DEFAULT_SELECTORS, challengeKind, credentialsRejected, isCredentialFault, safeUrl, inApp } =
   await import("../server/emburse/auto-export.js");
 type Selectors = Parameters<typeof runAutoExport>[1];
 
@@ -401,6 +401,42 @@ check("and says nobody entered a code", /Nobody entered the verification code/.t
 check("…in words, not “0 minutes”", !/\b0 (minutes|seconds)\b/.test(detail), detail.slice(0, 90));
 check("and the challenge is gone", currentChallenge() === null);
 await fetch(`${mock.url}/__outcome/ok`, { method: "POST" });
+
+// --------------------------------------- a signed-in app that is slow, or renamed
+// Both halves of a real failure: the run signed in successfully, spent thirty
+// seconds looking at a dashboard that had not painted, and reported that the
+// app never appeared. The screenshot taken a second later showed it loaded.
+console.log("\n12. A signed-in app that has not painted yet");
+forgetDevice();
+mock.reset();
+await fetch(`${mock.url}/__app?paintMs=6000`, { method: "POST" });
+
+run = await runAutoExport(settings, selectors, LOGIN, { dryRun: true });
+detail = run.steps.find((st) => st.name === "sign in")?.detail ?? "";
+check("waits for the app rather than judging a blank page", run.ok, detail.slice(0, 90));
+check("and reports a plain sign-in", /signed in as bot@example.invalid$/.test(detail), detail);
+
+console.log("\n13. A signed-in app the loggedIn selector no longer matches");
+forgetDevice();
+mock.reset();
+// The app is there and rendered; only the word the selector looks for is gone.
+await fetch(`${mock.url}/__app?nav=false`, { method: "POST" });
+
+run = await runAutoExport(settings, selectors, LOGIN, { dryRun: true });
+detail = run.steps.find((st) => st.name === "sign in")?.detail ?? "";
+check("the run continues — being in the app is evidence enough", run.ok, detail.slice(0, 110));
+check("but it says the selector needs correcting",
+  /loggedIn selector did not match/.test(detail), detail.slice(0, 110));
+
+// The guard against that becoming a free pass: somewhere that is NOT the app
+// must still fail, however much text is on it.
+console.log("\n14. Being somewhere else is still a failure");
+check("the identity host is not the app",
+  !inApp("https://account.emburse.app/code-authentication", "https://spend.emburse.com"));
+check("a logged-out page on the right host is not the app",
+  !inApp("https://spend.emburse.com/logged-out?next=x", "https://spend.emburse.com"));
+check("the dashboard is", inApp("https://spend.emburse.com/home", "https://spend.emburse.com"));
+await fetch(`${mock.url}/__app?paintMs=0&nav=true`, { method: "POST" });
 
 await mock.close();
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}\n`);

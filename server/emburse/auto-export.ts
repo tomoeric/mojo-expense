@@ -424,6 +424,8 @@ export async function signIn(
   page: Page,
   sel: Selectors,
   login: Login,
+  /** The app's own address, used to tell "back in the app" from "still at the identity host". */
+  appUrl: string,
   challenge?: ChallengeHook,
 ): Promise<string> {
   const loggedIn = page.locator(sel.loggedIn).first();
@@ -457,31 +459,87 @@ export async function signIn(
     await page.locator(sel.loginSubmit).first().click();
   }
 
-  // Race the app against the code box rather than waiting out the full step
-  // timeout on the app alone. A challenge is a normal outcome now, not an
-  // exception, and spending thirty seconds discovering it made every failed
-  // sign-in feel like a hang.
-  await Promise.race([
-    loggedIn.waitFor({ state: "visible" }),
-    page.locator(sel.mfaCode).first().waitFor({ state: "visible" }),
-  ]).catch(() => {});
+  const landed = await waitForApp(page, sel, appUrl);
 
-  if (!(await loggedIn.isVisible().catch(() => false))) {
-    // A verification code is the one failure a person can actually clear, so
-    // offer it to them instead of reporting a dead end — but only when
-    // somebody is there to ask. An unattended 6am run has nobody to answer,
-    // and parking a browser until it times out would just delay the same
-    // failure while holding the profile lock.
-    if (challenge) {
-      const how = await passChallenge(page, sel, challenge);
-      if (how) return `signed in as ${login.email} — ${how}`;
-    }
-    throw new SignInFailed(
-      `signed in as ${login.email} but the app did not appear — ${await whyStuck(page)}`,
-      isCredentialFault(await pageText(page), page.url()),
+  if (landed === "app") return `signed in as ${login.email}`;
+  if (landed === "app-unmatched") {
+    // Signed in, but `loggedIn` did not match. Worth proceeding — the origin
+    // and a rendered page are real evidence — and worth saying out loud, so a
+    // selector that has quietly stopped matching gets fixed rather than
+    // carried indefinitely.
+    return (
+      `signed in as ${login.email} — the app is loaded at ${safeUrl(page.url())}, but the ` +
+      "loggedIn selector did not match anything on it. Worth correcting."
     );
   }
-  return `signed in as ${login.email}`;
+
+  // A verification code is the one failure a person can actually clear, so
+  // offer it to them instead of reporting a dead end — but only when somebody
+  // is there to ask. An unattended 6am run has nobody to answer, and parking a
+  // browser until it times out would just delay the same failure while holding
+  // the profile lock.
+  if (challenge) {
+    const how = await passChallenge(page, sel, challenge);
+    if (how) return `signed in as ${login.email} — ${how}`;
+  }
+  throw new SignInFailed(
+    `signed in as ${login.email} but the app did not appear — ${await whyStuck(page)}`,
+    isCredentialFault(await pageText(page), page.url()),
+  );
+}
+
+/**
+ * Wait for the sign-in to land somewhere, and say where.
+ *
+ * Written as a poll rather than a race of `waitFor`s because the question is
+ * not "did one selector appear" but "which of several situations are we in",
+ * and the answer changes as the page loads.
+ *
+ * The reason it is patient: a real run signed in successfully, spent thirty
+ * seconds looking at a dashboard that had not painted yet, and reported that
+ * the app never appeared — the screenshot taken a second later showed the app
+ * fully rendered. Handing back the identity session and cold-rendering the
+ * dashboard is the slowest thing in the run, and it happens exactly once, on
+ * the run somebody is watching.
+ */
+async function waitForApp(
+  page: Page,
+  sel: Selectors,
+  appUrl: string,
+): Promise<"app" | "app-unmatched" | "challenge" | "stuck"> {
+  const deadline = Date.now() + env.emburseLogin.signInWaitMs;
+  const loggedIn = page.locator(sel.loggedIn).first();
+  const codeBox = page.locator(sel.mfaCode).first();
+
+  while (Date.now() < deadline) {
+    if (await loggedIn.isVisible().catch(() => false)) return "app";
+
+    const url = page.url();
+    const text = await pageText(page);
+    if (challengeKind(text, url) !== null) return "challenge";
+    if (await codeBox.isVisible().catch(() => false)) return "challenge";
+
+    // The fallback signal, and a sturdier one than any selector: sign-in
+    // happens on the identity host, the app lives on its own. Being back on
+    // the app's origin, off its sign-in paths, with something actually
+    // rendered, is what "signed in" means — regardless of what any given
+    // element is called this month.
+    if (text.length > 0 && inApp(url, appUrl)) return "app-unmatched";
+
+    await page.waitForTimeout(500);
+  }
+  return "stuck";
+}
+
+/** On the app's own origin, and not on one of its sign-in pages. */
+export function inApp(current: string, appUrl: string): boolean {
+  try {
+    const now = new URL(current);
+    if (now.origin !== new URL(appUrl).origin) return false;
+    return !/^\/(logged-out|login|sign-?in|sso|auth|code-authentication)\b/i.test(now.pathname);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -787,7 +845,7 @@ async function runSteps(
     return `loaded ${safeUrl(page.url())}`;
   }))) return false;
 
-  if (!(await step("sign in", async () => signIn(page, sel, login, opts.onChallenge)))) return false;
+  if (!(await step("sign in", async () => signIn(page, sel, login, url, opts.onChallenge)))) return false;
 
   if (!(await step("switch to ADMIN", async () => {
     // Emburse reopens on whichever of ADMIN / PERSONAL was last used, and
