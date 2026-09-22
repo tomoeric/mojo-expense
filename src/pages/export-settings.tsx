@@ -1,14 +1,28 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Save, ShieldAlert, Check } from "lucide-react";
+import { Loader2, Save, ShieldAlert, Check, Clock, Info } from "lucide-react";
+
+type Schedule = {
+  timezone: string;
+  firstRun: string;
+  retryHours: number;
+  attemptsPerDay: number;
+  graceMinutes: number;
+};
 
 type Settings = {
   sections: string[];
   receiptsOnly: boolean;
+  schedule: Schedule;
   updatedAt: string | null;
   updatedBy: string | null;
   allSections: string[];
 };
+
+/** Zones anyone here is plausibly running the laptop in. */
+const ZONES = [
+  "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "UTC",
+];
 
 /** What the section means for the people whose expenses are in it. */
 const WHY: Record<string, string> = {
@@ -35,6 +49,7 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
   const qc = useQueryClient();
   const [sections, setSections] = useState<string[] | null>(null);
   const [receiptsOnly, setReceiptsOnly] = useState(true);
+  const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
@@ -54,10 +69,11 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
     if (q.data && sections === null) {
       setSections(q.data.sections);
       setReceiptsOnly(q.data.receiptsOnly);
+      setSchedule(q.data.schedule);
     }
   }, [q.data, sections]);
 
-  if (q.isLoading || sections === null) {
+  if (q.isLoading || sections === null || schedule === null) {
     return <Loader2 className="mx-auto mt-10 h-6 w-6 animate-spin text-muted-foreground" />;
   }
   if (q.error) {
@@ -66,7 +82,9 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
 
   const all = q.data?.allSections ?? [];
   const dirty =
-    JSON.stringify(sections) !== JSON.stringify(q.data?.sections) || receiptsOnly !== q.data?.receiptsOnly;
+    JSON.stringify(sections) !== JSON.stringify(q.data?.sections) ||
+    receiptsOnly !== q.data?.receiptsOnly ||
+    JSON.stringify(schedule) !== JSON.stringify(q.data?.schedule);
 
   const toggle = (name: string) =>
     setSections((prev) =>
@@ -80,7 +98,7 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
       const res = await fetch("/api/export-settings", {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ sections, receiptsOnly }),
+        body: JSON.stringify({ sections, receiptsOnly, schedule }),
       });
       const body = (await res.json()) as Settings & { error?: string };
       if (!res.ok) throw new Error(body.error ?? `Save failed (${res.status})`);
@@ -159,6 +177,83 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
         </span>
       </label>
 
+      <div>
+        <h2 className="flex items-center gap-2 text-base font-bold">
+          <Clock className="h-4 w-4" />
+          Export automation schedule
+        </h2>
+        <p className="mt-1 flex items-start gap-2 rounded-lg border border-border bg-muted/50 p-3 text-sm text-muted-foreground">
+          <Info className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            <strong className="text-foreground">This does not run the export.</strong> Nothing in Emburse or
+            in this app triggers it — a Power Automate flow on a laptop does, started by Windows Task
+            Scheduler. What you set here is a written-down copy of that trigger, so the app can say whether
+            today&rsquo;s export arrived and when the next one is due. Change the trigger and change this, or
+            the two drift apart and the app is the one that looks wrong.
+          </span>
+        </p>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Timezone" hint="The laptop's own clock — Task Scheduler fires on local time.">
+          <select
+            value={schedule.timezone}
+            disabled={!isAdmin}
+            onChange={(e) => setSchedule({ ...schedule, timezone: e.target.value })}
+            className="w-full rounded-lg border border-border bg-transparent px-2 py-1.5 text-sm outline-none focus:border-sky-500 disabled:opacity-60"
+          >
+            {[...new Set([schedule.timezone, ...ZONES])].map((z) => (
+              <option key={z} value={z}>{z}</option>
+            ))}
+          </select>
+        </Field>
+
+        <Field label="First run" hint="When the flow requests the export.">
+          <input
+            type="time"
+            value={schedule.firstRun}
+            disabled={!isAdmin}
+            onChange={(e) => setSchedule({ ...schedule, firstRun: e.target.value })}
+            className="w-full rounded-lg border border-border bg-transparent px-2 py-1.5 text-sm outline-none focus:border-sky-500 disabled:opacity-60"
+          />
+        </Field>
+
+        <Field label="Attempts per day" hint="After the last one fails, the day is left until tomorrow.">
+          <input
+            type="number" min={1} max={8}
+            value={schedule.attemptsPerDay}
+            disabled={!isAdmin}
+            onChange={(e) => setSchedule({ ...schedule, attemptsPerDay: Number(e.target.value) })}
+            className="w-full rounded-lg border border-border bg-transparent px-2 py-1.5 text-sm outline-none focus:border-sky-500 disabled:opacity-60"
+          />
+        </Field>
+
+        <Field label="Hours between attempts" hint="Matches the Task Scheduler repeat interval.">
+          <input
+            type="number" min={1} max={12}
+            value={schedule.retryHours}
+            disabled={!isAdmin}
+            onChange={(e) => setSchedule({ ...schedule, retryHours: Number(e.target.value) })}
+            className="w-full rounded-lg border border-border bg-transparent px-2 py-1.5 text-sm outline-none focus:border-sky-500 disabled:opacity-60"
+          />
+        </Field>
+
+        <Field
+          label="Grace, minutes"
+          hint="Emburse queues the export and the folder poll then takes up to an hour, so an attempt that fired on time still lands late."
+        >
+          <input
+            type="number" min={0} max={720} step={15}
+            value={schedule.graceMinutes}
+            disabled={!isAdmin}
+            onChange={(e) => setSchedule({ ...schedule, graceMinutes: Number(e.target.value) })}
+            className="w-full rounded-lg border border-border bg-transparent px-2 py-1.5 text-sm outline-none focus:border-sky-500 disabled:opacity-60"
+          />
+        </Field>
+      </div>
+
+      <SchedulePreview schedule={schedule} />
+
       {error && (
         <p className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm">{error}</p>
       )}
@@ -194,3 +289,78 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
     </div>
   );
 }
+
+
+function Field({ label, hint, children }: { label: string; hint: string; children: React.ReactNode }) {
+  return (
+    <label className="block">
+      <span className="text-sm font-semibold">{label}</span>
+      {children}
+      <span className="mt-1 block text-xs text-muted-foreground">{hint}</span>
+    </label>
+  );
+}
+
+/**
+ * The day the settings describe, before saving them.
+ *
+ * Deliberately computed in the browser from the values in the form rather than
+ * fetched: the point is to see what a change does *before* committing it, which
+ * a round trip to the saved schedule could not show.
+ */
+function SchedulePreview({ schedule }: { schedule: Schedule }) {
+  const slots: { at: string; label: string }[] = [];
+  const [h, m] = schedule.firstRun.split(":").map(Number);
+
+  for (let i = 0; i < schedule.attemptsPerDay; i++) {
+    const minutes = (h ?? 6) * 60 + (m ?? 0) + i * schedule.retryHours * 60;
+    slots.push({
+      at: clock(minutes),
+      label: i === 0 ? "first attempt" : `retry ${i}`,
+    });
+  }
+
+  const last = (h ?? 6) * 60 + (m ?? 0) + (schedule.attemptsPerDay - 1) * schedule.retryHours * 60;
+  const givesUp = last + schedule.graceMinutes;
+  const spillsOver = givesUp >= 24 * 60;
+
+  return (
+    <div className="rounded-xl border border-border p-3.5">
+      <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+        A day on this schedule
+      </p>
+      <ol className="mt-2 space-y-1.5">
+        {slots.map((s, i) => (
+          <li key={i} className="flex items-center gap-2 text-sm">
+            <span className="tnum w-20 shrink-0 whitespace-nowrap font-semibold">{s.at}</span>
+            <span className="text-muted-foreground">{s.label}</span>
+          </li>
+        ))}
+        <li className="flex items-center gap-2 text-sm">
+          <span className="tnum w-20 shrink-0 whitespace-nowrap font-semibold text-amber-600">{clock(givesUp)}</span>
+          <span className="text-muted-foreground">
+            marked missed if nothing has arrived — next attempt tomorrow at {schedule.firstRun}
+          </span>
+        </li>
+      </ol>
+      {spillsOver && (
+        <p className="mt-2 text-xs text-amber-600">
+          The last attempt plus its grace runs past midnight, so a miss is only reported the next day.
+          Move the first run earlier, or shorten the grace.
+        </p>
+      )}
+      <p className="mt-2 text-xs text-muted-foreground">
+        All times {schedule.timezone}. Set Task Scheduler to repeat every {schedule.retryHours}h for a
+        duration of {(schedule.attemptsPerDay - 1) * schedule.retryHours}h to get exactly these attempts.
+      </p>
+    </div>
+  );
+}
+
+const clock = (minutes: number) => {
+  const total = ((minutes % 1440) + 1440) % 1440;
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  const ampm = h < 12 ? "AM" : "PM";
+  return `${((h + 11) % 12) + 1}:${String(m).padStart(2, "0")} ${ampm}`;
+};

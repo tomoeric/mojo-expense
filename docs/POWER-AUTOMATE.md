@@ -507,9 +507,14 @@ Already built, nothing to configure beyond one permission:
 It also shows where the schedule has got to, on the Import page: whether today's
 export has arrived, and when the next attempt is due. That strip is derived from
 the agreed schedule and the last arrival — the server cannot see the laptop, so
-it reports what turned up rather than what the flow claims. Keep `EXPORT_*` in
-`.env` in step with the Task Scheduler trigger, or the app will be the one that
-is wrong.
+it reports what turned up rather than what the flow claims.
+
+**The schedule is edited in the app**, under the user menu → **Export settings**,
+alongside the section scope. It is a written-down copy of the Task Scheduler
+trigger, not a control over it: nothing in Emburse and nothing in this app starts
+an export. Change the trigger and change this, or the two drift and the app is
+the one that looks wrong. The page previews the day the settings describe, and
+tells you the repeat duration to set in Task Scheduler to match.
 
 `pnpm exec tsx scripts/verify-schedule.ts` checks the boundaries you cannot
 reach by running the app today — the grace window expiring, a day being written

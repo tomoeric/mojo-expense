@@ -18,17 +18,31 @@
  */
 
 import { describeSchedule } from "../server/import/schedule.js";
+import { readSettings } from "../server/import/settings.js";
+import { isDbConfigured } from "../server/db.js";
 import { env } from "../server/env.js";
 
 const arg = process.argv.indexOf("--arrives-at");
 const arrivesAtHour = arg === -1 ? null : Number(process.argv[arg + 1]);
 
-const { timezone, firstRun, retryHours, attemptsPerDay, graceMinutes } = env.schedule;
+// Prefer the schedule the app is actually using. Falling back to env keeps the
+// script usable with no database, which is how it gets run before deploying.
+const SCHEDULE = isDbConfigured()
+  ? (await readSettings()).schedule
+  : {
+      timezone: env.schedule.timezone,
+      firstRun: `${String(env.schedule.firstRun.hour).padStart(2, "0")}:${String(env.schedule.firstRun.minute).padStart(2, "0")}`,
+      retryHours: env.schedule.retryHours,
+      attemptsPerDay: env.schedule.attemptsPerDay,
+      graceMinutes: env.schedule.graceMinutes,
+    };
+
+const { timezone } = SCHEDULE;
 
 console.log(
-  `\nEXPORT_TIMEZONE=${timezone}  EXPORT_FIRST_RUN=${String(firstRun.hour).padStart(2, "0")}:` +
-    `${String(firstRun.minute).padStart(2, "0")}  EXPORT_RETRY_HOURS=${retryHours}  ` +
-    `EXPORT_ATTEMPTS_PER_DAY=${attemptsPerDay}  EXPORT_GRACE_MINUTES=${graceMinutes}`,
+  `\nsource=${isDbConfigured() ? "settings (database)" : "env defaults"}  timezone=${SCHEDULE.timezone}  ` +
+    `first run=${SCHEDULE.firstRun}  retry=${SCHEDULE.retryHours}h  ` +
+    `attempts=${SCHEDULE.attemptsPerDay}  grace=${SCHEDULE.graceMinutes}m`,
 );
 if (arrivesAtHour !== null) console.log(`Simulating an export arriving at ${arrivesAtHour}:15 local.\n`);
 else console.log("Simulating a day on which no export ever arrives.\n");
@@ -44,7 +58,7 @@ for (let hour = 0; hour < 24; hour++) {
   const now = new Date(midnight.getTime() + hour * 3_600_000);
   // The strip only knows about exports that have already landed.
   const lastImport = arrival && arrival <= now ? arrival : null;
-  const r = describeSchedule(lastImport, now);
+  const r = describeSchedule(SCHEDULE, lastImport, now);
 
   const clock = new Intl.DateTimeFormat("en-US", {
     timeZone: timezone, hour: "2-digit", minute: "2-digit", hour12: false,

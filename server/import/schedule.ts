@@ -1,4 +1,4 @@
-import { env } from "../env.js";
+import type { Schedule } from "./settings.js";
 
 /**
  * When the next export is expected to land, and whether one is overdue.
@@ -30,9 +30,21 @@ export type ImportSchedule = {
   note: string;
 };
 
-/** `now` is injectable so the boundaries can be tested without waiting for them. */
-export function describeSchedule(lastImportAt: Date | null, now = new Date()): ImportSchedule {
-  const { timezone, firstRun, retryHours, attemptsPerDay, graceMinutes } = env.schedule;
+/**
+ * `now` is injectable so the boundaries can be tested without waiting for them.
+ *
+ * The schedule comes from settings rather than env: it describes a Task
+ * Scheduler trigger on somebody's laptop, and whoever changes that trigger
+ * should be able to correct this without a redeploy.
+ */
+export function describeSchedule(
+  schedule: Schedule,
+  lastImportAt: Date | null,
+  now = new Date(),
+): ImportSchedule {
+  const { timezone, retryHours, attemptsPerDay, graceMinutes } = schedule;
+  const [h = "6", m = "0"] = schedule.firstRun.split(":");
+  const firstRun = { hour: Number(h), minute: Number(m) };
 
   const today = partsIn(now, timezone);
   const slots = slotsFor(today, timezone);

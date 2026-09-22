@@ -1,4 +1,5 @@
 import { db, ensureSchema } from "../db.js";
+import { env } from "../env.js";
 
 /**
  * What the daily Emburse export is supposed to contain.
@@ -24,8 +25,27 @@ export type ExportSettings = {
   sections: string[];
   /** Whether the Receipts: true filter is expected. */
   receiptsOnly: boolean;
+  /**
+   * When the flow on the laptop is set to run.
+   *
+   * The app cannot start the export, so this is a written-down copy of the
+   * Windows Task Scheduler trigger — kept here rather than in env so it can be
+   * corrected without a redeploy, and because whoever changes the trigger is
+   * the person looking at this screen.
+   */
+  schedule: Schedule;
   updatedAt: string | null;
   updatedBy: string | null;
+};
+
+export type Schedule = {
+  timezone: string;
+  /** First attempt, as "HH:MM" in `timezone`. */
+  firstRun: string;
+  retryHours: number;
+  attemptsPerDay: number;
+  /** Minutes to keep waiting after an attempt before calling it a miss. */
+  graceMinutes: number;
 };
 
 /** Every section Emburse offers, in the order the dialog shows them. */
@@ -39,6 +59,16 @@ export const ALL_SECTIONS = [
 
 const DEFAULT_SECTIONS = ["Needs Review", "Needs Manager Review"];
 
+/** Env still supplies the starting point, so a fresh database is not blank. */
+function envSchedule(): Schedule {
+  const { timezone, firstRun, retryHours, attemptsPerDay, graceMinutes } = env.schedule;
+  return {
+    timezone,
+    firstRun: `${String(firstRun.hour).padStart(2, "0")}:${String(firstRun.minute).padStart(2, "0")}`,
+    retryHours, attemptsPerDay, graceMinutes,
+  };
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS export_settings (
   id           boolean PRIMARY KEY DEFAULT true CHECK (id),
@@ -47,6 +77,11 @@ CREATE TABLE IF NOT EXISTS export_settings (
   updated_at   timestamptz NOT NULL DEFAULT now(),
   updated_by   text
 );
+ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS timezone        text;
+ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS first_run       text;
+ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS retry_hours     integer;
+ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS attempts_per_day integer;
+ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS grace_minutes   integer;
 `;
 
 let ready: Promise<void> | null = null;
@@ -59,15 +94,29 @@ export async function readSettings(): Promise<ExportSettings> {
   await ensure();
   const { rows } = await db().query<{
     sections: string[]; receipts_only: boolean; updated_at: Date; updated_by: string | null;
-  }>("SELECT sections, receipts_only, updated_at, updated_by FROM export_settings WHERE id");
+    timezone: string | null; first_run: string | null;
+    retry_hours: number | null; attempts_per_day: number | null; grace_minutes: number | null;
+  }>(`SELECT sections, receipts_only, updated_at, updated_by,
+             timezone, first_run, retry_hours, attempts_per_day, grace_minutes
+        FROM export_settings WHERE id`);
 
   const row = rows[0];
+  const fallback = envSchedule();
   if (!row) {
-    return { sections: DEFAULT_SECTIONS, receiptsOnly: true, updatedAt: null, updatedBy: null };
+    return { sections: DEFAULT_SECTIONS, receiptsOnly: true, schedule: fallback, updatedAt: null, updatedBy: null };
   }
   return {
     sections: row.sections,
     receiptsOnly: row.receipts_only,
+    // Column by column, so a row written before the schedule existed still
+    // answers with sensible values rather than nulls.
+    schedule: {
+      timezone: row.timezone ?? fallback.timezone,
+      firstRun: row.first_run ?? fallback.firstRun,
+      retryHours: row.retry_hours ?? fallback.retryHours,
+      attemptsPerDay: row.attempts_per_day ?? fallback.attemptsPerDay,
+      graceMinutes: row.grace_minutes ?? fallback.graceMinutes,
+    },
     updatedAt: row.updated_at.toISOString(),
     updatedBy: row.updated_by,
   };
@@ -76,20 +125,52 @@ export async function readSettings(): Promise<ExportSettings> {
 export async function writeSettings(
   sections: string[],
   receiptsOnly: boolean,
+  schedule: Schedule,
   updatedBy: string,
 ): Promise<ExportSettings> {
   await ensure();
   // Store in the dialog's own order so a round-trip never reshuffles the UI.
   const ordered = ALL_SECTIONS.filter((s) => sections.includes(s));
   await db().query(
-    `INSERT INTO export_settings (id, sections, receipts_only, updated_at, updated_by)
-     VALUES (true, $1, $2, now(), $3)
+    `INSERT INTO export_settings (id, sections, receipts_only, timezone, first_run,
+                                  retry_hours, attempts_per_day, grace_minutes, updated_at, updated_by)
+     VALUES (true, $1, $2, $3, $4, $5, $6, $7, now(), $8)
      ON CONFLICT (id) DO UPDATE SET
        sections = EXCLUDED.sections, receipts_only = EXCLUDED.receipts_only,
+       timezone = EXCLUDED.timezone, first_run = EXCLUDED.first_run,
+       retry_hours = EXCLUDED.retry_hours, attempts_per_day = EXCLUDED.attempts_per_day,
+       grace_minutes = EXCLUDED.grace_minutes,
        updated_at = now(), updated_by = EXCLUDED.updated_by`,
-    [ordered, receiptsOnly, updatedBy],
+    [ordered, receiptsOnly, schedule.timezone, schedule.firstRun, schedule.retryHours,
+     schedule.attemptsPerDay, schedule.graceMinutes, updatedBy],
   );
   return readSettings();
+}
+
+/** A stored schedule can be edited to nonsense; clamp rather than trust. */
+export function cleanSchedule(raw: Partial<Schedule> | undefined, base: Schedule): Schedule {
+  const int = (v: unknown, lo: number, hi: number, fallback: number) => {
+    const n = Math.round(Number(v));
+    return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback;
+  };
+  const tz = typeof raw?.timezone === "string" ? raw.timezone : base.timezone;
+  return {
+    // A bad zone would throw inside Intl on every request, so prove it first.
+    timezone: isZone(tz) ? tz : base.timezone,
+    firstRun: /^([01]\d|2[0-3]):[0-5]\d$/.test(String(raw?.firstRun)) ? String(raw!.firstRun) : base.firstRun,
+    retryHours: int(raw?.retryHours, 1, 12, base.retryHours),
+    attemptsPerDay: int(raw?.attemptsPerDay, 1, 8, base.attemptsPerDay),
+    graceMinutes: int(raw?.graceMinutes, 0, 720, base.graceMinutes),
+  };
+}
+
+export function isZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

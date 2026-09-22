@@ -6,7 +6,7 @@ import { ingestExport } from "./ingest.js";
 import { syncFromSharePoint, syncOnPageLoad } from "./sync.js";
 import { isSharePointConfigured } from "./sharepoint.js";
 import { describeSchedule } from "./schedule.js";
-import { ALL_SECTIONS, readSettings, writeSettings } from "./settings.js";
+import { ALL_SECTIONS, cleanSchedule, readSettings, writeSettings } from "./settings.js";
 
 /**
  * Upload and history for the daily Emburse export.
@@ -109,7 +109,7 @@ importRouter.get("/imports", requireAuth, async (_req: Request, res: Response) =
       stats: stat[0] ?? null,
       sharepoint: isSharePointConfigured(),
       sources,
-      schedule: describeSchedule(lastImport),
+      schedule: describeSchedule((await readSettings()).schedule, lastImport),
     });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Could not read import history." });
@@ -136,7 +136,7 @@ importRouter.get("/export-settings", requireAuth, async (_req: Request, res: Res
 importRouter.put("/export-settings", requireAuth, requireAdmin, async (req: Request, res: Response) => {
   if (!guard(res)) return;
 
-  const body = req.body as { sections?: unknown; receiptsOnly?: unknown };
+  const body = req.body as { sections?: unknown; receiptsOnly?: unknown; schedule?: unknown };
   const sections = Array.isArray(body.sections) ? body.sections.filter((s): s is string => typeof s === "string") : null;
   if (!sections) {
     res.status(400).json({ error: "sections must be an array of section names." });
@@ -153,7 +153,13 @@ importRouter.put("/export-settings", requireAuth, requireAdmin, async (req: Requ
   }
 
   try {
-    const saved = await writeSettings(sections, body.receiptsOnly !== false, req.user?.email ?? "unknown");
+    const current = await readSettings();
+    const saved = await writeSettings(
+      sections,
+      body.receiptsOnly !== false,
+      cleanSchedule(body.schedule as never, current.schedule),
+      req.user?.email ?? "unknown",
+    );
     res.json({ ...saved, allSections: ALL_SECTIONS });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Could not save settings." });
