@@ -7,8 +7,10 @@ import { env, databaseHost, databaseUrlSource } from "./env.js";
 import { api } from "./routes.js";
 import { allowListSize, authMiddleware, authRouter, isAuthConfigured } from "./auth/index.js";
 import { importRouter } from "./import/routes.js";
+import { decisionRouter } from "./emburse/decision-routes.js";
 import { startSyncTimer } from "./import/sync.js";
 import { startExportScheduler } from "./emburse/export-scheduler.js";
+import { startDecisionWorker } from "./emburse/decision-worker.js";
 import { ensureSchema, isDbConfigured } from "./db.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -24,6 +26,7 @@ app.use(cookieParser());
 app.use(authMiddleware);
 app.use("/api", authRouter);
 app.use("/api", importRouter);
+app.use("/api", decisionRouter);
 app.use("/api", api);
 
 // Anything left under /api is a genuine 404. Without this it falls through to
@@ -73,6 +76,7 @@ app.listen(env.port, "0.0.0.0", () => {
       .then(() => {
         startSyncTimer();
         startExportScheduler();
+        startDecisionWorker();
       })
       .catch((err: unknown) => console.error("schema bootstrap failed:", err));
   } else {

@@ -4,6 +4,7 @@ import {
   explainLaunch, firstVisible, gridUrl, makeStepper, openBrowser, safeUrl, signIn,
   type Login, type StepResult,
 } from "./auto-export.js";
+import { withBrowser } from "./browser-lock.js";
 
 /**
  * Approve or deny one expense in Emburse, by driving the UI.
@@ -150,9 +151,10 @@ export async function runDecision(
 
   const sel = { ...DECISION_SELECTORS, ...selectors } as Record<string, string>;
 
+  return withBrowser(`${decision} one expense`, async () => {
   try {
     // The same persistent profile the export uses, so a device trusted once
-    // is trusted for both.
+    // is trusted for both — which is also why it has to queue behind it.
     const opened = await openBrowser();
     close = opened.close;
     page = await opened.context.newPage();
@@ -167,7 +169,94 @@ export async function runDecision(
   } finally {
     await close?.().catch(() => {});
   }
+  });
 }
+
+/**
+ * Apply several decisions in one browser session.
+ *
+ * Signs in once and then works the list. Each decision is independent: one
+ * that cannot find its row fails on its own and the rest carry on, because a
+ * batch that abandons nineteen good decisions over one bad one is worse than
+ * no batch at all.
+ */
+export async function runDecisions(
+  items: BatchItem[],
+  selectors: Record<string, string>,
+  emburseUrl: string,
+  login: Login,
+  opts: { dryRun?: boolean } = {},
+): Promise<Map<number, DecisionRun>> {
+  const results = new Map<number, DecisionRun>();
+  if (items.length === 0) return results;
+
+  const sel = { ...DECISION_SELECTORS, ...selectors } as Record<string, string>;
+
+  return withBrowser(`applying ${items.length} decision(s)`, async () => {
+    let close: (() => Promise<void>) | null = null;
+    let page: Page | null = null;
+    try {
+      const opened = await openBrowser();
+      close = opened.close;
+      page = await opened.context.newPage();
+      page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
+
+      // Once, for the whole batch.
+      const shared: StepResult[] = [];
+      const signedIn = await signInOnce(page, sel, emburseUrl, login, makeStepper(shared));
+      if (!signedIn) {
+        // Nothing can be applied, and each item should say why rather than
+        // failing with a blank.
+        for (const it of items) {
+          results.set(it.id, {
+            ok: false, steps: shared,
+            screenshot: (await page.screenshot().catch(() => null))?.toString("base64") ?? null,
+            matchedRow: null,
+          });
+        }
+        return results;
+      }
+
+      for (const it of items) {
+        const steps: StepResult[] = [...shared];
+        const step = makeStepper(steps);
+        let matchedRow: string | null = null;
+        const ok = await applyOne(
+          page, it.decision, it.target, it.reason ?? "", sel, emburseUrl, step, opts,
+          (t) => (matchedRow = t),
+        );
+        results.set(it.id, {
+          ok,
+          steps,
+          screenshot: ok ? null : (await page.screenshot().catch(() => null))?.toString("base64") ?? null,
+          matchedRow,
+        });
+      }
+      return results;
+    } catch (err) {
+      for (const it of items) {
+        if (!results.has(it.id)) {
+          results.set(it.id, {
+            ok: false,
+            steps: [{ name: "start browser", ok: false, detail: explainLaunch(err), ms: 0 }],
+            screenshot: null, matchedRow: null,
+          });
+        }
+      }
+      return results;
+    } finally {
+      await close?.().catch(() => {});
+    }
+  });
+}
+
+/** One queued decision, as the batch runner needs it. */
+export type BatchItem = {
+  id: number;
+  decision: Decision;
+  target: Target;
+  reason: string | null;
+};
 
 async function drive(
   page: Page,
@@ -180,6 +269,26 @@ async function drive(
   step: (name: string, fn: () => Promise<string>) => Promise<boolean>,
   opts: { dryRun?: boolean },
   setRow: (text: string) => void,
+): Promise<boolean> {
+  if (!(await signInOnce(page, sel, emburseUrl, login, step))) return false;
+  return applyOne(page, decision, target, reason, sel, emburseUrl, step, opts, setRow);
+}
+
+/**
+ * Get as far as a signed-in ADMIN view. Done once per browser session.
+ *
+ * Split out because a batch of decisions should pay for this once, not once
+ * each: on the real tenant signing in is about fifty seconds and reaching the
+ * grid another forty. Twenty decisions that each opened their own session
+ * would be half an hour of browser time, and the export could not run in any
+ * of it.
+ */
+async function signInOnce(
+  page: Page,
+  sel: Record<string, string>,
+  emburseUrl: string,
+  login: Login,
+  step: (name: string, fn: () => Promise<string>) => Promise<boolean>,
 ): Promise<boolean> {
   if (!(await step("open Emburse", async () => {
     await page.goto(emburseUrl, { waitUntil: "domcontentloaded" });
@@ -200,9 +309,29 @@ async function drive(
     if (await page.locator(sel.loggedIn!).first().isVisible().catch(() => false)) {
       return "no ADMIN tab on this page, but the app is loaded";
     }
-    throw new Error(`no ADMIN tab and the app is not loaded — at ${page.url()}`);
+    throw new Error(`no ADMIN tab and the app is not loaded — at ${safeUrl(page.url())}`);
   }))) return false;
 
+  return true;
+}
+
+/**
+ * Find, verify and act on one expense, on a page that is already signed in.
+ *
+ * Every safeguard lives here rather than in the caller, so a batch cannot get
+ * a laxer version of the checks than a single decision does.
+ */
+async function applyOne(
+  page: Page,
+  decision: Decision,
+  target: Target,
+  reason: string,
+  sel: Record<string, string>,
+  emburseUrl: string,
+  step: (name: string, fn: () => Promise<string>) => Promise<boolean>,
+  opts: { dryRun?: boolean },
+  setRow: (text: string) => void,
+): Promise<boolean> {
   let row: ReturnType<Page["locator"]> | null = null;
 
   if (!(await step("search for the expense", async () => {

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { env } from "../env.js";
 import { rememberCookies, restoreCookies } from "./browser-state.js";
+import { withBrowser } from "./browser-lock.js";
 import type { ExportSettings } from "../import/settings.js";
 
 /**
@@ -378,6 +379,10 @@ export async function runAutoExport(
     }
   };
 
+  // Queued, because a decision batch drives the same profile and Chromium
+  // locks it. Waiting is right; colliding is a crash that blames the wrong
+  // thing.
+  return withBrowser(opts.dryRun ? "a test export" : "the export", async () => {
   try {
     const opened = await openBrowser();
     close = opened.close;
@@ -416,6 +421,7 @@ export async function runAutoExport(
   } finally {
     await close?.().catch(() => {});
   }
+  });
 }
 
 /**

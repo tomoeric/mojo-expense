@@ -225,6 +225,10 @@ export async function ingestExport(
 
     const receipts = await storeReceipts(client, file, parsed.receipts, keys, warnings);
 
+    // Now that this export has confirmed which expenses left the inbox, the
+    // receipts for the ones this app approved are safe to let go of.
+    const freed = await dropApprovedReceipts(client);
+
     // Last, because storeReceipts appends to `warnings` too.
     await client.query("UPDATE expense_imports SET warnings = $2 WHERE id = $1", [importId, warnings]);
 
@@ -232,6 +236,9 @@ export async function ingestExport(
       `UPDATE expense_imports SET inserted_count=$2, updated_count=$3, unchanged_count=$4,
               left_inbox_count=$5, receipts_added=$6 WHERE id=$1`,
       [importId, inserted, updated, unchanged, leftInbox, receipts.added]);
+    if (freed.images > 0) {
+      console.log(`import: released ${freed.images} receipt image(s) for ${freed.expenses} approved expense(s)`);
+    }
 
     await client.query("COMMIT");
     return { ...base, importId, inserted, updated, unchanged, leftInbox,
@@ -381,6 +388,40 @@ function renderPage(doc: mupdf.Document, index: number): Buffer {
   const jpeg = Buffer.from(pixmap.asJPEG(RECEIPT_QUALITY, false));
   pixmap.destroy();
   return jpeg;
+}
+
+/**
+ * Let go of the receipts for expenses this app approved and Emburse confirmed.
+ *
+ * "Confirmed" is the important word. An approval is only known to have taken
+ * once the expense stops appearing in the export, and by then the image cannot
+ * be fetched again — an expense out of the inbox is out of every future export
+ * too. Deleting on the click instead would mean a failed approval loses the
+ * receipt for an expense still sitting in the queue. This costs at most one
+ * day of storage and cannot lose anything.
+ *
+ * Two deletions, in order, and the order is the point. Images are shared by
+ * content hash — one purchase split across sites points several expenses at
+ * the same picture — so the link goes first and the image only when nothing
+ * references it any more. Dropping the image because one of its owners was
+ * approved would blank the receipt on the others.
+ */
+async function dropApprovedReceipts(client: pg.PoolClient): Promise<{ expenses: number; images: number }> {
+  const links = await client.query(
+    `DELETE FROM expense_receipts er
+      USING expense_decisions d, expenses e
+      WHERE er.dedupe_key = d.dedupe_key
+        AND e.dedupe_key  = d.dedupe_key
+        AND d.decision = 'approve' AND d.state = 'applied'
+        AND e.in_inbox = false`,
+  );
+
+  const blobs = await client.query(
+    `DELETE FROM receipt_blobs b
+      WHERE NOT EXISTS (SELECT 1 FROM expense_receipts er WHERE er.sha256 = b.sha256)`,
+  );
+
+  return { expenses: links.rowCount ?? 0, images: blobs.rowCount ?? 0 };
 }
 
 /** The largest image on the page, as [x, y, w, h] in points. */
