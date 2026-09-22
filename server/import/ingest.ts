@@ -67,7 +67,7 @@ export async function ingestExport(
      * The chips are still checked, just earlier and better — by the runner,
      * which reads each one, refuses when it cannot, and verifies the result.
      * This flag says that happened. Files arriving any other way (dropped into
-     * SharePoint by hand) have had no such check, so they keep the old one.
+     * uploaded by hand) have had no such check, so they keep the old one.
      */
     sectionsVerified?: boolean;
   } = {},

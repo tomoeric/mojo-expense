@@ -8,7 +8,6 @@ import { api } from "./routes.js";
 import { allowListSize, authMiddleware, authRouter, isAuthConfigured } from "./auth/index.js";
 import { importRouter } from "./import/routes.js";
 import { decisionRouter } from "./emburse/decision-routes.js";
-import { startSyncTimer } from "./import/sync.js";
 import { startExportScheduler } from "./emburse/export-scheduler.js";
 import { startDecisionWorker } from "./emburse/decision-worker.js";
 import { ensureSchema, isDbConfigured } from "./db.js";
@@ -74,7 +73,6 @@ app.listen(env.port, "0.0.0.0", () => {
     // error is visible in the UI rather than only in a crash loop.
     ensureSchema()
       .then(() => {
-        startSyncTimer();
         startExportScheduler();
         startDecisionWorker();
       })

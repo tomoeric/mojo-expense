@@ -1,9 +1,8 @@
 import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Upload, Loader2, CheckCircle2, AlertTriangle, Database, FolderSync, Clock } from "lucide-react";
+import { Upload, Loader2, CheckCircle2, AlertTriangle, Database, Clock } from "lucide-react";
 import { money, timeOfDay } from "@/lib/format";
 import { StatChip, StatChipRow, Empty } from "@/components/ui";
-import { useSync, useSyncStatus, describeSync } from "@/lib/sync";
 
 type ImportResult = {
   filename: string;
@@ -60,18 +59,21 @@ type Stats = {
  * What each import brought in, and the manual way to load one.
  *
  * The daily export arrives on its own — the server drives Emburse and imports
- * the PDF without touching this page. Uploading and the SharePoint sync are
- * both fallbacks now: the route back in when the automation cannot run, and
- * the way to backfill an older export. Kept rather than removed, because the
+ * the PDF without touching this page. Uploading is the fallback: the way back
+ * in when the automation cannot run. Kept rather than removed, because the
  * automation has broken before and a reviewer with no way to load a file
  * would simply be stuck.
+ *
+ * The SharePoint sync that used to sit beside it is gone — a whole subsystem
+ * (Graph app auth, an hourly poll, a watched folder) serving a path nothing
+ * used once the app fetched its own exports, and the only route by which a
+ * file could be imported without anybody choosing to.
  */
 export function ImportPage() {
   const input = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [error, setError] = useState("");
-  const [syncNote, setSyncNote] = useState("");
   const [notes, setNotes] = useState<string[] | null>(null);
   const qc = useQueryClient();
 
@@ -83,8 +85,6 @@ export function ImportPage() {
       return (await res.json()) as {
         imports: HistoryRow[];
         stats: Stats | null;
-        sharepoint: boolean;
-        sources: { filename: string; status: string; imported_at: string; error: string | null }[];
         schedule: Schedule;
       };
     },
@@ -116,23 +116,6 @@ export function ImportPage() {
 
   const stats = history.data?.stats;
 
-  // The sync itself lives in a mutation on the query client, so leaving this
-  // page mid-run does not cancel it and does not lose the result — see
-  // lib/sync.ts. Everything here is just how it is shown.
-  const sync = useSync();
-  const syncing = useSyncStatus();
-
-  function runSync() {
-    setError("");
-    setResult(null);
-    sync.mutate(undefined, {
-      onSuccess: (r) => {
-        setSyncNote(describeSync(r));
-        if (r.failed.length) setError(r.failed.map((f) => `${f.name}: ${f.error}`).join(" · "));
-      },
-      onError: (err) => setError((err as Error).message),
-    });
-  }
 
   const schedule = history.data?.schedule;
 
@@ -204,24 +187,12 @@ export function ImportPage() {
           <button
             type="button"
             onClick={() => input.current?.click()}
-            disabled={busy || syncing}
+            disabled={busy}
             className="inline-flex items-center gap-2 rounded-lg bg-black px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-zinc-800 disabled:opacity-60"
           >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
             {busy ? "Working…" : "Choose PDF"}
           </button>
-          {history.data?.sharepoint && (
-            <button
-              type="button"
-              onClick={() => runSync()}
-              disabled={busy || syncing}
-              title="Pull any new exports from the watched SharePoint folder"
-              className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold transition-colors hover:bg-muted disabled:opacity-60"
-            >
-              {syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderSync className="h-4 w-4" />}
-              {syncing ? "Syncing…" : "Sync SharePoint"}
-            </button>
-          )}
         </div>
       </section>
 
@@ -232,32 +203,8 @@ export function ImportPage() {
         </div>
       )}
 
-      {syncNote && (
-        <div className="rounded-xl border border-border bg-muted px-4 py-3 text-sm">{syncNote}</div>
-      )}
-
       {result && <ImportSummary result={result} />}
 
-      {history.data?.sources && history.data.sources.length > 0 && (
-        <section>
-          <h2 className="mb-2 text-xs font-bold tracking-wide text-muted-foreground uppercase">
-            Watched SharePoint folder
-          </h2>
-          <ul className="divide-y divide-border rounded-xl border border-border">
-            {history.data.sources.map((s) => (
-              <li key={s.filename + s.imported_at} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
-                <span className="min-w-0 truncate">{s.filename}</span>
-                <span className="flex shrink-0 items-center gap-3">
-                  {s.error && <span className="max-w-72 truncate text-xs text-red-600">{s.error}</span>}
-                  <span className={`text-xs font-semibold ${s.status === "failed" ? "text-red-600" : "text-muted-foreground"}`}>
-                    {s.status}
-                  </span>
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
 
       <section>
         <h2 className="mb-2 text-xs font-bold tracking-wide text-muted-foreground uppercase">Recent imports</h2>

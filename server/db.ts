@@ -50,8 +50,8 @@ CREATE TABLE IF NOT EXISTS expense_imports (
   reconciled         boolean
 );
 -- Warnings are persisted, not just returned to whoever triggered the import.
--- The usual path is an unattended SharePoint sync, so a warning nobody stored
--- is a warning nobody ever sees.
+-- The usual path is an unattended scheduled export, so a warning nobody
+-- stored is a warning nobody ever sees.
 ALTER TABLE expense_imports ADD COLUMN IF NOT EXISTS warnings text[] NOT NULL DEFAULT '{}';
 ALTER TABLE expense_imports ADD COLUMN IF NOT EXISTS export_sections text[];
 

@@ -147,23 +147,13 @@ export const env = {
     cacheTtlSec: int("EMBURSE_CACHE_TTL_SEC", 300),
   },
 
-  /** Entra app registration — shared with sign-in, but app-only for Graph. */
-  azure: {
-    tenantId: str("AZURE_TENANT_ID"),
-    clientId: str("AZURE_CLIENT_ID"),
-    clientSecret: str("AZURE_CLIENT_SECRET"),
-  },
-
-  /**
-   * The SharePoint folder the daily export lands in. Defaults point at
-   * AI Projects → Shared Documents → Emburse Transactions.
-   */
-  sharepoint: {
-    driveId: str("SHAREPOINT_DRIVE_ID", "b!VegnEte7u0m9UoLreL1k7gzPwGK6nyJEhvVReyQS-aNV3-A-6WbnQamyPpjTyWnK"),
-    folderId: str("SHAREPOINT_FOLDER_ID", "01AKEC4WI273BYVMAHNZAJEEVRTHS5DFSA"),
-    /** Minutes between automatic syncs; 0 disables the timer (manual only). */
-    pollMinutes: int("SHAREPOINT_POLL_MINUTES", 60),
-  },
+  // AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET are still needed —
+  // they are how people sign in — but they are read straight from process.env
+  // in server/auth, so there is nothing for this file to hold. What has gone
+  // is Graph: the SharePoint folder poll that used to bring exports in, now
+  // that the app fetches its own. The app-only `Sites.Read.All` grant on that
+  // registration is no longer used by anything and can be withdrawn; the
+  // delegated sign-in scopes must stay.
 
   /**
    * When the server runs the export, and how it retries.
@@ -181,9 +171,10 @@ export const env = {
     attemptsPerDay: Math.max(1, int("EXPORT_ATTEMPTS_PER_DAY", 2)),
     /**
      * How long after an attempt to keep waiting before calling it a miss.
-     * Emburse queues the export and emails when it is ready, then the folder
-     * poll picks it up, so an attempt that fired on time still lands late.
-     * Default covers the export wait plus one full SHAREPOINT_POLL_MINUTES.
+     *
+     * Generous because a run is slow, not because delivery is: signing in,
+     * reaching the grid and building the file took about three minutes on the
+     * real tenant, and a retry sits behind that again.
      */
     graceMinutes: int("EXPORT_GRACE_MINUTES", 90),
   },

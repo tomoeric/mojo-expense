@@ -12,7 +12,7 @@ it is a demo.
 
 ## Layer 1 — the parser and the schedule, with no network
 
-Runs anywhere, including here. No credentials, no Emburse, no SharePoint.
+Runs anywhere, including here. No credentials, no Emburse, no browser.
 
 ```bash
 pnpm exec tsx scripts/verify-schedule.ts       # 26 boundary cases
@@ -74,33 +74,13 @@ pnpm exec playwright install --only-shell chromium
 Still failing → set `PLAYWRIGHT_CHROMIUM_PATH` explicitly. It overrides the
 search, and is the escape hatch when detection guesses wrong.
 
-## Layer 2 — can the app reach SharePoint?
-
-The single check on whether `Sites.Read.All` actually took.
-
-1. Deploy, sign in, open **Import**.
-2. Press **Sync now**.
-
-| Result | Meaning |
-| --- | --- |
-| "Checked N files — nothing new" | Graph works. Done. |
-| 403 with the Sites.Read.All message | Consent did not stick. Application permission, not delegated, and admin consent granted. |
-| 404 | `SHAREPOINT_DRIVE_ID` / `SHAREPOINT_FOLDER_ID` are wrong. |
-| "SharePoint sync is not configured" | One of the `AZURE_*` secrets is missing on the deployment. |
-
-Do this before anything else touches SharePoint. If the app cannot read the
-folder, a perfect export lands in a void.
-
----
-
 ## Layer 3 — does an export import correctly?
 
 Still no automation. You are testing the pipeline the runner will feed.
 
 1. Do the export by hand, exactly as the runner will: ADMIN tab, the configured
    Section chips, Receipts: true, PDF.
-2. Drop the PDF into **AI Projects → Shared Documents → Emburse Transactions**.
-3. **Sync now**.
+2. Open **Import** and press **Choose PDF**.
 
 Check three things:
 
@@ -111,9 +91,11 @@ Check three things:
 - **Receipts came through.** The stat chips show a receipt count and a storage
   size. Open one from the queue and read the total on it.
 
-Then press **Sync now** again. Nothing should import — the content hash makes a
+Then load the same file again. Nothing should import — the content hash makes a
 repeat a no-op. If it imports twice, stop and say so; everything downstream
-assumes that guard holds.
+assumes that guard holds. Loading an **older** export is refused outright, for
+a sharper reason: it would put already-decided expenses back in the queue and
+take today's out.
 
 ---
 

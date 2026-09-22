@@ -14,7 +14,6 @@ import { ImportPage } from "@/pages/import";
 import { ExportSettingsPage } from "@/pages/export-settings";
 import { MyEmburseLoginPage } from "@/pages/my-emburse-login";
 import { timeOfDay } from "@/lib/format";
-import { useSyncStatus } from "@/lib/sync";
 
 const RAIL = [
   { key: "queue", label: "Review Queue", Icon: ListChecks, description: "Expense reports waiting on a decision, oldest first." },
@@ -92,7 +91,6 @@ export function App() {
   const queryClient = useQueryClient();
   const auth = useAuth();
   const config = useConfig();
-  const syncing = useSyncStatus();
 
   // Only fetch reports once we know the viewer is allowed to see them —
   // otherwise every anonymous page load fires a request that 401s.
@@ -140,13 +138,6 @@ export function App() {
                   ? "demo mode"
                   : (config.data?.source ?? "")}
             </span>
-            {/* A sync outlives the page that started it, so say so everywhere. */}
-            {syncing && (
-              <span className="hidden items-center gap-1.5 text-xs text-white/70 sm:inline-flex">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Syncing SharePoint…
-              </span>
-            )}
             {auth.data?.user && <UserMenu user={auth.data.user} isAdmin={auth.data.isAdmin} />}
           </div>
         </div>

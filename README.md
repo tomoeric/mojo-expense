@@ -185,25 +185,21 @@ only from Card Transactions / Reimbursements → filter `Receipt: True` →
 Export → PDF, which a person runs. So a fully automated feed gives transactions
 without receipts, and receipts require someone to run the PDF export.
 
-Both land in the same watched SharePoint folder, and because identity is
-derived from the row fields rather than the file, a PDF imported later attaches
-its receipts to rows that already arrived another way.
+The app runs that PDF export itself, in a headless browser, and imports the
+file directly — see `server/emburse/auto-export.ts`. Nothing is written to or
+read from SharePoint any more.
 
-### SharePoint sync
+### Getting an export in by hand
 
-Set `SHAREPOINT_DRIVE_ID` and `SHAREPOINT_FOLDER_ID` (defaults point at
-AI Projects → Shared Documents → Emburse Transactions) and the app polls that
-folder every `SHAREPOINT_POLL_MINUTES` (default 60), importing anything new.
-There is also a **Sync SharePoint** button on the Import page.
+**Import → Choose PDF**, for when the automation cannot run. Identity is
+derived from the row fields rather than the file, so a PDF loaded later
+attaches its receipts to rows that already arrived another way.
 
-Graph is called **app-only**, so the Entra app registration needs the
-APPLICATION permission `Sites.Read.All` — or `Sites.Selected` granted on this
-site — with admin consent. The delegated scopes used for sign-in are not
-enough, and that mismatch is the usual cause of a 403.
-
-Each SharePoint item is remembered by id and eTag so a file is downloaded once;
-a file that fails to import is recorded with its error and not retried every
-poll, so one malformed export cannot wedge the loop.
+Loading the *same* file twice is a no-op (content hash). Loading an **older**
+export is refused: every row in an imported file is marked back into the inbox
+and everything absent from it is marked as having left, so an older snapshot
+would resurrect already-decided expenses and evict the ones actually waiting.
+Force is available for somebody who is certain.
 
 ### What the importer guarantees
 

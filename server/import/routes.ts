@@ -3,8 +3,6 @@ import express from "express";
 import { db, ensureSchema, isDbConfigured } from "../db.js";
 import { requireAdmin, requireAuth } from "../auth/index.js";
 import { ingestExport } from "./ingest.js";
-import { syncFromSharePoint, syncOnPageLoad } from "./sync.js";
-import { isSharePointConfigured } from "./sharepoint.js";
 import { describeSchedule } from "./schedule.js";
 import { ALL_SECTIONS, cleanSchedule, readSettings, writeSettings } from "./settings.js";
 import { DEFAULT_SELECTORS, SELECTOR_HELP, STEP_SELECTORS, envLogin } from "../emburse/auto-export.js";
@@ -65,21 +63,8 @@ importRouter.post(
   },
 );
 
-importRouter.post("/import/sync", requireAuth, async (req: Request, res: Response) => {
-  if (!guard(res)) return;
-  try {
-    res.json(await syncFromSharePoint(req.user?.email ?? "manual"));
-  } catch (err) {
-    res.status(502).json({ error: err instanceof Error ? err.message : "Sync failed." });
-  }
-});
-
 importRouter.get("/imports", requireAuth, async (_req: Request, res: Response) => {
   if (!guard(res)) return;
-  // Fire-and-forget: the page renders against what is already stored, and a
-  // freshly-arrived export shows up on the next load rather than blocking this
-  // one behind a download.
-  syncOnPageLoad();
   try {
     await ensureSchema();
     const { rows } = await db().query(
@@ -97,14 +82,6 @@ importRouter.get("/imports", requireAuth, async (_req: Request, res: Response) =
               (SELECT coalesce(sum(byte_size), 0) FROM receipt_blobs) AS receipt_bytes
          FROM expenses`,
     );
-    // The watched-folder history is only meaningful once sync is set up.
-    let sources: unknown[] = [];
-    if (isSharePointConfigured()) {
-      const seen = await db()
-        .query(`SELECT filename, status, imported_at, error FROM import_sources ORDER BY imported_at DESC LIMIT 10`)
-        .catch(() => ({ rows: [] }));
-      sources = seen.rows;
-    }
     // The newest row is the last export that actually brought new bytes in —
     // a re-uploaded duplicate returns early and never inserts one.
     const lastImport = rows[0]?.imported_at ? new Date(rows[0].imported_at as string) : null;
@@ -112,8 +89,6 @@ importRouter.get("/imports", requireAuth, async (_req: Request, res: Response) =
     res.json({
       imports: rows,
       stats: stat[0] ?? null,
-      sharepoint: isSharePointConfigured(),
-      sources,
       schedule: describeSchedule((await readSettings()).schedule, lastImport),
     });
   } catch (err) {
