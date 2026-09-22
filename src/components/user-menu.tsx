@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { LogOut, UserRound } from "lucide-react";
+import { LogOut, UserRound, SlidersHorizontal } from "lucide-react";
 import type { SessionUser } from "@/lib/api";
 
 /** Signed-in identity + sign out, in the dark header bar. */
-export function UserMenu({ user }: { user: SessionUser }) {
+export function UserMenu({ user, isAdmin }: { user: SessionUser; isAdmin: boolean }) {
   const [open, setOpen] = useState(false);
   const initials =
     user.name
@@ -38,6 +38,16 @@ export function UserMenu({ user }: { user: SessionUser }) {
               </p>
               <p className="mt-0.5 truncate text-xs text-muted-foreground">{user.email}</p>
             </div>
+            {isAdmin && (
+              <a
+                href="#/settings"
+                onClick={() => setOpen(false)}
+                className="flex items-center gap-2 border-b border-border px-3 py-2.5 text-sm transition-colors hover:bg-muted"
+              >
+                <SlidersHorizontal className="h-4 w-4" />
+                Export settings
+              </a>
+            )}
             <a
               href="/api/logout"
               className="flex items-center gap-2 px-3 py-2.5 text-sm transition-colors hover:bg-muted"

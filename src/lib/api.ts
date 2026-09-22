@@ -102,9 +102,9 @@ export type ReportsResponse = {
   summary: Summary;
 };
 
-export type SessionUser = { id: string; email: string; name: string; exp: number };
+export type SessionUser = { id: string; email: string; name: string; exp: number; isAdmin?: boolean };
 
-export type AuthResponse = { user: SessionUser | null; authConfigured: boolean };
+export type AuthResponse = { user: SessionUser | null; authConfigured: boolean; isAdmin: boolean };
 
 export type ConfigResponse = {
   configured: boolean;

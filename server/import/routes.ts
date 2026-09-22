@@ -1,11 +1,12 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import express from "express";
 import { db, ensureSchema, isDbConfigured } from "../db.js";
-import { requireAuth } from "../auth/index.js";
+import { requireAdmin, requireAuth } from "../auth/index.js";
 import { ingestExport } from "./ingest.js";
 import { syncFromSharePoint, syncOnPageLoad } from "./sync.js";
 import { isSharePointConfigured } from "./sharepoint.js";
 import { describeSchedule } from "./schedule.js";
+import { ALL_SECTIONS, readSettings, writeSettings } from "./settings.js";
 
 /**
  * Upload and history for the daily Emburse export.
@@ -79,7 +80,7 @@ importRouter.get("/imports", requireAuth, async (_req: Request, res: Response) =
     const { rows } = await db().query(
       `SELECT id, filename, imported_at, imported_by, parsed_rows, inserted_count,
               updated_count, unchanged_count, left_inbox_count, receipts_added,
-              total_cents, stated_total_cents, reconciled
+              total_cents, stated_total_cents, reconciled, warnings, export_sections
          FROM expense_imports ORDER BY imported_at DESC LIMIT 25`,
     );
     const { rows: stat } = await db().query(
@@ -112,5 +113,49 @@ importRouter.get("/imports", requireAuth, async (_req: Request, res: Response) =
     });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Could not read import history." });
+  }
+});
+
+
+/**
+ * What the export is supposed to contain.
+ *
+ * Readable by anyone signed in — the Import page shows it as context for the
+ * warnings — but only an admin may change it, since it governs how every future
+ * import is judged.
+ */
+importRouter.get("/export-settings", requireAuth, async (_req: Request, res: Response) => {
+  if (!guard(res)) return;
+  try {
+    res.json({ ...(await readSettings()), allSections: ALL_SECTIONS });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "Could not read settings." });
+  }
+});
+
+importRouter.put("/export-settings", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+
+  const body = req.body as { sections?: unknown; receiptsOnly?: unknown };
+  const sections = Array.isArray(body.sections) ? body.sections.filter((s): s is string => typeof s === "string") : null;
+  if (!sections) {
+    res.status(400).json({ error: "sections must be an array of section names." });
+    return;
+  }
+  const unknown = sections.filter((s) => !(ALL_SECTIONS as readonly string[]).includes(s));
+  if (unknown.length) {
+    res.status(400).json({ error: `Not an Emburse section: ${unknown.join(", ")}.` });
+    return;
+  }
+  if (sections.length === 0) {
+    res.status(400).json({ error: "Choose at least one section, or every import will be flagged." });
+    return;
+  }
+
+  try {
+    const saved = await writeSettings(sections, body.receiptsOnly !== false, req.user?.email ?? "unknown");
+    res.json({ ...saved, allSections: ALL_SECTIONS });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "Could not save settings." });
   }
 });

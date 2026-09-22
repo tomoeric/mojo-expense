@@ -35,12 +35,16 @@ export function isAuthConfigured(): boolean {
  * quotes are stripped (pasting `"a@b.com"` should not silently lock everyone
  * out); and a domain written `@mojocarwash.com` is accepted as well as bare.
  */
-function allowList(): string[] {
-  return (process.env.AUTH_ALLOWED ?? "")
+function parseList(raw: string | undefined): string[] {
+  return (raw ?? "")
     .split(/[,\s]+/)
     .map((s) => s.trim().toLowerCase().replace(/^["']|["']$/g, ""))
     .map((s) => (s.startsWith("@") ? s.slice(1) : s))
     .filter(Boolean);
+}
+
+function allowList(): string[] {
+  return parseList(process.env.AUTH_ALLOWED);
 }
 
 /** Entry count, for the boot log — never the addresses themselves. */
@@ -49,11 +53,46 @@ export function allowListSize(): number {
 }
 
 export function isAllowed(email: string): boolean {
-  const list = allowList();
+  return matches(email, allowList());
+}
+
+function matches(email: string, list: string[]): boolean {
   if (list.length === 0) return true;
   const lower = email.toLowerCase();
   const domain = lower.split("@")[1] ?? "";
   return list.includes(lower) || list.includes(domain);
+}
+
+/**
+ * Who may change settings that affect everyone.
+ *
+ * `AUTH_ADMINS` takes the same forgiving format as `AUTH_ALLOWED`. Leaving it
+ * unset makes every signed-in user an admin, which is the right default for a
+ * tool whose sign-in is already restricted to a named finance group — a second
+ * list that starts out empty would otherwise lock the first person out of the
+ * settings they need in order to set the list.
+ */
+function adminList(): string[] {
+  return parseList(process.env.AUTH_ADMINS);
+}
+
+export function isAdmin(email: string): boolean {
+  return matches(email, adminList());
+}
+
+export function adminListSize(): number {
+  return adminList().length;
+}
+
+/** 403 unless the caller may change shared settings. */
+export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
+  // With sign-in switched off there is no identity to check, and the app is
+  // already refusing to serve real data, so this is not a hole.
+  if (!isAuthConfigured() || (req.user && isAdmin(req.user.email))) {
+    next();
+    return;
+  }
+  res.status(403).json({ error: "Only an administrator can change this." });
 }
 
 let configPromise: Promise<oidc.Configuration> | null = null;
@@ -132,8 +171,11 @@ export const authRouter: IRouter = Router();
 
 authRouter.get("/auth/user", (req: Request, res: Response) => {
   res.json({
-    user: req.user ?? null,
+    user: req.user ? { ...req.user, isAdmin: isAdmin(req.user.email) } : null,
     authConfigured: isAuthConfigured(),
+    // With sign-in off there is no identity, so the UI should not hide admin
+    // affordances behind a check the server is not making either.
+    isAdmin: !isAuthConfigured() || (req.user ? isAdmin(req.user.email) : false),
   });
 });
 

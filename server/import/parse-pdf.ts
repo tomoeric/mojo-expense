@@ -53,7 +53,24 @@ export type ParsedExport = {
   receipts: ParsedReceipt[];
   /** The TOTAL printed on page 1, for reconciliation. */
   statedTotalCents: number | null;
+  /** The search Emburse says the export came from, off page 1. */
+  header: ExportHeader | null;
   pageCount: number;
+};
+
+/**
+ * Page 1 carries the search that produced the export:
+ *
+ *   Exported results of search: Section: Inbox, Receipt: Receipts: True
+ *
+ * which is the only in-band evidence of what was actually selected in the
+ * export dialog, and so the only way to catch a section chip left in the wrong
+ * state — that produces a well-formed PDF of the wrong rows.
+ */
+export type ExportHeader = {
+  sections: string[];
+  receiptFilter: string | null;
+  raw: string;
 };
 
 type Line = { x: number; y: number; text: string };
@@ -81,6 +98,7 @@ export function parseExpensesPdf(data: Buffer | Uint8Array): ParsedExport {
   const expenses: ParsedExpense[] = [];
   const receipts: ParsedReceipt[] = [];
   let statedTotalCents: number | null = null;
+  let header: ExportHeader | null = null;
   let carry: { lines: Line[]; rest: Line[] } | null = null;
 
   for (let i = 0; i < pageCount; i++) {
@@ -89,6 +107,10 @@ export function parseExpensesPdf(data: Buffer | Uint8Array): ParsedExport {
     if (statedTotalCents === null) {
       const t = lines.find((l) => l.text.includes("TOTAL:"));
       if (t) statedTotalCents = toCents(MONEY.exec(t.text)?.[0] ?? "");
+    }
+    if (header === null) {
+      const h = lines.find((l) => l.text.includes("Exported results of search:"));
+      if (h) header = parseHeader(h.text);
     }
 
     // A receipt page holds a single image and a two-line caption; the table
@@ -108,7 +130,7 @@ export function parseExpensesPdf(data: Buffer | Uint8Array): ParsedExport {
     carry = tail;
   }
 
-  return { expenses, receipts, statedTotalCents, pageCount };
+  return { expenses, receipts, statedTotalCents, header, pageCount };
 }
 
 function pageLines(doc: mupdf.Document, index: number): Line[] {
@@ -124,6 +146,30 @@ function pageLines(doc: mupdf.Document, index: number): Line[] {
 }
 
 /** Y below which data rows begin — located per page, never assumed. */
+/**
+ * Pull the sections and the receipt filter out of the search line.
+ *
+ * Split on `, Receipt:` rather than on the first comma: several selected
+ * sections are themselves comma-separated, so the first comma is usually
+ * between two section names, not between the two fields.
+ */
+function parseHeader(text: string): ExportHeader {
+  const after = text.slice(text.indexOf("Exported results of search:") + 27).trim();
+  const [sectionPart = "", receiptPart = ""] = after.split(/,\s*Receipt\s*:/i);
+
+  const sections = sectionPart
+    .replace(/^\s*Section\s*:\s*/i, "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  return {
+    sections,
+    receiptFilter: receiptPart.trim() || null,
+    raw: after,
+  };
+}
+
 function headerCut(lines: Line[]): number {
   const byY = new Map<number, string[]>();
   for (const l of lines) {

@@ -11,6 +11,7 @@ import { QueuePage } from "@/pages/queue";
 import { ReportsPage } from "@/pages/reports";
 import { AnalyticsPage } from "@/pages/analytics";
 import { ImportPage } from "@/pages/import";
+import { ExportSettingsPage } from "@/pages/export-settings";
 import { timeOfDay } from "@/lib/format";
 
 const RAIL = [
@@ -20,7 +21,23 @@ const RAIL = [
   { key: "import", label: "Import", Icon: Upload, description: "Upload the daily Emburse export and review what changed." },
 ] as const;
 
-type RailKey = (typeof RAIL)[number]["key"];
+/**
+ * Pages reachable from the user menu rather than the rail. They are settings
+ * rather than places to work, so they do not belong in the main navigation, but
+ * they still need to be a route so the back button and a pasted link behave.
+ */
+const MENU_PAGES = [
+  {
+    key: "settings",
+    label: "Export settings",
+    description: "What the daily Emburse export is supposed to contain, and what each import is checked against.",
+  },
+] as const;
+
+type RailKey = (typeof RAIL)[number]["key"] | (typeof MENU_PAGES)[number]["key"];
+
+/** Pages that stand alone — no report window, no live strip. */
+const isStandalone = (k: RailKey) => k === "import" || k === "settings";
 
 const WINDOWS = [
   { value: "30", label: "30 days" },
@@ -32,7 +49,8 @@ const WINDOWS = [
 function useHashRoute(): [RailKey, (k: RailKey) => void] {
   const read = (): RailKey => {
     const raw = window.location.hash.replace(/^#\/?/, "");
-    return RAIL.some((r) => r.key === raw) ? (raw as RailKey) : "queue";
+    const known = [...RAIL.map((r) => r.key), ...MENU_PAGES.map((m) => m.key)] as string[];
+    return known.includes(raw) ? (raw as RailKey) : "queue";
   };
   const [route, setRoute] = useState<RailKey>(read);
 
@@ -71,7 +89,8 @@ export function App() {
     setOpen(null);
   }, [route]);
 
-  const active = RAIL.find((r) => r.key === route) ?? RAIL[0];
+  const active =
+    RAIL.find((r) => r.key === route) ?? MENU_PAGES.find((m) => m.key === route) ?? RAIL[0];
   const data = reports.data;
 
   if (auth.isPending) {
@@ -105,7 +124,7 @@ export function App() {
                   ? "demo mode"
                   : (config.data?.source ?? "")}
             </span>
-            {auth.data?.user && <UserMenu user={auth.data.user} />}
+            {auth.data?.user && <UserMenu user={auth.data.user} isAdmin={auth.data.isAdmin} />}
           </div>
         </div>
       </header>
@@ -115,6 +134,8 @@ export function App() {
           <ul className="space-y-1">
             {RAIL.map(({ key, label, Icon }) => {
               const on = key === route;
+              /* A menu page leaves every rail item unselected, which is the
+                 honest state: you are not in any of them. */
               return (
                 <li key={key}>
                   <button
@@ -139,17 +160,19 @@ export function App() {
             description={active.description}
             warnings={data?.warnings ?? []}
             right={
-              <SegmentedControl
-                value={days}
-                onChange={setDays}
-                options={WINDOWS.map((w) => ({ value: w.value, label: w.label }))}
-              />
+              isStandalone(route) ? null : (
+                <SegmentedControl
+                  value={days}
+                  onChange={setDays}
+                  options={WINDOWS.map((w) => ({ value: w.value, label: w.label }))}
+                />
+              )
             }
           />
 
           {data?.demo && <NotConnected config={config.data} />}
 
-          {route !== "import" && <LiveStrip
+          {!isStandalone(route) && <LiveStrip
             label={
               data
                 ? `${data.demo ? "Demo data" : "Live"} — ${data.reports.length} reports · updated ${timeOfDay(data.fetchedAt)}`
@@ -159,8 +182,8 @@ export function App() {
             isRefreshing={reports.isFetching}
           />}
 
-          {/* Mobile rail. */}
-          <div className="md:hidden">
+          {/* Mobile rail. Hidden on menu pages, which are not in it. */}
+          <div className={MENU_PAGES.some((m) => m.key === route) ? "hidden" : "md:hidden"}>
             <SegmentedControl
               value={route}
               onChange={setRoute}
@@ -168,14 +191,14 @@ export function App() {
             />
           </div>
 
-          {reports.isPending && route !== "import" && (
+          {reports.isPending && !isStandalone(route) && (
             <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
               Loading expense reports…
             </div>
           )}
 
-          {reports.isError && route !== "import" && (
+          {reports.isError && !isStandalone(route) && (
             <Empty>
               <p className="font-semibold text-red-600">Could not load expense reports</p>
               <p className="mt-1">{(reports.error as Error).message}</p>
@@ -186,6 +209,7 @@ export function App() {
           {data && route === "reports" && <ReportsPage data={data} config={config.data} onOpen={setOpen} />}
           {data && route === "analytics" && <AnalyticsPage data={data} />}
           {route === "import" && <ImportPage />}
+          {route === "settings" && <ExportSettingsPage isAdmin={auth.data?.isAdmin ?? false} />}
         </main>
       </div>
 

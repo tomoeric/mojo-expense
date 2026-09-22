@@ -3,6 +3,7 @@ import * as mupdf from "mupdf";
 import { db } from "../db.js";
 import { parseExpensesPdf, type ParsedExpense, type ParsedReceipt } from "./parse-pdf.js";
 import { dedupeKey, sha256 } from "./key.js";
+import { checkAgainstSettings, readSettings } from "./settings.js";
 
 /**
  * Ingest one daily Emburse export.
@@ -58,6 +59,11 @@ export async function ingestExport(
   const parsed = opts.parsed ?? parseExpensesPdf(file);
   const warnings: string[] = [];
 
+  // What arrived vs what was asked for. A section chip left in the wrong state
+  // yields a well-formed PDF of the wrong rows that passes every other check,
+  // so the search line printed on page 1 is the only thing that can catch it.
+  warnings.push(...checkAgainstSettings(parsed.header, await readSettings()));
+
   const totalCents = parsed.expenses.reduce((a, e) => a + e.amountCents, 0);
   const reconciled = parsed.statedTotalCents !== null && totalCents === parsed.statedTotalCents;
   if (parsed.statedTotalCents === null) {
@@ -96,10 +102,10 @@ export async function ingestExport(
 
     const imp = await client.query<{ id: string }>(
       `INSERT INTO expense_imports (filename, file_sha256, imported_by, page_count, parsed_rows,
-                                    total_cents, stated_total_cents, reconciled)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+                                    total_cents, stated_total_cents, reconciled, export_sections)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
       [filename, fileHash, importedBy, parsed.pageCount, parsed.expenses.length,
-       totalCents, parsed.statedTotalCents, reconciled]);
+       totalCents, parsed.statedTotalCents, reconciled, parsed.header?.sections ?? null]);
     const importId = Number(imp.rows[0]!.id);
 
     const keys = new Map<string, ParsedExpense>();
@@ -158,6 +164,9 @@ export async function ingestExport(
     const leftInbox = gone.rowCount ?? 0;
 
     const receipts = await storeReceipts(client, file, parsed.receipts, keys, warnings);
+
+    // Last, because storeReceipts appends to `warnings` too.
+    await client.query("UPDATE expense_imports SET warnings = $2 WHERE id = $1", [importId, warnings]);
 
     await client.query(
       `UPDATE expense_imports SET inserted_count=$2, updated_count=$3, unchanged_count=$4,

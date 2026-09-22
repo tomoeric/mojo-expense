@@ -31,6 +31,8 @@ type HistoryRow = {
   receipts_added: number | null;
   total_cents: string | null;
   reconciled: boolean | null;
+  warnings: string[] | null;
+  export_sections: string[] | null;
 };
 
 type Schedule = {
@@ -60,6 +62,7 @@ export function ImportPage() {
   const [result, setResult] = useState<ImportResult | null>(null);
   const [error, setError] = useState("");
   const [syncNote, setSyncNote] = useState("");
+  const [notes, setNotes] = useState<string[] | null>(null);
   const qc = useQueryClient();
 
   const history = useQuery({
@@ -146,6 +149,34 @@ export function ImportPage() {
           <StatChip value={Number(stats.receipts).toLocaleString()} label="receipts" tone="emerald" />
           <StatChip value={`${(Number(stats.receipt_bytes) / 1e6).toFixed(1)} MB`} label="receipt storage" tone="slate" />
         </StatChipRow>
+      )}
+
+      {notes && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4" onClick={() => setNotes(null)}>
+          <div
+            className="max-h-[80vh] w-full max-w-lg overflow-auto rounded-xl border border-border bg-card p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="flex items-center gap-2 text-sm font-bold">
+              <AlertTriangle className="h-4 w-4 text-amber-500" />
+              Import warnings
+            </h3>
+            <ul className="mt-3 space-y-2">
+              {notes.map((w, i) => (
+                <li key={i} className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-sm">
+                  {w}
+                </li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              onClick={() => setNotes(null)}
+              className="mt-4 rounded-lg border border-border px-3 py-1.5 text-sm font-semibold hover:bg-muted"
+            >
+              Close
+            </button>
+          </div>
+        </div>
       )}
 
       <section className="rounded-xl border border-dashed border-border p-6 text-center">
@@ -256,15 +287,31 @@ export function ImportPage() {
                     <td className="tnum px-3 py-2 text-right">{r.receipts_added ?? 0}</td>
                     <td className="tnum px-3 py-2 text-right">{money(Number(r.total_cents ?? 0) / 100)}</td>
                     <td className="px-3 py-2">
-                      {r.reconciled ? (
-                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700">
-                          <CheckCircle2 className="h-3.5 w-3.5" /> balanced
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-700">
-                          <AlertTriangle className="h-3.5 w-3.5" /> check
-                        </span>
-                      )}
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        {r.reconciled ? (
+                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700">
+                            <CheckCircle2 className="h-3.5 w-3.5" /> balanced
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-700">
+                            <AlertTriangle className="h-3.5 w-3.5" /> check
+                          </span>
+                        )}
+                        {/* A scope mismatch is the failure that looks like success,
+                            so it has to survive past the upload that produced it —
+                            the usual import is an unattended sync nobody watches. */}
+                        {r.warnings && r.warnings.length > 0 && (
+                          <button
+                            type="button"
+                            title={r.warnings.join("\n\n")}
+                            onClick={() => setNotes(r.warnings ?? [])}
+                            className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-semibold text-amber-700 hover:bg-amber-500/20"
+                          >
+                            <AlertTriangle className="h-3 w-3" />
+                            {r.warnings.length}
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

@@ -49,6 +49,12 @@ CREATE TABLE IF NOT EXISTS expense_imports (
   stated_total_cents bigint,
   reconciled         boolean
 );
+-- Warnings are persisted, not just returned to whoever triggered the import.
+-- The usual path is an unattended SharePoint sync, so a warning nobody stored
+-- is a warning nobody ever sees.
+ALTER TABLE expense_imports ADD COLUMN IF NOT EXISTS warnings text[] NOT NULL DEFAULT '{}';
+ALTER TABLE expense_imports ADD COLUMN IF NOT EXISTS export_sections text[];
+
 CREATE INDEX IF NOT EXISTS expense_imports_at_idx ON expense_imports (imported_at DESC);
 
 CREATE TABLE IF NOT EXISTS expenses (
