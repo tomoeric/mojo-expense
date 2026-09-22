@@ -56,7 +56,16 @@ type Stats = {
   receipt_bytes: string;
 };
 
-/** Upload the daily Emburse export and see what each import changed. */
+/**
+ * What each import brought in, and the manual way to load one.
+ *
+ * The daily export arrives on its own — the server drives Emburse and imports
+ * the PDF without touching this page. Uploading and the SharePoint sync are
+ * both fallbacks now: the route back in when the automation cannot run, and
+ * the way to backfill an older export. Kept rather than removed, because the
+ * automation has broken before and a reviewer with no way to load a file
+ * would simply be stuck.
+ */
 export function ImportPage() {
   const input = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
@@ -171,10 +180,15 @@ export function ImportPage() {
 
       <section className="rounded-xl border border-dashed border-border p-6 text-center">
         <Database className="mx-auto h-6 w-6 text-muted-foreground" />
-        <h2 className="mt-2 text-sm font-bold">Upload the daily Emburse export</h2>
+        <h2 className="mt-2 text-sm font-bold">Load an export by hand</h2>
+        {/* The app fetches the daily export itself now. Saying "upload the
+            daily export" here would describe a job nobody has any more, and a
+            page that describes the wrong job is how people end up doing it. */}
         <p className="mx-auto mt-1 max-w-lg text-sm text-muted-foreground">
-          The Expenses PDF from Emburse Spend. Re-uploading a file you have already imported changes
-          nothing, and expenses that have left the Emburse inbox are kept rather than deleted.
+          Not normally needed — the app signs into Emburse and fetches today&rsquo;s export on its own.
+          This is the way back in when it cannot: export the Expenses PDF from Emburse Spend yourself,
+          or backfill an older one. Re-loading a file already imported changes nothing, and expenses
+          that have left the Emburse inbox are kept rather than deleted.
         </p>
         <input
           ref={input}

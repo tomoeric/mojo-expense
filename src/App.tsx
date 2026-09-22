@@ -20,7 +20,7 @@ const RAIL = [
   { key: "queue", label: "Review Queue", Icon: ListChecks, description: "Expense reports waiting on a decision, oldest first." },
   { key: "reports", label: "All Reports", Icon: FileText, description: "Every report in the window, filterable by status and department." },
   { key: "analytics", label: "Analytics", Icon: BarChart3, description: "Where the money went — by category, department and month." },
-  { key: "import", label: "Import", Icon: Upload, description: "Upload the daily Emburse export and review what changed." },
+  { key: "import", label: "Import", Icon: Upload, description: "What the daily export brought in, and a way to load one by hand." },
 ] as const;
 
 /**
@@ -57,24 +57,18 @@ const isStandalone = (k: RailKey) => k === "import" || k === "settings";
  */
 const WINDOW_DAYS = 730;
 
-/** Hash routing keeps sub-pages deep-linkable without pulling in a router. */
-function useHashRoute(): {
-  route: RailKey;
-  view: string;
-  setRoute: (k: RailKey) => void;
-  setView: (v: string) => void;
-} {
-  // `#/queue/flagged` — the second segment is the section's own sub-view, so a
-  // chosen filter survives a reload and can be linked to.
+/** Hash routing keeps pages deep-linkable without pulling in a router. */
+function useHashRoute(): { route: RailKey; setRoute: (k: RailKey) => void } {
+  // Just `#/queue`. There used to be a second segment for a page's own
+  // sub-view — `#/queue/flagged` — and nothing has sub-views any more, so a
+  // stale link like that now lands on the page itself rather than a filter
+  // that no longer exists.
   const read = () => {
-    const [first = "", ...rest] = window.location.hash.replace(/^#\/?/, "").split("/");
+    const first = window.location.hash.replace(/^#\/?/, "").split("/")[0] ?? "";
     const known = [...RAIL.map((r) => r.key), ...MENU_PAGES.map((m) => m.key)] as string[];
-    return {
-      route: (known.includes(first) ? first : "queue") as RailKey,
-      view: decodeURIComponent(rest.join("/")) || "all",
-    };
+    return (known.includes(first) ? first : "queue") as RailKey;
   };
-  const [state, setState] = useState(read);
+  const [route, setState] = useState(read);
 
   useEffect(() => {
     const onChange = () => setState(read());
@@ -82,21 +76,17 @@ function useHashRoute(): {
     return () => window.removeEventListener("hashchange", onChange);
   }, []);
 
-  const go = (route: RailKey, view: string) => {
-    window.location.hash = view && view !== "all" ? `/${route}/${encodeURIComponent(view)}` : `/${route}`;
-    setState({ route, view: view || "all" });
-  };
-
   return {
-    route: state.route,
-    view: state.view,
-    setRoute: (k) => go(k, "all"),
-    setView: (v) => go(state.route, v),
+    route,
+    setRoute: (k) => {
+      window.location.hash = `/${k}`;
+      setState(k);
+    },
   };
 }
 
 export function App() {
-  const { route, view, setRoute, setView } = useHashRoute();
+  const { route, setRoute } = useHashRoute();
   const [open, setOpen] = useState<ExpenseReport | null>(null);
 
   const queryClient = useQueryClient();
@@ -233,7 +223,7 @@ export function App() {
           )}
 
           {data && route === "queue" && (
-            <QueuePage data={data} config={config.data} onOpen={setOpen} view={view} onView={setView} />
+            <QueuePage data={data} onOpen={setOpen} />
           )}
           {data && route === "reports" && <ReportsPage data={data} config={config.data} onOpen={setOpen} />}
           {data && route === "analytics" && <AnalyticsPage data={data} />}
