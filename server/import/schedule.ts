@@ -3,15 +3,12 @@ import type { Schedule } from "./settings.js";
 /**
  * When the next export is expected to land, and whether one is overdue.
  *
- * The export is produced by a Power Automate flow on a laptop, which the server
- * cannot see. So rather than have the flow report in — one more moving part, one
- * more credential — the app derives everything from two things it already knows:
- * the agreed schedule, and when an export last actually arrived.
- *
- * That has a useful property: it reports what the reviewer cares about (is the
- * data current?) rather than what the robot claims (I ran successfully), and the
- * two can disagree. A flow that "succeeds" while exporting an empty selection
- * still shows here as nothing having arrived.
+ * Derived from two things: the configured schedule, and when an export last
+ * actually arrived. Deliberately not from whether the runner thinks it
+ * succeeded — those can disagree, and when they do the arrival is the one that
+ * matters. A run that "succeeds" while exporting an empty selection still shows
+ * here as nothing having landed, which is what the reviewer actually cares
+ * about: is the data current?
  *
  * The schedule is: first attempt at `firstRun`, retry every `retryHours`, at
  * most `attemptsPerDay` attempts. After the last one fails the day is written
@@ -33,9 +30,8 @@ export type ImportSchedule = {
 /**
  * `now` is injectable so the boundaries can be tested without waiting for them.
  *
- * The schedule comes from settings rather than env: it describes a Task
- * Scheduler trigger on somebody's laptop, and whoever changes that trigger
- * should be able to correct this without a redeploy.
+ * The schedule comes from settings rather than env so it can be changed in the
+ * app, without a redeploy and without a restart.
  */
 export function describeSchedule(
   schedule: Schedule,

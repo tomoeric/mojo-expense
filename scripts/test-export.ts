@@ -41,6 +41,10 @@ process.env.EMBURSE_LOGIN_EMAIL ||= "bot@example.invalid";
 process.env.EMBURSE_LOGIN_PASSWORD ||= "not-a-real-password";
 process.env.EMBURSE_STEP_TIMEOUT_MS ||= "15000";
 process.env.EMBURSE_EXPORT_WAIT_MS ||= "60000";
+// Short, so the abandonment path can actually be tested. Five real minutes of
+// waiting is the right default for a person reading a text and the wrong one
+// for a test suite.
+process.env.EMBURSE_CHALLENGE_TIMEOUT_MS ||= "20000";
 
 const { runAutoExport, DEFAULT_SELECTORS } = await import("../server/emburse/auto-export.js");
 type Selectors = Parameters<typeof runAutoExport>[1];
@@ -70,6 +74,18 @@ const settings = {
   sections: ["Needs Review", "Needs Manager Review"],
   receiptsOnly: true,
 } as ExportSettings;
+
+/**
+ * Throw away the browser's memory of this device.
+ *
+ * The profile is shared by every run here, which is the point of section 7 —
+ * and a nuisance everywhere after it, because a device trusted once is never
+ * asked again. Any section that needs to meet a challenge has to arrive as a
+ * stranger, so it says so out loud rather than depending on what ran before.
+ */
+const profileDir = process.env.EMBURSE_PROFILE_DIR ?? ".emburse-profile";
+const forgetDevice = () => fs.rmSync(profileDir, { recursive: true, force: true });
+forgetDevice();
 
 let failures = 0;
 const check = (label: string, ok: boolean, detail = "") => {
@@ -157,7 +173,7 @@ check(
 console.log("\n6. A failed sign-in must say which failure it was");
 for (const [kind, expect] of [
   ["rejected", /rejected the credentials/],
-  ["mfa", /second factor/],
+  ["mfa", /asking for a verification code/],
 ] as const) {
   mock.reset();
   await fetch(`${mock.url}/__outcome/${kind}`, { method: "POST" });
@@ -182,7 +198,8 @@ run = await runAutoExport(settings, selectors, LOGIN, {});
 let detail = run.steps.find((s) => s.name === "sign in")?.detail ?? "";
 check("the first run is stopped by the device check", !run.ok);
 check("and names it as a device check", /verify this device/.test(detail), detail.slice(0, 100));
-check("…and not as a code prompt, which it is not", !/second factor/.test(detail), detail.slice(0, 100));
+check("…and not as a code prompt, which it is not",
+  !/asking for a verification code/.test(detail), detail.slice(0, 100));
 
 // Second run: the cookie the first run was given should now be presented.
 run = await runAutoExport(settings, selectors, LOGIN, {});
@@ -192,6 +209,161 @@ check(
   run.ok,
   detail.slice(0, 120),
 );
+await fetch(`${mock.url}/__outcome/ok`, { method: "POST" });
+
+// ------------------------------------------------ the code a person types in
+console.log("\n8. A verification code, entered by a person");
+const { GOOD_CODE } = await import("./mock-emburse.js");
+forgetDevice();
+mock.reset();
+await fetch(`${mock.url}/__outcome/code`, { method: "POST" });
+
+// Unattended: no hook, so the run must fail rather than park a browser that
+// nobody is going to answer. This is the 6am case, and getting it wrong means a
+// scheduled run sits on the profile lock for five minutes every morning.
+run = await runAutoExport(settings, selectors, LOGIN, {});
+check("without somebody to ask, the run just fails", !run.ok);
+check("and nothing was submitted to the code screen", mock.state().codeAttempts === 0,
+  `${mock.state().codeAttempts} attempt(s)`);
+
+// Attended: the hook stands in for the person at the keyboard. The first code
+// is wrong on purpose — a run that gives up after one bad digit would be worse
+// than no feature at all.
+const given: { prompt: string; attempt: number; lastError: string | null }[] = [];
+const answers = ["000000", GOOD_CODE];
+run = await runAutoExport(settings, selectors, LOGIN, {
+  onChallenge: async (ctx) => {
+    given.push({ prompt: ctx.prompt, attempt: ctx.attempt, lastError: ctx.lastError });
+    return answers[ctx.attempt - 1] ?? GOOD_CODE;
+  },
+});
+for (const s of run.steps) console.log(`     ${s.ok ? "·" : "✗"} ${s.name.padEnd(34)} ${s.detail.slice(0, 90)}`);
+
+check("the run completed once the code was given", run.ok);
+check("it asked twice — the first code was wrong", given.length === 2, `asked ${given.length} time(s)`);
+check("the prompt quoted what Emburse was asking",
+  /verification code/i.test(given[0]?.prompt ?? ""), given[0]?.prompt?.slice(0, 70) ?? "none");
+check("the first ask had no error to report", given[0]?.lastError === null);
+check("the retry said the code had been refused",
+  /did not accept that code/i.test(given[1]?.lastError ?? ""), given[1]?.lastError?.slice(0, 70) ?? "none");
+
+// The one that matters. A code submitted without ticking "remember this
+// device" gets in today and is a stranger again tomorrow — the feature would
+// look like it worked while changing nothing.
+check("it ticked “remember this device”", mock.state().rememberedDevice);
+check("…and said so in the step detail",
+  /device is now remembered/.test(run.steps.find((st) => st.name === "sign in")?.detail ?? ""),
+  run.steps.find((st) => st.name === "sign in")?.detail?.slice(0, 90) ?? "");
+
+// And therefore: the next run needs no code at all, attended or not.
+const before = mock.state().codeAttempts;
+run = await runAutoExport(settings, selectors, LOGIN, {});
+check("the next unattended run signs straight in", run.ok);
+check("without being asked for another code", mock.state().codeAttempts === before,
+  `${mock.state().codeAttempts - before} further attempt(s)`);
+
+// --------------------------------------------- the registry the web page uses
+// Sections 8 drove the hook directly. The app does not: it parks the run in a
+// registry and lets a separate HTTP request answer it. That hand-off is where
+// the rules live — who may answer, how many guesses, what happens when nobody
+// comes back — so it is exercised as the app uses it, through waitForCode.
+console.log("\n9. Answering through the registry, as the app does");
+const { waitForCode, answerChallenge, cancelChallenge, currentChallenge } =
+  await import("../server/emburse/challenge.js");
+
+forgetDevice();
+mock.reset();
+await fetch(`${mock.url}/__outcome/code`, { method: "POST" });
+
+const OWNER = "eric@example.invalid";
+
+const runPromise = runAutoExport(settings, selectors, LOGIN, {
+  onChallenge: (ctx) => waitForCode({ ...ctx, owner: OWNER }),
+});
+
+// Wait for the run to park, the way the page does: by polling. Generous,
+// because this includes a cold browser start against a profile that was just
+// deleted — a tight window here fails as "the challenge never appeared", which
+// is the same symptom as the feature being broken and wastes an afternoon.
+const parked = async () => {
+  for (let i = 0; i < 600; i++) {
+    if (currentChallenge()) return true;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return false;
+};
+
+check("the run parks and the challenge becomes visible", await parked());
+const view = currentChallenge();
+check("the challenge names its owner", view?.owner === OWNER, view?.owner ?? "none");
+check("and carries a picture of the page", (view?.screenshot?.length ?? 0) > 1000);
+check("and says how many guesses are left", view?.attemptsLeft === 3, String(view?.attemptsLeft));
+
+// Nobody else gets to finish somebody's half-open sign-in — not even another
+// administrator. This is the check that keeps a parked browser from being a
+// way into a finance system.
+let answer = answerChallenge(GOOD_CODE, "someone.else@example.invalid");
+check("a different person cannot answer it", !answer.ok);
+check("…and is told whose it is", /eric@example.invalid/.test(answer.ok ? "" : answer.error),
+  answer.ok ? "" : answer.error);
+check("…and the challenge is still waiting", currentChallenge() !== null);
+
+// Something that could not be a code at all must not cost one of three guesses.
+answer = answerChallenge("12", OWNER);
+check("a malformed code is refused without spending an attempt", !answer.ok);
+check("…and the challenge is still waiting", currentChallenge() !== null);
+
+// Answered the way it will really arrive: pasted out of a text message, spaces
+// and all. Rejecting that as malformed would be the most annoying possible bug
+// in a box somebody is typing into while holding a phone.
+answer = answerChallenge(`${GOOD_CODE.slice(0, 3)} ${GOOD_CODE.slice(3)}`, OWNER);
+check("the owner can answer, spaces and all", answer.ok);
+run = await runPromise;
+check("and the run completes", run.ok);
+check("the challenge is cleared afterwards", currentChallenge() === null);
+
+// Somebody who walks away. The run must end rather than hold the browser open
+// on a server nobody is looking at — this is also what the timeout does when
+// it fires, by the same path.
+console.log("\n10. Nobody answers");
+forgetDevice();
+mock.reset();
+await fetch(`${mock.url}/__outcome/code`, { method: "POST" });
+
+const abandoned = runAutoExport(settings, selectors, LOGIN, {
+  onChallenge: (ctx) => waitForCode({ ...ctx, owner: OWNER }),
+});
+check("it parked again", await parked());
+check("a stranger cannot cancel it either", !cancelChallenge("nope", "someone.else@example.invalid").ok);
+check("the owner can", cancelChallenge("Cancelled from the app.", OWNER).ok);
+
+run = await abandoned;
+check("the run fails rather than hanging", !run.ok);
+check("and says it was abandoned",
+  /Cancelled from the app/.test(run.steps.find((st) => st.name === "sign in")?.detail ?? ""),
+  run.steps.find((st) => st.name === "sign in")?.detail?.slice(0, 90) ?? "");
+check("and the browser is not still holding a challenge", currentChallenge() === null);
+check("nothing is waiting, so there is nothing to answer", !answerChallenge(GOOD_CODE, OWNER).ok);
+
+// The case nobody presses a button for: somebody starts a run, walks off, and
+// the browser must let go by itself. Without this the server keeps a half-open
+// sign-in and the profile lock indefinitely, and the next run cannot start.
+console.log("\n11. Nobody comes back at all");
+forgetDevice();
+mock.reset();
+await fetch(`${mock.url}/__outcome/code`, { method: "POST" });
+
+const forgotten = runAutoExport(settings, selectors, LOGIN, {
+  onChallenge: (ctx) => waitForCode({ ...ctx, owner: OWNER }),
+});
+check("it parked", await parked());
+run = await forgotten; // no answer, no cancel — only the timeout ends this
+detail = run.steps.find((st) => st.name === "sign in")?.detail ?? "";
+check("the run ends on its own", !run.ok);
+check("and says nobody entered a code", /Nobody entered the verification code/.test(detail),
+  detail.slice(0, 90));
+check("…in words, not “0 minutes”", !/\b0 (minutes|seconds)\b/.test(detail), detail.slice(0, 90));
+check("and the challenge is gone", currentChallenge() === null);
 await fetch(`${mock.url}/__outcome/ok`, { method: "POST" });
 
 await mock.close();

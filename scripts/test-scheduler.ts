@@ -32,7 +32,8 @@ const check = (label: string, ok: boolean, detail = "") => {
 
 await ensureSchema();
 const current = await readSettings();
-await writeSettings(current.sections, current.receiptsOnly, SCHEDULE, current.selectors, "test");
+await writeSettings(
+  current.sections, current.receiptsOnly, SCHEDULE, current.selectors, current.emburseUrl, "test");
 await db().query(`CREATE TABLE IF NOT EXISTS export_runs (
   id bigserial PRIMARY KEY, started_at timestamptz NOT NULL DEFAULT now(), finished_at timestamptz,
   local_date text NOT NULL, attempt integer NOT NULL, trigger text NOT NULL, ok boolean,

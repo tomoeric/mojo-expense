@@ -10,6 +10,7 @@ import { ALL_SECTIONS, cleanSchedule, readSettings, writeSettings } from "./sett
 import { DEFAULT_SELECTORS, SELECTOR_HELP, STEP_SELECTORS, envLogin } from "../emburse/auto-export.js";
 import { credentialStatus, deleteCredential, listCredentials, saveCredential } from "../emburse/credentials.js";
 import { attemptExport, nextDue, recentRuns, runScreenshot } from "../emburse/export-scheduler.js";
+import { answerChallenge, cancelChallenge, currentChallenge } from "../emburse/challenge.js";
 
 /**
  * Upload and history for the daily Emburse export.
@@ -228,19 +229,59 @@ function cleanSelectors(raw: unknown, current: Record<string, string>): Record<s
 }
 
 
-/** The last few export attempts, and why one is or is not due now. */
-importRouter.get("/export-runs", requireAuth, async (_req: Request, res: Response) => {
+/** The last few export attempts, why one is or is not due, and any parked sign-in. */
+importRouter.get("/export-runs", requireAuth, async (req: Request, res: Response) => {
   if (!guard(res)) return;
   try {
     const { schedule } = await readSettings();
+    const challenge = currentChallenge();
     res.json({
       configured: (await listCredentials()).length > 0 || envLogin() !== null,
       due: await nextDue(schedule),
       runs: await recentRuns(20),
+      // Carried on the list rather than its own endpoint: this is already the
+      // thing the page polls while a run is going, and a challenge is only
+      // ever raised during one.
+      // `mine` rather than making the page compare emails: only the owner can
+      // answer, and the page should say who is being waited on either way.
+      challenge: challenge && { ...challenge, mine: challenge.owner === (req.user?.email ?? "") },
     });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Could not read export runs." });
   }
+});
+
+/**
+ * Hand Emburse the verification code it is waiting for.
+ *
+ * The run that raised this is parked inside sign-in with a live browser open,
+ * so this call does not start anything — it unblocks something. The answer is
+ * checked against the caller's own session identity inside `answerChallenge`:
+ * a parked challenge is a half-open session to a finance system, and being an
+ * administrator is not the same as being the person who started it.
+ */
+importRouter.post("/export-challenge", requireAuth, requireAdmin, (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  const { code } = req.body as { code?: unknown };
+  const result = answerChallenge(code, req.user?.email ?? "");
+  if (!result.ok) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+  // The run itself carries on in the request that started it; the page finds
+  // out how it went by polling the run list, as it already does.
+  res.json({ ok: true });
+});
+
+/** Give up on a parked sign-in rather than waiting out its timeout. */
+importRouter.delete("/export-challenge", requireAuth, requireAdmin, (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  const result = cancelChallenge("Cancelled from the app.", req.user?.email ?? "");
+  if (!result.ok) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+  res.json({ ok: true });
 });
 
 /** The page a failed run died on. Served as an image so it can be looked at. */

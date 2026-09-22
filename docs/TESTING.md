@@ -24,8 +24,8 @@ idempotency: whether the parsed total matches the total printed on page 1, and
 whether importing the same file twice changes anything.
 
 **Is the schedule configured the way you think?** Different question from "is the
-logic right", and the one that actually goes wrong, because `EXPORT_*` has to
-agree with a Task Scheduler trigger on a laptop and nothing enforces that:
+logic right", and the one that actually goes wrong — a timezone or a first-run
+hour can be perfectly valid and still not be what anybody meant:
 
 ```bash
 pnpm exec tsx scripts/simulate-schedule.ts
@@ -83,17 +83,17 @@ The single check on whether `Sites.Read.All` actually took.
 | 404 | `SHAREPOINT_DRIVE_ID` / `SHAREPOINT_FOLDER_ID` are wrong. |
 | "SharePoint sync is not configured" | One of the `AZURE_*` secrets is missing on the deployment. |
 
-Do this before touching Power Automate. If the app cannot read the folder, a
-perfect flow delivers into a void.
+Do this before anything else touches SharePoint. If the app cannot read the
+folder, a perfect export lands in a void.
 
 ---
 
 ## Layer 3 — does an export import correctly?
 
-Still no automation. You are testing the pipeline the flow will feed.
+Still no automation. You are testing the pipeline the runner will feed.
 
-1. Do the export by hand, exactly as the flow will: ADMIN tab, the three Section
-   chips (Needs Review, Needs Manager Review, Denied), Receipts: true, PDF.
+1. Do the export by hand, exactly as the runner will: ADMIN tab, the configured
+   Section chips, Receipts: true, PDF.
 2. Drop the PDF into **AI Projects → Shared Documents → Emburse Transactions**.
 3. **Sync now**.
 
@@ -101,8 +101,8 @@ Check three things:
 
 - **Reconciled.** The import row says balanced, not check. If it says check, the
   parser and the PDF disagree on the total and the data is not trustworthy yet.
-- **The count matches.** Compare against the `N items, $X` line you captured from
-  the grid. This is why the flow captures it.
+- **The count matches.** Compare against the `N items, $X` line above the grid.
+  This is why the runner captures it.
 - **Receipts came through.** The stat chips show a receipt count and a storage
   size. Open one from the queue and read the total on it.
 
@@ -112,72 +112,87 @@ assumes that guard holds.
 
 ---
 
-## Layer 4 — does the flow drive Emburse?
+## Layer 4 — does the runner drive Emburse?
 
-Now the automation. Run it from the Power Automate Desktop designer with **Run**,
-not from Task Scheduler, so you can watch it and stop it.
+Now the automation, which is this server rather than anything on a laptop.
 
-**Run it once with the browser visible.** Do not minimise the window to make it
-tidy — you are watching for the flow clicking before a page has settled, which is
-the failure that produces a correct-looking export of the wrong rows.
+Everything below except the last two items runs **against a stand-in Emburse**,
+with no tenant and no credentials, in about two minutes:
 
-Then check, in this order:
+```bash
+pnpm exec tsx scripts/test-export.ts <any-export.pdf>
+pnpm exec tsx scripts/test-decide.ts
+```
 
-1. It landed on **ADMIN**, not PERSONAL.
-2. The grid's item count after APPLY matches what you get filtering by hand.
-3. The dialog shows exactly **three** blue Section chips — Needs Review, Needs
-   Manager Review, Denied — with Pending Submission and Completed grey.
-4. The dialog header says **"all expense(s)"**, not "N expense(s)".
-5. Format is PDF and the template dropdown is greyed out.
+`test-export` starts a fake Emburse (`scripts/mock-emburse.ts`), drives the real
+runner against it and asserts what actually happened on the server side — which
+chips ended up on, whether the receipts filter was applied, whether an export was
+requested at all. It proves the machinery. It cannot prove the selectors match
+the real Emburse; nothing outside their tenant can.
 
-**Run it a second time immediately.** It should stop within a second — today is
-already done. If it exports again, the marker file logic is wrong and you will
-get a pile of duplicate exports and emails.
+Then, against the real thing, from **Export settings → Run the export**:
+
+1. Press **Test run**. It does everything up to clicking Export, so it can be
+   repeated freely — nothing is produced and nobody is emailed.
+2. Read the step list. A failure names the step, quotes what it looked for and
+   shows the page it was looking at. Fix that one selector inline and run again.
+3. When every step is green, press **Run export now** once and check the import.
+
+### If Emburse asks for a verification code
+
+The test run stops and asks you for it, in the page, with a picture of what
+Emburse is showing. Type the code in and the run carries on from where it
+stopped.
+
+That should happen **once**. The app ticks *remember this device*, and the
+browser keeps a persistent profile (`EMBURSE_PROFILE_DIR`), so the next run
+signs straight in. If you are asked again on the next run, the tick did not take
+— check the `mfaRemember` selector against that screen, because the default
+matches the first checkbox on the page and a tenant may put something else
+there.
+
+Two things it deliberately will not do:
+
+- **A scheduled run never waits for a code.** There is nobody there to give one,
+  and a parked browser holds the profile lock. It fails with the reason instead.
+- **Only the person who started the run can answer it.** A parked challenge is a
+  half-open session to a finance system; being an administrator is not the same
+  as being its owner.
 
 ---
 
 ## Layer 5 — does it fail the way it should?
 
-Each of these is a deliberate break. Do them once, before trusting the thing
-overnight.
+Most of these are asserted by `test-export.ts` on every run, which is the point
+of the mock — each one was a real bug it caught before a person did.
 
-### The flow exports the wrong scope
+| Failure | What must happen | Covered by |
+| --- | --- | --- |
+| A row is ticked, so the dialog is scoped to a selection | Refuse before requesting anything | §3 |
+| A section chip is in the wrong state | Corrected, in both directions, by reading it first | §1 |
+| A selector matches nothing | Fail at that step — never read absence as "already done" | §5 |
+| The password is wrong | Say so, quoting the page — not a shortlist of three possibilities | §6 |
+| A second factor is asked for | Named as a code prompt, not as a device check | §6 |
+| A device check is asked for | Named as a device check, not as a code prompt | §7 |
+| A device trusted once | Stays trusted on the next run | §7 |
+| A code is typed in wrong | Asked again, up to three times | §8 |
+| A code is accepted | *Remember this device* was ticked, so there is no next code | §8 |
+| Somebody else tries to answer the challenge | Refused, and told whose it is | §9 |
+| Somebody walks away mid-challenge | The run ends and the browser closes | §10, §11 |
 
-**Tick one row in the grid, then run.** The dialog will say "1 expense(s)" and the
-flow must **bail out**, not export. This is the failure that produces a valid PDF
-containing nothing, which the importer would accept without complaint.
+Run them:
 
-### A section chip is in the wrong state
+```bash
+pnpm exec tsx scripts/test-export.ts <any-export.pdf>
+```
 
-**Manually toggle Pending Submission on, then run.** The flow must switch it back
-off. Then **toggle a wanted chip off** and run — it must switch that one on. If
-the flow clicks chips unconditionally, one of these two runs ends up inverted and
-still looks successful.
-
-### The session has expired
-
-**Sign out of Emburse in the flow's Edge profile, then run.** Either the sign-in
-branch handles it, or the flow fails and mails you. What must not happen is the
-flow clicking happily through a login page and "succeeding".
+Two that the mock cannot cover, worth doing once against the real tenant:
 
 ### Emburse changed its UI
 
-You cannot cause this, but you can approximate it: **rename a UI element's
-selector to something that will not match** and run. The flow should fail on that
-action and mail you, not carry on to the next step.
-
-### The retry cap holds
-
-**Break the flow deliberately** (a bad selector), then let Task Scheduler run it.
-Expect exactly two attempts, three hours apart, then nothing until tomorrow.
-Check the marker file reads `<today> 2`. A flow that keeps retrying all day means
-the duration arithmetic is wrong and Emburse gets eight export requests.
-
-### The laptop was asleep
-
-**Close the lid over a scheduled slot.** On wake, Task Scheduler's *run as soon as
-possible after a missed start* should fire it. If nothing happens, that setting
-is not on.
+You cannot cause this, but you can approximate it: **set a selector to something
+that will not match** in Export settings and press Test run. It must fail on that
+step and show you the page — not carry on to the next one. Put it back.
 
 ### A whole day is missed
 
@@ -188,25 +203,7 @@ the full receipted inbox rather than one day's rows.
 
 ### The app notices
 
-With no export today and both slots passed, the Import page should show the amber
-**MISSED** strip. You do not need to wait for a real failure to see it — point
-`EXPORT_FIRST_RUN` at a time that has already passed, restart, and look:
-
-```
-EXPORT_FIRST_RUN=00:01
-EXPORT_ATTEMPTS_PER_DAY=1
-```
-
+With no export today and every slot passed, the Import page should show the amber
+**MISSED** strip. You do not need to wait for a real failure to see it — set the
+first run to a time that has already passed, with one attempt per day, and look.
 Put it back afterwards.
-
----
-
-## What is not covered
-
-- **Graph app-only auth has never been exercised against the live tenant** from
-  here — layer 2 is the first real test of it.
-- **The schedule strip's rendering** is typechecked and its logic is unit-tested,
-  but it has not been looked at in a browser with real data.
-- **The collect half of the automation** (fetching the finished PDF out of
-  Emburse) is documented but not built. Until it is, layer 3 is manual: you move
-  the file into SharePoint yourself.

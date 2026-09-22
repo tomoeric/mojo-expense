@@ -166,12 +166,11 @@ export const env = {
   },
 
   /**
-   * When the Power Automate flow on the laptop is expected to deliver.
+   * When the server runs the export, and how it retries.
    *
-   * The server cannot see the flow, so this is only a statement of the agreed
-   * schedule — it is what the app compares actual arrivals against in order to
-   * say "next upload at ...". Change it here if the Task Scheduler trigger
-   * changes, or the two will disagree and the app will be the one that is wrong.
+   * Only the starting point: the live schedule is a stored setting, editable in
+   * the app and re-read on every scheduler tick, so it can be corrected without
+   * a redeploy. These values seed a database that has never been written to.
    */
   schedule: {
     timezone: str("EXPORT_TIMEZONE", "America/Chicago"),
@@ -226,6 +225,14 @@ export const env = {
      * simply somewhere to put it.
      */
     profileDir: str("EMBURSE_PROFILE_DIR", ".emburse-profile"),
+    /**
+     * How long a sign-in will wait for somebody to type a verification code.
+     *
+     * A parked run holds a live browser and the profile lock, so this cannot be
+     * generous. Five minutes is long enough to unlock a phone and read a text,
+     * and short enough that a run abandoned mid-way frees itself.
+     */
+    challengeTimeoutMs: int("EMBURSE_CHALLENGE_TIMEOUT_MS", 5 * 60_000),
   },
 
   audit: {

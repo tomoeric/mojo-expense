@@ -20,6 +20,9 @@ import express from "express";
 import type { Server } from "node:http";
 import fs from "node:fs";
 
+/** The one code the mock's verification screen accepts. */
+export const GOOD_CODE = "482913";
+
 export type MockHandle = { url: string; state: () => State; reset: () => void; close: () => Promise<void> };
 
 type State = {
@@ -29,7 +32,11 @@ type State = {
   sections: Record<string, boolean>;
   rowsTicked: number;
   pendingUser: string;
-  loginOutcome: "ok" | "rejected" | "mfa" | "device";
+  loginOutcome: "ok" | "rejected" | "mfa" | "device" | "code";
+  /** Codes submitted to the verification screen, right or wrong. */
+  codeAttempts: number;
+  /** Whether the last accepted code arrived with "remember this device" ticked. */
+  rememberedDevice: boolean;
   search: string;
   format: string;
   requestedAt: number | null;
@@ -52,6 +59,8 @@ const state: State = {
   rowsTicked: 0,
   pendingUser: "",
   loginOutcome: "ok",
+  codeAttempts: 0,
+  rememberedDevice: false,
   search: "",
   format: "CSV",
   requestedAt: null,
@@ -141,6 +150,16 @@ app.post("/login", (req, res) => {
     res.send(page("<h1>Verify it is you</h1><p>Enter the verification code we sent to your phone.</p>"));
     return;
   }
+  // A verification code, unless this browser has already been trusted. This is
+  // the screen a person can actually clear, so unlike the others it has a way
+  // through — and the "remember this device" box is wired to the cookie rather
+  // than being decoration. An automation that submits the code without ticking
+  // it gets in today and is a stranger again tomorrow, which is exactly the
+  // silent failure worth catching here.
+  if (state.loginOutcome === "code" && !/trusted=1/.test(req.headers.cookie ?? "")) {
+    res.send(codePage(null));
+    return;
+  }
   // Device verification, unless this browser has been here before. The cookie
   // is the whole point: without a persistent profile it never comes back, and
   // "remember this device" can never be satisfied.
@@ -149,6 +168,30 @@ app.post("/login", (req, res) => {
     res.send(page("<h1>Verify</h1><p>Remember this device for 30 days. Back to login</p>"));
     return;
   }
+  state.signedIn = true;
+  res.redirect("/");
+});
+
+const codePage = (error: string | null) =>
+  page(`
+    <h1>Verify it is you</h1>
+    <p>Enter the verification code we sent to your phone.</p>
+    ${error ? `<p>${error}</p>` : ""}
+    <form method="post" action="/verify">
+      <input type="text" name="code" placeholder="000000">
+      <label><input type="checkbox" name="remember"> Remember this device for 30 days</label>
+      <button type="submit">Verify</button>
+    </form>`);
+
+app.post("/verify", (req, res) => {
+  const { code, remember } = req.body as { code?: string; remember?: string };
+  state.codeAttempts++;
+  if (code !== GOOD_CODE) {
+    res.send(codePage("That code is incorrect. Please try again."));
+    return;
+  }
+  state.rememberedDevice = Boolean(remember);
+  if (remember) res.setHeader("set-cookie", "trusted=1; Path=/; Max-Age=2592000");
   state.signedIn = true;
   res.redirect("/");
 });

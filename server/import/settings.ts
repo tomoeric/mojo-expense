@@ -5,10 +5,9 @@ import { DEFAULT_SELECTORS, SUPERSEDED_SELECTORS } from "../emburse/auto-export.
 /**
  * What the daily Emburse export is supposed to contain.
  *
- * This is not configuration the app acts on — the export is produced by a Power
- * Automate flow on a laptop that cannot read this. It is a **statement of
- * intent**, and its value is in being checked: every export PDF prints the
- * search it came from on page 1,
+ * The app both acts on this and checks itself against it. The runner uses these
+ * sections and filters to drive Emburse; the importer then reads what actually
+ * came back. Every export PDF prints the search it came from on page 1,
  *
  *   Exported results of search: Section: Inbox, Receipt: Receipts: True
  *
@@ -41,12 +40,11 @@ export type ExportSettings = {
   /** Whether the Receipts: true filter is expected. */
   receiptsOnly: boolean;
   /**
-   * When the flow on the laptop is set to run.
+   * When the server runs the export, and how it retries.
    *
-   * The app cannot start the export, so this is a written-down copy of the
-   * Windows Task Scheduler trigger — kept here rather than in env so it can be
-   * corrected without a redeploy, and because whoever changes the trigger is
-   * the person looking at this screen.
+   * Read by the scheduler on every tick rather than at boot, so a change here
+   * takes effect without a restart — which is the whole reason it is a stored
+   * setting and not an env var.
    */
   schedule: Schedule;
   updatedAt: string | null;

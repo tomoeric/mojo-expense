@@ -40,13 +40,28 @@ Tables and columns are created by idempotent `CREATE/ALTER … IF NOT EXISTS` in
 `server/db.ts`, which runs on boot. A plain build + restart applies a schema
 change; there is no migration step.
 
-## What the app does and does not control
+## The export is the app's own job
 
-The daily export is produced by a Power Automate Desktop flow on a laptop. The
-app cannot start it, schedule it, or read its state. Everything the app shows
-about the schedule is **a record of what was agreed plus what actually
-arrived** — never a claim about what the robot did. Keep that distinction in
-the copy, or the UI starts lying the first time the flow breaks.
+The daily export is produced **by this server**, driving Emburse in a headless
+Chromium (`server/emburse/auto-export.ts`). It replaced a Power Automate flow on
+a laptop, which could not be relied on: a laptop sleeps, travels, and belongs to
+one person. The Reserved VM is already awake.
 
-See `docs/POWER-AUTOMATE.md` for the flow and `docs/TESTING.md` for how it is
-verified.
+Three things follow, and all three are easy to break:
+
+- **Selectors are configuration, not code.** Emburse's markup cannot be known
+  from outside their tenant, so every selector is editable in Export settings
+  and a failed run names the step, quotes what it looked for, and hands back a
+  screenshot. Never hard-code a new one; add it to `DEFAULT_SELECTORS`,
+  `SELECTOR_HELP` and `STEP_SELECTORS` so it can be corrected without a deploy.
+- **The browser profile is persistent** (`EMBURSE_PROFILE_DIR`). That is what
+  makes Emburse's "remember this device" mean anything. Anything that launches
+  a fresh browser per run silently undoes it.
+- **Absence is never success.** A selector that matches nothing must fail, not
+  be read as "already done". That mistake shipped once and turned a failed
+  login into three green steps.
+
+See `docs/TESTING.md`. The mock (`scripts/mock-emburse.ts`) is the only thing
+that exercises the failure paths — sign-in rejected, a second factor, a device
+check, a code typed in wrong — and every one of those was a real bug it caught
+before a person did. Add to it before adding to the runner.

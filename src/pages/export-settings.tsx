@@ -24,7 +24,7 @@ type Settings = {
   allSections: string[];
 };
 
-/** Zones anyone here is plausibly running the laptop in. */
+/** Zones the export schedule is plausibly set in. */
 const ZONES = [
   "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "UTC",
 ];
@@ -41,10 +41,10 @@ const WHY: Record<string, string> = {
 /**
  * Declare what the daily export is supposed to contain.
  *
- * The app cannot make the export happen — a Power Automate flow on a laptop
- * does that, and it cannot read this. What this buys is enforcement after the
- * fact: every export prints its search on page 1, and each import is checked
- * against what is set here.
+ * Read twice: once by the runner, which drives Emburse to produce exactly this,
+ * and once by the importer, which checks what actually came back against it.
+ * The second reading is the one that earns its keep — every export prints its
+ * search on page 1, so a run that quietly produced something else says so.
  *
  * That matters because a section chip toggled the wrong way in Emburse produces
  * a valid PDF of the wrong rows, which parses cleanly and reconciles against its
@@ -122,9 +122,9 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
       <div>
         <h2 className="text-base font-bold">Export scope</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Which Emburse sections the daily export is supposed to cover. The app cannot change what the
-          Power Automate flow does — it checks each import against this and flags the difference, which
-          is the only way to catch a section chip left in the wrong state.
+          Which Emburse sections the daily export covers. The app sets these in Emburse when it runs,
+          then checks each import back against them — which is the only way to catch a section chip that
+          ended up in the wrong state anyway.
         </p>
       </div>
 
@@ -190,17 +190,17 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
         <p className="mt-1 flex items-start gap-2 rounded-lg border border-border bg-muted/50 p-3 text-sm text-muted-foreground">
           <Info className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
-            <strong className="text-foreground">This does not run the export.</strong> Nothing in Emburse or
-            in this app triggers it — a Power Automate flow on a laptop does, started by Windows Task
-            Scheduler. What you set here is a written-down copy of that trigger, so the app can say whether
-            today&rsquo;s export arrived and when the next one is due. Change the trigger and change this, or
-            the two drift apart and the app is the one that looks wrong.
+            <strong className="text-foreground">This is what actually runs the export.</strong> The server
+            signs into Emburse itself at the first time below, and retries on the gap you set if a run
+            fails. Changes take effect on the next check — no restart. A run only asks for a verification
+            code if Emburse stops trusting the browser, and only when somebody started it by hand; a
+            scheduled run fails rather than waiting for an answer nobody is there to give.
           </span>
         </p>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Timezone" hint="The laptop's own clock — Task Scheduler fires on local time.">
+        <Field label="Timezone" hint="All the times below are read in this zone.">
           <select
             value={schedule.timezone}
             disabled={!isAdmin}
@@ -213,7 +213,7 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
           </select>
         </Field>
 
-        <Field label="First run" hint="When the flow requests the export.">
+        <Field label="First run" hint="When the server signs in and requests the export.">
           <input
             type="time"
             value={schedule.firstRun}
@@ -233,7 +233,7 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
           />
         </Field>
 
-        <Field label="Hours between attempts" hint="Matches the Task Scheduler repeat interval.">
+        <Field label="Hours between attempts" hint="How long to wait before retrying a failed run.">
           <input
             type="number" min={1} max={12}
             value={schedule.retryHours}
@@ -377,8 +377,8 @@ function SchedulePreview({ schedule }: { schedule: Schedule }) {
         </p>
       )}
       <p className="mt-2 text-xs text-muted-foreground">
-        All times {schedule.timezone}. Set Task Scheduler to repeat every {schedule.retryHours}h for a
-        duration of {(schedule.attemptsPerDay - 1) * schedule.retryHours}h to get exactly these attempts.
+        All times {schedule.timezone}. The scheduler checks every few minutes, so an attempt can start a
+        little after its slot — and a change here is picked up on the next check, without a restart.
       </p>
     </div>
   );

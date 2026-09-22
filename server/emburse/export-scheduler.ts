@@ -2,6 +2,7 @@ import { db, ensureSchema, isDbConfigured } from "../db.js";
 import { ingestExport } from "../import/ingest.js";
 import { readSettings, type Schedule } from "../import/settings.js";
 import { envLogin, runAutoExport, type ExportRun, type Selectors } from "./auto-export.js";
+import { waitForCode } from "./challenge.js";
 import { credentialForExport, noteResult } from "./credentials.js";
 
 /**
@@ -192,7 +193,18 @@ export async function attemptExport(
       );
     }
 
-    run = await runAutoExport(settings, settings.selectors as Selectors, login, opts);
+    // A verification code can only be asked of somebody who is there to be
+    // asked. Derived from the trigger rather than passed in, so there is no
+    // way for a caller to hand a 6am scheduled run a prompt nobody will see —
+    // it would park a browser for five minutes and then fail anyway, holding
+    // the profile lock the whole time.
+    const onChallenge =
+      trigger === "scheduled"
+        ? undefined
+        : (ctx: { prompt: string; screenshot: string | null; attempt: number; lastError: string | null }) =>
+            waitForCode({ ...ctx, owner: by });
+
+    run = await runAutoExport(settings, settings.selectors as Selectors, login, { ...opts, onChallenge });
 
     // Only the sign-in step says anything about the credential. A later failure
     // means Emburse moved a button, and blaming the password for that would

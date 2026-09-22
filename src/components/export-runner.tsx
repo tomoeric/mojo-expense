@@ -1,9 +1,22 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Play, FlaskConical, Loader2, CheckCircle2, XCircle, Image, ChevronDown, Wrench } from "lucide-react";
+import { Play, FlaskConical, Loader2, CheckCircle2, XCircle, Image, ChevronDown, Wrench, ShieldQuestion } from "lucide-react";
 import { SelectorEditor } from "@/components/selector-editor";
 
 type Step = { name: string; ok: boolean; detail: string; ms: number };
+
+type Challenge = {
+  id: string;
+  prompt: string;
+  screenshot: string | null;
+  owner: string;
+  mine: boolean;
+  startedAt: string;
+  expiresAt: string;
+  attempts: number;
+  attemptsLeft: number;
+  lastError: string | null;
+};
 
 type Run = {
   id: number;
@@ -53,6 +66,9 @@ export function ExportRunner({
   const [error, setError] = useState("");
   const [open, setOpen] = useState<number | null>(null);
   const [fixing, setFixing] = useState<string | null>(null);
+  const [code, setCode] = useState("");
+  const [answering, setAnswering] = useState(false);
+  const [codeError, setCodeError] = useState("");
 
   const q = useQuery({
     queryKey: ["export-runs"],
@@ -63,11 +79,17 @@ export function ExportRunner({
         configured: boolean;
         due: { due: boolean; attempt: number; reason: string };
         runs: Run[];
+        challenge: Challenge | null;
       };
     },
     // While a run is going, the list is the only progress indicator there is.
-    refetchInterval: busy ? 4000 : false,
+    // The slow poll when idle is for the parked-sign-in case: a challenge can
+    // be waiting from a run somebody started in another tab, and a browser
+    // held open with nobody looking at it is the whole thing to avoid.
+    refetchInterval: (query) => (busy || query.state.data?.challenge ? 3000 : 20_000),
   });
+
+  const challenge = q.data?.challenge ?? null;
 
   async function run(dry: boolean) {
     setBusy(dry ? "dry" : "real");
@@ -84,6 +106,39 @@ export function ExportRunner({
       setError((err as Error).message);
     } finally {
       setBusy("");
+    }
+  }
+
+  async function sendCode() {
+    setAnswering(true);
+    setCodeError("");
+    try {
+      const res = await fetch("/api/export-challenge", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      const body = (await res.json()) as { error?: string };
+      if (!res.ok) throw new Error(body.error ?? `Could not send the code (${res.status})`);
+      setCode("");
+      // The run carries on inside the request that started it; the poll below
+      // is what tells us whether Emburse accepted this.
+      await qc.invalidateQueries({ queryKey: ["export-runs"] });
+    } catch (err) {
+      setCodeError((err as Error).message);
+    } finally {
+      setAnswering(false);
+    }
+  }
+
+  async function giveUp() {
+    setCodeError("");
+    try {
+      const res = await fetch("/api/export-challenge", { method: "DELETE" });
+      if (!res.ok) throw new Error(((await res.json()) as { error?: string }).error ?? "Could not cancel");
+      await qc.invalidateQueries({ queryKey: ["export-runs"] });
+    } catch (err) {
+      setCodeError((err as Error).message);
     }
   }
 
@@ -145,6 +200,102 @@ export function ExportRunner({
       </div>
 
       {error && <p className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm">{error}</p>}
+
+      {/* A sign-in parked mid-way, waiting on a person. This is the only screen
+          in the app where a browser is sitting open on the server holding a
+          half-finished login, so it says plainly what is happening, who it is
+          waiting for, and how long it will wait. */}
+      {challenge && (
+        <div className="space-y-3 rounded-xl border border-sky-500/40 bg-sky-500/5 p-4">
+          <div className="flex items-start gap-2.5">
+            <ShieldQuestion className="mt-0.5 h-5 w-5 shrink-0 text-sky-600" aria-hidden />
+            <div className="min-w-0">
+              <h3 className="text-sm font-bold">Emburse wants a verification code</h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {challenge.mine ? (
+                  <>
+                    The sign-in is paused waiting for it. Enter the code Emburse just sent and the run
+                    carries on from where it stopped — and because the app ticks{" "}
+                    <em>remember this device</em>, it should not have to ask again.
+                  </>
+                ) : (
+                  <>
+                    A run started by <strong>{challenge.owner}</strong> is waiting for a code. Only they can
+                    enter it — the code is going into their sign-in, not yours.
+                  </>
+                )}
+              </p>
+            </div>
+          </div>
+
+          <p className="rounded-lg border border-border bg-background/60 p-2.5 text-xs text-muted-foreground">
+            Emburse says: “{challenge.prompt}”
+          </p>
+
+          {challenge.lastError && (
+            <p className="rounded-lg border border-red-500/30 bg-red-500/10 p-2.5 text-xs">{challenge.lastError}</p>
+          )}
+
+          {challenge.mine && (
+            <>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && code.trim() && !answering) void sendCode();
+                  }}
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  autoFocus
+                  maxLength={10}
+                  placeholder="123456"
+                  aria-label="Verification code from Emburse"
+                  className="tnum w-36 rounded-lg border border-border bg-background px-3 py-2 text-base tracking-[0.3em]"
+                />
+                <button
+                  type="button"
+                  disabled={answering || !code.trim()}
+                  onClick={() => void sendCode()}
+                  className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-3.5 py-2 text-sm font-semibold text-white transition-colors hover:bg-sky-500 disabled:opacity-40"
+                >
+                  {answering ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  {answering ? "Sending…" : "Send the code"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void giveUp()}
+                  className="rounded-lg border border-border px-3 py-2 text-sm font-semibold transition-colors hover:bg-muted"
+                >
+                  Cancel the run
+                </button>
+              </div>
+
+              <p className="text-xs text-muted-foreground">
+                {challenge.attemptsLeft} attempt{challenge.attemptsLeft === 1 ? "" : "s"} left · gives up at{" "}
+                {new Date(challenge.expiresAt).toLocaleTimeString()}
+              </p>
+            </>
+          )}
+
+          {codeError && (
+            <p className="rounded-lg border border-red-500/30 bg-red-500/10 p-2.5 text-xs">{codeError}</p>
+          )}
+
+          {challenge.screenshot && (
+            <details>
+              <summary className="cursor-pointer text-xs font-semibold text-muted-foreground">
+                Show the page Emburse is on
+              </summary>
+              <img
+                src={`data:image/png;base64,${challenge.screenshot}`}
+                alt="The Emburse verification page"
+                className="mt-2 max-h-96 w-full rounded-lg border border-border object-contain object-top"
+              />
+            </details>
+          )}
+        </div>
+      )}
 
       {runs.length > 0 && (
         <div className="divide-y divide-border overflow-hidden rounded-xl border border-border">

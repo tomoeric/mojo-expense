@@ -61,6 +61,7 @@ export type Selectors = Record<SelectorKey, string>;
 
 export type SelectorKey =
   | "loginEmail" | "loginPassword" | "loginSubmit" | "loggedIn"
+  | "mfaCode" | "mfaSubmit" | "mfaRemember"
   | "adminTab" | "transactionsNav" | "grid" | "itemCount"
   | "gridPath"
   | "exportButton" | "dialog" | "dialogRoot" | "dialogScope" | "formatSelect"
@@ -89,6 +90,15 @@ export const DEFAULT_SELECTORS: Selectors = {
   loginPassword: 'input[type="password"]',
   loginSubmit: 'button[type="submit"], button:has-text("Continue"), button:has-text("Sign in")',
   loggedIn: 'text=Transactions',
+
+  // The device-verification screen. Its code box is usually one field, but some
+  // tenants split it into six single-character boxes — the selector matches
+  // either, and the code is typed rather than pasted so both fill correctly.
+  mfaCode: 'input[name*="code" i], input[autocomplete="one-time-code"], input[inputmode="numeric"], input[type="tel"]',
+  mfaSubmit: 'button[type="submit"], button:has-text("Verify"), button:has-text("Continue"), button:has-text("Submit")',
+  // Ticking this is the entire point of passing the challenge: unticked, the
+  // next run is a stranger again and somebody is reading codes every morning.
+  mfaRemember: 'input[type="checkbox"]',
 
   adminTab: 'text=ADMIN',
   transactionsNav: 'a:has-text("Transactions")',
@@ -131,7 +141,8 @@ export type Login = { userId: string | null; email: string; password: string };
  */
 export const STEP_SELECTORS: Record<string, SelectorKey[]> = {
   "open Emburse": [],
-  "sign in": ["loginEmail", "loginPassword", "loginSubmit", "loggedIn"],
+  "sign in": ["loginEmail", "loginPassword", "loginSubmit", "loggedIn",
+              "mfaCode", "mfaSubmit", "mfaRemember"],
   "switch to ADMIN": ["adminTab"],
   "open Transactions": ["transactionsNav", "grid"],
   "filter Receipts: true": ["gridPath"],
@@ -150,6 +161,9 @@ export const SELECTOR_HELP: Record<SelectorKey, string> = {
   loginPassword: "The password box.",
   loginSubmit: "The sign-in button.",
   loggedIn: "Something that only appears once signed in.",
+  mfaCode: "The box for the verification code, on the \u201cverify this device\u201d screen.",
+  mfaSubmit: "The button that submits that code.",
+  mfaRemember: "The \u201cremember this device\u201d tick box. Ticking it is what stops the code being asked for every run.",
   adminTab: "The ADMIN tab, top left. PERSONAL would export one person's expenses.",
   transactionsNav: "Cards → Transactions in the left nav.",
   grid: "The transactions table itself — used to tell the page has loaded.",
@@ -291,7 +305,7 @@ export async function runAutoExport(
   settings: ExportSettings,
   selectors: Selectors,
   login: Login,
-  opts: { dryRun?: boolean } = {},
+  opts: { dryRun?: boolean; onChallenge?: ChallengeHook } = {},
 ): Promise<ExportRun> {
   const steps: StepResult[] = [];
   let close: (() => Promise<void>) | null = null;
@@ -399,7 +413,12 @@ export function explainLaunch(err: unknown): string {
  * email, then the password on a second screen. Filling both at once fills one
  * box and submits nothing.
  */
-export async function signIn(page: Page, sel: Selectors, login: Login): Promise<string> {
+export async function signIn(
+  page: Page,
+  sel: Selectors,
+  login: Login,
+  challenge?: ChallengeHook,
+): Promise<string> {
   const loggedIn = page.locator(sel.loggedIn).first();
   const emailBox = page.locator(sel.loginEmail).first();
 
@@ -433,10 +452,164 @@ export async function signIn(page: Page, sel: Selectors, login: Login): Promise<
 
   await loggedIn.waitFor({ state: "visible" }).catch(() => {});
   if (!(await loggedIn.isVisible().catch(() => false))) {
+    // A verification code is the one failure a person can actually clear, so
+    // offer it to them instead of reporting a dead end — but only when
+    // somebody is there to ask. An unattended 6am run has nobody to answer,
+    // and parking a browser until it times out would just delay the same
+    // failure while holding the profile lock.
+    if (challenge) {
+      const how = await passChallenge(page, sel, challenge);
+      if (how) return `signed in as ${login.email} — ${how}`;
+    }
     throw new Error(`signed in as ${login.email} but the app did not appear — ${await whyStuck(page)}`);
   }
   return `signed in as ${login.email}`;
 }
+
+/**
+ * Asked for a verification code while a sign-in is parked, and given one back.
+ *
+ * Whatever is on the other end of this — a web page, a test — the contract is
+ * the same: it blocks until a person answers, and it throws if they never do.
+ */
+export type ChallengeHook = (ctx: {
+  /** What the page says, so the person knows which code is wanted. */
+  prompt: string;
+  screenshot: string | null;
+  attempt: number;
+  /** Why the previous code was refused, on a retry. */
+  lastError: string | null;
+}) => Promise<string>;
+
+/** Attempts before giving up. Emburse's own limit is lower, so this is a floor. */
+const CHALLENGE_ATTEMPTS = 3;
+
+/**
+ * Walk a person through the device check, and make it the last one.
+ *
+ * The verification itself is the easy half. The half that matters is the tick
+ * box: an unticked "remember this device" means the code was for nothing, the
+ * next run is a stranger again, and somebody is reading texts every morning
+ * forever. So it is ticked before the code is submitted, and its state is
+ * reported either way — if Emburse ever stops offering it, that shows up as a
+ * sentence in the step detail rather than as a mystery a month later.
+ *
+ * Returns how it was passed, or null when this is not a code prompt at all —
+ * in which case the caller falls through to its usual diagnosis.
+ */
+async function passChallenge(page: Page, sel: Selectors, ask: ChallengeHook): Promise<string | null> {
+  // Two gates, both required. The text says this is a challenge; the box says
+  // there is somewhere to type. Either alone would be a guess — plenty of
+  // pages have a numeric input, and a page can talk about codes without
+  // offering one.
+  if (challengeKind(await pageText(page)) === null) return null;
+  const box = page.locator(sel.mfaCode).first();
+  if (!(await box.isVisible().catch(() => false))) return null;
+
+  let lastError: string | null = null;
+
+  for (let attempt = 1; attempt <= CHALLENGE_ATTEMPTS; attempt++) {
+    const prompt = snippet(await pageText(page));
+    const screenshot = await page
+      .screenshot({ fullPage: false })
+      .then((b) => b.toString("base64"))
+      .catch(() => null);
+
+    const code = await ask({ prompt, screenshot, attempt, lastError });
+
+    const remembered = await tickRemember(page, sel);
+    await typeCode(page, sel, code);
+    await page.locator(sel.mfaSubmit).first().click().catch(() => {});
+
+    const loggedIn = page.locator(sel.loggedIn).first();
+    await loggedIn.waitFor({ state: "visible" }).catch(() => {});
+    if (await loggedIn.isVisible().catch(() => false)) {
+      return remembered
+        ? `verified with a code, and this device is now remembered, so future runs should not be asked again`
+        : `verified with a code. Emburse did not offer to remember this device, so the next run may be asked again — ` +
+            `check the mfaRemember selector against that screen`;
+    }
+
+    const text = await pageText(page);
+    lastError = challengeKind(text)
+      ? `Emburse did not accept that code. It says: "${snippet(text)}"`
+      : `The code was submitted but the app still did not appear. The page reads: "${snippet(text)}"`;
+
+    // Off the challenge screen but not into the app: another code will not
+    // help, so stop rather than spending the remaining attempts on it.
+    if (!challengeKind(text)) break;
+  }
+
+  throw new Error(lastError ?? "The verification code was not accepted.");
+}
+
+/**
+ * Tick "remember this device", if it is there.
+ *
+ * Scoped to an unticked box only: `check()` on an already-ticked one is a
+ * no-op, but reporting it as "we ticked it" when the tenant ticks it by
+ * default would be a small lie in the one place this feature is judged.
+ */
+async function tickRemember(page: Page, sel: Selectors): Promise<boolean> {
+  const box = page.locator(sel.mfaRemember).first();
+  if (!(await box.isVisible().catch(() => false))) return false;
+  if (await box.isChecked().catch(() => false)) return true;
+  await box.check().catch(() => {});
+  return box.isChecked().catch(() => false);
+}
+
+/**
+ * Put the code in, whichever shape the box takes.
+ *
+ * Some tenants use one field; others use six single-character boxes that
+ * advance focus as you type. Filling `.first()` with the whole code works for
+ * the first and silently loses five characters on the second — so when the
+ * count of boxes matches the length of the code, they are filled one by one.
+ */
+async function typeCode(page: Page, sel: Selectors, code: string): Promise<void> {
+  const boxes = page.locator(sel.mfaCode);
+  const n = await boxes.count().catch(() => 1);
+
+  if (n > 1 && n === code.length) {
+    for (let i = 0; i < n; i++) await boxes.nth(i).fill(code[i]!);
+    return;
+  }
+  const first = boxes.first();
+  await first.fill("");
+  // Typed rather than pasted: a split field that advances focus on keypress
+  // ignores a value set wholesale.
+  await first.pressSequentially(code, { delay: 20 });
+}
+
+/** The page's words, flattened — what both the diagnosis and the prompt read. */
+const pageText = async (page: Page): Promise<string> =>
+  ((await page.locator("body").innerText().catch(() => "")) || "").replace(/\s+/g, " ").trim();
+
+/**
+ * Which wall this is, if it is one.
+ *
+ * Two different screens, and the order matters. A page asking for a code is a
+ * second factor; a page only offering to remember the device is a device check.
+ * They overlap in wording — "Verify it is you" heads both — so the code request
+ * is tested first, or every MFA prompt gets reported as a device check and
+ * sends people to look at a device nobody asked about.
+ *
+ * Shared, because the code-entry step and the failure message must agree on
+ * what a challenge is. Two copies of this rule would drift, and the drift would
+ * show up as a run that refuses to offer the box on the very page that needs it.
+ */
+export function challengeKind(text: string): "code" | "device" | null {
+  if (
+    /verification code|authentication code|two-factor|2fa|one-time|authenticator|security code|passcode|check your (phone|email)|enter the code/i.test(
+      text,
+    )
+  ) return "code";
+  if (offersToRemember(text)) return "device";
+  return null;
+}
+
+const offersToRemember = (text: string) =>
+  /remember (this|my) device|trust (this|my) device|verify this device/i.test(text);
 
 /**
  * Why sign-in ended somewhere that is not the app.
@@ -449,34 +622,23 @@ export async function signIn(page: Page, sel: Selectors, login: Login): Promise<
  */
 async function whyStuck(page: Page): Promise<string> {
   const url = page.url();
-  const text = ((await page.locator("body").innerText().catch(() => "")) || "")
-    .replace(/\s+/g, " ")
-    .trim();
+  const text = await pageText(page);
 
   if (/wrong email or password|incorrect password|invalid (email|password|credentials)|try again/i.test(text)) {
     return `Emburse rejected the credentials. It says: "${snippet(text)}"`;
   }
-  // Two different walls, and the order matters. A page asking for a code is a
-  // second factor; a page offering to remember the device is a device check.
-  // They overlap in wording — "Verify it is you" heads both — so the code
-  // request is tested first, or every MFA prompt gets reported as a device
-  // check and sends people to fix the wrong thing.
-  const remembers = /remember (this|my) device|trust (this|my) device|verify this device/i.test(text);
-  if (
-    /verification code|authentication code|two-factor|2fa|one-time|authenticator|security code|passcode|check your (phone|email)|enter the code/i.test(
-      text,
-    )
-  ) {
+  const kind = challengeKind(text);
+  if (kind === "code") {
     return (
-      "Emburse is asking for a second factor, which no automation can answer on its own — " +
-      "the code has to come from a person. " +
-      (remembers
-        ? "It does offer to remember this device, so passing it once on this browser profile should hold. "
+      "Emburse is asking for a verification code. Start a test run and it will stop here and ask " +
+      "you for it, rather than failing. " +
+      (offersToRemember(text)
+        ? "It offers to remember this device, so passing it once should be the last time. "
         : "") +
       `It says: "${snippet(text)}"`
     );
   }
-  if (remembers) {
+  if (kind === "device") {
     return (
       "Emburse is asking to verify this device, which no automation can answer on its own. " +
       "It offers to remember the device, so this only has to be passed once per browser profile — " +
@@ -506,7 +668,7 @@ async function runSteps(
   sel: Selectors,
   login: Login,
   step: (name: string, fn: () => Promise<string>) => Promise<boolean>,
-  opts: { dryRun?: boolean },
+  opts: { dryRun?: boolean; onChallenge?: ChallengeHook },
   setItemLine: (v: string) => void,
   setPdf: (b: Buffer) => void,
 ): Promise<boolean> {
@@ -518,7 +680,7 @@ async function runSteps(
     return `loaded ${page.url()}`;
   }))) return false;
 
-  if (!(await step("sign in", async () => signIn(page, sel, login)))) return false;
+  if (!(await step("sign in", async () => signIn(page, sel, login, opts.onChallenge)))) return false;
 
   if (!(await step("switch to ADMIN", async () => {
     // Emburse reopens on whichever of ADMIN / PERSONAL was last used, and
