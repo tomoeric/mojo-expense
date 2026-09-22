@@ -8,6 +8,7 @@ import type { ExpenseReport, ProviderResult } from "./emburse/types.js";
 import { fetchReceipt, ReceiptError } from "./emburse/receipts.js";
 import { auditLine, cachedAudit } from "./emburse/receipt-audit.js";
 import { db, isDbConfigured } from "./db.js";
+import { syncOnPageLoad } from "./import/sync.js";
 import type { ExpenseLine } from "./emburse/types.js";
 
 const cache = new TtlCache<ProviderResult & { demo: boolean }>(env.emburse.cacheTtlSec * 1000);
@@ -85,6 +86,9 @@ api.get("/config", (_req, res) => {
 });
 
 api.get("/reports", requireAuth, async (req, res) => {
+  // The queue is the page people actually open, so it is the best place to
+  // notice that a new export is sitting in SharePoint. Non-blocking.
+  syncOnPageLoad();
   const blocked = refusesUnauthenticated();
   if (blocked) {
     res.status(503).json({ error: blocked });

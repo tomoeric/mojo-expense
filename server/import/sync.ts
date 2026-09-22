@@ -111,6 +111,61 @@ async function record(file: DriveFile, status: string, importId: number | null, 
 }
 
 let timer: NodeJS.Timeout | null = null;
+let lastAttempt = 0;
+let running = false;
+
+/**
+ * Run a sync unless one ran recently, or is running now.
+ *
+ * Both the interval timer and the on-demand path come through here, so a page
+ * load moments after a scheduled pass does not repeat the work, and a slow sync
+ * cannot have a second one pile up behind it.
+ *
+ * The clock is per-process. An autoscale deployment with several instances will
+ * therefore sync more often than `pollMinutes` suggests — harmless, because
+ * `import_sources` skips files already seen and the content hash catches the
+ * rest, but it is why the interval is a floor rather than a promise.
+ */
+function kick(trigger: string): void {
+  const minutes = env.sharepoint.pollMinutes;
+  if (minutes <= 0 || running) return;
+  if (!isDbConfigured() || !isSharePointConfigured()) return;
+  if (Date.now() - lastAttempt < minutes * 60_000) return;
+
+  lastAttempt = Date.now();
+  running = true;
+  syncFromSharePoint(trigger)
+    .then((r) => {
+      if (r.imported.length > 0 || r.failed.length > 0) {
+        console.log(`sharepoint sync (${trigger}): imported ${r.imported.length}, failed ${r.failed.length}`);
+      }
+    })
+    .catch((err: unknown) => console.error(`sharepoint sync (${trigger}) failed:`, err))
+    .finally(() => {
+      running = false;
+    });
+}
+
+/**
+ * Nudge the sync when someone loads a page.
+ *
+ * The interval below only runs while a process is alive, and this app deploys
+ * to Replit **autoscale**, which stops the container when no requests are
+ * arriving. Overnight there is no traffic, so there is nothing running to fire
+ * a timer — the export could sit in SharePoint until someone happened to visit.
+ *
+ * Tying a check to page loads closes that gap without a second service: the
+ * reviewer opening the app is exactly when the data needs to be current. It
+ * returns immediately and the sync continues in the background, so nobody waits
+ * on an 11 MB download.
+ *
+ * It is a safety net, not a scheduler. If the export genuinely has to be in the
+ * database before anyone asks — for an alert, say — the deployment needs to be
+ * a Reserved VM that stays awake.
+ */
+export function syncOnPageLoad(): void {
+  kick("on-demand");
+}
 
 /** Start the background poll, if both a database and SharePoint are configured. */
 export function startSyncTimer(): void {
@@ -118,18 +173,8 @@ export function startSyncTimer(): void {
   if (timer || minutes <= 0) return;
   if (!isDbConfigured() || !isSharePointConfigured()) return;
 
-  const run = () => {
-    syncFromSharePoint("scheduled")
-      .then((r) => {
-        if (r.imported.length > 0 || r.failed.length > 0) {
-          console.log(`sharepoint sync: imported ${r.imported.length}, failed ${r.failed.length}`);
-        }
-      })
-      .catch((err: unknown) => console.error("sharepoint sync failed:", err));
-  };
-
   // First pass shortly after boot, so a restart picks up anything waiting.
-  setTimeout(run, 30_000);
-  timer = setInterval(run, minutes * 60_000);
-  console.log(`SharePoint sync every ${minutes} min`);
+  setTimeout(() => kick("scheduled"), 30_000);
+  timer = setInterval(() => kick("scheduled"), minutes * 60_000);
+  console.log(`SharePoint sync every ${minutes} min (plus on page load)`);
 }

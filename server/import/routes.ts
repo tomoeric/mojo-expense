@@ -3,7 +3,7 @@ import express from "express";
 import { db, ensureSchema, isDbConfigured } from "../db.js";
 import { requireAuth } from "../auth/index.js";
 import { ingestExport } from "./ingest.js";
-import { syncFromSharePoint } from "./sync.js";
+import { syncFromSharePoint, syncOnPageLoad } from "./sync.js";
 import { isSharePointConfigured } from "./sharepoint.js";
 import { describeSchedule } from "./schedule.js";
 
@@ -70,6 +70,10 @@ importRouter.post("/import/sync", requireAuth, async (req: Request, res: Respons
 
 importRouter.get("/imports", requireAuth, async (_req: Request, res: Response) => {
   if (!guard(res)) return;
+  // Fire-and-forget: the page renders against what is already stored, and a
+  // freshly-arrived export shows up on the next load rather than blocking this
+  // one behind a download.
+  syncOnPageLoad();
   try {
     await ensureSchema();
     const { rows } = await db().query(
