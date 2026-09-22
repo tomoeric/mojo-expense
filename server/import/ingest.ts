@@ -121,6 +121,24 @@ export async function ingestExport(
       }
     }
 
+    // An export older than one already imported would do real damage, quietly.
+    // Every row in the file is marked back into the inbox (`in_inbox = true,
+    // left_inbox_at = NULL`) and everything absent from it is marked as having
+    // left — so yesterday's file resurrects expenses that have since been
+    // approved and evicts the ones actually waiting now. Worse once approvals
+    // start releasing receipts: a resurrected expense comes back with no
+    // receipt to review, and the image cannot be fetched again.
+    //
+    // Refused rather than warned about, because by the time a warning is read
+    // the queue has already been rewritten.
+    if (!opts.force) {
+      const stale = await olderThanWhatWeHave(client, parsed);
+      if (stale) {
+        await client.query("ROLLBACK");
+        return { ...base, warnings: [...warnings, stale] };
+      }
+    }
+
     const imp = await client.query<{ id: string }>(
       `INSERT INTO expense_imports (filename, file_sha256, imported_by, page_count, parsed_rows,
                                     total_cents, stated_total_cents, reconciled, export_sections)
@@ -388,6 +406,51 @@ function renderPage(doc: mupdf.Document, index: number): Buffer {
   const jpeg = Buffer.from(pixmap.asJPEG(RECEIPT_QUALITY, false));
   pixmap.destroy();
   return jpeg;
+}
+
+/**
+ * Is this export older than one already imported? Say so in words, or null.
+ *
+ * Judged on the newest expense in the file against the newest we hold. An
+ * export is a snapshot of the inbox, so a later snapshot cannot have an older
+ * newest row — and on a quiet day the two simply match, which is not treated
+ * as stale.
+ */
+async function olderThanWhatWeHave(
+  client: pg.PoolClient,
+  parsed: { expenses: { date: string }[] },
+): Promise<string | null> {
+  const { rows } = await client.query<{ newest: string | null }>(
+    "SELECT max(expense_date)::text AS newest FROM expenses",
+  );
+  return staleExportReason(
+    parsed.expenses.map((e) => e.date).filter(Boolean).sort().at(-1) ?? null,
+    rows[0]?.newest ?? null,
+  );
+}
+
+/**
+ * The rule itself, with no database in the way.
+ *
+ * Separated so it can be checked against every boundary without a live table
+ * — the first import, a quiet day where the dates match, a file with no dates
+ * at all. Each of those must be allowed through, and a rule that blocks a real
+ * import is worse than the hazard it guards against.
+ */
+export function staleExportReason(
+  newestInFile: string | null,
+  newestStored: string | null,
+): string | null {
+  if (!newestInFile) return null;
+  if (!newestStored) return null;
+  if (newestInFile >= newestStored) return null;
+
+  return (
+    `This export is older than one already imported — its newest expense is ${newestInFile}, ` +
+    `and expenses up to ${newestStored} are already stored. Loading it would put already-decided ` +
+    `expenses back in the review queue and take today's out of it, so it was not imported. ` +
+    `Re-run today's export instead, or force it if you are certain.`
+  );
 }
 
 /**
