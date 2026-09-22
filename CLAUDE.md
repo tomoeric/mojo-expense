@@ -1,9 +1,12 @@
 # mojo-expense — working notes for Claude
 
-## Always end with the deploy commands
+## Always end with the deploy commands — BOTH blocks, every time
 
-Every time work is finished and pushed, give the Replit deploy commands as one
-copy-paste block — not inline prose, not a description of what to run:
+Every time work is finished and pushed, end the reply with **two** copy-paste
+blocks. Not inline prose, not a description of what to run, and not one block
+with the other described in words.
+
+First, the normal deploy:
 
 ```bash
 git pull origin main
@@ -11,11 +14,10 @@ pnpm install
 pnpm run build
 ```
 
-Then "restart". This is not optional; a reply that ends without it is
-incomplete. If a step beyond restart is needed (re-run the import, change a
-secret), say so after the block.
+Then "restart".
 
-If a pull fails with `divergent branches`, the workspace has local commits:
+Second, **always**, without waiting to be asked and without waiting for a pull
+to fail — the divergent-branch recovery:
 
 ```bash
 git fetch origin main
@@ -24,6 +26,17 @@ git reset --hard origin/main
 pnpm install
 pnpm run build
 ```
+
+The Replit workspace picks up local commits on its own (an edit in the Replit
+editor, an agent run), so `git pull` fails with `divergent branches` often
+enough that making it a troubleshooting step means it is missing exactly when
+it is needed. The `git branch backup-local-…` line runs first on purpose: it
+parks whatever the workspace had on a dated branch, so the `reset --hard` never
+destroys anything — which is what makes it safe to hand over unconditionally.
+
+Neither block is optional; a reply that ends without both is incomplete. If a
+step beyond restart is needed (re-run the import, change a secret), say so after
+the blocks.
 
 ## Shape
 
