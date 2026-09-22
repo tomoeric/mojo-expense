@@ -55,10 +55,46 @@ Two consequences to be aware of:
   folder silently fills with numbered copies. Have the flow **delete the existing
   file first**, or move the download over it with overwrite enabled.
 - **SharePoint is no longer your archive.** Only the latest export exists as a
-  file. That is fine — the database keeps every row, and reimporting is a no-op
-  anyway — but if you want the PDFs themselves kept, turn on **version history**
-  on the library, because the daily overwrite is the only thing standing between
-  you and a single snapshot.
+  file. That is fine in itself — see the storage note below.
+
+#### Storage: overwriting saves less than it looks
+
+The instinct is that overwriting one file costs one file's worth of space. It
+does not. **SharePoint versioning is on by default and keeps 500 major
+versions**, so a daily overwrite quietly accumulates 500 copies before it starts
+discarding anything. At 15 MB an export that is 7.5 GB — the same order as never
+overwriting at all.
+
+So the filename is not the decision. **Version retention is.** Pick one:
+
+| Option | Storage | Archive | Effort |
+| --- | --- | --- | --- |
+| **Overwrite, cap versions at 10** | ~10 × one export | last 10 days | one library setting |
+| Overwrite, versioning off | one export | none | one library setting |
+| Dated files + a retention policy | rolling window | that window | Purview rule |
+| Dated files + a cleanup flow | rolling window | that window | a second flow to maintain |
+| POST straight to `/api/import` | none | none | flow needs an API credential |
+
+**Capping versions at 10 is the one to take.** It is a single setting, needs no
+automation, and gives a short rollback window for the case that actually happens
+— a bad export that needs re-running against yesterday's file. Library settings →
+Versioning settings → keep 10 major versions.
+
+What makes that safe is that **the database is the archive**, not the folder:
+
+- Every row from every import is retained. Rows that leave the Emburse inbox are
+  marked `in_inbox = false`, never deleted.
+- Receipt images are stored in Neon, deduplicated by SHA-256. The same receipts
+  reappear in every export until their expense completes, and they are stored
+  once. Blob storage therefore grows with *distinct receipts*, not with imports —
+  re-importing daily costs nothing.
+
+The PDF matters only if you need the original document for audit. If you do, that
+is an argument for a retention window rather than for keeping everything forever.
+
+The thing actually worth watching is **Neon**, since that is what grows
+permanently. The Import page shows receipt count and storage; at roughly 90 KB a
+receipt, a few thousand receipts a year is a few hundred MB.
 
 ## Build it
 
