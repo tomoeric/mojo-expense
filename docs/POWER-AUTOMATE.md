@@ -48,72 +48,61 @@ the ability to see at a glance whether a day was missed.
 
 ### 0. The runner machine
 
-A corporate desktop that stays on is the right shape for this. Work through the
-list below on that machine before building anything — most of these are cheap to
-check and expensive to discover halfway through.
+**The runner is a personal laptop**, because the corporate desktop won't allow a
+signed-in Edge profile — a managed policy that clears cookies on exit kills the
+persistent-session approach outright, and without a session the flow has nothing
+to automate.
 
-#### The screen lock is the thing that decides the design
+That trade is the right way round, but it has a consequence worth naming once: a
+laptop sleeps, travels, and gets shut. It will miss runs. The whole design below
+therefore assumes missed runs are normal rather than exceptional, and makes them
+harmless instead of trying to prevent them.
 
-**Attended RPA cannot drive a locked workstation.** Browser automation clicks
-real UI, and there is no UI to click behind a lock screen. So a corporate
-desktop with the usual GPO lock policy will run the flow perfectly while someone
-is sitting at it and fail every night at 5 a.m.
+#### Why attended mode actually suits a laptop
 
-Three ways out, in order of preference:
+The lock-screen problem that ruled out an unattended desktop mostly goes away
+here. You are logged into your own laptop during the working day, so an
+**attended** flow on a **free** Power Automate licence is a genuine fit — no
+Premium, no unattended add-on, no GPO exemption to negotiate.
 
-1. **Unattended mode** (Power Automate Premium + the unattended add-on). The
-   runtime signs into the machine itself, runs the flow, and signs out. This is
-   the only option that is *designed* for a locked, unattended box, and it is why
-   the licence is worth costing out rather than dismissing.
-2. **A GPO exemption** for this one machine — no lock timeout, auto-login after
-   reboot. Free, but it is a security exception your IT team has to agree to, on
-   a machine that will hold a live Emburse session. Expect pushback, and expect
-   it to be reasonable pushback.
-3. **A dedicated VM** instead of a desktop, with the same exemption but no
-   physical keyboard anyone can walk up to. Better than 2 if you have the
-   infrastructure.
+The cost is that the flow needs the machine awake and you signed in, which is
+exactly what the retry design in step 3 is for.
 
-Settle this first. It is the difference between a flow that works and a flow
-that works only when watched.
+#### What the laptop needs
 
-#### If it is someone's actual desk PC
-
-Think twice. UI automation takes the foreground: a browser window will open,
-click around for a minute and close, stealing focus from whatever that person is
-doing. And if they sign out at the end of the day, the overnight run dies.
-
-A machine nobody sits at is worth more than a fast one.
-
-#### Checklist for the machine
-
-- [ ] **Stays on.** Sleep and hibernate disabled, not just "usually left on".
-- [ ] **Survives reboot.** Patch Tuesday restarts it; auto-login and a flow that
-      starts on logon, or accept a monthly gap you have to notice.
-- [ ] **Power Automate for desktop** installed. Corporate images often block
-      installs — this may be an IT ticket.
-- [ ] **Edge allowed to keep a profile.** Some managed configs clear cookies on
-      exit, which kills the persistent-session approach outright.
+- [ ] **Power Automate for desktop** installed (ships with Windows 11).
+- [ ] **An Edge profile signed into Emburse**, which persists between runs.
+      Launch the flow's browser with `Clear cache` and `Clear cookies` both OFF.
 - [ ] **OneDrive signed in**, syncing AI Projects → Documents → Emburse
-      Transactions.
-- [ ] **Emburse reachable** from the corporate network without an interstitial
-      proxy sign-in page.
+      Transactions. If the laptop is offline the file queues locally and uploads
+      when it reconnects, which is one fewer thing to handle.
+- [ ] **Emburse reachable** off the corporate network too, since the laptop will
+      not always be on it.
+
+#### Expect the browser to steal focus
+
+Attended UI automation clicks real windows. When the flow fires, a browser opens,
+works for a minute and closes — on top of whatever you were doing. Schedule it
+for a time you are unlikely to be mid-sentence: early morning, or over lunch.
 
 #### The Emburse login for the bot
 
-Two options, and the choice interacts with the lock-screen decision above:
+With a personal laptop and a persistent profile, the simplest thing is to stay
+signed in as yourself and let the sign-in branch of the flow be a rare fallback.
 
-- **A dedicated Emburse service account, MFA exempted.** You have Emburse admin
-  now, so this is available. Preferred: no human's password change breaks it, and
-  its activity is distinguishable from yours in Emburse's audit trail.
-- **A persistent Edge profile signed in as you.** Cheaper to set up, works until
-  something forces re-auth — and it puts the bot's exports under your name.
+Worth knowing what you are accepting: the exports run under your name in
+Emburse's audit trail, and a password change or a forced re-auth stops the
+automation until you sign in by hand. If that becomes annoying, you have Emburse
+admin and can move to a dedicated service account with MFA exempted.
 
-If Emburse sign-in goes through Microsoft SSO with MFA, the service account is
-not optional; a bot cannot satisfy an MFA prompt.
+If Emburse sign-in goes through Microsoft SSO with MFA, the fallback branch
+cannot work at all — a bot cannot satisfy an MFA prompt. In that case the
+persistent profile is not a convenience, it is the only mechanism, and it needs
+"remember this device" set.
 
-Hold the password in a flow variable marked **Sensitive** (its value is then
-masked in the designer and in run logs), or pull it from **Azure Key Vault** if
-you have the connector. Never type it into an action as a literal.
+Hold any password in a flow variable marked **Sensitive** (its value is then
+masked in the designer and in run logs). Never type it into an action as a
+literal.
 
 ### 1. Desktop flow — "Emburse · request export"
 
@@ -145,12 +134,13 @@ login   If web page contains  →  the sign-in form
         └ the If matters: on a run where the session is still good, Emburse
           skips sign-in entirely and these actions would fail
 
+  +   Click link on web page ............... the ADMIN tab
+        └ Emburse opens on whichever of ADMIN / PERSONAL you last used, and
+          PERSONAL shows only your own expenses — see below
+
 transactions
         Click link on web page ............. left nav → Cards → Transactions
   +     Wait for web page content .......... the grid has rows
-  +     Click link on web page ............. the Section chip you export from
-                                             (Needs Review / Needs Manager
-                                             Review / …) — see below
 
 advanced filter
         Click link on web page ............. ADVANCED FILTERS
@@ -162,6 +152,17 @@ advanced filter
 export
         Press button on web page ........... EXPORT  (top right of the grid)
   +     Wait for web page content .......... the Export Expenses dialog is up
+
+  +     For each of the four Section chips to include:
+            If web page contains ........... that chip in its UNCHECKED state
+                Click link on web page ..... that chip
+            End
+  +     If web page contains ............... Completed in its CHECKED state
+            Click link on web page ......... Completed        (switch it off)
+        End
+        └ the chips are toggles, so clicking blind turns an already-on section
+          OFF; test the state and click only when it needs changing
+
         Set drop-down list value ........... Select a format → PDF
                                              (the template dropdown greys
                                              itself out — no action needed)
@@ -191,25 +192,43 @@ contains` that costs nothing and catches a stray selection left behind by a
 human, a mis-aimed click earlier in the flow, or a row checkbox that Emburse
 restored from a remembered session.
 
-#### The Section chips decide what you get
+#### ADMIN, not PERSONAL
 
-This is the part worth getting right, because it is silent when it is wrong.
+Emburse has **ADMIN** and **PERSONAL** tabs at the top left, and it reopens on
+whichever you last used. PERSONAL shows only your own expenses — a flow that
+lands there exports a handful of rows, succeeds, and quietly replaces the
+company-wide data with one person's.
 
-The Transactions grid has section tabs — **Needs Review**, Needs Manager Review,
-Pending Submission, Denied, Completed — and the export inherits whichever are
-active. The dialog echoes them back as chips, and they are editable there too.
-So there are two places the section can be set, and they have to agree with what
-you actually want in the review console.
+Click ADMIN explicitly at the start of every run. Never rely on where Emburse
+left you.
 
-Decide this deliberately rather than inheriting whatever tab was last open:
+#### The Section chips, set in the dialog
 
-- **Needs Review alone** is the reviewer's working set — the queue MOJO Expense
-  exists to work through.
-- Adding the other sections gives history, and lets the app watch things move
-  out of the inbox rather than simply vanish.
+The export covers the **Section(s)** ticked in the Export Expenses dialog. Four
+are wanted, and one is not:
 
-Whichever you choose, set it explicitly in the flow. Emburse remembers the last
-tab, so a flow that relies on the default exports whatever a human left behind.
+| Section | Include |
+| --- | --- |
+| Needs Review | yes |
+| Needs Manager Review | yes |
+| Pending Submission | yes |
+| Denied | yes |
+| Completed | no |
+
+Widening from one section to four is the difference between 34 rows and 275, so
+keep the **2,500-transaction export cap** in view as volume grows.
+
+**The chips are toggles.** Clicking one that is already blue switches it *off*,
+so a flow that clicks all four unconditionally lands on the inverse of the
+intended state — and it looks like it worked. Guard each with an `If web page
+contains` against the chip's *unchecked* appearance and click only when it needs
+changing. Capture the checked and unchecked variants as separate UI elements;
+they differ by the tick and the fill.
+
+One consequence worth knowing downstream: with these four sections the export is
+everything that is not Completed, so the app's `in_inbox` flag comes to mean
+"still somewhere in the approval pipeline" rather than "awaiting first review".
+Rows drop out when they complete, which is the behaviour you want.
 
 #### Capture the item count
 
@@ -310,30 +329,96 @@ Close web browser
 Poll the exports list rather than trusting the email's Download button — the
 button is a tracking redirect and lands you in the same list anyway.
 
-### 3. Scheduling
+### 3. Scheduling, and the three-hour retry
 
-**Option A — no extra licence.** Windows Task Scheduler runs each flow:
+A laptop will be asleep at 05:00. So rather than schedule one daily run and hope,
+**run every three hours and make all but the first run a no-op.**
+
+#### Make the flow idempotent first
+
+Both flows start by asking "has today already been done?" and exit immediately if
+so. This is what makes a frequent schedule safe.
+
+**Request flow** — first and last actions:
+
+```
+  first   Get current date and time  → %Today% formatted yyyy-MM-dd
+          Read text from file ........ %LocalAppData%\MojoExpense\requested.txt
+          └ one line, "<date> <attempts|done>", e.g. "2026-09-22 1"
+          If  the line's date = %Today%
+              If  it reads "done"  →  Stop flow   (already requested today)
+              If  its count >= 2   →  Stop flow   (today is written off)
+          End
+          Write text to file ......... "%Today% <count+1>"   (an attempt begins)
+
+   ...the eight-step export path...
+
+   last   Write text to file ......... requested.txt ← "%Today% done"
+          └ only after the "export started" confirmation, never before
+```
+
+**Collect flow** — the marker is the file itself:
+
+```
+  first   If folder contains  emburse-%Today%.pdf   → Stop flow
+```
+
+Note which write happens when. The **attempt count** goes up at the start, so a
+flow that dies halfway still burns an attempt and cannot loop forever. The
+**success** marker is written only after Emburse confirms the export started —
+writing that one optimistically would turn a single failed run into a whole day
+with no data.
+
+#### Then schedule it every three hours
+
+Two Windows Task Scheduler tasks, each running:
 
 ```
 "C:\Program Files (x86)\Power Automate Desktop\PAD.Console.Host.exe" "ms-powerautomate:/console/flow/run?workflowName=Emburse - request export"
 ```
 
-Request at 05:00, collect at 05:20. This works and costs nothing, but it is not
-a documented Microsoft interface — treat it as something to re-verify after a
-Power Automate update.
+Trigger: daily at 06:00, **repeat every 3 hours for a duration of 3 hours** —
+which fires at 06:00 and 09:00, then stops. Two attempts, then the day is left
+alone until tomorrow. Collect runs on the same cadence, offset 30 minutes.
 
-**Option B — supported, needs Power Automate Premium** (~$15/user/month, plus
-the unattended add-on if nobody is logged in on the runner):
+Do not lean on the duration arithmetic alone. Have the request flow keep its own
+count in the marker file and stop at the cap: Task Scheduler's repeat semantics
+are easy to misread, and a miscounted duration that retries all day means eight
+export requests and eight emails from Emburse.
 
-- Cloud flow on a daily **Recurrence** → *Run a flow built with Power Automate
-  for desktop* → "request export".
-- Cloud flow on **When a new email arrives (V3)**, filtered to
-  `noreply@spend.emburse.com` with subject `Your expense export is ready` →
-  *Run a flow built with Power Automate for desktop* → "collect export".
+Settings tab — these four matter on a laptop:
 
-Option B is genuinely better: the collect step fires when the export is actually
-ready instead of 20 minutes later and hoping. If the licence is affordable, take
-it.
+| Setting | Value | Why |
+| --- | --- | --- |
+| Run only when user is logged on | **on** | attended UI automation has no session otherwise |
+| Run task as soon as possible after a scheduled start is missed | **on** | slept through 06:00 → runs on wake, not three hours later |
+| Stop the task if it runs longer than | 30 minutes | a flow wedged on a changed selector should not block the next attempt |
+| Stop if the computer switches to battery power | **off** | otherwise unplugging mid-run kills it |
+
+Leave *Start only if the computer is on AC power* unchecked too, or a laptop on
+battery never runs at all.
+
+#### What this gets you
+
+- Laptop asleep at 06:00 → first attempt on wake, or at 09:00.
+- Emburse down, or a selector broke → one more attempt three hours later, then
+  the day is left alone rather than hammering a service that is clearly unwell.
+- Already succeeded → every later run exits in under a second, and Emburse gets
+  exactly one export request per day rather than eight.
+- Whole day missed → tomorrow backfills it, because the export is the full
+  receipted inbox rather than one day's rows.
+
+The last point is the important one. The retry loop covers a bad morning; the
+full-inbox export covers a bad week.
+
+#### If you later want it properly hands-off
+
+Power Automate Premium (~$15/user/month) lets a cloud flow trigger the desktop
+flow, including on **When a new email arrives (V3)** filtered to
+`noreply@spend.emburse.com` / `Your expense export is ready`. Collect then fires
+when the export is genuinely ready instead of on a three-hour guess. Worth
+revisiting once the free version has proved the click path is stable — not
+before.
 
 ### 4. Make it fail loudly
 
@@ -356,6 +441,17 @@ Already built, nothing to configure beyond one permission:
   the file `in_inbox = false` rather than deleting them.
 - Reconciles the parsed total against the total printed on page 1 and records
   the import as balanced or needing a check.
+
+It also shows where the schedule has got to, on the Import page: whether today's
+export has arrived, and when the next attempt is due. That strip is derived from
+the agreed schedule and the last arrival — the server cannot see the laptop, so
+it reports what turned up rather than what the flow claims. Keep `EXPORT_*` in
+`.env` in step with the Task Scheduler trigger, or the app will be the one that
+is wrong.
+
+`pnpm exec tsx scripts/verify-schedule.ts` checks the boundaries you cannot
+reach by running the app today — the grace window expiring, a day being written
+off, and both US DST switches.
 
 The target folder is already the built-in default in `server/env.ts`:
 

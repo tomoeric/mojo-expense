@@ -27,6 +27,15 @@ function int(name: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+/** "HH:MM" into its parts, falling back when unset or malformed. */
+function hhmm(name: string, hour: number, minute: number): { hour: number; minute: number } {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(str(name));
+  if (!m) return { hour, minute };
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  return h < 24 && min < 60 ? { hour: h, minute: min } : { hour, minute };
+}
+
 const PRODUCTS: readonly EmburseProduct[] = ["professional", "enterprise", "spend"];
 
 function product(): EmburseProduct {
@@ -154,6 +163,30 @@ export const env = {
     folderId: str("SHAREPOINT_FOLDER_ID", "01AKEC4WI273BYVMAHNZAJEEVRTHS5DFSA"),
     /** Minutes between automatic syncs; 0 disables the timer (manual only). */
     pollMinutes: int("SHAREPOINT_POLL_MINUTES", 60),
+  },
+
+  /**
+   * When the Power Automate flow on the laptop is expected to deliver.
+   *
+   * The server cannot see the flow, so this is only a statement of the agreed
+   * schedule — it is what the app compares actual arrivals against in order to
+   * say "next upload at ...". Change it here if the Task Scheduler trigger
+   * changes, or the two will disagree and the app will be the one that is wrong.
+   */
+  schedule: {
+    timezone: str("EXPORT_TIMEZONE", "America/Chicago"),
+    firstRun: hhmm("EXPORT_FIRST_RUN", 6, 0),
+    /** Gap between retries within a day. */
+    retryHours: int("EXPORT_RETRY_HOURS", 3),
+    /** Attempts before the day is written off and the next is tomorrow. */
+    attemptsPerDay: Math.max(1, int("EXPORT_ATTEMPTS_PER_DAY", 2)),
+    /**
+     * How long after an attempt to keep waiting before calling it a miss.
+     * Emburse queues the export and emails when it is ready, then the folder
+     * poll picks it up, so an attempt that fired on time still lands late.
+     * Default covers the export wait plus one full SHAREPOINT_POLL_MINUTES.
+     */
+    graceMinutes: int("EXPORT_GRACE_MINUTES", 90),
   },
 
   audit: {

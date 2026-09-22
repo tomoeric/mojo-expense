@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Upload, Loader2, CheckCircle2, AlertTriangle, Database, FolderSync } from "lucide-react";
+import { Upload, Loader2, CheckCircle2, AlertTriangle, Database, FolderSync, Clock } from "lucide-react";
 import { money, timeOfDay } from "@/lib/format";
 import { StatChip, StatChipRow, Empty } from "@/components/ui";
 
@@ -33,6 +33,16 @@ type HistoryRow = {
   reconciled: boolean | null;
 };
 
+type Schedule = {
+  timezone: string;
+  slots: string[];
+  lastImportAt: string | null;
+  arrivedToday: boolean;
+  nextAttemptAt: string;
+  state: "arrived" | "waiting" | "missed";
+  note: string;
+};
+
 type Stats = {
   expenses: string;
   in_inbox: string;
@@ -62,6 +72,7 @@ export function ImportPage() {
         stats: Stats | null;
         sharepoint: boolean;
         sources: { filename: string; status: string; imported_at: string; error: string | null }[];
+        schedule: Schedule;
       };
     },
   });
@@ -121,8 +132,12 @@ export function ImportPage() {
     }
   }
 
+  const schedule = history.data?.schedule;
+
   return (
     <div className="space-y-5">
+      {schedule && <ScheduleStrip schedule={schedule} />}
+
       {stats && Number(stats.expenses) > 0 && (
         <StatChipRow>
           <StatChip value={Number(stats.expenses).toLocaleString()} label="expenses stored" />
@@ -319,3 +334,55 @@ const Fact = ({ label, value }: { label: string; value: number | string }) => (
     <strong>{value}</strong> <span className="text-muted-foreground">{label}</span>
   </span>
 );
+
+
+const TONES = {
+  arrived: { wrap: "border-emerald-500/30 bg-emerald-500/10", dot: "bg-emerald-500", Icon: CheckCircle2 },
+  waiting: { wrap: "border-sky-500/30 bg-sky-500/10", dot: "bg-sky-500", Icon: Clock },
+  missed: { wrap: "border-amber-500/40 bg-amber-500/10", dot: "bg-amber-500", Icon: AlertTriangle },
+} as const;
+
+/**
+ * Where the daily export has got to.
+ *
+ * Deliberately phrased around arrival rather than around the robot: the flow
+ * runs on a laptop the server cannot see, so "the export arrived" is a fact and
+ * "the flow succeeded" would be a guess. When the two differ, arrival is the one
+ * the reviewer needs.
+ */
+function ScheduleStrip({ schedule }: { schedule: Schedule }) {
+  const { wrap, dot, Icon } = TONES[schedule.state];
+
+  // Everything is rendered in the schedule's timezone, not the viewer's: the
+  // times mean "when the laptop runs the flow", which does not move with them.
+  const at = (iso: string) =>
+    new Date(iso).toLocaleTimeString(undefined, {
+      hour: "numeric", minute: "2-digit", timeZone: schedule.timezone,
+    });
+  const on = (iso: string) =>
+    new Date(iso).toLocaleString(undefined, {
+      weekday: "short", hour: "numeric", minute: "2-digit", timeZone: schedule.timezone,
+    });
+
+  return (
+    <section className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border px-4 py-2.5 ${wrap}`}>
+      <span className="relative flex h-2 w-2 shrink-0">
+        {schedule.state !== "arrived" && (
+          <span className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-60 ${dot}`} />
+        )}
+        <span className={`relative inline-flex h-2 w-2 rounded-full ${dot}`} />
+      </span>
+
+      <Icon className="h-4 w-4 shrink-0 opacity-70" />
+      <p className="text-sm font-medium">{schedule.note}</p>
+
+      <p className="ml-auto text-xs text-muted-foreground">
+        {schedule.lastImportAt
+          ? `Last export ${on(schedule.lastImportAt)}`
+          : "No export has arrived yet"}
+        {" · "}
+        {`Runs ${schedule.slots.map(at).join(" and ")} daily`}
+      </p>
+    </section>
+  );
+}

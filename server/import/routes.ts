@@ -5,6 +5,7 @@ import { requireAuth } from "../auth/index.js";
 import { ingestExport } from "./ingest.js";
 import { syncFromSharePoint } from "./sync.js";
 import { isSharePointConfigured } from "./sharepoint.js";
+import { describeSchedule } from "./schedule.js";
 
 /**
  * Upload and history for the daily Emburse export.
@@ -94,7 +95,17 @@ importRouter.get("/imports", requireAuth, async (_req: Request, res: Response) =
         .catch(() => ({ rows: [] }));
       sources = seen.rows;
     }
-    res.json({ imports: rows, stats: stat[0] ?? null, sharepoint: isSharePointConfigured(), sources });
+    // The newest row is the last export that actually brought new bytes in —
+    // a re-uploaded duplicate returns early and never inserts one.
+    const lastImport = rows[0]?.imported_at ? new Date(rows[0].imported_at as string) : null;
+
+    res.json({
+      imports: rows,
+      stats: stat[0] ?? null,
+      sharepoint: isSharePointConfigured(),
+      sources,
+      schedule: describeSchedule(lastImport),
+    });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Could not read import history." });
   }
