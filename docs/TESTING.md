@@ -15,7 +15,8 @@ it is a demo.
 Runs anywhere, including here. No credentials, no Emburse, no SharePoint.
 
 ```bash
-pnpm exec tsx scripts/verify-schedule.ts     # 26 boundary cases
+pnpm exec tsx scripts/verify-schedule.ts       # 26 boundary cases
+pnpm exec tsx scripts/test-settings-check.ts   # the export-scope warning
 pnpm exec tsx scripts/verify-import.ts <export.pdf>
 ```
 

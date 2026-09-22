@@ -220,6 +220,7 @@ export function isZone(tz: string): boolean {
 export function checkAgainstSettings(
   header: { sections: string[]; receiptFilter: string | null } | null,
   want: ExportSettings,
+  opts: { sectionsVerified?: boolean } = {},
 ): string[] {
   if (!header) {
     return ["Could not read the search line from page 1, so the export's scope was not checked."];
@@ -234,7 +235,12 @@ export function checkAgainstSettings(
   // the sections, so it cannot be compared member by member — say so plainly
   // instead of reporting five spurious differences.
   if (got.has("inbox")) {
-    if (want.sections.length > 0) {
+    // "Inbox" is what Emburse prints for the grid's own search; the export
+    // dialog's section chips never appear on this line at all. So when the run
+    // that produced the file already read and verified those chips, there is
+    // nothing here to disagree with — and saying so anyway would put an amber
+    // warning on every successful export.
+    if (want.sections.length > 0 && !opts.sectionsVerified) {
       warnings.push(
         `Exported from Section: Inbox, not the ${want.sections.length} configured ` +
           `section${want.sections.length === 1 ? "" : "s"} (${want.sections.join(", ")}).`,

@@ -83,8 +83,19 @@ Three things follow, and all three are easy to break:
   the page await a run, and never `res.json()` a response without checking it
   is JSON.
 - **Absence is never success.** A selector that matches nothing must fail, not
-  be read as "already done". That mistake shipped once and turned a failed
-  login into three green steps.
+  be read as "already done". That mistake shipped four times: a failed login
+  reported as three green steps, an exports link silently not clicked, section
+  chips silently skipped, and a chip whose state could not be read treated as
+  "off" and then toggled six times.
+- **Wait for a condition, never sample one.** The dialog's title renders before
+  its body, the dashboard paints seconds after sign-in, and a click re-renders
+  what was just read. Anything using `isVisible()` as a one-shot answer is a
+  bug waiting for a slow morning.
+- **A warning that fires every time is worse than none.** The page-1 header
+  check warned on every successful export, because Emburse prints the grid's
+  search there and never names the dialog's chips. Suppressed only where the
+  run verified the chips itself (`sectionsVerified`); files arriving any other
+  way still get the check.
 
 See `docs/TESTING.md`. The mock (`scripts/mock-emburse.ts`) is the only thing
 that exercises the failure paths — sign-in rejected, a second factor, a device

@@ -53,6 +53,23 @@ export async function ingestExport(
     parsed?: ReturnType<typeof parseExpensesPdf>;
     /** Override the file identity, when the same bytes stand in for a later export. */
     fileHash?: string;
+    /**
+     * The run that produced this file read the section chips and confirmed
+     * they matched the configuration.
+     *
+     * Emburse prints the *grid* search on page 1 — "Section: Inbox, Receipt:
+     * Receipts: True" — and never names the chips from the export dialog. So
+     * for a file this app produced, the header saying "Inbox" is simply what
+     * that line always says, and warning about it fires on every successful
+     * run. A warning that is always wrong is worse than no warning: it teaches
+     * people to skip the one that matters.
+     *
+     * The chips are still checked, just earlier and better — by the runner,
+     * which reads each one, refuses when it cannot, and verifies the result.
+     * This flag says that happened. Files arriving any other way (dropped into
+     * SharePoint by hand) have had no such check, so they keep the old one.
+     */
+    sectionsVerified?: boolean;
   } = {},
 ): Promise<ImportResult> {
   const fileHash = opts.fileHash ?? sha256(file);
@@ -62,7 +79,11 @@ export async function ingestExport(
   // What arrived vs what was asked for. A section chip left in the wrong state
   // yields a well-formed PDF of the wrong rows that passes every other check,
   // so the search line printed on page 1 is the only thing that can catch it.
-  warnings.push(...checkAgainstSettings(parsed.header, await readSettings()));
+  warnings.push(
+    ...checkAgainstSettings(parsed.header, await readSettings(), {
+      sectionsVerified: opts.sectionsVerified ?? false,
+    }),
+  );
 
   const totalCents = parsed.expenses.reduce((a, e) => a + e.amountCents, 0);
   const reconciled = parsed.statedTotalCents !== null && totalCents === parsed.statedTotalCents;

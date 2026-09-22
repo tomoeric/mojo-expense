@@ -249,7 +249,11 @@ export async function attemptExport(
     }
 
     if (run.ok && run.pdf) {
-      const imported = await ingestExport(run.pdf, `emburse-${day}.pdf`, by);
+      // The run read every section chip, refused to guess at any it could not
+      // read, and verified the result — so the weaker header check has nothing
+      // left to add about sections.
+      const sectionsVerified = run.steps.some((s) => s.name === "set the sections" && s.ok);
+      const imported = await ingestExport(run.pdf, `emburse-${day}.pdf`, by, { sectionsVerified });
       importId = imported.importId;
       // A duplicate file is not a failed run: it means Emburse produced the
       // same export twice, which is normal on a day nothing changed.
