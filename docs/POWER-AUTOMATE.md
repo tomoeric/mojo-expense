@@ -109,8 +109,11 @@ advanced filter
 export
         Press button on web page ........... EXPORT  (top right of the grid)
   +     Wait for web page content .......... the Export Expenses dialog is up
-  +     Set drop-down list value ........... Select a template → the one you use
         Set drop-down list value ........... Select a format → PDF
+                                             (the template dropdown greys
+                                             itself out — no action needed)
+  +     If web page contains ............... the text "all expense(s)"
+                                             └ else: rows are selected, bail out
         Press button on web page ........... EXPORT  (in the dialog)
   +     Wait for web page content .......... the "export started" confirmation
 
@@ -118,13 +121,22 @@ export
   +   On error (any action above) ............ Send email to the AP inbox
 ```
 
-#### No row checkboxes
+#### No row checkboxes — and the dialog tells you which mode you are in
 
-The export dialog says it plainly: *"You will be exporting all expense(s) that
-are tagged with"*, followed by the **Section(s)** and **Filter(s)** currently in
-play. It acts on the section-and-filter state, not on a row selection. Ticking
-the header checkbox is unnecessary, and a select-all click would only be one
-more thing to break.
+With nothing ticked, the dialog reads *"You will be exporting **all**
+expense(s) that are tagged with"* and lists the active **Section(s)** and
+**Filter(s)**. It acts on grid state, so no selection is needed.
+
+Tick a row and it changes: the header becomes *"You will be exporting **1**
+expense(s)"* and the Section(s) chips disappear entirely, leaving only the
+filters. The export is now scoped to that one row.
+
+That second mode is the failure worth guarding against, because it produces a
+perfectly valid PDF containing almost nothing. Before clicking EXPORT in the
+dialog, assert the text still says **"all expense(s)"** — one `If web page
+contains` that costs nothing and catches a stray selection left behind by a
+human, a mis-aimed click earlier in the flow, or a row checkbox that Emburse
+restored from a remembered session.
 
 #### The Section chips decide what you get
 
@@ -169,14 +181,15 @@ page that has not caught up — so EXPORT opens against the unfiltered grid and 
 get a correct-looking export of the wrong set. Nothing errors; the totals are
 just wrong.
 
-#### Check the template dropdown against PDF
+#### The template dropdown looks after itself
 
-The dialog has **Choose a template** above **Which format** — it defaults to
-`Default CSV export`. Before building the flow, open the dialog by hand, switch
-the format to PDF, and see what the template selector does: it may grey out, it
-may keep a CSV-shaped template selected, or it may need a PDF template of its
-own. Set it in the flow to whatever the correct answer turns out to be rather
-than leaving the CSV default sitting there.
+**Choose a template** sits above **Which format** and defaults to
+`Default CSV export`, but choosing PDF greys it out — templates only apply to the
+delimited formats (CSV, Pipe Delimited, Semi-Colon Delimited). So there is no
+template action in the flow at all.
+
+Order matters, though: set the format **first**. Touching the template selector
+before PDF is chosen just adds a step that will be disabled a moment later.
 
 Leave **Export Disabled Expense Tags** unticked unless you know you want it.
 
