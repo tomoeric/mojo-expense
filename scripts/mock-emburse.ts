@@ -93,12 +93,21 @@ app.get("/", (_req, res) => {
 });
 
 app.get("/identity", (_req, res) => {
+  // Drawn by JavaScript after a beat, like account.emburse.app. A check that
+  // runs the instant domcontentloaded fires sees an empty page here, which is
+  // exactly how a correct selector came to look like a wrong one.
   res.send(page(`
-    <h1>Sign in</h1>
-    <form method="post" action="/identity">
-      <input type="text" name="username" placeholder="username@example.com">
-      <button type="submit">CONTINUE</button>
-    </form>`));
+    <div id="root"></div>
+    <script>
+      setTimeout(function () {
+        document.getElementById("root").innerHTML =
+          '<h1>Sign in</h1>' +
+          '<form method="post" action="/identity">' +
+          '<input type="text" name="username" placeholder="username@example.com">' +
+          '<button type="submit">CONTINUE</button>' +
+          '</form>';
+      }, 1200);
+    </script>`));
 });
 
 app.post("/identity", (req, res) => {

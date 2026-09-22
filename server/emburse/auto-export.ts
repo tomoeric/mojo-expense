@@ -375,10 +375,19 @@ export async function signIn(page: Page, sel: Selectors, login: Login): Promise<
   const loggedIn = page.locator(sel.loggedIn).first();
   const emailBox = page.locator(sel.loginEmail).first();
 
+  // Wait, do not peek. account.emburse.app draws its form with JavaScript, so
+  // asking whether the box is visible the instant domcontentloaded fires
+  // reliably says no — and then a correct selector looks like a wrong one.
+  // Race the two outcomes instead: whichever appears, that is where we are.
+  await Promise.race([
+    emailBox.waitFor({ state: "visible" }),
+    loggedIn.waitFor({ state: "visible" }),
+  ]).catch(() => {});
+
   if (!(await emailBox.isVisible().catch(() => false))) {
     if (await loggedIn.isVisible().catch(() => false)) return "already signed in";
     throw new Error(
-      `no sign-in form and the app is not loaded — at ${page.url()}. ` +
+      `no sign-in form and the app is not loaded after waiting — at ${page.url()}. ` +
         "Check the loginEmail selector against that page.",
     );
   }
@@ -431,6 +440,9 @@ async function runSteps(
     // Emburse reopens on whichever of ADMIN / PERSONAL was last used, and
     // PERSONAL holds only this account's own expenses.
     const tab = page.locator(sel.adminTab).first();
+    // Same reasoning as sign-in: the app renders after load, so give the tab a
+    // chance to exist before concluding it does not.
+    await tab.waitFor({ state: "visible" }).catch(() => {});
     if (await tab.isVisible().catch(() => false)) {
       await tab.click();
       return "clicked ADMIN";
