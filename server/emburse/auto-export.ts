@@ -105,6 +105,53 @@ const ALL_CHIPS = [
 /** A stored credential, or the env fallback for a deployment without one. */
 export type Login = { userId: string | null; email: string; password: string };
 
+/**
+ * Which selectors each step depends on.
+ *
+ * Exported so a failed run can offer the exact fields to correct rather than
+ * the whole list. Knowing a run stopped at "open the export dialog" is only
+ * half an answer; the useful half is which two selectors that step used.
+ */
+export const STEP_SELECTORS: Record<string, SelectorKey[]> = {
+  "open Emburse": [],
+  "sign in": ["loginEmail", "loginPassword", "loginSubmit", "loggedIn"],
+  "switch to ADMIN": ["adminTab"],
+  "open Transactions": ["transactionsNav", "grid"],
+  "filter Receipts: true": ["advancedFilters", "receiptsFilter", "applyFilters"],
+  "read the item count": ["itemCount"],
+  "open the export dialog": ["exportButton", "dialog"],
+  "set the sections": ["dialogRoot", "dialog"],
+  "choose PDF": ["formatSelect"],
+  "confirm the scope is everything": ["dialog", "dialogScope"],
+  "start the export": ["dialogRoot", "dialogExport"],
+  "wait for the export and download it": ["exportsNav", "newestExportReady", "newestExportDownload"],
+};
+
+/** What each selector is for, shown beside its field. */
+export const SELECTOR_HELP: Record<SelectorKey, string> = {
+  loginEmail: "The email box on the Emburse sign-in page.",
+  loginPassword: "The password box.",
+  loginSubmit: "The sign-in button.",
+  loggedIn: "Something that only appears once signed in.",
+  adminTab: "The ADMIN tab, top left. PERSONAL would export one person's expenses.",
+  transactionsNav: "Cards → Transactions in the left nav.",
+  grid: "The transactions table itself — used to tell the page has loaded.",
+  itemCount: "The \u201cN items, $X\u201d line above the grid.",
+  advancedFilters: "The ADVANCED FILTERS link.",
+  receiptsFilter: "The Receipt control inside the filter panel.",
+  applyFilters: "The Apply button in the filter panel.",
+  exportButton: "The EXPORT button above the grid, not the one in the dialog.",
+  dialog: "Text that proves the Export Expenses dialog is open.",
+  dialogRoot: "The dialog element itself; section chips are looked for inside it.",
+  dialogScope: "The line saying whether all expenses or a selection will be exported.",
+  formatSelect: "The format dropdown in the dialog.",
+  dialogExport: "The EXPORT button inside the dialog.",
+  exportStarted: "Confirmation that the export was queued.",
+  exportsNav: "The link to the list of finished exports.",
+  newestExportReady: "The newest export's row once it reads Complete.",
+  newestExportDownload: "The Download link on that row.",
+};
+
 export function envLogin(): Login | null {
   const { email, password } = env.emburseLogin;
   return email && password ? { userId: null, email, password } : null;
@@ -244,9 +291,17 @@ async function runSteps(
   if (settings.receiptsOnly) {
     if (!(await step("filter Receipts: true", async () => {
       await page.locator(sel.advancedFilters).first().click();
-      await page.locator(sel.receiptsFilter).first().click();
+
+      // The receipts control is a toggle, like the section chips. Emburse
+      // remembers the last filter, so on the second run of the day a blind
+      // click turns it OFF — and the run then exports everything, succeeds,
+      // and reports a larger item count nobody is checking.
+      const control = page.locator(sel.receiptsFilter).first();
+      const on = await isOn(control);
+      if (!on) await control.click();
+
       await page.locator(sel.applyFilters).first().click();
-      return "applied";
+      return on ? "already on" : "switched on";
     }))) return false;
   }
 
@@ -376,6 +431,21 @@ function chipLocator(page: Page, sel: Selectors, name: string) {
 }
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Whether a toggle is on, for a checkbox or anything dressed as one.
+ *
+ * `isChecked` is the truth for a real checkbox and throws for everything else,
+ * so the aria and class reading is the fallback rather than the other way
+ * round — a chip that merely looks checked should not outvote one that says so.
+ */
+async function isOn(el: ReturnType<Page["locator"]>): Promise<boolean> {
+  try {
+    return await el.isChecked();
+  } catch {
+    return isChipOn(el);
+  }
+}
 
 /**
  * Whether a section chip is switched on.

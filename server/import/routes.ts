@@ -7,7 +7,7 @@ import { syncFromSharePoint, syncOnPageLoad } from "./sync.js";
 import { isSharePointConfigured } from "./sharepoint.js";
 import { describeSchedule } from "./schedule.js";
 import { ALL_SECTIONS, cleanSchedule, readSettings, writeSettings } from "./settings.js";
-import { DEFAULT_SELECTORS, envLogin } from "../emburse/auto-export.js";
+import { DEFAULT_SELECTORS, SELECTOR_HELP, STEP_SELECTORS, envLogin } from "../emburse/auto-export.js";
 import { credentialStatus, deleteCredential, listCredentials, saveCredential } from "../emburse/credentials.js";
 import { attemptExport, nextDue, recentRuns, runScreenshot } from "../emburse/export-scheduler.js";
 
@@ -130,7 +130,15 @@ importRouter.get("/imports", requireAuth, async (_req: Request, res: Response) =
 importRouter.get("/export-settings", requireAuth, async (_req: Request, res: Response) => {
   if (!guard(res)) return;
   try {
-    res.json({ ...(await readSettings()), allSections: ALL_SECTIONS });
+    res.json({
+      ...(await readSettings()),
+      allSections: ALL_SECTIONS,
+      // So the UI can show which selectors a failed step used, and what
+      // each one is for, without keeping its own copy to drift.
+      selectorHelp: SELECTOR_HELP,
+      stepSelectors: STEP_SELECTORS,
+      defaultSelectors: DEFAULT_SELECTORS,
+    });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Could not read settings." });
   }
@@ -164,7 +172,8 @@ importRouter.put("/export-settings", requireAuth, requireAdmin, async (req: Requ
       cleanSelectors(body.selectors, current.selectors),
       req.user?.email ?? "unknown",
     );
-    res.json({ ...saved, allSections: ALL_SECTIONS });
+    res.json({ ...saved, allSections: ALL_SECTIONS, selectorHelp: SELECTOR_HELP,
+      stepSelectors: STEP_SELECTORS, defaultSelectors: DEFAULT_SELECTORS });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Could not save settings." });
   }

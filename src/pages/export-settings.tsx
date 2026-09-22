@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Save, ShieldAlert, Check, Clock, Info } from "lucide-react";
+import { ExportRunner } from "@/components/export-runner";
 
 type Schedule = {
   timezone: string;
@@ -12,6 +13,10 @@ type Schedule = {
 
 type Settings = {
   sections: string[];
+  selectors: Record<string, string>;
+  selectorHelp: Record<string, string>;
+  stepSelectors: Record<string, string[]>;
+  defaultSelectors: Record<string, string>;
   receiptsOnly: boolean;
   schedule: Schedule;
   updatedAt: string | null;
@@ -253,6 +258,28 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
       </div>
 
       <SchedulePreview schedule={schedule} />
+
+      {/* Below the settings it exercises: the run is how you find out whether
+          what is configured above actually works against the real Emburse. */}
+      <div className="border-t border-border pt-5">
+        <ExportRunner
+          isAdmin={isAdmin}
+          selectors={q.data?.selectors ?? {}}
+          help={q.data?.selectorHelp ?? {}}
+          stepSelectors={q.data?.stepSelectors ?? {}}
+          defaults={q.data?.defaultSelectors ?? {}}
+          onSaveSelectors={async (next) => {
+            const res = await fetch("/api/export-settings", {
+              method: "PUT",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ sections, receiptsOnly, schedule, selectors: next }),
+            });
+            const body = (await res.json()) as Settings & { error?: string };
+            if (!res.ok) throw new Error(body.error ?? "Could not save selectors");
+            qc.setQueryData(["export-settings"], body);
+          }}
+        />
+      </div>
 
       {error && (
         <p className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm">{error}</p>
