@@ -262,6 +262,10 @@ export function checkAgainstSettings(
 function liveOverrides(stored: Record<string, string> | null): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(stored ?? {})) {
+    // A selector that no longer exists is not an override, it is litter from a
+    // step that was removed. Dropping it here means retiring a step also
+    // retires whatever somebody once typed into it.
+    if (!(k in DEFAULT_SELECTORS)) continue;
     if (v === DEFAULT_SELECTORS[k as keyof typeof DEFAULT_SELECTORS]) continue;
     if ((SUPERSEDED_SELECTORS[k] ?? []).includes(v)) continue;
     out[k] = v;

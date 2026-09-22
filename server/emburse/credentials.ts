@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS emburse_credentials (
   last_ok_at   timestamptz,
   last_error   text
 );
+ALTER TABLE emburse_credentials ADD COLUMN IF NOT EXISTS needs_reentry boolean NOT NULL DEFAULT false;
 `;
 
 let ready: Promise<void> | null = null;
@@ -107,7 +108,7 @@ export async function saveCredential(
        user_email = EXCLUDED.user_email, login_email = EXCLUDED.login_email,
        secret = EXCLUDED.secret, updated_at = now(),
        -- A new password invalidates what the old one proved.
-       last_ok_at = NULL, last_error = NULL`,
+       last_ok_at = NULL, last_error = NULL, needs_reentry = false`,
     [userId, userEmail, loginEmail, seal(password)],
   );
 }
@@ -122,7 +123,7 @@ export async function deleteCredential(userId: string): Promise<boolean> {
 export async function credentialStatus(userId: string): Promise<CredentialStatus | null> {
   await ensure();
   const { rows } = await db().query(
-    `SELECT user_email, login_email, updated_at, last_ok_at, last_error
+    `SELECT user_email, login_email, updated_at, last_ok_at, last_error, needs_reentry
        FROM emburse_credentials WHERE user_id = $1`, [userId]);
   return rows[0] ? toStatus(rows[0]) : null;
 }
@@ -136,7 +137,7 @@ export async function credentialStatus(userId: string): Promise<CredentialStatus
 export async function listCredentials(): Promise<CredentialStatus[]> {
   await ensure();
   const { rows } = await db().query(
-    `SELECT user_email, login_email, updated_at, last_ok_at, last_error
+    `SELECT user_email, login_email, updated_at, last_ok_at, last_error, needs_reentry
        FROM emburse_credentials ORDER BY user_email`);
   return rows.map(toStatus);
 }
@@ -148,7 +149,7 @@ function toStatus(r: Record<string, unknown>): CredentialStatus {
     updatedAt: (r.updated_at as Date).toISOString(),
     lastOkAt: r.last_ok_at ? (r.last_ok_at as Date).toISOString() : null,
     lastError: (r.last_error as string | null) ?? null,
-    needsReentry: Boolean(r.last_error),
+    needsReentry: Boolean(r.needs_reentry),
   };
 }
 
@@ -191,13 +192,28 @@ export async function credentialForExport(): Promise<
  * password is not made wrong by Emburse moving a button, and prompting for it
  * every time a selector drifts would train its owner to dismiss the prompt.
  */
-export async function noteResult(userId: string, ok: boolean, error: string | null): Promise<void> {
+export async function noteResult(
+  userId: string,
+  ok: boolean,
+  error: string | null,
+  /**
+   * Whether the password is the thing that needs changing.
+   *
+   * Separate from `error` on purpose. A device check, a moved button and a
+   * wrong password are all failed sign-ins, but only one of them is answered
+   * by typing the password again. Flagging all three for re-entry meant asking
+   * somebody to re-type a working password, watching it fail identically, and
+   * teaching them to ignore the warning by the time it is real.
+   */
+  credentialFault: boolean,
+): Promise<void> {
   await ensure();
   await db().query(
     `UPDATE emburse_credentials
-        SET last_ok_at = CASE WHEN $2 THEN now() ELSE last_ok_at END,
-            last_error = CASE WHEN $2 THEN NULL ELSE $3 END
+        SET last_ok_at    = CASE WHEN $2 THEN now() ELSE last_ok_at END,
+            last_error    = CASE WHEN $2 THEN NULL ELSE $3 END,
+            needs_reentry = CASE WHEN $2 THEN false ELSE $4 END
       WHERE user_id = $1`,
-    [userId, ok, error?.slice(0, 500) ?? null],
+    [userId, ok, error?.slice(0, 500) ?? null, credentialFault],
   );
 }

@@ -178,7 +178,10 @@ export async function attemptExport(
   );
   const id = Number(rows[0]!.id);
 
-  let run: ExportRun = { ok: false, signInFailed: false, steps: [], screenshot: null, pdf: null, itemLine: null };
+  let run: ExportRun = {
+    ok: false, signInFailed: false, credentialFault: false,
+    steps: [], screenshot: null, pdf: null, itemLine: null,
+  };
   let importId: number | null = null;
   let error: string | null = null;
 
@@ -206,12 +209,16 @@ export async function attemptExport(
 
     run = await runAutoExport(settings, settings.selectors as Selectors, login, { ...opts, onChallenge });
 
-    // Only the sign-in step says anything about the credential. A later failure
-    // means Emburse moved a button, and blaming the password for that would
-    // have its owner re-typing a perfectly good one.
+    // Only the sign-in step says anything about the credential, and even then
+    // only some of what it says. A later failure means Emburse moved a button;
+    // a device check means Emburse does not know this browser. Neither is
+    // answered by re-typing a password, so only `credentialFault` sends its
+    // owner back to the field.
     if (login.userId) {
       const signIn = run.steps.find((s) => s.name === "sign in");
-      if (signIn) await noteResult(login.userId, signIn.ok, signIn.ok ? null : signIn.detail);
+      if (signIn) {
+        await noteResult(login.userId, signIn.ok, signIn.ok ? null : signIn.detail, run.credentialFault);
+      }
     }
 
     if (run.ok && run.pdf) {

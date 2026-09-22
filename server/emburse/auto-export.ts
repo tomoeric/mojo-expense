@@ -40,6 +40,14 @@ export type ExportRun = {
    * credential went bad.
    */
   signInFailed: boolean;
+  /**
+   * Whether the stored password is what needs changing.
+   *
+   * Narrower than `signInFailed` on purpose: a device check and a renamed
+   * button are also failed sign-ins, and neither is fixed by typing the
+   * password again.
+   */
+  credentialFault: boolean;
   steps: StepResult[];
   /** PNG of the page where it stopped, base64, present only on failure. */
   screenshot: string | null;
@@ -62,7 +70,7 @@ export type Selectors = Record<SelectorKey, string>;
 export type SelectorKey =
   | "loginEmail" | "loginPassword" | "loginSubmit" | "loggedIn"
   | "mfaCode" | "mfaSubmit" | "mfaRemember"
-  | "adminTab" | "transactionsNav" | "grid" | "itemCount"
+  | "adminTab" | "grid" | "itemCount"
   | "gridPath"
   | "exportButton" | "dialog" | "dialogRoot" | "dialogScope" | "formatSelect"
   | "dialogExport" | "exportStarted"
@@ -101,7 +109,6 @@ export const DEFAULT_SELECTORS: Selectors = {
   mfaRemember: 'input[type="checkbox"]',
 
   adminTab: 'text=ADMIN',
-  transactionsNav: 'a:has-text("Transactions")',
   grid: 'table',
   // The "34 items, $42,249.94" line above the grid.
   itemCount: 'text=/\\d[\\d,]* items?, \\$[\\d,]+\\.\\d{2}/',
@@ -144,8 +151,7 @@ export const STEP_SELECTORS: Record<string, SelectorKey[]> = {
   "sign in": ["loginEmail", "loginPassword", "loginSubmit", "loggedIn",
               "mfaCode", "mfaSubmit", "mfaRemember"],
   "switch to ADMIN": ["adminTab"],
-  "open Transactions": ["transactionsNav", "grid"],
-  "filter Receipts: true": ["gridPath"],
+  "open the filtered grid": ["gridPath", "grid"],
   "read the item count": ["itemCount"],
   "open the export dialog": ["exportButton", "dialog"],
   "set the sections": ["dialogRoot", "dialog"],
@@ -165,7 +171,6 @@ export const SELECTOR_HELP: Record<SelectorKey, string> = {
   mfaSubmit: "The button that submits that code.",
   mfaRemember: "The \u201cremember this device\u201d tick box. Ticking it is what stops the code being asked for every run.",
   adminTab: "The ADMIN tab, top left. PERSONAL would export one person's expenses.",
-  transactionsNav: "Cards → Transactions in the left nav.",
   grid: "The transactions table itself — used to tell the page has loaded.",
   itemCount: "The \u201cN items, $X\u201d line above the grid.",
   gridPath: "Path to the transactions grid. Filters are added as query parameters.",
@@ -312,6 +317,7 @@ export async function runAutoExport(
   let page: Page | null = null;
   let pdf: Buffer | null = null;
   let itemLine: string | null = null;
+  let credentialFault = false;
 
   /** Run one step, timing it and recording what happened either way. */
   const step = async (name: string, fn: () => Promise<string>): Promise<boolean> => {
@@ -321,6 +327,7 @@ export async function runAutoExport(
       steps.push({ name, ok: true, detail, ms: Date.now() - started });
       return true;
     } catch (err) {
+      if (err instanceof SignInFailed && err.credentialFault) credentialFault = true;
       steps.push({
         name,
         ok: false,
@@ -340,7 +347,7 @@ export async function runAutoExport(
     const ok = await runSteps(page, settings, selectors, login, step, opts, (v) => (itemLine = v), (b) => (pdf = b));
 
     const screenshot = ok ? null : (await page.screenshot({ fullPage: false })).toString("base64");
-    return { ok, signInFailed: signInBroke(steps), steps, screenshot, pdf, itemLine };
+    return { ok, signInFailed: signInBroke(steps), credentialFault, steps, screenshot, pdf, itemLine };
   } catch (err) {
     steps.push({
       name: "start browser",
@@ -354,7 +361,7 @@ export async function runAutoExport(
     } catch {
       /* A dead page cannot be photographed; the step detail is what matters. */
     }
-    return { ok: false, signInFailed: signInBroke(steps), steps, screenshot, pdf, itemLine };
+    return { ok: false, signInFailed: signInBroke(steps), credentialFault, steps, screenshot, pdf, itemLine };
   } finally {
     await close?.().catch(() => {});
   }
@@ -434,7 +441,7 @@ export async function signIn(
   if (!(await emailBox.isVisible().catch(() => false))) {
     if (await loggedIn.isVisible().catch(() => false)) return "already signed in";
     throw new Error(
-      `no sign-in form and the app is not loaded after waiting — at ${page.url()}. ` +
+      `no sign-in form and the app is not loaded after waiting — at ${safeUrl(page.url())}. ` +
         "Check the loginEmail selector against that page.",
     );
   }
@@ -450,7 +457,15 @@ export async function signIn(
     await page.locator(sel.loginSubmit).first().click();
   }
 
-  await loggedIn.waitFor({ state: "visible" }).catch(() => {});
+  // Race the app against the code box rather than waiting out the full step
+  // timeout on the app alone. A challenge is a normal outcome now, not an
+  // exception, and spending thirty seconds discovering it made every failed
+  // sign-in feel like a hang.
+  await Promise.race([
+    loggedIn.waitFor({ state: "visible" }),
+    page.locator(sel.mfaCode).first().waitFor({ state: "visible" }),
+  ]).catch(() => {});
+
   if (!(await loggedIn.isVisible().catch(() => false))) {
     // A verification code is the one failure a person can actually clear, so
     // offer it to them instead of reporting a dead end — but only when
@@ -461,9 +476,27 @@ export async function signIn(
       const how = await passChallenge(page, sel, challenge);
       if (how) return `signed in as ${login.email} — ${how}`;
     }
-    throw new Error(`signed in as ${login.email} but the app did not appear — ${await whyStuck(page)}`);
+    throw new SignInFailed(
+      `signed in as ${login.email} but the app did not appear — ${await whyStuck(page)}`,
+      isCredentialFault(await pageText(page), page.url()),
+    );
   }
   return `signed in as ${login.email}`;
+}
+
+/**
+ * A sign-in that failed, and whether the password is what needs changing.
+ *
+ * The distinction is the whole point. Every sign-in failure used to flag the
+ * stored credential for re-entry, so a device check told its owner their
+ * password was rejected. They re-type a perfectly good password, it fails the
+ * same way, and the next time the app says a credential is bad they do not
+ * believe it.
+ */
+export class SignInFailed extends Error {
+  constructor(message: string, readonly credentialFault: boolean) {
+    super(message);
+  }
 }
 
 /**
@@ -498,13 +531,22 @@ const CHALLENGE_ATTEMPTS = 3;
  * in which case the caller falls through to its usual diagnosis.
  */
 async function passChallenge(page: Page, sel: Selectors, ask: ChallengeHook): Promise<string | null> {
-  // Two gates, both required. The text says this is a challenge; the box says
-  // there is somewhere to type. Either alone would be a guess — plenty of
-  // pages have a numeric input, and a page can talk about codes without
-  // offering one.
-  if (challengeKind(await pageText(page)) === null) return null;
+  // Is this a challenge at all? The address answers first and most reliably —
+  // Emburse's own path says /code-authentication — with the page's words as a
+  // fallback for tenants whose URL says nothing.
+  if (challengeKind(await pageText(page), page.url()) === null) return null;
+
+  // Wait for the box, do not peek at it. This page is drawn by JavaScript like
+  // the identity page before it, so asking the instant we arrive reliably says
+  // "no code box" and turns a challenge we could have cleared into a dead end.
   const box = page.locator(sel.mfaCode).first();
-  if (!(await box.isVisible().catch(() => false))) return null;
+  await box.waitFor({ state: "visible" }).catch(() => {});
+  if (!(await box.isVisible().catch(() => false))) {
+    throw new Error(
+      `Emburse is asking for a verification code at ${safeUrl(page.url())}, but no box to type it ` +
+        "into was found. Check the mfaCode selector against that page.",
+    );
+  }
 
   let lastError: string | null = null;
 
@@ -531,13 +573,13 @@ async function passChallenge(page: Page, sel: Selectors, ask: ChallengeHook): Pr
     }
 
     const text = await pageText(page);
-    lastError = challengeKind(text)
+    lastError = challengeKind(text, page.url())
       ? `Emburse did not accept that code. It says: "${snippet(text)}"`
       : `The code was submitted but the app still did not appear. The page reads: "${snippet(text)}"`;
 
     // Off the challenge screen but not into the app: another code will not
     // help, so stop rather than spending the remaining attempts on it.
-    if (!challengeKind(text)) break;
+    if (!challengeKind(text, page.url())) break;
   }
 
   throw new Error(lastError ?? "The verification code was not accepted.");
@@ -598,7 +640,16 @@ const pageText = async (page: Page): Promise<string> =>
  * what a challenge is. Two copies of this rule would drift, and the drift would
  * show up as a run that refuses to offer the box on the very page that needs it.
  */
-export function challengeKind(text: string): "code" | "device" | null {
+export function challengeKind(text: string, url = ""): "code" | "device" | null {
+  // The address is the most reliable evidence there is, and it was being
+  // ignored. Emburse parks a half-finished sign-in on a page whose path says
+  // exactly what it wants — /code-authentication — while the page's own words
+  // may not have rendered yet, or may not contain any of the phrases below.
+  // Reading only the text meant sitting on the verification page and reporting
+  // a wrong password.
+  if (/\/(code-authentication|mfa|two-factor|2fa|otp|verify-device|challenge)/i.test(path(url))) {
+    return "code";
+  }
   if (
     /verification code|authentication code|two-factor|2fa|one-time|authenticator|security code|passcode|check your (phone|email)|enter the code/i.test(
       text,
@@ -610,6 +661,34 @@ export function challengeKind(text: string): "code" | "device" | null {
 
 const offersToRemember = (text: string) =>
   /remember (this|my) device|trust (this|my) device|verify this device/i.test(text);
+
+/** Just the path, for matching. A malformed URL is not worth throwing over. */
+const path = (url: string): string => {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url;
+  }
+};
+
+/**
+ * A URL safe to show a person, write to the database, or put in a screenshot.
+ *
+ * Emburse carries a `session_token` in the query string of its verification
+ * pages — a bearer credential for a half-authenticated session. That was being
+ * printed in the failure message, stored on the credential row as `last_error`,
+ * and rendered in the UI, which is three copies of a live secret in places
+ * nobody would think to look for one. The path is the part that carries the
+ * meaning; the query string is the part that carries the risk.
+ */
+export const safeUrl = (url: string): string => {
+  try {
+    const u = new URL(url);
+    return u.search || u.hash ? `${u.origin}${u.pathname} (…)` : `${u.origin}${u.pathname}`;
+  } catch {
+    return url.split("?")[0] ?? url;
+  }
+};
 
 /**
  * Why sign-in ended somewhere that is not the app.
@@ -624,10 +703,11 @@ async function whyStuck(page: Page): Promise<string> {
   const url = page.url();
   const text = await pageText(page);
 
-  if (/wrong email or password|incorrect password|invalid (email|password|credentials)|try again/i.test(text)) {
-    return `Emburse rejected the credentials. It says: "${snippet(text)}"`;
-  }
-  const kind = challengeKind(text);
+  // Challenges are tested before credential rejection, not after. "Try again"
+  // appears on a code screen too ("Didn't get a code? Try again"), so a loose
+  // rejection test run first will claim the password is wrong while the
+  // browser sits on the verification page — which is exactly what happened.
+  const kind = challengeKind(text, url);
   if (kind === "code") {
     return (
       "Emburse is asking for a verification code. Start a test run and it will stop here and ask " +
@@ -645,16 +725,41 @@ async function whyStuck(page: Page): Promise<string> {
       `but the confirmation has to come from a person. It says: "${snippet(text)}"`
     );
   }
+  if (credentialsRejected(text)) {
+    return `Emburse rejected the credentials. It says: "${snippet(text)}"`;
+  }
   if (/microsoft|sign in with|single sign|saml|okta/i.test(text)) {
     return `Emburse handed sign-in to another identity provider. It says: "${snippet(text)}"`;
   }
   if (!text) {
-    return `the page at ${url} has no readable text yet — it may still be loading, or be a redirect.`;
+    return `the page at ${safeUrl(url)} has no readable text yet — it may still be loading, or be a redirect.`;
   }
   // Signed in fine, but nothing matched loggedIn: the likeliest remaining case.
   return (
-    `at ${url}, and the page reads: "${snippet(text)}". If that looks like Emburse, ` +
+    `at ${safeUrl(url)}, and the page reads: "${snippet(text)}". If that looks like Emburse, ` +
     "the loggedIn selector is what needs correcting."
+  );
+}
+
+/**
+ * Did Emburse actually say the password was wrong?
+ *
+ * Deliberately narrow. Sending somebody to re-type a password that is perfectly
+ * good is worse than saying nothing: they do it, it fails again, and after the
+ * second time they stop believing the message. "Try again" on its own is not
+ * evidence — half the error screens on the internet end with it.
+ */
+export function isCredentialFault(text: string, url = ""): boolean {
+  // A challenge always wins. Sitting on the verification page is not evidence
+  // about the password, and treating it as such is what sent somebody to
+  // re-type a working one.
+  if (challengeKind(text, url) !== null) return false;
+  return credentialsRejected(text);
+}
+
+export function credentialsRejected(text: string): boolean {
+  return /wrong email or password|incorrect password|invalid (email|password|credentials)|password (is|was) (incorrect|wrong)|could not (sign|log) you in/i.test(
+    text,
   );
 }
 
@@ -677,7 +782,9 @@ async function runSteps(
 
   if (!(await step("open Emburse", async () => {
     await page.goto(url, { waitUntil: "domcontentloaded" });
-    return `loaded ${page.url()}`;
+    // Redacted: Emburse's sign-in redirect carries a session_token and the
+    // whole OAuth query string, and this detail is stored and displayed.
+    return `loaded ${safeUrl(page.url())}`;
   }))) return false;
 
   if (!(await step("sign in", async () => signIn(page, sel, login, opts.onChallenge)))) return false;
@@ -702,22 +809,16 @@ async function runSteps(
     throw new Error(`no ADMIN tab and the app is not loaded — at ${page.url()}`);
   }))) return false;
 
-  if (!(await step("open Transactions", async () => {
-    // Clicking ADMIN can land on the grid already. Navigating to where you
-    // are is not an error, but waiting for a link that is no longer on the
-    // page is a hang — so check the destination before insisting on the route.
-    const grid = page.locator(sel.grid).first();
-    if (await grid.isVisible().catch(() => false)) return "already on the grid";
-
-    await page.locator(sel.transactionsNav).first().click();
-    await grid.waitFor({ state: "visible" });
-    return "grid visible";
-  }))) return false;
-
-  if (!(await step("filter Receipts: true", async () => {
-    // Straight to the filtered grid rather than clicking ADVANCED FILTERS and
-    // a checkbox. The filters live in the query string, so there is no toggle
-    // whose state could be misread and silently inverted.
+  if (!(await step("open the filtered grid", async () => {
+    // One navigation, not two. There used to be an "open Transactions" step
+    // that clicked a nav link first — which was pure risk, because this step
+    // then navigates to an absolute URL regardless of where that click landed.
+    // Its only achievement was a thirty-second timeout whenever Emburse
+    // renamed or moved the link, on the way to a page we were about to load
+    // directly anyway.
+    //
+    // The filters live in the query string, so there is also no ADVANCED
+    // FILTERS dialog and no toggle whose state could be misread and inverted.
     const target = gridUrl(url, { receiptsOnly: settings.receiptsOnly, path: sel.gridPath });
     await page.goto(target, { waitUntil: "domcontentloaded" });
     await page.locator(sel.grid).first().waitFor({ state: "visible" });

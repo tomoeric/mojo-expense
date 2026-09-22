@@ -115,6 +115,21 @@ export function MyEmburseLoginPage() {
         </p>
       )}
 
+      {/* A sign-in can fail without the password being wrong — a device check,
+          a renamed button. Saying so is worth doing; sending somebody to
+          re-type a working password is not, because it fails identically and
+          spends the credibility of the warning above. */}
+      {credential && !credential.needsReentry && credential.lastError && (
+        <p className="flex items-start gap-2 rounded-lg border border-border bg-muted/40 p-3 text-sm">
+          <Info className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+          <span>
+            <strong>The last sign-in did not get through</strong> — but not because of this password,
+            so there is nothing to re-enter here.
+            <span className="mt-1 block text-xs text-muted-foreground">{credential.lastError}</span>
+          </span>
+        </p>
+      )}
+
       {credential && !credential.needsReentry && (
         <div className="rounded-xl border border-border p-3.5 text-sm">
           <p className="font-semibold">{credential.loginEmail}</p>

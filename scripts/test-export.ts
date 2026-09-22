@@ -46,7 +46,8 @@ process.env.EMBURSE_EXPORT_WAIT_MS ||= "60000";
 // for a test suite.
 process.env.EMBURSE_CHALLENGE_TIMEOUT_MS ||= "20000";
 
-const { runAutoExport, DEFAULT_SELECTORS } = await import("../server/emburse/auto-export.js");
+const { runAutoExport, DEFAULT_SELECTORS, challengeKind, credentialsRejected, isCredentialFault, safeUrl } =
+  await import("../server/emburse/auto-export.js");
 type Selectors = Parameters<typeof runAutoExport>[1];
 
 // The credential the runner signs in with. In the app this comes from what
@@ -61,7 +62,6 @@ const selectors: Selectors = {
   loginSubmit: 'button[type="submit"]',
   loggedIn: 'a:has-text("Transactions")',
   adminTab: 'a:has-text("ADMIN")',
-  transactionsNav: 'a:has-text("Transactions")',
   grid: "table",
   exportButton: 'a[href="/dialog"] button',
   formatSelect: 'a:has-text("Select a format")',
@@ -92,6 +92,42 @@ const check = (label: string, ok: boolean, detail = "") => {
   console.log(`  ${ok ? "ok  " : "FAIL"} ${label}${detail ? ` — ${detail}` : ""}`);
   if (!ok) failures++;
 };
+
+// --------------------------------------------- reading the page, and the URL
+// No browser needed. These are the rules that decide what a stuck sign-in is,
+// and every one of them has been wrong in production at least once.
+console.log("\n0. Telling one kind of stuck sign-in from another");
+
+// The real failure: parked on Emburse's own verification page, reported as a
+// wrong password, because only the page text was read and the address — which
+// says /code-authentication in plain words — was thrown away.
+const CODE_URL = "https://account.emburse.app/code-authentication?session_token=eyJhbGciOiJIUzI1NiJ9.abc";
+check("the address alone identifies a code page", challengeKind("", CODE_URL) === "code");
+check("…even when the page text has not rendered yet",
+  challengeKind("", CODE_URL) === "code");
+check("…and it is not called a password problem", !isCredentialFault("", CODE_URL));
+
+// "Try again" ends half the error screens on the internet, including code
+// screens. On its own it is not evidence about the password.
+check("“try again” alone is not a rejected password",
+  !credentialsRejected("Didn't get a code? Try again."));
+check("a real rejection still reads as one",
+  credentialsRejected("Wrong email or password. Please try again."));
+check("…and a code page wins over one that says both",
+  !isCredentialFault("Wrong password. Try again.", CODE_URL));
+
+// PKCE puts `code_challenge` in the query string of a perfectly ordinary
+// sign-in redirect. Matching the whole URL rather than its path would call
+// every OAuth hand-off a verification screen.
+check("an OAuth redirect is not mistaken for a challenge",
+  challengeKind("", "https://account.emburse.app/?code_challenge=abc&response_type=code") === null);
+
+// A session_token is a bearer credential for a half-open sign-in, and this
+// string gets stored on the credential row and rendered in the page.
+check("a session token is never shown or stored",
+  !safeUrl(CODE_URL).includes("eyJhbGciOiJIUzI1NiJ9"), safeUrl(CODE_URL));
+check("…while the part that carries the meaning survives",
+  safeUrl(CODE_URL).includes("/code-authentication"), safeUrl(CODE_URL));
 
 // ---------------------------------------------------------------- clean run
 console.log("\n1. A clean run, with the chips starting out wrong");

@@ -61,12 +61,23 @@ const forExport = await credentialForExport();
 check("the runner gets the real password", forExport?.password === SECRET);
 check("and knows whose it is, to report back", forExport?.userId === BRIAN.id);
 
-console.log("\n6. Re-asking happens only after a sign-in failure");
+console.log("\n6. Re-asking happens only when the password is the problem");
 check("a fresh credential is not flagged", (await credentialStatus(BRIAN.id))?.needsReentry === false);
-await noteResult(BRIAN.id, false, "sign in: password rejected");
-check("flagged once sign-in fails", (await credentialStatus(BRIAN.id))?.needsReentry === true);
-await noteResult(BRIAN.id, true, null);
+await noteResult(BRIAN.id, false, "sign in: password rejected", true);
+check("flagged when Emburse rejects the password", (await credentialStatus(BRIAN.id))?.needsReentry === true);
+await noteResult(BRIAN.id, true, null, false);
 check("cleared once it works again", (await credentialStatus(BRIAN.id))?.needsReentry === false);
+
+// The distinction that matters. Telling somebody their password is wrong when
+// it is not gets it re-typed, fails identically, and spends the credibility of
+// the warning for the day it is real.
+await noteResult(BRIAN.id, false, "sign in: Emburse is asking to verify this device", false);
+check("a device check does NOT ask for the password again",
+  (await credentialStatus(BRIAN.id))?.needsReentry === false);
+check("…but the reason is still recorded",
+  /verify this device/.test((await credentialStatus(BRIAN.id))?.lastError ?? ""),
+  (await credentialStatus(BRIAN.id))?.lastError ?? "none");
+await noteResult(BRIAN.id, true, null, false);
 
 console.log("\n7. Replacing it forgets what the old one proved");
 await saveCredential(BRIAN.id, BRIAN.email, "brian@mojocarwash.com", "a-different-password");
