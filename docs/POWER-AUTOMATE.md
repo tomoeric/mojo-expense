@@ -64,82 +64,168 @@ you have the connector. Never type it into an action as a literal.
 
 ### 1. Desktop flow — "Emburse · request export"
 
-This is the flow that replaces the manual pull. Each line is a real Power
-Automate Desktop action, in order; indented lines are what you set on it.
+The manual path today is:
+
+> login → transactions → advanced filter → receipts = true → apply → export →
+> pdf → export
+
+The flow is those steps plus the scaffolding a human does without thinking:
+opening the browser, waiting for each page to settle, setting the fields in the
+export dialog, and noticing when something went wrong.
+
+Lines marked **`+`** have no equivalent in the manual path.
 
 ```
-Launch new Microsoft Edge
-    Launch mode ............ Launch new instance
-    Initial URL ............ the Card Transactions tab
-    Window state ........... Normal        (Minimized hides real failures)
-    Clear cache / cookies .. both OFF      (this is what keeps you signed in)
-    → produces the variable  Browser
+  +   Launch new Microsoft Edge
+          Launch mode ............ Launch new instance
+          Initial URL ............ the Emburse sign-in page
+          Window state ........... Normal    (Minimized hides real failures)
+          Clear cache / cookies .. both OFF  (this is what keeps a session alive)
+          → produces the variable  Browser
 
-If web page contains  →  Element, the sign-in form
-    Populate text field on web page    the username field
-    Populate text field on web page    the password field  (Sensitive variable)
-    Press button on web page           Sign in
-    Wait for web page content          the transactions grid appears
-End
+login   If web page contains  →  the sign-in form
+          Populate text field on web page .. username
+          Populate text field on web page .. password   (Sensitive variable)
+          Press button on web page ......... Sign in
+  +       Wait for web page content ........ the dashboard has loaded
+        End
+        └ the If matters: on a run where the session is still good, Emburse
+          skips sign-in entirely and these actions would fail
 
-Click link on web page ............... Advanced Filters
-Set drop-down list value on web page . Receipt → True
-Press button on web page ............. Apply
+transactions
+        Click link on web page ............. left nav → Cards → Transactions
+  +     Wait for web page content .......... the grid has rows
+  +     Click link on web page ............. the Section chip you export from
+                                             (Needs Review / Needs Manager
+                                             Review / …) — see below
 
-Wait for web page content ............ the filtered grid has finished loading
+advanced filter
+        Click link on web page ............. ADVANCED FILTERS
+        Set drop-down list value ........... Receipts → true
+        Press button on web page ........... APPLY
+  +     Wait for web page content .......... the item-count line has updated
+  +     Get details of element on web page . the "N items, $X" line → variable
 
-Click link on web page ............... the select-all checkbox in the header
-Click link on web page ............... Export
-Set drop-down list value on web page . file type → PDF
-Press button on web page ............. Export
+export
+        Press button on web page ........... EXPORT  (top right of the grid)
+  +     Wait for web page content .......... the Export Expenses dialog is up
+  +     Set drop-down list value ........... Select a template → the one you use
+        Set drop-down list value ........... Select a format → PDF
+        Press button on web page ........... EXPORT  (in the dialog)
+  +     Wait for web page content .......... the "export started" confirmation
 
-Wait for web page content ............ the "export started" confirmation
-Close web browser .................... Browser
+  +   Close web browser ...................... Browser
+  +   On error (any action above) ............ Send email to the AP inbox
 ```
 
-**The `Wait for web page content` after Apply is not optional.** The grid
-re-renders asynchronously; without it the select-all click lands on the
-unfiltered list and you export the wrong set. Same story after sign-in.
+#### No row checkboxes
+
+The export dialog says it plainly: *"You will be exporting all expense(s) that
+are tagged with"*, followed by the **Section(s)** and **Filter(s)** currently in
+play. It acts on the section-and-filter state, not on a row selection. Ticking
+the header checkbox is unnecessary, and a select-all click would only be one
+more thing to break.
+
+#### The Section chips decide what you get
+
+This is the part worth getting right, because it is silent when it is wrong.
+
+The Transactions grid has section tabs — **Needs Review**, Needs Manager Review,
+Pending Submission, Denied, Completed — and the export inherits whichever are
+active. The dialog echoes them back as chips, and they are editable there too.
+So there are two places the section can be set, and they have to agree with what
+you actually want in the review console.
+
+Decide this deliberately rather than inheriting whatever tab was last open:
+
+- **Needs Review alone** is the reviewer's working set — the queue MOJO Expense
+  exists to work through.
+- Adding the other sections gives history, and lets the app watch things move
+  out of the inbox rather than simply vanish.
+
+Whichever you choose, set it explicitly in the flow. Emburse remembers the last
+tab, so a flow that relies on the default exports whatever a human left behind.
+
+#### Capture the item count
+
+The grid prints a line like **`34 items, $42,249.94`** above the table. Grab it
+with `Get details of element on web page` before clicking EXPORT and put it in
+the alert email (or a log file next to the PDF).
+
+That one number is the cheapest possible check on the whole pipeline. The
+importer already reconciles its parsed total against the total printed on page 1
+of the PDF; having Emburse's own on-screen figure as well means a filter that
+silently failed to apply shows up as a mismatch instead of as a quiet, plausible,
+wrong export.
+
+It also makes the best wait condition after APPLY — wait for that line to change
+rather than for a fixed number of seconds.
+
+#### The two waits that actually matter
+
+`Wait for web page content` after **APPLY** and after **Sign in** are not
+padding. Both re-render asynchronously, and PAD will fire the next click into a
+page that has not caught up — so EXPORT opens against the unfiltered grid and you
+get a correct-looking export of the wrong set. Nothing errors; the totals are
+just wrong.
+
+#### Check the template dropdown against PDF
+
+The dialog has **Choose a template** above **Which format** — it defaults to
+`Default CSV export`. Before building the flow, open the dialog by hand, switch
+the format to PDF, and see what the template selector does: it may grey out, it
+may keep a CSV-shaped template selected, or it may need a PDF template of its
+own. Set it in the flow to whatever the correct answer turns out to be rather
+than leaving the CSV default sitting there.
+
+Leave **Export Disabled Expense Tags** unticked unless you know you want it.
 
 #### The part only you can do: selectors
 
-Every `Press button` / `Click link` above needs a **UI element**, and those
+Every `Click link` / `Press button` above needs a **UI element**, and those
 cannot be written from outside — they have to be captured against the live
-Emburse DOM. Use the recorder for the whole click path in one pass, then go back
-through the UI elements repository and loosen each selector:
+Emburse DOM. Record the whole path in one pass, then loosen each selector:
 
 - Delete generated ids and `nth-child(n)` position steps.
 - Keep the element's **text** and any stable `data-*` or `aria-*` attribute.
-- Where Emburse gives you nothing stable, anchor on the nearest parent that has
-  a real name rather than on a chain of divs.
+- Where Emburse gives you nothing stable, anchor on the nearest parent with a
+  real name rather than on a chain of divs.
 
-A selector pinned to a generated class name is the thing most likely to break,
-and it breaks the week Emburse ships a UI change.
+The Section chips and the dialog's EXPORT button deserve particular care: the
+grid and the dialog both have a control labelled EXPORT, so a loose text-only
+selector can match the wrong one.
 
-#### What to export each day
+#### A note on sign-in
 
-**Export the whole open inbox every run, not just yesterday.** It costs a bigger
-PDF and nothing else, because the importer is built for it:
+The `If web page contains` branch assumes a username/password form. If your login
+goes through Microsoft SSO or prompts for MFA, that branch needs different
+handling — a bot cannot satisfy an MFA challenge. Either use an Emburse service
+account exempted from MFA (you have admin now), or keep the Edge profile
+permanently signed in and let the If branch be a rare fallback.
+
+#### What gets exported
+
+Receipts = true with no date filter, so every run exports the full set for the
+chosen sections rather than just yesterday's.
+
+That is the right default, and it is what the importer is built for:
 
 - The same bytes twice is a no-op (content hash).
 - A row that reappears unchanged is left alone; a row whose note or category was
   edited is **updated**, not duplicated.
 - A row that has left the inbox is marked `in_inbox = false`, never deleted.
 
-So a full-inbox export is self-healing: if the flow fails on Tuesday, Wednesday's
-run backfills it. A "yesterday only" export turns every missed run into a
-permanent hole in the data.
-
-The one limit to respect: **a PDF export caps at 2,500 transactions.** If the
-open inbox could exceed that, split into two date ranges and let the flow produce
-two files — the importer takes multiple files per day without complaint.
+So the run is self-healing: if Tuesday fails, Wednesday backfills it. The one
+limit to respect is that **a PDF export caps at 2,500 transactions** — past that,
+add a date range and let the flow produce two files. The importer takes multiple
+files per day without complaint.
 
 #### Fail loudly
 
-On the `On error` tab of the sign-in, the Apply wait, and the final confirmation
-wait: set a couple of retries, then **send mail to the AP inbox** rather than
-letting the flow end quietly. An export automation that silently stops is worse
-than a manual one, because you stop checking.
+Set the `On error` path on sign-in, the APPLY wait and the confirmation wait: a
+couple of retries, then **send mail to the AP inbox**, with the captured item
+count in the body. An export automation that stops quietly is worse than a manual
+one, because you stop checking.
 
 ### 2. Desktop flow — "Emburse · collect export"
 
