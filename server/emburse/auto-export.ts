@@ -329,7 +329,21 @@ export async function runAutoExport(
   settings: ExportSettings,
   selectors: Selectors,
   login: Login,
-  opts: { dryRun?: boolean; onChallenge?: ChallengeHook } = {},
+  opts: {
+    dryRun?: boolean;
+    onChallenge?: ChallengeHook;
+    /**
+     * Called as each step finishes, so progress can be seen while it happens.
+     *
+     * A run can legitimately take twenty minutes — most of it spent waiting
+     * for Emburse to build the file — and the steps used to be written only at
+     * the end. So the one question worth asking, "is it stuck?", had no answer
+     * anywhere in the app.
+     */
+    onStep?: (steps: StepResult[]) => void;
+    /** Checked between steps, so a run can be called off without a restart. */
+    shouldStop?: () => boolean;
+  } = {},
 ): Promise<ExportRun> {
   const steps: StepResult[] = [];
   let close: (() => Promise<void>) | null = null;
@@ -341,9 +355,15 @@ export async function runAutoExport(
   /** Run one step, timing it and recording what happened either way. */
   const step = async (name: string, fn: () => Promise<string>): Promise<boolean> => {
     const started = Date.now();
+    if (opts.shouldStop?.()) {
+      steps.push({ name, ok: false, detail: "stopped — the run was called off", ms: 0 });
+      opts.onStep?.(steps);
+      return false;
+    }
     try {
       const detail = await fn();
       steps.push({ name, ok: true, detail, ms: Date.now() - started });
+      opts.onStep?.(steps);
       return true;
     } catch (err) {
       if (err instanceof SignInFailed && err.credentialFault) credentialFault = true;
@@ -353,6 +373,7 @@ export async function runAutoExport(
         detail: err instanceof Error ? err.message.split("\n")[0]! : String(err),
         ms: Date.now() - started,
       });
+      opts.onStep?.(steps);
       return false;
     }
   };
@@ -1011,7 +1032,7 @@ async function runSteps(
   sel: Selectors,
   login: Login,
   step: (name: string, fn: () => Promise<string>) => Promise<boolean>,
-  opts: { dryRun?: boolean; onChallenge?: ChallengeHook },
+  opts: { dryRun?: boolean; onChallenge?: ChallengeHook; shouldStop?: () => boolean },
   setItemLine: (v: string) => void,
   setPdf: (b: Buffer) => void,
 ): Promise<boolean> {
@@ -1309,6 +1330,7 @@ async function runSteps(
     await clickVisible(page, sel.exportsNav, "the Exports link").catch(() => {});
 
     while (Date.now() < deadline) {
+      if (opts.shouldStop?.()) throw new Error("stopped — the run was called off while waiting");
       if (await firstVisible(page, sel.newestExportReady, 0)) {
         const [download] = await Promise.all([
           page.waitForEvent("download"),

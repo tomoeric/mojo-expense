@@ -222,7 +222,19 @@ export async function attemptExport(
         : (ctx: { prompt: string; screenshot: string | null; attempt: number; lastError: string | null }) =>
             waitForCode({ ...ctx, owner: by });
 
-    run = await runAutoExport(settings, settings.selectors as Selectors, login, { ...opts, onChallenge });
+    run = await runAutoExport(settings, settings.selectors as Selectors, login, {
+      ...opts,
+      onChallenge,
+      // Written as they happen. A run can take twenty minutes, most of it
+      // waiting for Emburse to build the file, and the steps used to appear
+      // only once it was over — so "is it stuck?" had no answer anywhere.
+      onStep: (steps) => {
+        void db()
+          .query("UPDATE export_runs SET steps = $2 WHERE id = $1", [id, JSON.stringify(steps)])
+          .catch(() => {});
+      },
+      shouldStop: () => stopping.has(id),
+    });
 
     // Only the sign-in step says anything about the credential, and even then
     // only some of what it says. A later failure means Emburse moved a button;
@@ -250,6 +262,7 @@ export async function attemptExport(
     run = { ...run, ok: false };
   }
 
+  stopping.delete(id);
   await db().query(
     `UPDATE export_runs SET finished_at = now(), ok = $2, steps = $3, item_line = $4,
                             error = $5, import_id = $6, screenshot = $7
@@ -259,6 +272,19 @@ export async function attemptExport(
   );
 
   return { id, run, importId };
+}
+
+/**
+ * Runs somebody has asked to stop.
+ *
+ * In memory, and that is the right place: a run only exists inside the process
+ * driving its browser, so a restart ends it anyway. Ids are dropped once the
+ * run notices, and a stop for a run that has already finished is harmless.
+ */
+const stopping = new Set<number>();
+
+export function stopRun(id: number): void {
+  stopping.add(id);
 }
 
 let timer: NodeJS.Timeout | null = null;

@@ -666,6 +666,41 @@ check("…and the chips were left exactly as they were",
 check("…and no export was requested", mock.state().requestedAt === null);
 await fetch(`${mock.url}/__app?chipState=aria`, { method: "POST" });
 
+// ----------------------------------------- progress, and a way to call it off
+// A run can take twenty minutes, most of it waiting for Emburse to build the
+// file — and the steps used to be written only once it was over, so "is it
+// stuck?" had no answer anywhere in the app.
+console.log("\n24. A run reports progress, and can be stopped");
+await forgetDevice();
+mock.reset();
+
+const seen: number[] = [];
+run = await runAutoExport(settings, selectors, LOGIN, {
+  dryRun: true,
+  onStep: (steps) => seen.push(steps.length),
+});
+check("every step is reported as it finishes", seen.length === run.steps.length,
+  `${seen.length} reports for ${run.steps.length} steps`);
+check("…in order, one at a time",
+  seen.every((n, i) => n === i + 1), seen.join(","));
+check("…and the run still succeeded", run.ok);
+
+// Stopping. Called off after the first step, the run must end promptly and say
+// so, rather than carrying on to request an export nobody wants.
+await forgetDevice();
+mock.reset();
+let stepsDone = 0;
+run = await runAutoExport(settings, selectors, LOGIN, {
+  onStep: (steps) => (stepsDone = steps.length),
+  shouldStop: () => stepsDone >= 2,
+});
+check("a stopped run does not finish", !run.ok);
+check("…and says it was called off",
+  /called off/.test(run.steps.find((st) => !st.ok)?.detail ?? ""),
+  run.steps.find((st) => !st.ok)?.detail ?? "");
+check("…before requesting an export", mock.state().requestedAt === null);
+check("…and stopped near where it was told to", run.steps.length <= 4, `${run.steps.length} steps`);
+
 await mock.close();
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}\n`);
 process.exit(failures === 0 ? 0 : 1);

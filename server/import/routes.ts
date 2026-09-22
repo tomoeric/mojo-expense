@@ -9,7 +9,7 @@ import { describeSchedule } from "./schedule.js";
 import { ALL_SECTIONS, cleanSchedule, readSettings, writeSettings } from "./settings.js";
 import { DEFAULT_SELECTORS, SELECTOR_HELP, STEP_SELECTORS, envLogin } from "../emburse/auto-export.js";
 import { credentialStatus, deleteCredential, listCredentials, saveCredential } from "../emburse/credentials.js";
-import { attemptExport, nextDue, recentRuns, runScreenshot } from "../emburse/export-scheduler.js";
+import { attemptExport, nextDue, recentRuns, runScreenshot, stopRun } from "../emburse/export-scheduler.js";
 import { answerChallenge, cancelChallenge, currentChallenge } from "../emburse/challenge.js";
 import { cookiesSavedAt, forgetCookies } from "../emburse/browser-state.js";
 
@@ -307,6 +307,25 @@ importRouter.delete("/export-challenge", requireAuth, requireAdmin, (req: Reques
     res.status(400).json({ error: result.error });
     return;
   }
+  res.json({ ok: true });
+});
+
+/**
+ * Call off a run that is still going.
+ *
+ * Checked between steps and inside the long wait for Emburse to build the
+ * file, so it takes effect in seconds rather than at the next restart. Without
+ * it the only way out of a run gone wrong was to restart the server — and a
+ * run holds the browser profile, so nothing else could start meanwhile.
+ */
+importRouter.post("/export-runs/:id/stop", requireAuth, requireAdmin, (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) {
+    res.status(400).json({ error: "Not a run id." });
+    return;
+  }
+  stopRun(id);
   res.json({ ok: true });
 });
 

@@ -148,8 +148,11 @@ export function ExportRunner({
   // Derived from the data rather than from whether this tab started the run,
   // so a reload, a second tab, or a request the proxy dropped all still show
   // a run in progress.
-  const running = (q.data?.runs ?? []).some(isRunning);
-  const working = busy !== "" || running;
+  const active = (q.data?.runs ?? []).find(isRunning) ?? null;
+  const working = busy !== "" || active !== null;
+  // Which of the two buttons is the one in flight. Both used to spin, which
+  // made a test run look like a real one.
+  const kind = active ? (active.trigger === "dry-run" ? "dry" : "real") : busy;
 
   async function run(dry: boolean) {
     setBusy(dry ? "dry" : "real");
@@ -199,6 +202,17 @@ export function ExportRunner({
       setCodeError((err as Error).message);
     } finally {
       setAnswering(false);
+    }
+  }
+
+  async function stop(id: number) {
+    setError("");
+    try {
+      const res = await fetch(`/api/export-runs/${id}/stop`, { method: "POST" });
+      if (!res.ok) throw new Error((await readJson<{ error?: string }>(res)).error ?? "Could not stop it");
+      await qc.invalidateQueries({ queryKey: ["export-runs"] });
+    } catch (err) {
+      setError((err as Error).message);
     }
   }
 
@@ -286,8 +300,8 @@ export function ExportRunner({
           onClick={() => void run(true)}
           className="inline-flex items-center gap-2 rounded-lg border border-border px-3.5 py-2 text-sm font-semibold transition-colors hover:bg-muted disabled:opacity-40"
         >
-          {working ? <Loader2 className="h-4 w-4 animate-spin" /> : <FlaskConical className="h-4 w-4" />}
-          {working ? "Testing…" : "Test run"}
+          {kind === "dry" ? <Loader2 className="h-4 w-4 animate-spin" /> : <FlaskConical className="h-4 w-4" />}
+          {kind === "dry" ? "Testing…" : "Test run"}
         </button>
 
         <button
@@ -296,8 +310,8 @@ export function ExportRunner({
           onClick={() => void run(false)}
           className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-3.5 py-2 text-sm font-semibold text-white transition-colors hover:bg-sky-500 disabled:opacity-40"
         >
-          {working ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-          {working ? "Running…" : "Run export now"}
+          {kind === "real" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+          {kind === "real" ? "Running…" : "Run export now"}
         </button>
 
         {working && (
@@ -406,11 +420,37 @@ export function ExportRunner({
         </div>
       )}
 
+      {active && (
+        <p className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/40 p-2.5 text-xs">
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" aria-hidden />
+          <span>
+            Step {active.steps.length > 0 ? `${active.steps.length}: ${active.steps.at(-1)?.name}` : "starting"}
+            {" · "}
+            {Math.round((Date.now() - new Date(active.startedAt).getTime()) / 1000)}s so far.
+            {" "}
+            {active.steps.at(-1)?.name === "wait for the export and download it"
+              ? "Emburse is building the file — this is the long one, up to 15 minutes."
+              : "Expand the run below to see every step as it happens."}
+          </span>
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => void stop(active.id)}
+              className="ml-auto rounded-lg border border-border px-2.5 py-1 font-semibold hover:bg-muted"
+            >
+              Stop this run
+            </button>
+          )}
+        </p>
+      )}
+
       {runs.length > 0 && (
         <div className="divide-y divide-border overflow-hidden rounded-xl border border-border">
           {runs.map((r) => {
             const failed = r.steps.find((s) => !s.ok);
-            const expanded = open === r.id;
+            // A run in progress opens itself: its step list is the answer to
+            // the only question anybody has while it is going.
+            const expanded = open === r.id || (open === null && isRunning(r));
             return (
               <div key={r.id}>
                 <button
