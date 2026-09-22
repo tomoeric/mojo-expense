@@ -621,6 +621,51 @@ check("…and it says the scope is worth correcting", /worth correcting/.test(de
   detail.slice(0, 110));
 await fetch(`${mock.url}/__app?dialogRoot=whole`, { method: "POST" });
 
+// ------------------------------------ chips that say nothing in text or ARIA
+// The real failure: "would not settle after +Needs Review +Needs Review
+// +Needs Review +Needs Review +Needs Review +Needs Review". Emburse's chips
+// show selection with a filled background and an icon — nothing in the text,
+// nothing in aria-pressed — so every read came back "off" and every pass
+// decided the chip still needed turning on. It was toggled six times and left
+// wherever the parity landed.
+console.log("\n22. Chips that show their state with an icon, not with words");
+await forgetDevice();
+mock.reset();
+await fetch(`${mock.url}/__app?chipState=icon`, { method: "POST" });
+
+run = await runAutoExport(settings, selectors, LOGIN, { dryRun: true });
+detail = run.steps.find((st) => st.name === "set the sections")?.detail ?? "";
+check("the chips are read correctly", run.ok,
+  run.steps.find((st) => !st.ok)?.detail?.slice(0, 110) ?? "");
+check("…and end up as configured",
+  JSON.stringify(mock.state().sections) === JSON.stringify({
+    "Needs Review": true, "Needs Manager Review": true,
+    "Pending Submission": false, Denied: false, Completed: false,
+  }), JSON.stringify(mock.state().sections));
+check("…without clicking the same chip twice",
+  !/\+Needs Review/.test(detail), detail.slice(0, 110));
+
+console.log("\n23. Chips whose state reads wrong");
+await forgetDevice();
+mock.reset();
+await fetch(`${mock.url}/__app?chipState=mute`, { method: "POST" });
+const startedAs = JSON.stringify(mock.state().sections);
+
+run = await runAutoExport(settings, selectors, LOGIN, {});
+detail = run.steps.find((st) => st.name === "set the sections")?.detail ?? "";
+check("the run refuses", !run.ok);
+check("…after a single click, not six",
+  /did not turn it on|cannot tell whether/.test(detail), detail.slice(0, 110));
+check("…naming the chip it gave up on", /Needs Review/.test(detail), detail.slice(0, 110));
+// The point of stopping: a chip toggled an unknown number of times is worse
+// than a run that stopped. Two clicks return a toggle to where it started,
+// which is the one thing that can be said for certain when the read is wrong.
+check("…and the chips were left exactly as they were",
+  JSON.stringify(mock.state().sections) === startedAs,
+  JSON.stringify(mock.state().sections));
+check("…and no export was requested", mock.state().requestedAt === null);
+await fetch(`${mock.url}/__app?chipState=aria`, { method: "POST" });
+
 await mock.close();
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}\n`);
 process.exit(failures === 0 ? 0 : 1);

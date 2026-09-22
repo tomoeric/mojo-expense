@@ -1145,11 +1145,40 @@ async function runSteps(
       for (const name of ALL_CHIPS) {
         const chip = chipLocator(here.root, name);
         if (!(await chip.isVisible().catch(() => false))) continue;
-        if ((await isChipOn(chip)) === want.has(name)) continue;
+
+        const on = await isChipOn(chip);
+        if (on === null) {
+          // Never click a chip whose state could not be read. Doing so turned
+          // one on, then off, then on again — six times — because every read
+          // came back the same and every pass decided it still needed
+          // changing. A chip toggled an unknown number of times is worse than
+          // a run that stopped.
+          throw new Error(
+            `cannot tell whether the "${name}" chip is selected, so it was left alone rather ` +
+              `than toggled blindly. It looks like ${await describeChip(chip)}.`,
+          );
+        }
+        if (on === want.has(name)) continue;
 
         await chip.click();
-        changed.push(`${want.has(name) ? "+" : "-"}${name}`);
         clicked = true;
+        changed.push(`${want.has(name) ? "+" : "-"}${name}`);
+
+        // Verify this one click before making another. Without this, a chip
+        // whose state reads wrong is clicked once per pass until the passes
+        // run out, leaving it wherever the parity landed.
+        const after = await findChipRoot(page, sel, [...want]);
+        const state = after ? await isChipOn(chipLocator(after.root, name)) : null;
+        if (state !== want.has(name)) {
+          // Put it back. Two clicks return a toggle to where it started, which
+          // is the one thing that can be said for certain here.
+          if (after) await chipLocator(after.root, name).click().catch(() => {});
+          throw new Error(
+            `clicking "${name}" did not turn it ${want.has(name) ? "on" : "off"} — it now reads ` +
+              `${state === null ? "unreadable" : state ? "on" : "off"}. It was clicked back to ` +
+              `where it started. The dialog reads: "${snippet(await dialogText(page, sel))}"`,
+          );
+        }
         break;
       }
       // One change per pass. The next pass waits for the dialog to come back
@@ -1162,7 +1191,7 @@ async function runSteps(
       for (const name of ALL_CHIPS) {
         const chip = chipLocator(here.root, name);
         if (!(await chip.isVisible().catch(() => false))) continue;
-        if (await isChipOn(chip)) on.push(name);
+        if ((await isChipOn(chip)) === true) on.push(name);
       }
       const wrong = [...want].filter((w) => !on.includes(w)).concat(on.filter((o) => !want.has(o)));
       if (wrong.length) {
@@ -1371,13 +1400,50 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
  * is a reliable attribute, so this reads whatever signals the DOM offers and
  * falls back to the tick character in the label.
  */
-async function isChipOn(chip: ReturnType<Page["locator"]>): Promise<boolean> {
-  const aria = await chip.getAttribute("aria-pressed").catch(() => null);
-  if (aria !== null) return aria === "true";
-  const checked = await chip.getAttribute("aria-checked").catch(() => null);
-  if (checked !== null) return checked === "true";
+async function isChipOn(chip: Locator): Promise<boolean | null> {
+  // Anything the chip states outright, in the order it is worth trusting.
+  for (const attr of ["aria-pressed", "aria-checked", "aria-selected", "data-selected", "data-active"]) {
+    const v = await chip.getAttribute(attr).catch(() => null);
+    if (v !== null && v !== "") return v === "true";
+  }
+
   const cls = (await chip.getAttribute("class").catch(() => "")) ?? "";
-  if (/\b(selected|active|checked|on)\b/i.test(cls)) return true;
+  if (/\b(is-)?(selected|active|checked)\b/i.test(cls)) return true;
+  // Chip libraries of this vintage say it in the variant: filled is on,
+  // outlined is off.
+  if (/filled/i.test(cls)) return true;
+  if (/outlined/i.test(cls)) return false;
+
   const text = (await chip.innerText().catch(() => "")) ?? "";
-  return text.includes("✓") || text.includes("✔");
+  if (/[\u2713\u2714\u2705]/.test(text)) return true;
+
+  // The tick as an icon rather than a character — which is why reading the
+  // text alone found no tick on a chip that plainly has one.
+  if ((await chip.locator("svg").count().catch(() => 0)) > 0) return true;
+
+  // Last resort, and the one a person actually uses: a selected chip is
+  // filled, an unselected one is not.
+  const bg = await chip
+    .evaluate((el) => getComputedStyle(el as Element).backgroundColor)
+    .catch(() => "");
+  const rgba = /rgba?\(([^)]+)\)/.exec(bg);
+  if (rgba) {
+    const [r = 0, g = 0, b = 0, a = 1] = rgba[1]!.split(",").map((n) => Number(n.trim()));
+    if (a === 0) return false;
+    // Near-white is the page behind it showing through, not a filled chip.
+    if (r > 235 && g > 235 && b > 235) return false;
+    return true;
+  }
+
+  // Unknown. Deliberately not "off": treating unreadable as off is what made
+  // a chip get clicked six times — on, off, on, off — because every read came
+  // back the same and every pass decided it still needed turning on.
+  return null;
+}
+
+/** What a chip looks like, for a failure somebody has to act on. */
+async function describeChip(chip: Locator): Promise<string> {
+  const cls = (await chip.getAttribute("class").catch(() => "")) ?? "";
+  const tag = await chip.evaluate((el) => (el as Element).tagName.toLowerCase()).catch(() => "?");
+  return `<${tag}${cls ? ` class="${cls.slice(0, 120)}"` : ""}>`;
 }

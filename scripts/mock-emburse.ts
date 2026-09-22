@@ -64,6 +64,18 @@ type State = {
   formatControl: "links" | "select" | "mui";
   /** When true the chips render as something the chip selector cannot match. */
   chipsUnmatchable: boolean;
+  /**
+   * How a chip shows that it is selected.
+   *
+   *   "aria"  — aria-pressed, the easy case.
+   *   "icon"  — an SVG tick and a filled background, no ARIA at all. This is
+   *             Emburse's shape, and reading only text and aria-pressed found
+   *             every chip "off" — so the runner turned one on, off, on, off.
+   *   "mute"  — nothing says which chips are on, so every read comes back
+   *             "off", including for chips that are on. The runner must click
+   *             at most once, put it back, and stop.
+   */
+  chipState: "aria" | "icon" | "mute";
   /** Milliseconds the dialog shows only its title before drawing its body. */
   dialogBodyMs: number;
   /** When true role="dialog" wraps only the title, not the chips. */
@@ -101,6 +113,7 @@ const state: State = {
   gridShape: "table",
   formatControl: "links",
   chipsUnmatchable: false,
+  chipState: "aria",
   dialogBodyMs: 0,
   dialogRootIsHeaderOnly: false,
   search: "",
@@ -320,8 +333,7 @@ app.get("/dialog", (_req, res) => {
         // is what a markup change looks like from outside, and what used to be
         // reported as "already correct".
         ? `<section data-chip><svg><title>${on ? "on" : "off"}</title></svg></section>`
-        : `<a role="button" aria-pressed="${on}" href="/chip?name=${encodeURIComponent(name)}"
-            style="border:1px solid #888;padding:2px 6px;margin:2px">${on ? "✓ " : ""}${name}</a>`)
+        : chipMarkup(name, on))
     .join("");
   const body = `
       <p>You will be exporting ${scope} that are tagged with</p>
@@ -361,6 +373,26 @@ app.get("/dialog", (_req, res) => {
       ${body}
     </div>`));
 });
+
+const chipMarkup = (name: string, on: boolean) => {
+  const href = `/chip?name=${encodeURIComponent(name)}`;
+  if (state.chipState === "icon") {
+    // A tick drawn as an icon and a filled background — nothing in the text,
+    // nothing in ARIA. Exactly what a chip library emits, and exactly what
+    // made every chip read as "off".
+    // No title, no label: a decorative tick, the way an icon font or an
+    // inline SVG actually ships. It contributes nothing to the chip's text.
+    const tick = on ? '<svg width="10" height="10" aria-hidden="true"></svg>' : "";
+    const fill = on ? "background:#1a73e8;color:#fff" : "background:transparent";
+    return `<a href="${href}" style="${fill};border:1px solid #888;padding:2px 6px;margin:2px">${tick}${name}</a>`;
+  }
+  if (state.chipState === "mute") {
+    // Nothing to read at all. The only safe move is to refuse.
+    return `<a href="${href}" style="border:1px solid #888;padding:2px 6px;margin:2px">${name}</a>`;
+  }
+  return `<a role="button" aria-pressed="${on}" href="${href}"
+      style="border:1px solid #888;padding:2px 6px;margin:2px">${on ? "\u2713 " : ""}${name}</a>`;
+};
 
 const formatControl = () => {
   if (state.formatControl === "mui") {
@@ -461,6 +493,7 @@ app.post("/__app", (req, res) => {
   if ("grid" in q) state.gridShape = q["grid"] as State["gridShape"];
   if ("format" in q) state.formatControl = q["format"] as State["formatControl"];
   if ("chips" in q) state.chipsUnmatchable = q["chips"] === "unmatchable";
+  if ("chipState" in q) state.chipState = q["chipState"] as State["chipState"];
   if ("bodyMs" in q) state.dialogBodyMs = Number(q["bodyMs"]) || 0;
   if ("dialogRoot" in q) state.dialogRootIsHeaderOnly = q["dialogRoot"] === "header";
   res.json({ ok: true });
