@@ -46,17 +46,70 @@ the ability to see at a glance whether a day was missed.
 
 ## Build it
 
-### 0. Prerequisites
+### 0. The runner machine
 
-- An **always-on Windows machine**. A laptop that sleeps is not a runner.
-- **Power Automate for desktop** installed (ships with Windows 11).
-- **OneDrive** on that machine, syncing the Emburse Transactions folder.
-- An **Emburse login the bot can use**. Two options:
-  - A dedicated Emburse service account with a password and MFA exempted — you
-    now have Emburse admin, so this is available. Preferred: a human changing
-    their own password doesn't break the automation.
-  - A persistent Edge/Chrome profile kept signed in as a real user. Works, but
-    any forced re-auth stops the flow until someone logs in again.
+A corporate desktop that stays on is the right shape for this. Work through the
+list below on that machine before building anything — most of these are cheap to
+check and expensive to discover halfway through.
+
+#### The screen lock is the thing that decides the design
+
+**Attended RPA cannot drive a locked workstation.** Browser automation clicks
+real UI, and there is no UI to click behind a lock screen. So a corporate
+desktop with the usual GPO lock policy will run the flow perfectly while someone
+is sitting at it and fail every night at 5 a.m.
+
+Three ways out, in order of preference:
+
+1. **Unattended mode** (Power Automate Premium + the unattended add-on). The
+   runtime signs into the machine itself, runs the flow, and signs out. This is
+   the only option that is *designed* for a locked, unattended box, and it is why
+   the licence is worth costing out rather than dismissing.
+2. **A GPO exemption** for this one machine — no lock timeout, auto-login after
+   reboot. Free, but it is a security exception your IT team has to agree to, on
+   a machine that will hold a live Emburse session. Expect pushback, and expect
+   it to be reasonable pushback.
+3. **A dedicated VM** instead of a desktop, with the same exemption but no
+   physical keyboard anyone can walk up to. Better than 2 if you have the
+   infrastructure.
+
+Settle this first. It is the difference between a flow that works and a flow
+that works only when watched.
+
+#### If it is someone's actual desk PC
+
+Think twice. UI automation takes the foreground: a browser window will open,
+click around for a minute and close, stealing focus from whatever that person is
+doing. And if they sign out at the end of the day, the overnight run dies.
+
+A machine nobody sits at is worth more than a fast one.
+
+#### Checklist for the machine
+
+- [ ] **Stays on.** Sleep and hibernate disabled, not just "usually left on".
+- [ ] **Survives reboot.** Patch Tuesday restarts it; auto-login and a flow that
+      starts on logon, or accept a monthly gap you have to notice.
+- [ ] **Power Automate for desktop** installed. Corporate images often block
+      installs — this may be an IT ticket.
+- [ ] **Edge allowed to keep a profile.** Some managed configs clear cookies on
+      exit, which kills the persistent-session approach outright.
+- [ ] **OneDrive signed in**, syncing AI Projects → Documents → Emburse
+      Transactions.
+- [ ] **Emburse reachable** from the corporate network without an interstitial
+      proxy sign-in page.
+
+#### The Emburse login for the bot
+
+Two options, and the choice interacts with the lock-screen decision above:
+
+- **A dedicated Emburse service account, MFA exempted.** You have Emburse admin
+  now, so this is available. Preferred: no human's password change breaks it, and
+  its activity is distinguishable from yours in Emburse's audit trail.
+- **A persistent Edge profile signed in as you.** Cheaper to set up, works until
+  something forces re-auth — and it puts the bot's exports under your name.
+
+If Emburse sign-in goes through Microsoft SSO with MFA, the service account is
+not optional; a bot cannot satisfy an MFA prompt.
 
 Hold the password in a flow variable marked **Sensitive** (its value is then
 masked in the designer and in run logs), or pull it from **Azure Key Vault** if
