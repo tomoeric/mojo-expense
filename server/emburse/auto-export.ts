@@ -131,7 +131,10 @@ export const DEFAULT_SELECTORS: Selectors = {
   // The dialog's wording is "Choose a template" / "Select a template" for its
   // sibling control, so the format one is likely phrased the same way. Only
   // used when the control is not a native <select>, which is handled directly.
-  formatSelect: 'text=Select a format, text=Choose a format, text=Select format, [role="combobox"]',
+  // Deliberately no bare text match: the words "Select a format" belong to a
+  // floating label that cannot be clicked. Only used if neither the native
+  // dropdown nor the accessible-name lookup found the control.
+  formatSelect: '[role="combobox"], [aria-haspopup="listbox"], button:has-text("format")',
   formatOption: 'text="PDF"',
   dialogExport: 'button:has-text("EXPORT")',
   exportStarted: 'text=/export .*(started|queued|processing)/i',
@@ -444,6 +447,15 @@ export function explainLaunch(err: unknown): string {
  * email, then the password on a second screen. Filling both at once fills one
  * box and submits nothing.
  */
+/** The export dialog's words, for a failure that has to be readable. */
+async function dialogText(page: Page, sel: Selectors): Promise<string> {
+  const root = await firstVisible(page, sel.dialogRoot, 2000);
+  const text = root ? await root.innerText().catch(() => "") : "";
+  // A dropdown's menu is often portalled outside the dialog, so fall back to
+  // the page rather than reporting an empty string.
+  return (text || (await pageText(page))).replace(/\s+/g, " ").trim();
+}
+
 /**
  * Set the format with a native `<select>`, if that is what this is.
  *
@@ -471,6 +483,49 @@ async function chooseFormatFromSelect(page: Page, sel: Selectors): Promise<strin
 
     await one.selectOption({ label: pdf });
     return `format set to PDF — chose "${pdf.trim()}" in a dropdown`;
+  }
+  return null;
+}
+
+/**
+ * Set the format through the accessibility tree.
+ *
+ * The dialog puts "Select a format" in a floating label above a control that
+ * reads "CSV". A text selector finds the label — and that label carries
+ * `pointer-events: none`, so clicking it waits for something that can never
+ * receive a click and times out at exactly the step timeout. The words are
+ * right there on screen and still unclickable, which is a miserable thing to
+ * debug from a selector box.
+ *
+ * Asking for the control *named* "format" sidesteps it: the label is what
+ * gives the control its accessible name, so the name matches while the thing
+ * returned is the control. It also cleanly avoids the template dropdown
+ * sitting right above it, whose value ("Default CSV export") contains the word
+ * CSV and would fool anything matching on displayed text.
+ */
+async function chooseFormatByRole(page: Page): Promise<string | null> {
+  for (const role of ["combobox", "button"] as const) {
+    const control = page.getByRole(role, { name: /format/i }).first();
+    if (!(await control.isVisible().catch(() => false))) continue;
+
+    const before = ((await control.innerText().catch(() => "")) || "").trim();
+    if (/^pdf$/i.test(before)) return "format was already PDF";
+
+    await control.click();
+    const option = page.getByRole("option", { name: /^\s*PDF\s*$/i }).first();
+    await option.waitFor({ state: "visible" }).catch(() => {});
+    if (!(await option.isVisible().catch(() => false))) continue;
+    await option.click();
+
+    // Verify rather than assume. A dropdown that opened and closed without
+    // taking looks identical to one that worked.
+    const after = ((await control.innerText().catch(() => "")) || "").trim();
+    if (!/pdf/i.test(after)) {
+      throw new Error(
+        `chose PDF in the format dropdown but it still reads "${after || "nothing"}".`,
+      );
+    }
+    return `format set to PDF${before ? ` (was ${before})` : ""}`;
   }
   return null;
 }
@@ -1051,6 +1106,25 @@ async function runSteps(
     const want = new Set(settings.sections);
     const changed: string[] = [];
 
+    // Before touching anything: can every section we were told to export
+    // actually be found? A chip that does not match the selector used to be
+    // skipped in silence, so a dialog where none of them matched produced
+    // "already correct" and an export of whatever Emburse happened to have
+    // selected. That is the one failure this whole step exists to prevent,
+    // and it is invisible in the result — the PDF is valid, it parses, it
+    // reconciles against its own total. Only the sections are wrong.
+    const missing: string[] = [];
+    for (const name of want) {
+      if (!(await chipLocator(page, sel, name).isVisible().catch(() => false))) missing.push(name);
+    }
+    if (missing.length) {
+      throw new Error(
+        `could not find the section chip${missing.length === 1 ? "" : "s"} for ` +
+          `${missing.join(", ")} in the export dialog, so the export would have covered the ` +
+          `wrong sections. The dialog reads: "${snippet(await dialogText(page, sel))}"`,
+      );
+    }
+
     for (let pass = 0; pass <= ALL_CHIPS.length; pass++) {
       let clicked = false;
       for (const name of ALL_CHIPS) {
@@ -1059,17 +1133,31 @@ async function runSteps(
         if ((await isChipOn(chip)) === want.has(name)) continue;
 
         await chip.click();
-        if (!(await firstVisible(page, sel.dialog, env.emburseLogin.stepTimeoutMs))) {
-      throw new Error(
-        `the export dialog did not open — nothing visible matched ${sel.dialog} at ` +
-          `${safeUrl(page.url())}.`,
-      );
-    }
+        // Clicking re-renders the dialog; wait for it before reading again.
+        await firstVisible(page, sel.dialog, env.emburseLogin.stepTimeoutMs);
         changed.push(`${want.has(name) ? "+" : "-"}${name}`);
         clicked = true;
         break;
       }
-      if (!clicked) return changed.length ? changed.join(" ") : "already correct";
+      if (clicked) continue;
+
+      // Settled. Now say what is actually on, rather than that nothing needed
+      // doing — "already correct" is a claim, and it was being made without
+      // ever having read a chip.
+      const on: string[] = [];
+      for (const name of ALL_CHIPS) {
+        const chip = chipLocator(page, sel, name);
+        if (!(await chip.isVisible().catch(() => false))) continue;
+        if (await isChipOn(chip)) on.push(name);
+      }
+      const wrong = [...want].filter((w) => !on.includes(w)).concat(on.filter((o) => !want.has(o)));
+      if (wrong.length) {
+        throw new Error(
+          `the section chips would not take: wanted ${[...want].join(", ") || "none"}, ` +
+            `ended up with ${on.join(", ") || "none"}.`,
+        );
+      }
+      return `${changed.length ? `${changed.join(" ")} — ` : ""}on: ${on.join(", ") || "none"}`;
     }
     // A chip that never takes means the state could not be read, and exporting
     // the wrong sections looks exactly like exporting the right ones.
@@ -1084,13 +1172,7 @@ async function runSteps(
     // expected, all it could say was that a click timed out. Both halves are
     // now named, both are configurable, and a failure quotes the dialog so the
     // right words can be read straight off it.
-    const inDialog = async () => {
-      const root = await firstVisible(page, sel.dialogRoot, 2000);
-      const text = root ? await root.innerText().catch(() => "") : "";
-      // The menu a dropdown opens is often portalled outside the dialog, so
-      // fall back to the whole page rather than reporting an empty string.
-      return (text || (await pageText(page))).replace(/\s+/g, " ").trim();
-    };
+    const inDialog = () => dialogText(page, sel);
 
     // A native <select> first, because it is the one shape where clicking is
     // simply wrong: its <option>s are not clickable elements, so a click on
@@ -1100,6 +1182,9 @@ async function runSteps(
     // is a native select, so its format control very likely is too.
     const viaSelect = await chooseFormatFromSelect(page, sel);
     if (viaSelect) return viaSelect;
+
+    const viaRole = await chooseFormatByRole(page);
+    if (viaRole) return viaRole;
 
     await clickVisible(page, sel.formatSelect, "the format dropdown", inDialog);
     await clickVisible(page, sel.formatOption, "PDF in the format list", inDialog);

@@ -143,6 +143,7 @@ check("…while the part that carries the meaning survives",
 // ---------------------------------------------------------------- clean run
 console.log("\n1. A clean run, with the chips starting out wrong");
 mock.reset();
+let detail = "";
 let run = await runAutoExport(settings, selectors, LOGIN, {});
 for (const s of run.steps) console.log(`     ${s.ok ? "·" : "✗"} ${s.name.padEnd(34)} ${s.detail}`);
 
@@ -174,10 +175,12 @@ check(
   "skipped sign-in rather than failing on a missing form",
   run.steps.find((s) => s.name === "sign in")?.detail === "already signed in",
 );
-check(
-  "left the chips alone the second time",
-  run.steps.find((s) => s.name === "set the sections")?.detail === "already correct",
-);
+// No longer "already correct": that was a claim the step used to make without
+// having read a chip. It now reports what is on, and the absence of any +/-
+// is what says nothing was touched.
+detail = run.steps.find((s) => s.name === "set the sections")?.detail ?? "";
+check("left the chips alone the second time", detail === "on: Needs Review, Needs Manager Review",
+  detail);
 
 // ------------------------------------------------------------ row selection
 console.log("\n3. A run with a row ticked, which must refuse");
@@ -242,7 +245,7 @@ await fetch(`${mock.url}/__outcome/device`, { method: "POST" });
 
 // First run meets the device check and is told about it in those words.
 run = await runAutoExport(settings, selectors, LOGIN, {});
-let detail = run.steps.find((s) => s.name === "sign in")?.detail ?? "";
+detail = run.steps.find((s) => s.name === "sign in")?.detail ?? "";
 check("the first run is stopped by the device check", !run.ok);
 check("and names it as a device check", /verify this device/.test(detail), detail.slice(0, 100));
 check("…and not as a code prompt, which it is not",
@@ -538,6 +541,52 @@ await fetch(`${mock.url}/__app?format=links`, { method: "POST" });
 run = await runAutoExport(settings, selectors, LOGIN, {});
 check("a dropdown made of links still works", run.ok && mock.state().format === "PDF",
   mock.state().format);
+
+// ------------------------ the section chips, when they cannot be read at all
+// The failure that matters most, because it is invisible in the result: the
+// chip selector matched nothing, every chip was skipped in silence, and the
+// step reported "already correct" while the dialog had the wrong sections.
+// The PDF that comes out of that is valid, parses, and reconciles against its
+// own printed total. Only the rows are wrong.
+console.log("\n18. Section chips that cannot be read");
+await forgetDevice();
+mock.reset();
+await fetch(`${mock.url}/__app?chips=unmatchable`, { method: "POST" });
+
+run = await runAutoExport(settings, selectors, LOGIN, {});
+detail = run.steps.find((st) => st.name === "set the sections")?.detail ?? "";
+check("the run refuses rather than exporting the wrong sections", !run.ok);
+check("it stops at the sections step",
+  run.steps.find((st) => !st.ok)?.name === "set the sections",
+  run.steps.find((st) => !st.ok)?.name ?? "nothing failed");
+check("…and never says “already correct”", !/already correct/.test(detail), detail.slice(0, 90));
+check("…and names the sections it could not find",
+  /Needs Review/.test(detail) && /Needs Manager Review/.test(detail), detail.slice(0, 120));
+check("…and no export was requested", mock.state().requestedAt === null);
+
+// And when they can be read, the detail says what is actually on — a claim
+// that can be checked at a glance, rather than "already correct".
+await forgetDevice();
+mock.reset();
+await fetch(`${mock.url}/__app?chips=normal`, { method: "POST" });
+run = await runAutoExport(settings, selectors, LOGIN, { dryRun: true });
+detail = run.steps.find((st) => st.name === "set the sections")?.detail ?? "";
+check("a readable dialog reports what ended up on",
+  /on: Needs Review, Needs Manager Review/.test(detail), detail.slice(0, 110));
+
+// ------------------------------- a format control behind an unclickable label
+console.log("\n19. A format control whose label cannot be clicked");
+await forgetDevice();
+mock.reset();
+await fetch(`${mock.url}/__app?format=mui`, { method: "POST" });
+
+run = await runAutoExport(settings, selectors, LOGIN, {});
+detail = run.steps.find((st) => st.name === "choose PDF")?.detail ?? "";
+check("the run gets through the format step", run.ok, run.steps.find((st) => !st.ok)?.name ?? "");
+check("PDF was actually chosen", mock.state().format === "PDF", mock.state().format);
+check("…and it did not settle for the template dropdown above it",
+  /was CSV/.test(detail), detail.slice(0, 90));
+await fetch(`${mock.url}/__app?format=links`, { method: "POST" });
 
 await mock.close();
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}\n`);

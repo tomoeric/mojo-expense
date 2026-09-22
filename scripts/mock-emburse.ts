@@ -61,7 +61,9 @@ type State = {
    *              be ignored. Clicking an <option> is not a thing you can do,
    *              so a runner that clicks its way through times out here.
    */
-  formatControl: "links" | "select";
+  formatControl: "links" | "select" | "mui";
+  /** When true the chips render as something the chip selector cannot match. */
+  chipsUnmatchable: boolean;
   /** Codes submitted to the verification screen, right or wrong. */
   codeAttempts: number;
   /** Whether the last accepted code arrived with "remember this device" ticked. */
@@ -94,6 +96,7 @@ const state: State = {
   showNavLabel: true,
   gridShape: "table",
   formatControl: "links",
+  chipsUnmatchable: false,
   search: "",
   format: "CSV",
   requestedAt: null,
@@ -305,8 +308,14 @@ app.get("/dialog", (_req, res) => {
   const scope = state.rowsTicked > 0 ? `${state.rowsTicked} expense(s)` : "all expense(s)";
   const chips = Object.entries(state.sections)
     .map(([name, on]) =>
-      `<a role="button" aria-pressed="${on}" href="/chip?name=${encodeURIComponent(name)}"
-          style="border:1px solid #888;padding:2px 6px;margin:2px">${on ? "✓ " : ""}${name}</a>`)
+      state.chipsUnmatchable
+        // Same words on screen, wrapped so the chip selector cannot reach them:
+        // the text lives in a nested element the filter does not look at. This
+        // is what a markup change looks like from outside, and what used to be
+        // reported as "already correct".
+        ? `<section data-chip><svg><title>${on ? "on" : "off"}</title></svg></section>`
+        : `<a role="button" aria-pressed="${on}" href="/chip?name=${encodeURIComponent(name)}"
+            style="border:1px solid #888;padding:2px 6px;margin:2px">${on ? "✓ " : ""}${name}</a>`)
     .join("");
   res.send(page(`
     <div role="dialog">
@@ -320,6 +329,22 @@ app.get("/dialog", (_req, res) => {
 });
 
 const formatControl = () => {
+  if (state.formatControl === "mui") {
+    // The shape the real dialog uses: a floating label that owns the control's
+    // accessible name and cannot be clicked, over a div that can. A runner
+    // that goes by the visible words finds the label and waits forever.
+    return `
+      <label id="tpl-label">Select a template</label>
+      <div role="combobox" aria-labelledby="tpl-label" tabindex="0">Default CSV export</div>
+      <p>Which format do you want to export in?</p>
+      <label id="fmt-label" style="pointer-events:none">Select a format</label>
+      <div role="combobox" aria-labelledby="fmt-label" tabindex="0"
+           onclick="document.getElementById('fmt-menu').style.display='block'">${state.format}</div>
+      <ul id="fmt-menu" role="listbox" style="display:none">
+        <li role="option" onclick="location.href='/format/CSV'">CSV</li>
+        <li role="option" onclick="location.href='/format/PDF'">PDF</li>
+      </ul>`;
+  }
   if (state.formatControl === "select") {
     // A template dropdown first, exactly as the real dialog has it — a runner
     // that grabs the first <select> it sees picks this one and never sets the
@@ -401,6 +426,7 @@ app.post("/__app", (req, res) => {
   if ("nav" in q) state.showNavLabel = q["nav"] !== "false";
   if ("grid" in q) state.gridShape = q["grid"] as State["gridShape"];
   if ("format" in q) state.formatControl = q["format"] as State["formatControl"];
+  if ("chips" in q) state.chipsUnmatchable = q["chips"] === "unmatchable";
   res.json({ ok: true });
 });
 app.post("/__reset", (_req, res) => {
