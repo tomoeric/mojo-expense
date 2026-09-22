@@ -66,6 +66,21 @@ export type SelectorKey =
   | "dialogExport" | "exportStarted"
   | "exportsNav" | "newestExportReady" | "newestExportDownload";
 
+/**
+ * Defaults that have since been replaced, and are no longer worth keeping.
+ *
+ * Saving settings used to write every selector to the database, defaults
+ * included — so a stored value could be an old default nobody chose, and it
+ * would then outrank a better one shipped later. A person's deliberate
+ * override should survive an upgrade; a snapshot of last week's guess should
+ * not. Anything matching one of these is dropped on read.
+ */
+export const SUPERSEDED_SELECTORS: Record<string, string[]> = {
+  loginEmail: ['input[type="email"], input[name="email"]'],
+  loginPassword: ['input[type="password"], input[name="password"]'],
+  loginSubmit: ['button[type="submit"]'],
+};
+
 export const DEFAULT_SELECTORS: Selectors = {
   // Emburse signs in through account.emburse.app, whose box is often a plain
   // text input rather than type=email.

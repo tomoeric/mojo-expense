@@ -1,6 +1,6 @@
 import { db, ensureSchema } from "../db.js";
 import { env } from "../env.js";
-import { DEFAULT_SELECTORS } from "../emburse/auto-export.js";
+import { DEFAULT_SELECTORS, SUPERSEDED_SELECTORS } from "../emburse/auto-export.js";
 
 /**
  * What the daily Emburse export is supposed to contain.
@@ -140,9 +140,10 @@ export async function readSettings(): Promise<ExportSettings> {
       attemptsPerDay: row.attempts_per_day ?? fallback.attemptsPerDay,
       graceMinutes: row.grace_minutes ?? fallback.graceMinutes,
     },
-    // Merged over the defaults, so a key added in a later build appears without
-    // anyone having to re-save, and a stored key always wins.
-    selectors: { ...DEFAULT_SELECTORS, ...(row.selectors ?? {}) },
+    // Defaults first, then real overrides. A stored value that is merely an
+    // old default is discarded, so an improvement ships to everyone who never
+    // deliberately changed that field.
+    selectors: { ...DEFAULT_SELECTORS, ...liveOverrides(row.selectors) },
     emburseUrl: row.emburse_url || env.emburseLogin.url,
     updatedAt: row.updated_at.toISOString(),
     updatedBy: row.updated_by,
@@ -160,6 +161,11 @@ export async function writeSettings(
   await ensure();
   // Store in the dialog's own order so a round-trip never reshuffles the UI.
   const ordered = ALL_SECTIONS.filter((s) => sections.includes(s));
+  // Only what actually differs from the default. Writing the whole set is what
+  // froze last week's guesses into the database in the first place.
+  // Reuses the read-side rule so the two cannot disagree, and so a save also
+  // tidies away anything superseded rather than carrying it forever.
+  const overrides = liveOverrides(selectors);
   await db().query(
     `INSERT INTO export_settings (id, sections, receipts_only, timezone, first_run,
                                   retry_hours, attempts_per_day, grace_minutes, selectors,
@@ -173,7 +179,7 @@ export async function writeSettings(
        emburse_url = EXCLUDED.emburse_url,
        updated_at = now(), updated_by = EXCLUDED.updated_by`,
     [ordered, receiptsOnly, schedule.timezone, schedule.firstRun, schedule.retryHours,
-     schedule.attemptsPerDay, schedule.graceMinutes, JSON.stringify(selectors),
+     schedule.attemptsPerDay, schedule.graceMinutes, JSON.stringify(overrides),
      cleanUrl(emburseUrl, env.emburseLogin.url), updatedBy],
   );
   return readSettings();
@@ -253,6 +259,17 @@ export function checkAgainstSettings(
   return warnings;
 }
 
+
+/** Stored selectors, minus any that are just a default we have since replaced. */
+function liveOverrides(stored: Record<string, string> | null): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(stored ?? {})) {
+    if (v === DEFAULT_SELECTORS[k as keyof typeof DEFAULT_SELECTORS]) continue;
+    if ((SUPERSEDED_SELECTORS[k] ?? []).includes(v)) continue;
+    out[k] = v;
+  }
+  return out;
+}
 
 /** Only an https URL, and only its origin — paths would break every goto. */
 export function cleanUrl(raw: unknown, fallback: string): string {
