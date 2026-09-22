@@ -52,8 +52,8 @@ const LOGIN = { userId: null, email: "bot@example.invalid", password: "not-a-rea
 // Tuned to the mock's markup. The real ones live in the app's settings.
 const selectors: Selectors = {
   ...DEFAULT_SELECTORS,
-  loginEmail: 'input[name="email"]',
-  loginPassword: 'input[name="password"]',
+  loginEmail: 'input[name="username"]',
+  loginPassword: 'input[type="password"]',
   loginSubmit: 'button[type="submit"]',
   loggedIn: 'a:has-text("Transactions")',
   adminTab: 'a:has-text("ADMIN")',
@@ -138,6 +138,20 @@ run = await runAutoExport(settings, selectors, LOGIN, { dryRun: true });
 check("run succeeded", run.ok);
 check("never requested an export", mock.state().requestedAt === null);
 check("still set the format", mock.state().format === "PDF", mock.state().format);
+
+// ---------------------------------------- a wrong selector must not look fine
+console.log("\n5. A wrong loginEmail selector must fail, not report success");
+// Last, because resetting drops the session the "already signed in" case needs.
+mock.reset();
+run = await runAutoExport(settings, { ...selectors, loginEmail: "input#not-a-real-field" }, LOGIN, {});
+check("run failed", !run.ok);
+const signIn = run.steps.find((s) => s.name === "sign in");
+check("it failed at sign in rather than skipping it", signIn?.ok === false, signIn?.detail ?? "no step");
+check(
+  "and said the form was missing rather than claiming a session",
+  /no sign-in form/.test(signIn?.detail ?? ""),
+  signIn?.detail ?? "",
+);
 
 await mock.close();
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}\n`);

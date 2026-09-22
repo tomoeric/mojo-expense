@@ -1,7 +1,7 @@
 import type { Browser, Page } from "playwright";
 import { env } from "../env.js";
 import {
-  explainLaunch, gridUrl, loadPlaywright, makeStepper, systemChromium,
+  explainLaunch, gridUrl, loadPlaywright, makeStepper, signIn, systemChromium,
   type Login, type StepResult,
 } from "./auto-export.js";
 
@@ -189,21 +189,21 @@ async function drive(
     return `loaded ${page.url()}`;
   }))) return false;
 
-  if (!(await step("sign in", async () => {
-    const form = page.locator(sel.loginEmail!).first();
-    if (!(await form.isVisible().catch(() => false))) return "already signed in";
-    await form.fill(login.email);
-    await page.locator(sel.loginPassword!).first().fill(login.password);
-    await page.locator(sel.loginSubmit!).first().click();
-    await page.locator(sel.loggedIn!).first().waitFor({ state: "visible" });
-    return `signed in as ${login.email}`;
-  }))) return false;
+  // The same sign-in the export uses, not a second copy of it: the subtleties
+  // (two-step identity page, absence not meaning success) are worth having in
+  // exactly one place.
+  if (!(await step("sign in", async () => signIn(page, sel as never, login)))) return false;
 
   if (!(await step("switch to ADMIN", async () => {
     const tab = page.locator(sel.adminTab!).first();
-    if (!(await tab.isVisible().catch(() => false))) return "no ADMIN tab visible";
-    await tab.click();
-    return "clicked ADMIN";
+    if (await tab.isVisible().catch(() => false)) {
+      await tab.click();
+      return "clicked ADMIN";
+    }
+    if (await page.locator(sel.loggedIn!).first().isVisible().catch(() => false)) {
+      return "no ADMIN tab on this page, but the app is loaded";
+    }
+    throw new Error(`no ADMIN tab and the app is not loaded — at ${page.url()}`);
   }))) return false;
 
   let row: ReturnType<Page["locator"]> | null = null;

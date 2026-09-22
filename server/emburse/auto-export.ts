@@ -67,9 +67,11 @@ export type SelectorKey =
   | "exportsNav" | "newestExportReady" | "newestExportDownload";
 
 export const DEFAULT_SELECTORS: Selectors = {
-  loginEmail: 'input[type="email"], input[name="email"]',
-  loginPassword: 'input[type="password"], input[name="password"]',
-  loginSubmit: 'button[type="submit"]',
+  // Emburse signs in through account.emburse.app, whose box is often a plain
+  // text input rather than type=email.
+  loginEmail: 'input[type="email"], input[name="username"], input[name="email"], input[placeholder*="@"]',
+  loginPassword: 'input[type="password"]',
+  loginSubmit: 'button[type="submit"], button:has-text("Continue"), button:has-text("Sign in")',
   loggedIn: 'text=Transactions',
 
   adminTab: 'text=ADMIN',
@@ -339,6 +341,55 @@ export function explainLaunch(err: unknown): string {
   return raw.split("\n")[0]!;
 }
 
+/**
+ * Sign in, and be certain about whether it worked.
+ *
+ * Two things this gets wrong if written the obvious way.
+ *
+ * First, "the form is not on screen" is not the same as "already signed in".
+ * It is equally what a wrong selector looks like — and reporting that as
+ * success meant a failed login sailed through three green steps before timing
+ * out on one that could not pretend. Absence is now only accepted when the app
+ * itself is visibly loaded.
+ *
+ * Second, Emburse hands sign-in to account.emburse.app, which asks for the
+ * email, then the password on a second screen. Filling both at once fills one
+ * box and submits nothing.
+ */
+export async function signIn(page: Page, sel: Selectors, login: Login): Promise<string> {
+  const loggedIn = page.locator(sel.loggedIn).first();
+  const emailBox = page.locator(sel.loginEmail).first();
+
+  if (!(await emailBox.isVisible().catch(() => false))) {
+    if (await loggedIn.isVisible().catch(() => false)) return "already signed in";
+    throw new Error(
+      `no sign-in form and the app is not loaded — at ${page.url()}. ` +
+        "Check the loginEmail selector against that page.",
+    );
+  }
+
+  await emailBox.fill(login.email);
+  await page.locator(sel.loginSubmit).first().click();
+
+  // The password may share the page or arrive on the next one.
+  const passwordBox = page.locator(sel.loginPassword).first();
+  await passwordBox.waitFor({ state: "visible" }).catch(() => {});
+  if (await passwordBox.isVisible().catch(() => false)) {
+    await passwordBox.fill(login.password);
+    await page.locator(sel.loginSubmit).first().click();
+  }
+
+  await loggedIn.waitFor({ state: "visible" }).catch(() => {});
+  if (!(await loggedIn.isVisible().catch(() => false))) {
+    throw new Error(
+      `signed in as ${login.email} but the app did not appear — at ${page.url()}. ` +
+        "Either the password was rejected, a second factor is being asked for, or the " +
+        "loggedIn selector does not match.",
+    );
+  }
+  return `signed in as ${login.email}`;
+}
+
 const signInBroke = (steps: StepResult[]) => steps.some((s) => s.name === "sign in" && !s.ok);
 
 async function runSteps(
@@ -359,25 +410,23 @@ async function runSteps(
     return `loaded ${page.url()}`;
   }))) return false;
 
-  if (!(await step("sign in", async () => {
-    // A live session means no form; that is success, not a missing element.
-    const form = page.locator(sel.loginEmail).first();
-    if (!(await form.isVisible().catch(() => false))) return "already signed in";
-
-    await form.fill(login.email);
-    await page.locator(sel.loginPassword).first().fill(login.password);
-    await page.locator(sel.loginSubmit).first().click();
-    await page.locator(sel.loggedIn).first().waitFor({ state: "visible" });
-    return `signed in as ${login.email}`;
-  }))) return false;
+  if (!(await step("sign in", async () => signIn(page, sel, login)))) return false;
 
   if (!(await step("switch to ADMIN", async () => {
     // Emburse reopens on whichever of ADMIN / PERSONAL was last used, and
     // PERSONAL holds only this account's own expenses.
     const tab = page.locator(sel.adminTab).first();
-    if (!(await tab.isVisible().catch(() => false))) return "no ADMIN tab visible — already company-wide?";
-    await tab.click();
-    return "clicked ADMIN";
+    if (await tab.isVisible().catch(() => false)) {
+      await tab.click();
+      return "clicked ADMIN";
+    }
+    // Absence is only acceptable if this is the app at all. Treating a missing
+    // element as "fine" is how a failed sign-in got reported as three green
+    // steps and then a thirty-second timeout on the one that could not skip.
+    if (await page.locator(sel.loggedIn).first().isVisible().catch(() => false)) {
+      return "no ADMIN tab on this page, but the app is loaded";
+    }
+    throw new Error(`no ADMIN tab and the app is not loaded — at ${page.url()}`);
   }))) return false;
 
   if (!(await step("open Transactions", async () => {

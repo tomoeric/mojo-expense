@@ -28,6 +28,7 @@ type State = {
   receiptsFilter: boolean;
   sections: Record<string, boolean>;
   rowsTicked: number;
+  pendingUser: string;
   search: string;
   format: string;
   requestedAt: number | null;
@@ -48,6 +49,7 @@ const state: State = {
     "Pending Submission": false, Denied: true, Completed: false,
   },
   rowsTicked: 0,
+  pendingUser: "",
   search: "",
   format: "CSV",
   requestedAt: null,
@@ -80,12 +82,9 @@ const page = (body: string) => `<!doctype html><html><body style="font-family:sa
 
 app.get("/", (_req, res) => {
   if (!state.signedIn) {
-    res.send(page(`
-      <form method="post" action="/login">
-        <input type="email" name="email" placeholder="Email">
-        <input type="password" name="password" placeholder="Password">
-        <button type="submit">Sign in</button>
-      </form>`));
+    // Email first, password on the next screen — the shape account.emburse.app
+    // actually uses, and the one that defeats filling both at once.
+    res.redirect("/identity");
     return;
   }
   res.send(page(`
@@ -93,9 +92,32 @@ app.get("/", (_req, res) => {
     <a href="/transactions">Transactions</a>`));
 });
 
+app.get("/identity", (_req, res) => {
+  res.send(page(`
+    <h1>Sign in</h1>
+    <form method="post" action="/identity">
+      <input type="text" name="username" placeholder="username@example.com">
+      <button type="submit">CONTINUE</button>
+    </form>`));
+});
+
+app.post("/identity", (req, res) => {
+  state.pendingUser = String((req.body as { username?: string }).username ?? "");
+  if (!state.pendingUser) {
+    res.status(401).send(page("<p>Enter an email</p>"));
+    return;
+  }
+  res.send(page(`
+    <h1>Sign in</h1>
+    <form method="post" action="/login">
+      <input type="password" name="password" placeholder="Password">
+      <button type="submit">Sign in</button>
+    </form>`));
+});
+
 app.post("/login", (req, res) => {
-  const { email, password } = req.body as { email?: string; password?: string };
-  if (!email || !password) {
+  const { password } = req.body as { password?: string };
+  if (!state.pendingUser || !password) {
     res.status(401).send(page("<p>Bad credentials</p>"));
     return;
   }
@@ -215,7 +237,7 @@ app.post("/__reset", (_req, res) => {
 const reset = () =>
   Object.assign(state, {
     signedIn: false, admin: false, receiptsFilter: false, rowsTicked: 0,
-    search: "", format: "CSV", requestedAt: null,
+    pendingUser: "", search: "", format: "CSV", requestedAt: null,
     sections: {
       "Needs Review": true, "Needs Manager Review": false,
       "Pending Submission": false, Denied: true, Completed: false,

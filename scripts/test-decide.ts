@@ -93,8 +93,8 @@ process.env.EMBURSE_STEP_TIMEOUT_MS ||= "12000";
 const { runDecision } = await import("../server/emburse/decide.js");
 
 const SEL = {
-  loginEmail: 'input[name="email"]',
-  loginPassword: 'input[name="password"]',
+  loginEmail: 'input[name="username"]',
+  loginPassword: 'input[type="password"]',
   loginSubmit: 'button[type="submit"]',
   loggedIn: 'a:has-text("Transactions")',
   adminTab: 'a:has-text("ADMIN")',
