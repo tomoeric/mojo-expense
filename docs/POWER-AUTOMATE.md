@@ -40,9 +40,25 @@ connector, no 11 MB binary passing through Power Automate, no separate
 credential to rotate. If the machine is offline the file queues locally and
 uploads when it comes back.
 
-**Name the file with a datestamp** — `emburse-YYYY-MM-DD.pdf`. A constant
-filename still works (the app treats a changed eTag as a new file) but you lose
-the ability to see at a glance whether a day was missed.
+#### One file, overwritten daily
+
+Emburse downloads as `expenses.pdf` every time, and the folder keeps a single
+`expenses.pdf` that each run replaces. The app handles that: `import_sources`
+remembers a SharePoint item by **id + eTag**, and an in-place overwrite keeps the
+id while changing the eTag, so the replacement reads as new and is imported.
+Nothing needs a datestamp for the pipeline to work.
+
+Two consequences to be aware of:
+
+- **Windows will not overwrite for you.** A browser saving `expenses.pdf` into a
+  folder that already has one writes `expenses (1).pdf` instead. Left alone, the
+  folder silently fills with numbered copies. Have the flow **delete the existing
+  file first**, or move the download over it with overwrite enabled.
+- **SharePoint is no longer your archive.** Only the latest export exists as a
+  file. That is fine — the database keeps every row, and reimporting is a no-op
+  anyway — but if you want the PDFs themselves kept, turn on **version history**
+  on the library, because the daily overwrite is the only thing standing between
+  you and a single snapshot.
 
 ## Build it
 
@@ -321,7 +337,9 @@ Wait for web page content  the newest row showing status Complete
   └ retry: every 30s, up to 20 times, then fail loudly
 Click  Download on the newest row
 Wait for file  in the browser's download folder
-Rename file  emburse-%CurrentDateTime as yyyy-MM-dd%.pdf
+Delete file  the existing expenses.pdf in the synced folder, if present
+             └ otherwise Windows saves "expenses (1).pdf" and the folder fills
+               up with numbered copies nobody asked for
 Move file  → the OneDrive-synced Emburse Transactions folder
 Close web browser
 ```
@@ -357,10 +375,12 @@ so. This is what makes a frequent schedule safe.
           └ only after the "export started" confirmation, never before
 ```
 
-**Collect flow** — the marker is the file itself:
+**Collect flow** — the file is always called `expenses.pdf`, so its name cannot
+say whether today's has arrived. Use its timestamp:
 
 ```
-  first   If folder contains  emburse-%Today%.pdf   → Stop flow
+  first   Get file info ......... the synced expenses.pdf
+          If  its Last Modified is today  → Stop flow
 ```
 
 Note which write happens when. The **attempt count** goes up at the start, so a
