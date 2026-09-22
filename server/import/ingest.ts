@@ -303,7 +303,7 @@ async function storeReceipts(
 
     // JPEG, both from the cropped path and the whole-page fallback — the name
     // matters because the column next to it declares the content type.
-    const image = renderPage(doc, r.page - 1);
+    const image = renderReceiptPage(doc, r.page - 1);
     const hash = sha256(image);
 
     // Keyed by the hash of the image, so the same receipt arriving in every
@@ -369,43 +369,123 @@ const str = (v: unknown): string | null => (v === null || v === undefined || v =
  * ~82 KB against ~58 KB for a markedly better picture. Pages with no image
  * block (a typed note rather than a photo) fall back to the whole page.
  */
-const RECEIPT_SCALE = 2.2;
-const RECEIPT_QUALITY = 85;
+/**
+ * Scale for rendering a receipt page when there is no photo to extract.
+ *
+ * Only used for the fallback — a receipt that is vector text rather than a
+ * picture of paper. Those have no native resolution to preserve, so the
+ * number is simply how legible we want them.
+ */
+const RECEIPT_SCALE = 3;
+
+/**
+ * Longest edge we keep, in pixels.
+ *
+ * Set above what a phone actually produces — 4032 is the long edge of a
+ * 12MP sensor — so in practice nothing is resampled at all and the stored
+ * image is the photo. The cap exists only to bound the absurd case, a flatbed
+ * scan at 600dpi, which would otherwise dominate the storage that the
+ * approved-receipt cleanup is there to contain.
+ */
+const RECEIPT_MAX_EDGE = 4200;
+
+/**
+ * JPEG quality. Higher than it was, and deliberately.
+ *
+ * These images are read by people squinting at faded thermal paper, and now
+ * also by a model pulling line items off them. Compression artefacts land
+ * hardest on exactly the thing both are trying to read: small, low-contrast
+ * digits.
+ */
+const RECEIPT_QUALITY = 92;
 
 /** Bumped whenever rendering changes, so a re-import replaces older images. */
-export const RENDER_VERSION = 2;
+export const RENDER_VERSION = 3;
 
 /** One receipt page as a JPEG: cropped to the image on it, or the whole page. */
-function renderPage(doc: mupdf.Document, index: number): Buffer {
+export function renderReceiptPage(doc: mupdf.Document, index: number): Buffer {
   const page = doc.loadPage(index);
-  const box = imageBox(page);
 
-  if (box) {
-    const [x, y, w, h] = box;
-    const s = RECEIPT_SCALE;
-    const pixmap = new mupdf.Pixmap(
-      mupdf.ColorSpace.DeviceRGB,
-      [x * s, y * s, (x + w) * s, (y + h) * s],
-      false,
-    );
-    pixmap.clear(255);
-    const device = new mupdf.DrawDevice(mupdf.Matrix.scale(s, s), pixmap);
-    page.run(device, mupdf.Matrix.identity);
-    device.close();
-    const jpeg = Buffer.from(pixmap.asJPEG(RECEIPT_QUALITY, false));
-    pixmap.destroy();
-    return jpeg;
+  // The photo itself, at the resolution the camera took it.
+  //
+  // What this replaced: rendering the whole *page* at a fixed scale and
+  // cropping to where the image sat. That throws away everything the photo
+  // had beyond the page's own geometry — measured on a 2400x3200 receipt
+  // placed on a 576x768pt page, the old path produced 1268x1690 and lost more
+  // than half the linear detail. On faded thermal paper that is the
+  // difference between a total you can read and one you cannot, and it is
+  // also what a model has to work with when pulling line items off it.
+  const photo = largestImage(page);
+  if (photo) {
+    try {
+      return encode(photo.toPixmap());
+    } catch {
+      // An exotic colour space or a mask — fall through and rasterise, which
+      // always works even when it is not the best available.
+    }
   }
 
-  const pixmap = page.toPixmap(
-    mupdf.Matrix.scale(RECEIPT_SCALE, RECEIPT_SCALE),
-    mupdf.ColorSpace.DeviceRGB,
-    false,
-    true,
+  // No embedded photo: a receipt that is vector text, with no native
+  // resolution to preserve. Rasterising is the only option.
+  return encode(
+    page.toPixmap(
+      mupdf.Matrix.scale(RECEIPT_SCALE, RECEIPT_SCALE),
+      mupdf.ColorSpace.DeviceRGB,
+      false,
+      true,
+    ),
   );
-  const jpeg = Buffer.from(pixmap.asJPEG(RECEIPT_QUALITY, false));
-  pixmap.destroy();
-  return jpeg;
+}
+
+/**
+ * The biggest image on the page, as an image rather than as a rectangle.
+ *
+ * `walk` hands over the image object itself, which is what makes native
+ * resolution reachable — reading the structured text as JSON gives only the
+ * bounding box, and a box can be rendered but not extracted.
+ */
+function largestImage(page: mupdf.Page): mupdf.Image | null {
+  let best: { image: mupdf.Image; area: number } | null = null;
+  try {
+    page.toStructuredText("preserve-images").walk({
+      onImageBlock(bbox, _ctm, image) {
+        // Small decorations — logos, icons in a header — are not the receipt.
+        const [x0, y0, x1, y1] = bbox as unknown as [number, number, number, number];
+        const area = Math.abs((x1 - x0) * (y1 - y0));
+        if (Math.abs(x1 - x0) < 40 || Math.abs(y1 - y0) < 40) return;
+        if (!best || area > best.area) best = { image, area };
+      },
+    });
+  } catch {
+    return null;
+  }
+  return best ? (best as { image: mupdf.Image }).image : null;
+}
+
+/** A pixmap as JPEG, in RGB, no larger than the cap. */
+function encode(pixmap: mupdf.Pixmap): Buffer {
+  let pm = pixmap;
+  try {
+    // Greyscale and CMYK both happen; JPEG wants neither surprise.
+    if (pm.getNumberOfComponents() !== 3) {
+      pm = pm.convertToColorSpace(mupdf.ColorSpace.DeviceRGB);
+    }
+    const w = pm.getWidth();
+    const h = pm.getHeight();
+    if (Math.max(w, h) > RECEIPT_MAX_EDGE) {
+      const f = RECEIPT_MAX_EDGE / Math.max(w, h);
+      pm = pm.warp(
+        // The four corners, unmoved: a straight resample rather than a
+        // perspective correction. `warp` is the only resize mupdf exposes.
+        [[0, 0], [w, 0], [w, h], [0, h]] as never,
+        Math.round(w * f), Math.round(h * f),
+      );
+    }
+    return Buffer.from(pm.asJPEG(RECEIPT_QUALITY, false));
+  } finally {
+    try { pm.destroy(); } catch { /* already gone */ }
+    if (pm !== pixmap) { try { pixmap.destroy(); } catch { /* already gone */ } }
+  }
 }
 
 /**

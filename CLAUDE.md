@@ -64,6 +64,15 @@ the blocks.
   image can never be fetched again. Links go first, images only when nothing
   references them — they are shared by content hash.
 
+## Receipts
+
+- **A receipt is a photo embedded in the export PDF.** Keep it at the camera's
+  own resolution: walk the page's structured text, take the largest image
+  block, and `toPixmap()` it. Rasterising the page instead caps the result at
+  the page geometry — measured, that lost 72% of the pixels.
+- `RENDER_VERSION` must be bumped whenever rendering changes, or re-imports
+  will not replace the older images.
+
 ## Shape
 
 - Standalone app. Not part of ninja-live-status: own repo, own Replit app, own

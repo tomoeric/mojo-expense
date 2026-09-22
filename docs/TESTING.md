@@ -18,6 +18,7 @@ Runs anywhere, including here. No credentials, no Emburse, no browser.
 pnpm exec tsx scripts/verify-schedule.ts       # 26 boundary cases
 pnpm exec tsx scripts/test-browser-lock.ts     # one browser at a time
 pnpm exec tsx scripts/test-stale-import.ts     # refusing an out-of-date export
+pnpm exec tsx scripts/test-receipt-quality.ts <export.pdf>   # receipts kept at full resolution
 pnpm exec tsx scripts/test-receipt-cleanup.ts  # releasing approved receipts (needs DATABASE_URL)
 pnpm exec tsx scripts/test-decisions.ts        # the decision queue (needs DATABASE_URL + a browser)
 pnpm exec tsx scripts/test-settings-check.ts   # the export-scope warning
