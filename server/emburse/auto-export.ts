@@ -221,7 +221,7 @@ export async function runAutoExport(
     steps.push({
       name: "start browser",
       ok: false,
-      detail: err instanceof Error ? err.message : String(err),
+      detail: explainLaunch(err),
       ms: 0,
     });
     let screenshot: string | null = null;
@@ -234,6 +234,37 @@ export async function runAutoExport(
   } finally {
     await browser?.close().catch(() => {});
   }
+}
+
+/**
+ * Turn a browser-launch failure into something actionable.
+ *
+ * Playwright's own message is several lines of box-drawing characters that
+ * render as noise in a web page, and the command it suggests is not the one to
+ * run here. A missing browser is by far the most likely first failure on a new
+ * host, so it is worth answering precisely rather than passing the error along.
+ */
+function explainLaunch(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+
+  if (/Executable doesn't exist|playwright install/i.test(raw)) {
+    return (
+      "No browser is installed for Playwright on this host. Run " +
+      "`pnpm exec playwright install --only-shell chromium` in the shell, or redeploy — " +
+      "`pnpm install` now does it automatically. If the download works but launching still " +
+      "fails, the host is missing shared libraries and PLAYWRIGHT_CHROMIUM_PATH should point " +
+      "at a browser it already has."
+    );
+  }
+  if (/libnss3|libatk|error while loading shared libraries|cannot open shared object/i.test(raw)) {
+    return (
+      "A browser is installed but cannot start — the host is missing shared libraries it needs. " +
+      "Set PLAYWRIGHT_CHROMIUM_PATH to a Chromium the host already provides. Details: " +
+      raw.split("\n")[0]
+    );
+  }
+  // Anything else: the first line only. The rest is a stack nobody reads here.
+  return raw.split("\n")[0]!;
 }
 
 const signInBroke = (steps: StepResult[]) => steps.some((s) => s.name === "sign in" && !s.ok);

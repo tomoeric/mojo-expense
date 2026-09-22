@@ -3,13 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "MOJO Expense — reviewer console over the Emburse expense-report API",
+  "description": "MOJO Expense \u2014 reviewer console over the Emburse expense-report API",
   "scripts": {
     "dev": "NODE_ENV=development tsx watch server/index.ts",
     "build": "pnpm run typecheck && vite build && pnpm run build:server",
     "build:server": "esbuild server/index.ts --bundle --platform=node --target=node20 --format=esm --packages=external --outfile=dist/server.js",
     "start": "NODE_ENV=production node dist/server.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "postinstall": "playwright install --only-shell chromium"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.122.0",

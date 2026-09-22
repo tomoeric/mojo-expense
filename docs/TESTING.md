@@ -38,6 +38,29 @@ without waiting a day.
 
 ---
 
+## Layer 1a — is there a browser on the host?
+
+The first thing to fail on a new deployment, and the one that makes every other
+question moot. `pnpm install` now installs a Chromium as a postinstall step, and
+`PLAYWRIGHT_BROWSERS_PATH=0` puts it inside `node_modules` so it is rebuilt with
+the deployment rather than left in a home-directory cache that a deploy does not
+carry.
+
+If a run still stops at **start browser**:
+
+```bash
+pnpm exec playwright install --only-shell chromium
+```
+
+If the download succeeds but launching fails with a missing `libnss3` or similar,
+the host has no shared libraries for Playwright's own build. Point
+`PLAYWRIGHT_CHROMIUM_PATH` at a Chromium the host already provides:
+
+```bash
+which chromium chromium-browser google-chrome 2>/dev/null
+ls -d /nix/store/*chromium*/bin/chromium 2>/dev/null | head -1
+```
+
 ## Layer 2 — can the app reach SharePoint?
 
 The single check on whether `Sites.Read.All` actually took.

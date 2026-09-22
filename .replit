@@ -1,4 +1,9 @@
 modules = ["nodejs-24"]
+
+[env]
+# Keep Playwright's browser inside node_modules so it is rebuilt with the
+# deployment; a home-directory cache does not reliably travel with one.
+PLAYWRIGHT_BROWSERS_PATH = "0"
 run = "pnpm run dev"
 
 [deployment]
