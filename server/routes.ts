@@ -271,6 +271,9 @@ async function findLine(lineId: string, window: { startDate: string; endDate: st
     const r = rows[0];
     if (!r) return null;
     return {
+      // Only used to fetch a receipt, which does not need the diff.
+      changes: [],
+      section: null,
       id: r.dedupe_key, reportId: "", date: r.expense_date ? r.expense_date.toISOString().slice(0, 10) : null,
       category: r.category || "Uncategorised", merchant: r.merchant || "—",
       amount: Number(r.amount_cents) / 100, currency: "USD",

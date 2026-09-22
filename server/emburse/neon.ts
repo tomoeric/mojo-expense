@@ -30,7 +30,9 @@ type Row = {
   in_inbox: boolean;
   first_seen_at: Date;
   left_inbox_at: Date | null;
+  section: string | null;
   receipt_count: string;
+  changes: { field: string; before_value: string | null; after_value: string | null }[] | null;
 };
 
 export class NeonProvider implements EmburseProvider {
@@ -41,8 +43,17 @@ export class NeonProvider implements EmburseProvider {
     const { rows } = await db().query<Row>(
       `SELECT e.dedupe_key, e.employee, e.expense_date, e.merchant, e.amount_cents,
               e.category, e.department, e.location, e.note, e.method,
-              e.in_inbox, e.first_seen_at, e.left_inbox_at,
-              (SELECT count(*) FROM expense_receipts r WHERE r.dedupe_key = e.dedupe_key) AS receipt_count
+              e.in_inbox, e.first_seen_at, e.left_inbox_at, e.section,
+              (SELECT count(*) FROM expense_receipts r WHERE r.dedupe_key = e.dedupe_key) AS receipt_count,
+              -- Only the newest import's changes. Older ones stay in the table
+              -- for history, but "what changed" on screen means "since the last
+              -- sync", and carrying every edit ever would drown that.
+              (SELECT json_agg(json_build_object(
+                        'field', c.field, 'before_value', c.before_value, 'after_value', c.after_value)
+                        ORDER BY c.id)
+                 FROM expense_changes c
+                WHERE c.dedupe_key = e.dedupe_key
+                  AND c.import_id = (SELECT max(id) FROM expense_imports)) AS changes
          FROM expenses e
         WHERE e.expense_date BETWEEN $1::date AND $2::date
         ORDER BY e.expense_date DESC, e.employee, e.merchant`,
@@ -86,6 +97,10 @@ function toReport(key: string, group: Row[]): ExpenseReport {
     receiptUrl: "",
     glCode: "",
     note: [r.note, r.location ? `Site: ${r.location}` : ""].filter(Boolean).join(" · "),
+    section: r.section,
+    changes: (r.changes ?? []).map((c) => ({
+      field: c.field, before: c.before_value, after: c.after_value,
+    })),
   }));
 
   const total = lines.reduce((a, l) => a + l.amount, 0);

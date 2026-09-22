@@ -98,6 +98,33 @@ CREATE TABLE IF NOT EXISTS receipt_blobs (
 -- Which renderer produced the image, so a re-import can upgrade older ones.
 ALTER TABLE receipt_blobs ADD COLUMN IF NOT EXISTS render_version integer NOT NULL DEFAULT 1;
 
+-- Which Emburse section a row came from.
+--
+-- The export PDF has no per-row status column, so this can only be known when
+-- an import covers exactly one section — then every row in it is that section.
+-- With the default all-in-one export it stays null, and the UI simply does not
+-- offer the split rather than showing empty buckets.
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS section text;
+CREATE INDEX IF NOT EXISTS expenses_section_idx ON expenses (section) WHERE section IS NOT NULL;
+
+-- What each import changed, field by field.
+--
+-- The diff already exists in ingest.ts in order to count updates; persisting it
+-- is what lets a reviewer see *what* moved rather than only that something did.
+-- Emburse edits notes and categories after the fact, and a silently-changed
+-- business purpose is exactly the thing a reviewer would want to look at again.
+CREATE TABLE IF NOT EXISTS expense_changes (
+  id           bigserial PRIMARY KEY,
+  dedupe_key   text        NOT NULL REFERENCES expenses (dedupe_key) ON DELETE CASCADE,
+  import_id    bigint      NOT NULL,
+  changed_at   timestamptz NOT NULL DEFAULT now(),
+  field        text        NOT NULL,
+  before_value text,
+  after_value  text
+);
+CREATE INDEX IF NOT EXISTS expense_changes_key_idx ON expense_changes (dedupe_key, id DESC);
+CREATE INDEX IF NOT EXISTS expense_changes_import_idx ON expense_changes (import_id);
+
 CREATE TABLE IF NOT EXISTS expense_receipts (
   dedupe_key  text NOT NULL REFERENCES expenses (dedupe_key) ON DELETE CASCADE,
   sha256      text NOT NULL REFERENCES receipt_blobs (sha256),

@@ -110,6 +110,9 @@ export class DemoProvider implements EmburseProvider {
         const merchants = MERCHANTS[category] ?? ["Misc Vendor"];
         const amount = round2(lo + rand() * (hi - lo));
         lines.push({
+          // Demo data has no import history, so nothing ever "changed".
+          changes: [],
+          section: null,
           id: `${id}-L${j + 1}`,
           reportId: id,
           date: iso(new Date(submitted.getTime() - Math.floor(rand() * 12) * 86_400_000)),

@@ -19,6 +19,10 @@ const fallbackId = (prefix: string): string => `${prefix}-${(seq += 1)}`;
  */
 export function toLine(row: Row): ExpenseLine {
   return {
+    // Change tracking is a property of the import pipeline; a live API payload
+    // carries no before-state to diff against.
+    changes: [],
+    section: null,
     id: asString(pick(row, "ExpenseID", "ExpenseId", "LineID", "id", "uuid"), fallbackId("line")),
     reportId: asString(
       pick(row, "ExpenseReportID", "ExpenseReportId", "ReportID", "reportId", "report_id", "expense_report_id"),

@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Upload, Loader2, CheckCircle2, AlertTriangle, Database, FolderSync, Clock } from "lucide-react";
 import { money, timeOfDay } from "@/lib/format";
 import { StatChip, StatChipRow, Empty } from "@/components/ui";
+import { useSync, useSyncStatus, describeSync } from "@/lib/sync";
 
 type ImportResult = {
   filename: string;
@@ -106,33 +107,22 @@ export function ImportPage() {
 
   const stats = history.data?.stats;
 
-  async function sync() {
-    setBusy(true);
+  // The sync itself lives in a mutation on the query client, so leaving this
+  // page mid-run does not cancel it and does not lose the result — see
+  // lib/sync.ts. Everything here is just how it is shown.
+  const sync = useSync();
+  const syncing = useSyncStatus();
+
+  function runSync() {
     setError("");
     setResult(null);
-    try {
-      const res = await fetch("/api/import/sync", { method: "POST" });
-      const body = (await res.json()) as {
-        checked: number; skipped: number;
-        imported: { name: string; inserted: number; updated: number; receipts: number }[];
-        failed: { name: string; error: string }[];
-        error?: string;
-      };
-      if (!res.ok) throw new Error(body.error ?? `Sync failed (${res.status})`);
-      setSyncNote(
-        body.imported.length === 0
-          ? `Checked ${body.checked} files in SharePoint — nothing new.`
-          : `Imported ${body.imported.length}: ` +
-            body.imported.map((i) => `${i.name} (+${i.inserted} new, ${i.receipts} receipts)`).join(", "),
-      );
-      if (body.failed.length) setError(body.failed.map((f) => `${f.name}: ${f.error}`).join(" · "));
-      void qc.invalidateQueries({ queryKey: ["reports"] });
-      void history.refetch();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
+    sync.mutate(undefined, {
+      onSuccess: (r) => {
+        setSyncNote(describeSync(r));
+        if (r.failed.length) setError(r.failed.map((f) => `${f.name}: ${f.error}`).join(" · "));
+      },
+      onError: (err) => setError((err as Error).message),
+    });
   }
 
   const schedule = history.data?.schedule;
@@ -200,7 +190,7 @@ export function ImportPage() {
           <button
             type="button"
             onClick={() => input.current?.click()}
-            disabled={busy}
+            disabled={busy || syncing}
             className="inline-flex items-center gap-2 rounded-lg bg-black px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-zinc-800 disabled:opacity-60"
           >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
@@ -209,13 +199,13 @@ export function ImportPage() {
           {history.data?.sharepoint && (
             <button
               type="button"
-              onClick={() => void sync()}
-              disabled={busy}
+              onClick={() => runSync()}
+              disabled={busy || syncing}
               title="Pull any new exports from the watched SharePoint folder"
               className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold transition-colors hover:bg-muted disabled:opacity-60"
             >
-              <FolderSync className="h-4 w-4" />
-              Sync SharePoint
+              {syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderSync className="h-4 w-4" />}
+              {syncing ? "Syncing…" : "Sync SharePoint"}
             </button>
           )}
         </div>

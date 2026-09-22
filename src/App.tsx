@@ -13,6 +13,7 @@ import { AnalyticsPage } from "@/pages/analytics";
 import { ImportPage } from "@/pages/import";
 import { ExportSettingsPage } from "@/pages/export-settings";
 import { timeOfDay } from "@/lib/format";
+import { useSyncStatus } from "@/lib/sync";
 
 const RAIL = [
   { key: "queue", label: "Review Queue", Icon: ListChecks, description: "Expense reports waiting on a decision, oldest first." },
@@ -39,49 +40,68 @@ type RailKey = (typeof RAIL)[number]["key"] | (typeof MENU_PAGES)[number]["key"]
 /** Pages that stand alone — no report window, no live strip. */
 const isStandalone = (k: RailKey) => k === "import" || k === "settings";
 
-const WINDOWS = [
-  { value: "30", label: "30 days" },
-  { value: "90", label: "90 days" },
-  { value: "365", label: "12 months" },
-] as const;
+/**
+ * How far back to load, with no selector to change it.
+ *
+ * The window was a hangover from a live API, where narrowing the range saved a
+ * paged fetch. Reading imported rows out of Postgres it saves nothing, and it
+ * cost something real: a reviewer could be looking at a filtered subset without
+ * noticing, and wonder where an expense went. Two years is past the useful life
+ * of an expense claim and inside the server's own cap.
+ */
+const WINDOW_DAYS = 730;
 
 /** Hash routing keeps sub-pages deep-linkable without pulling in a router. */
-function useHashRoute(): [RailKey, (k: RailKey) => void] {
-  const read = (): RailKey => {
-    const raw = window.location.hash.replace(/^#\/?/, "");
+function useHashRoute(): {
+  route: RailKey;
+  view: string;
+  setRoute: (k: RailKey) => void;
+  setView: (v: string) => void;
+} {
+  // `#/queue/flagged` — the second segment is the section's own sub-view, so a
+  // chosen filter survives a reload and can be linked to.
+  const read = () => {
+    const [first = "", ...rest] = window.location.hash.replace(/^#\/?/, "").split("/");
     const known = [...RAIL.map((r) => r.key), ...MENU_PAGES.map((m) => m.key)] as string[];
-    return known.includes(raw) ? (raw as RailKey) : "queue";
+    return {
+      route: (known.includes(first) ? first : "queue") as RailKey,
+      view: decodeURIComponent(rest.join("/")) || "all",
+    };
   };
-  const [route, setRoute] = useState<RailKey>(read);
+  const [state, setState] = useState(read);
 
   useEffect(() => {
-    const onChange = () => setRoute(read());
+    const onChange = () => setState(read());
     window.addEventListener("hashchange", onChange);
     return () => window.removeEventListener("hashchange", onChange);
   }, []);
 
-  return [
-    route,
-    (k: RailKey) => {
-      window.location.hash = `/${k}`;
-      setRoute(k);
-    },
-  ];
+  const go = (route: RailKey, view: string) => {
+    window.location.hash = view && view !== "all" ? `/${route}/${encodeURIComponent(view)}` : `/${route}`;
+    setState({ route, view: view || "all" });
+  };
+
+  return {
+    route: state.route,
+    view: state.view,
+    setRoute: (k) => go(k, "all"),
+    setView: (v) => go(state.route, v),
+  };
 }
 
 export function App() {
-  const [route, setRoute] = useHashRoute();
-  const [days, setDays] = useState<(typeof WINDOWS)[number]["value"]>("90");
+  const { route, view, setRoute, setView } = useHashRoute();
   const [open, setOpen] = useState<ExpenseReport | null>(null);
 
   const queryClient = useQueryClient();
   const auth = useAuth();
   const config = useConfig();
+  const syncing = useSyncStatus();
 
   // Only fetch reports once we know the viewer is allowed to see them —
   // otherwise every anonymous page load fires a request that 401s.
   const signedIn = Boolean(auth.data?.user) || auth.data?.authConfigured === false;
-  const reports = useReports(Number(days), signedIn);
+  const reports = useReports(WINDOW_DAYS, signedIn);
 
   useEffect(() => {
     // The drawer belongs to the list behind it; leaving it open over another
@@ -111,7 +131,7 @@ export function App() {
   return (
     <div className="min-h-screen">
       <header className="border-b border-border bg-black text-white">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-3">
+        <div className="mx-auto flex max-w-[1800px] items-center justify-between gap-4 px-5 py-3">
           <div className="flex items-baseline gap-2.5">
             <span className="text-base font-extrabold tracking-tight">MOJO Expense</span>
             <span className="text-xs text-white/60">Emburse reviewer console</span>
@@ -124,12 +144,21 @@ export function App() {
                   ? "demo mode"
                   : (config.data?.source ?? "")}
             </span>
+            {/* A sync outlives the page that started it, so say so everywhere. */}
+            {syncing && (
+              <span className="hidden items-center gap-1.5 text-xs text-white/70 sm:inline-flex">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Syncing SharePoint…
+              </span>
+            )}
             {auth.data?.user && <UserMenu user={auth.data.user} isAdmin={auth.data.isAdmin} />}
           </div>
         </div>
       </header>
 
-      <div className="mx-auto flex max-w-7xl gap-6 px-5 py-6">
+      {/* Wider than a reading column on purpose: the queue is an eleven-column
+          table, and squeezing it into prose width is what made columns collapse. */}
+      <div className="mx-auto flex max-w-[1800px] gap-6 px-5 py-6">
         <nav className="hidden w-56 shrink-0 md:block">
           <ul className="space-y-1">
             {RAIL.map(({ key, label, Icon }) => {
@@ -159,15 +188,7 @@ export function App() {
             title={active.label}
             description={active.description}
             warnings={data?.warnings ?? []}
-            right={
-              isStandalone(route) ? null : (
-                <SegmentedControl
-                  value={days}
-                  onChange={setDays}
-                  options={WINDOWS.map((w) => ({ value: w.value, label: w.label }))}
-                />
-              )
-            }
+            right={null}
           />
 
           {data?.demo && <NotConnected config={config.data} />}
@@ -175,7 +196,7 @@ export function App() {
           {!isStandalone(route) && <LiveStrip
             label={
               data
-                ? `${data.demo ? "Demo data" : "Live"} — ${data.reports.length} reports · updated ${timeOfDay(data.fetchedAt)}`
+                ? `${data.demo ? "Demo data" : "Live"} — ${data.reports.reduce((a, r) => a + r.lines.length, 0).toLocaleString()} expenses · updated ${timeOfDay(data.fetchedAt)}`
                 : "Loading…"
             }
             onRefresh={() => queryClient.invalidateQueries({ queryKey: ["reports"] })}
@@ -205,7 +226,9 @@ export function App() {
             </Empty>
           )}
 
-          {data && route === "queue" && <QueuePage data={data} config={config.data} onOpen={setOpen} />}
+          {data && route === "queue" && (
+            <QueuePage data={data} config={config.data} onOpen={setOpen} view={view} onView={setView} />
+          )}
           {data && route === "reports" && <ReportsPage data={data} config={config.data} onOpen={setOpen} />}
           {data && route === "analytics" && <AnalyticsPage data={data} />}
           {route === "import" && <ImportPage />}
@@ -217,7 +240,7 @@ export function App() {
         <ReportDrawer
           report={openReport}
           onClose={() => setOpen(null)}
-          days={Number(days)}
+          days={WINDOW_DAYS}
           auditConfigured={config.data?.auditConfigured ?? false}
         />
       )}

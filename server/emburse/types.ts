@@ -53,6 +53,20 @@ export type ExpenseLine = {
   receiptUrl: string;
   glCode: string;
   note: string;
+  /** Emburse section, when an import made it knowable. */
+  section: string | null;
+  /**
+   * What the most recent import changed on this expense. Empty for everything
+   * that arrived unchanged, which is almost every row on almost every day —
+   * that is what makes the few that did change worth a second look.
+   */
+  changes: FieldChange[];
+};
+
+export type FieldChange = {
+  field: string;
+  before: string | null;
+  after: string | null;
 };
 
 export type ExpenseReport = {

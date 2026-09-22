@@ -108,6 +108,13 @@ export async function ingestExport(
        totalCents, parsed.statedTotalCents, reconciled, parsed.header?.sections ?? null]);
     const importId = Number(imp.rows[0]!.id);
 
+    // Only unambiguous when the export covered exactly one *named* section.
+    // Emburse writes "Inbox" for the unfiltered default view, which is not a
+    // section at all — tagging rows with it would add a queue bucket that just
+    // duplicates "All waiting".
+    const only = parsed.header?.sections.length === 1 ? parsed.header.sections[0]!.trim() : null;
+    const section = only && only.toLowerCase() !== "inbox" ? only : null;
+
     const keys = new Map<string, ParsedExpense>();
     for (const e of parsed.expenses) keys.set(dedupeKey(e), e);
     if (keys.size !== parsed.expenses.length) {
@@ -128,21 +135,39 @@ export async function ingestExport(
     for (const row of prior.rows) existing.set(row.dedupe_key, row);
 
     let inserted = 0, updated = 0, unchanged = 0;
+    const changes: { key: string; field: string; before: string | null; after: string | null }[] = [];
+
     for (const [key, e] of keys) {
       const was = existing.get(key);
       if (!was) inserted++;
-      else if (
-        was.note !== e.note || was.method !== e.method ||
-        was.receipt_label !== e.receiptLabel || was.source_page !== e.sourcePage ||
-        was.in_inbox === false
-      ) updated++;
-      else unchanged++;
+      else {
+        // Compare the fields an Emburse edit can actually move. The dedupe key
+        // covers employee, date, merchant, amount, category, location and
+        // department, so a change to any of those makes a different row rather
+        // than an edit to this one — there is nothing to diff there.
+        const moved = FIELDS.filter(({ was: read, now: take }) => read(was) !== take(e));
+        // Source page shifts whenever the export's row order changes, which is
+        // most days and means nothing to a reviewer; it is worth detecting as
+        // an update but not worth reporting as one.
+        const worth = moved.filter((f) => f.report);
+
+        const returned = was.in_inbox === false;
+        if (moved.length > 0 || returned) updated++;
+        else unchanged++;
+
+        for (const f of worth) {
+          changes.push({ key, field: f.label, before: str(f.was(was)), after: str(f.now(e)) });
+        }
+        if (returned) {
+          changes.push({ key, field: "Inbox", before: "left the inbox", after: "back in the inbox" });
+        }
+      }
 
       await client.query(
         `INSERT INTO expenses (dedupe_key, employee, expense_date, merchant, amount_cents,
                                category, department, location, note, method, receipt_label,
-                               in_inbox, first_import_id, last_import_id, source_page)
-         VALUES ($1,$2,NULLIF($3,'')::date,$4,$5,$6,$7,$8,$9,$10,$11,true,$12,$12,$13)
+                               in_inbox, first_import_id, last_import_id, source_page, section)
+         VALUES ($1,$2,NULLIF($3,'')::date,$4,$5,$6,$7,$8,$9,$10,$11,true,$12,$12,$13,$14)
          ON CONFLICT (dedupe_key) DO UPDATE SET
            note           = EXCLUDED.note,
            method         = EXCLUDED.method,
@@ -151,9 +176,23 @@ export async function ingestExport(
            in_inbox       = true,
            left_inbox_at  = NULL,
            last_seen_at   = now(),
-           last_import_id = EXCLUDED.last_import_id`,
+           last_import_id = EXCLUDED.last_import_id,
+           -- Keep a known section rather than letting an all-sections export
+           -- blank out what a per-section one established.
+           section        = COALESCE(EXCLUDED.section, expenses.section)`,
         [key, e.employee, e.date, e.merchant, e.amountCents, e.category, e.department,
-         e.location, e.note, e.method, e.receiptLabel, importId, e.sourcePage]);
+         e.location, e.note, e.method, e.receiptLabel, importId, e.sourcePage, section]);
+    }
+
+    if (changes.length > 0) {
+      // One statement rather than one per change: an export where a category
+      // rename touched every row would otherwise be hundreds of round trips.
+      await client.query(
+        `INSERT INTO expense_changes (dedupe_key, import_id, field, before_value, after_value)
+         SELECT * FROM unnest($1::text[], $2::bigint[], $3::text[], $4::text[], $5::text[])`,
+        [changes.map((c) => c.key), changes.map(() => importId), changes.map((c) => c.field),
+         changes.map((c) => c.before), changes.map((c) => c.after)],
+      );
     }
 
     // Anything that was in the inbox and is not in this file has moved on.
@@ -246,6 +285,26 @@ async function storeReceipts(
   }
   return { added, skipped };
 }
+
+/**
+ * The fields an import can change on an existing row.
+ *
+ * `report: false` means the change counts as an update but is not shown to a
+ * reviewer, because it carries no meaning for them.
+ */
+const FIELDS: {
+  label: string;
+  report: boolean;
+  was: (r: Record<string, unknown>) => unknown;
+  now: (e: ParsedExpense) => unknown;
+}[] = [
+  { label: "Note", report: true, was: (r) => r.note, now: (e) => e.note },
+  { label: "Payment method", report: true, was: (r) => r.method, now: (e) => e.method },
+  { label: "Receipt", report: true, was: (r) => r.receipt_label, now: (e) => e.receiptLabel },
+  { label: "Page", report: false, was: (r) => r.source_page, now: (e) => e.sourcePage },
+];
+
+const str = (v: unknown): string | null => (v === null || v === undefined || v === "" ? null : String(v));
 
 /**
  * Render the receipt from one page.
