@@ -7,7 +7,8 @@ import { syncFromSharePoint, syncOnPageLoad } from "./sync.js";
 import { isSharePointConfigured } from "./sharepoint.js";
 import { describeSchedule } from "./schedule.js";
 import { ALL_SECTIONS, cleanSchedule, readSettings, writeSettings } from "./settings.js";
-import { DEFAULT_SELECTORS, isAutoExportConfigured, runAutoExport } from "../emburse/auto-export.js";
+import { DEFAULT_SELECTORS, isAutoExportConfigured } from "../emburse/auto-export.js";
+import { attemptExport, nextDue, recentRuns, runScreenshot } from "../emburse/export-scheduler.js";
 
 /**
  * Upload and history for the daily Emburse export.
@@ -194,15 +195,15 @@ importRouter.post("/export-run", requireAuth, requireAdmin, async (req: Request,
 
   const dryRun = req.query.dryRun === "1";
   try {
-    const settings = await readSettings();
-    const run = await runAutoExport(settings, settings.selectors as never, { dryRun });
-
-    let imported = null;
-    if (run.ok && run.pdf) {
-      imported = await ingestExport(run.pdf, `emburse-${new Date().toISOString().slice(0, 10)}.pdf`,
-        req.user?.email ?? "auto-export");
-    }
-    res.json({ ...run, pdf: undefined, pdfBytes: run.pdf?.length ?? 0, imported });
+    // Through the scheduler, so a manual run is recorded like any other and
+    // shows up in the same history. Tagged separately so it cannot eat one of
+    // the day's scheduled attempts.
+    const { id, run, importId } = await attemptExport(dryRun ? "dry-run" : "manual",
+      req.user?.email ?? "manual", { dryRun });
+    res.json({
+      id, ok: run.ok, steps: run.steps, itemLine: run.itemLine,
+      screenshot: run.screenshot, pdfBytes: run.pdf?.length ?? 0, importId,
+    });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Export run failed." });
   }
@@ -223,3 +224,32 @@ function cleanSelectors(raw: unknown, current: Record<string, string>): Record<s
   }
   return out;
 }
+
+
+/** The last few export attempts, and why one is or is not due now. */
+importRouter.get("/export-runs", requireAuth, async (_req: Request, res: Response) => {
+  if (!guard(res)) return;
+  try {
+    const { schedule } = await readSettings();
+    res.json({
+      configured: isAutoExportConfigured(),
+      due: await nextDue(schedule),
+      runs: await recentRuns(20),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "Could not read export runs." });
+  }
+});
+
+/** The page a failed run died on. Served as an image so it can be looked at. */
+importRouter.get("/export-runs/:id/screenshot", requireAuth, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  const shot = await runScreenshot(Number(req.params.id));
+  if (!shot) {
+    res.status(404).json({ error: "No screenshot for that run." });
+    return;
+  }
+  res.setHeader("content-type", "image/png");
+  res.setHeader("cache-control", "private, max-age=3600");
+  res.send(shot);
+});

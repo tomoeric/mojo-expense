@@ -11,14 +11,16 @@
  * Those are the parts that would otherwise only be exercised in production.
  *
  *   pnpm exec tsx scripts/mock-emburse.ts [port]
+ *
+ * `startMock` is exported so the test harness can run one in-process rather
+ * than making the reader juggle two terminals.
  */
 
 import express from "express";
+import type { Server } from "node:http";
 import fs from "node:fs";
 
-const port = Number(process.argv[2] ?? 5299);
-const app = express();
-app.use(express.urlencoded({ extended: false }));
+export type MockHandle = { url: string; state: () => State; reset: () => void; close: () => Promise<void> };
 
 type State = {
   signedIn: boolean;
@@ -29,6 +31,10 @@ type State = {
   format: string;
   requestedAt: number | null;
 };
+
+export function startMock(port: number, pdfPath: string): Promise<MockHandle> {
+const app = express();
+app.use(express.urlencoded({ extended: false }));
 
 const state: State = {
   signedIn: false,
@@ -161,9 +167,9 @@ app.get("/exports", (_req, res) => {
 });
 
 app.get("/download", (_req, res) => {
-  const pdf = process.env.MOCK_PDF ?? "";
+  const pdf = pdfPath;
   if (!pdf || !fs.existsSync(pdf)) {
-    res.status(500).send("MOCK_PDF must point at a real export PDF");
+    res.status(500).send("the mock needs a real export PDF to serve");
     return;
   }
   res.setHeader("content-type", "application/pdf");
@@ -174,6 +180,11 @@ app.get("/download", (_req, res) => {
 /** Test hooks, so a harness can assert what the run actually did. */
 app.get("/__state", (_req, res) => res.json(state));
 app.post("/__reset", (_req, res) => {
+  reset();
+  res.json({ ok: true });
+});
+
+const reset = () =>
   Object.assign(state, {
     signedIn: false, admin: false, receiptsFilter: false, rowsTicked: 0,
     format: "CSV", requestedAt: null,
@@ -182,7 +193,21 @@ app.post("/__reset", (_req, res) => {
       "Pending Submission": false, Denied: true, Completed: false,
     },
   });
-  res.json({ ok: true });
-});
 
-app.listen(port, () => console.log(`mock Emburse on http://127.0.0.1:${port}`));
+return new Promise((resolve) => {
+  const server: Server = app.listen(port, () =>
+    resolve({
+      url: `http://127.0.0.1:${port}`,
+      state: () => ({ ...state }),
+      reset: () => void reset(),
+      close: () => new Promise<void>((done) => server.close(() => done())),
+    }),
+  );
+});
+}
+
+// Run standalone when invoked directly, so the mock can also be poked by hand.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const h = await startMock(Number(process.argv[2] ?? 5299), process.env.MOCK_PDF ?? "");
+  console.log(`mock Emburse on ${h.url}`);
+}

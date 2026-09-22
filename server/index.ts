@@ -8,6 +8,7 @@ import { api } from "./routes.js";
 import { allowListSize, authMiddleware, authRouter, isAuthConfigured } from "./auth/index.js";
 import { importRouter } from "./import/routes.js";
 import { startSyncTimer } from "./import/sync.js";
+import { startExportScheduler } from "./emburse/export-scheduler.js";
 import { ensureSchema, isDbConfigured } from "./db.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -69,7 +70,10 @@ app.listen(env.port, "0.0.0.0", () => {
     // Create the tables on boot; the app still serves if this fails so the
     // error is visible in the UI rather than only in a crash loop.
     ensureSchema()
-      .then(() => startSyncTimer())
+      .then(() => {
+        startSyncTimer();
+        startExportScheduler();
+      })
       .catch((err: unknown) => console.error("schema bootstrap failed:", err));
   } else {
     console.log("No database configured (NEON_DATABASE_URL / EXTERNAL_DATABASE_URL / DATABASE_URL) — imports are unavailable.");
