@@ -276,13 +276,17 @@ async function storeReceipts(
       continue;
     }
 
-    const png = renderPage(doc, r.page - 1);
-    const hash = sha256(png);
+    // JPEG, both from the cropped path and the whole-page fallback — the name
+    // matters because the column next to it declares the content type.
+    const image = renderPage(doc, r.page - 1);
+    const hash = sha256(image);
 
+    // Keyed by the hash of the image, so the same receipt arriving in every
+    // daily export is stored once and costs an index lookup thereafter.
     const ins = await client.query(
       `INSERT INTO receipt_blobs (sha256, content_type, byte_size, bytes, render_version)
        VALUES ($1,'image/jpeg',$2,$3,$4) ON CONFLICT (sha256) DO NOTHING`,
-      [hash, png.length, png, RENDER_VERSION]);
+      [hash, image.length, image, RENDER_VERSION]);
     if (ins.rowCount === 0) skipped++;
 
     for (const key of matches) {
@@ -346,6 +350,7 @@ const RECEIPT_QUALITY = 85;
 /** Bumped whenever rendering changes, so a re-import replaces older images. */
 export const RENDER_VERSION = 2;
 
+/** One receipt page as a JPEG: cropped to the image on it, or the whole page. */
 function renderPage(doc: mupdf.Document, index: number): Buffer {
   const page = doc.loadPage(index);
   const box = imageBox(page);
