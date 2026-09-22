@@ -164,7 +164,7 @@ export function envLogin(): Login | null {
  * out to `which`, and a host where that is unavailable should fall back to
  * Playwright's own browser rather than failing the run before it starts.
  */
-async function systemChromium(): Promise<string | null> {
+export async function systemChromium(): Promise<string | null> {
   if (env.emburseLogin.chromiumPath) return env.emburseLogin.chromiumPath;
   try {
     const { findSystemChromium } = await import("../../scripts/find-chromium.mjs");
@@ -175,7 +175,7 @@ async function systemChromium(): Promise<string | null> {
 }
 
 /** Playwright is optional; the app must boot on a host that has no browser. */
-async function loadPlaywright() {
+export async function loadPlaywright() {
   try {
     return (await import("playwright")).chromium;
   } catch {
@@ -184,6 +184,33 @@ async function loadPlaywright() {
         "build is available on the host, then restart.",
     );
   }
+}
+
+/**
+ * A step recorder.
+ *
+ * Shared with the approve/deny runner because the two want identical
+ * behaviour: record what happened either way, keep only the first line of an
+ * error, and hand back whether to carry on. Two copies of that would drift,
+ * and the difference would only show up in a failure report nobody could
+ * compare.
+ */
+export function makeStepper(steps: StepResult[]) {
+  return async (name: string, fn: () => Promise<string>): Promise<boolean> => {
+    const started = Date.now();
+    try {
+      steps.push({ name, ok: true, detail: await fn(), ms: Date.now() - started });
+      return true;
+    } catch (err) {
+      steps.push({
+        name,
+        ok: false,
+        detail: err instanceof Error ? err.message.split("\n")[0]! : String(err),
+        ms: Date.now() - started,
+      });
+      return false;
+    }
+  };
 }
 
 export async function runAutoExport(
@@ -263,7 +290,7 @@ export async function runAutoExport(
  * run here. A missing browser is by far the most likely first failure on a new
  * host, so it is worth answering precisely rather than passing the error along.
  */
-function explainLaunch(err: unknown): string {
+export function explainLaunch(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
 
   if (/Executable doesn't exist|playwright install/i.test(raw)) {
