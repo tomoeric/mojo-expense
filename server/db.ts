@@ -89,6 +89,8 @@ CREATE TABLE IF NOT EXISTS receipt_blobs (
   bytes        bytea   NOT NULL,
   created_at   timestamptz NOT NULL DEFAULT now()
 );
+-- Which renderer produced the image, so a re-import can upgrade older ones.
+ALTER TABLE receipt_blobs ADD COLUMN IF NOT EXISTS render_version integer NOT NULL DEFAULT 1;
 
 CREATE TABLE IF NOT EXISTS expense_receipts (
   dedupe_key  text NOT NULL REFERENCES expenses (dedupe_key) ON DELETE CASCADE,

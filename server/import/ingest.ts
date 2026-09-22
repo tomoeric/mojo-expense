@@ -211,9 +211,9 @@ async function storeReceipts(
     const hash = sha256(png);
 
     const ins = await client.query(
-      `INSERT INTO receipt_blobs (sha256, content_type, byte_size, bytes)
-       VALUES ($1,'image/jpeg',$2,$3) ON CONFLICT (sha256) DO NOTHING`,
-      [hash, png.length, png]);
+      `INSERT INTO receipt_blobs (sha256, content_type, byte_size, bytes, render_version)
+       VALUES ($1,'image/jpeg',$2,$3,$4) ON CONFLICT (sha256) DO NOTHING`,
+      [hash, png.length, png, RENDER_VERSION]);
     if (ins.rowCount === 0) skipped++;
 
     for (const key of matches) {
@@ -222,6 +222,13 @@ async function storeReceipts(
          VALUES ($1,$2,$3) ON CONFLICT (dedupe_key, sha256) DO NOTHING`,
         [key, hash, r.page]);
       if (link.rowCount) added++;
+      // Replace, don't accumulate: an expense that already had an image from
+      // an older renderer would otherwise end up showing two receipts.
+      await client.query(
+        `DELETE FROM expense_receipts er USING receipt_blobs b
+          WHERE er.sha256 = b.sha256 AND er.dedupe_key = $1 AND b.render_version < $2`,
+        [key, RENDER_VERSION],
+      );
     }
   }
 
@@ -232,23 +239,69 @@ async function storeReceipts(
 }
 
 /**
- * Render a receipt page to JPEG.
+ * Render the receipt from one page.
  *
- * Encoding matters more than it looks: the same pages as PNG at 2x came to
- * 375 KB each — 80 MB for one import, against 8.7 MB of original JPEGs in the
- * PDF. JPEG at 1.5x lands at ~58 KB, close to source size, while 918x1188 px
- * stays sharp enough to read a receipt total (which the amount check needs).
+ * Rendering the whole page wastes most of the pixels on white margin and the
+ * caption, and worse, it UNDER-samples: the embedded receipts are natively
+ * around 733x1200 while a full page at 1.5x left the receipt itself at roughly
+ * 528x866 — a third of the detail thrown away before anyone tried to read it.
+ *
+ * So the image block's own bounding box is rendered instead, at a scale that
+ * meets or exceeds native resolution. That is sharper AND crops the margin;
+ * ~82 KB against ~58 KB for a markedly better picture. Pages with no image
+ * block (a typed note rather than a photo) fall back to the whole page.
  */
-const RECEIPT_SCALE = 1.5;
-const RECEIPT_QUALITY = 80;
+const RECEIPT_SCALE = 2.2;
+const RECEIPT_QUALITY = 85;
+
+/** Bumped whenever rendering changes, so a re-import replaces older images. */
+export const RENDER_VERSION = 2;
 
 function renderPage(doc: mupdf.Document, index: number): Buffer {
-  const pixmap = doc
-    .loadPage(index)
-    .toPixmap(mupdf.Matrix.scale(RECEIPT_SCALE, RECEIPT_SCALE), mupdf.ColorSpace.DeviceRGB, false, true);
+  const page = doc.loadPage(index);
+  const box = imageBox(page);
+
+  if (box) {
+    const [x, y, w, h] = box;
+    const s = RECEIPT_SCALE;
+    const pixmap = new mupdf.Pixmap(
+      mupdf.ColorSpace.DeviceRGB,
+      [x * s, y * s, (x + w) * s, (y + h) * s],
+      false,
+    );
+    pixmap.clear(255);
+    const device = new mupdf.DrawDevice(mupdf.Matrix.scale(s, s), pixmap);
+    page.run(device, mupdf.Matrix.identity);
+    device.close();
+    const jpeg = Buffer.from(pixmap.asJPEG(RECEIPT_QUALITY, false));
+    pixmap.destroy();
+    return jpeg;
+  }
+
+  const pixmap = page.toPixmap(
+    mupdf.Matrix.scale(RECEIPT_SCALE, RECEIPT_SCALE),
+    mupdf.ColorSpace.DeviceRGB,
+    false,
+    true,
+  );
   const jpeg = Buffer.from(pixmap.asJPEG(RECEIPT_QUALITY, false));
   pixmap.destroy();
   return jpeg;
+}
+
+/** The largest image on the page, as [x, y, w, h] in points. */
+function imageBox(page: mupdf.Page): [number, number, number, number] | null {
+  try {
+    const st = JSON.parse(page.toStructuredText("preserve-images").asJSON()) as {
+      blocks: { type: string; bbox: { x: number; y: number; w: number; h: number } }[];
+    };
+    const images = st.blocks.filter((b) => b.type === "image" && b.bbox.w > 40 && b.bbox.h > 40);
+    if (images.length === 0) return null;
+    const biggest = images.reduce((a, b) => (a.bbox.w * a.bbox.h >= b.bbox.w * b.bbox.h ? a : b));
+    return [biggest.bbox.x, biggest.bbox.y, biggest.bbox.w, biggest.bbox.h];
+  } catch {
+    return null;
+  }
 }
 
 const caption = (employee: string, cents: number, date: string) =>
