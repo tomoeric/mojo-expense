@@ -165,7 +165,33 @@ for (const [kind, expect] of [
   const detail = run.steps.find((s) => s.name === "sign in")?.detail ?? "";
   check(`a ${kind} sign-in is named as such`, expect.test(detail), detail.slice(0, 120));
   check(`…and quotes what the page said`, /It says: "/.test(detail));
+  // The device-check wording once swallowed this case: "Verify it is you" heads
+  // both screens, so a pattern loose enough to catch one caught the other and
+  // sent people to fix a device they had never been asked about.
+  check(`…and is not mistaken for a device check`, !/verify this device/.test(detail), detail.slice(0, 120));
 }
+await fetch(`${mock.url}/__outcome/ok`, { method: "POST" });
+
+// ------------------------------------------- the profile must carry a cookie
+console.log("\n7. A trusted device must stay trusted between runs");
+mock.reset();
+await fetch(`${mock.url}/__outcome/device`, { method: "POST" });
+
+// First run meets the device check and is told about it in those words.
+run = await runAutoExport(settings, selectors, LOGIN, {});
+let detail = run.steps.find((s) => s.name === "sign in")?.detail ?? "";
+check("the first run is stopped by the device check", !run.ok);
+check("and names it as a device check", /verify this device/.test(detail), detail.slice(0, 100));
+check("…and not as a code prompt, which it is not", !/second factor/.test(detail), detail.slice(0, 100));
+
+// Second run: the cookie the first run was given should now be presented.
+run = await runAutoExport(settings, selectors, LOGIN, {});
+detail = run.steps.find((s) => s.name === "sign in")?.detail ?? "";
+check(
+  "the second run gets past it, because the profile kept the cookie",
+  run.ok,
+  detail.slice(0, 120),
+);
 await fetch(`${mock.url}/__outcome/ok`, { method: "POST" });
 
 await mock.close();

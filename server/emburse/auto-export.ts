@@ -1,4 +1,5 @@
-import type { Browser, Page } from "playwright";
+import fs from "node:fs/promises";
+import type { BrowserContext, Page } from "playwright";
 import { env } from "../env.js";
 import type { ExportSettings } from "../import/settings.js";
 
@@ -210,6 +211,43 @@ export async function systemChromium(): Promise<string | null> {
   }
 }
 
+/**
+ * A browser whose cookies outlive the run.
+ *
+ * Every run used to launch a fresh browser, so Emburse saw an unknown device
+ * each time — which makes its "remember this device for 30 days" offer
+ * worthless, because there is nothing for it to remember. A persistent profile
+ * on disk means a device trusted once stays trusted, and the verification
+ * becomes a rare event rather than a permanent wall.
+ *
+ * It also keeps the session, so most runs skip sign-in entirely.
+ */
+export async function openBrowser(): Promise<{ context: BrowserContext; close: () => Promise<void> }> {
+  const chromium = await loadPlaywright();
+  const executablePath = (await systemChromium()) ?? undefined;
+  const args = ["--no-sandbox", "--disable-dev-shm-usage"];
+
+  const dir = env.emburseLogin.profileDir;
+  if (dir) {
+    await fs.mkdir(dir, { recursive: true }).catch(() => {});
+    const context = await chromium.launchPersistentContext(dir, {
+      ...(executablePath ? { executablePath } : {}),
+      args,
+      viewport: { width: 1600, height: 1000 },
+      acceptDownloads: true,
+    });
+    return { context, close: () => context.close() };
+  }
+
+  // No profile directory configured: behave as before rather than refusing.
+  const browser = await chromium.launch({ ...(executablePath ? { executablePath } : {}), args });
+  const context = await browser.newContext({
+    acceptDownloads: true,
+    viewport: { width: 1600, height: 1000 },
+  });
+  return { context, close: () => browser.close() };
+}
+
 /** Playwright is optional; the app must boot on a host that has no browser. */
 export async function loadPlaywright() {
   try {
@@ -256,7 +294,7 @@ export async function runAutoExport(
   opts: { dryRun?: boolean } = {},
 ): Promise<ExportRun> {
   const steps: StepResult[] = [];
-  let browser: Browser | null = null;
+  let close: (() => Promise<void>) | null = null;
   let page: Page | null = null;
   let pdf: Buffer | null = null;
   let itemLine: string | null = null;
@@ -280,19 +318,9 @@ export async function runAutoExport(
   };
 
   try {
-    const chromium = await loadPlaywright();
-    // Prefer a browser the host provides. Playwright's own build is linked
-    // against libraries a Nix host does not carry, so there it installs
-    // cleanly and then will not start — and finding the host's own is not
-    // something anyone should have to do by hand, because a Nix store path
-    // contains a content hash and changes whenever the package does.
-    const executablePath = (await systemChromium()) ?? undefined;
-    browser = await chromium.launch({
-      ...(executablePath ? { executablePath } : {}),
-      args: ["--no-sandbox", "--disable-dev-shm-usage"],
-    });
-    const context = await browser.newContext({ acceptDownloads: true, viewport: { width: 1600, height: 1000 } });
-    page = await context.newPage();
+    const opened = await openBrowser();
+    close = opened.close;
+    page = await opened.context.newPage();
     page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
 
     const ok = await runSteps(page, settings, selectors, login, step, opts, (v) => (itemLine = v), (b) => (pdf = b));
@@ -314,7 +342,7 @@ export async function runAutoExport(
     }
     return { ok: false, signInFailed: signInBroke(steps), steps, screenshot, pdf, itemLine };
   } finally {
-    await browser?.close().catch(() => {});
+    await close?.().catch(() => {});
   }
 }
 
@@ -428,10 +456,31 @@ async function whyStuck(page: Page): Promise<string> {
   if (/wrong email or password|incorrect password|invalid (email|password|credentials)|try again/i.test(text)) {
     return `Emburse rejected the credentials. It says: "${snippet(text)}"`;
   }
-  if (/verification code|authentication code|two-factor|2fa|one-time|authenticator|check your (phone|email)/i.test(text)) {
+  // Two different walls, and the order matters. A page asking for a code is a
+  // second factor; a page offering to remember the device is a device check.
+  // They overlap in wording — "Verify it is you" heads both — so the code
+  // request is tested first, or every MFA prompt gets reported as a device
+  // check and sends people to fix the wrong thing.
+  const remembers = /remember (this|my) device|trust (this|my) device|verify this device/i.test(text);
+  if (
+    /verification code|authentication code|two-factor|2fa|one-time|authenticator|security code|passcode|check your (phone|email)|enter the code/i.test(
+      text,
+    )
+  ) {
     return (
-      "Emburse is asking for a second factor, which no automation can answer. " +
-      `Use an account with MFA switched off. It says: "${snippet(text)}"`
+      "Emburse is asking for a second factor, which no automation can answer on its own — " +
+      "the code has to come from a person. " +
+      (remembers
+        ? "It does offer to remember this device, so passing it once on this browser profile should hold. "
+        : "") +
+      `It says: "${snippet(text)}"`
+    );
+  }
+  if (remembers) {
+    return (
+      "Emburse is asking to verify this device, which no automation can answer on its own. " +
+      "It offers to remember the device, so this only has to be passed once per browser profile — " +
+      `but the confirmation has to come from a person. It says: "${snippet(text)}"`
     );
   }
   if (/microsoft|sign in with|single sign|saml|okta/i.test(text)) {

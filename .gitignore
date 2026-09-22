@@ -3,3 +3,6 @@ dist/
 .env
 .env.local
 *.log
+
+# Browser profile for the Emburse automation — holds live session cookies.
+.emburse-profile/

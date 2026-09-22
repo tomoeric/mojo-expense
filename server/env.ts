@@ -217,6 +217,15 @@ export const env = {
      * insists on the exact build it shipped with and fails outright otherwise.
      */
     chromiumPath: str("PLAYWRIGHT_CHROMIUM_PATH"),
+    /**
+     * Where the browser keeps its cookies between runs.
+     *
+     * Without it every run is a new device to Emburse, so a device trusted
+     * once is a stranger again the next morning and the verification never
+     * stops being asked. On a Reserved VM the filesystem persists, so this is
+     * simply somewhere to put it.
+     */
+    profileDir: str("EMBURSE_PROFILE_DIR", ".emburse-profile"),
   },
 
   audit: {

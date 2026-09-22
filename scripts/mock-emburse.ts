@@ -29,7 +29,7 @@ type State = {
   sections: Record<string, boolean>;
   rowsTicked: number;
   pendingUser: string;
-  loginOutcome: "ok" | "rejected" | "mfa";
+  loginOutcome: "ok" | "rejected" | "mfa" | "device";
   search: string;
   format: string;
   requestedAt: number | null;
@@ -139,6 +139,14 @@ app.post("/login", (req, res) => {
   }
   if (state.loginOutcome === "mfa") {
     res.send(page("<h1>Verify it is you</h1><p>Enter the verification code we sent to your phone.</p>"));
+    return;
+  }
+  // Device verification, unless this browser has been here before. The cookie
+  // is the whole point: without a persistent profile it never comes back, and
+  // "remember this device" can never be satisfied.
+  if (state.loginOutcome === "device" && !/trusted=1/.test(req.headers.cookie ?? "")) {
+    res.setHeader("set-cookie", "trusted=1; Path=/; Max-Age=2592000");
+    res.send(page("<h1>Verify</h1><p>Remember this device for 30 days. Back to login</p>"));
     return;
   }
   state.signedIn = true;

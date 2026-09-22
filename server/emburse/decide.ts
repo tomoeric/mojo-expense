@@ -1,7 +1,7 @@
-import type { Browser, Page } from "playwright";
+import type { Page } from "playwright";
 import { env } from "../env.js";
 import {
-  explainLaunch, gridUrl, loadPlaywright, makeStepper, signIn, systemChromium,
+  explainLaunch, gridUrl, makeStepper, openBrowser, signIn,
   type Login, type StepResult,
 } from "./auto-export.js";
 
@@ -144,21 +144,18 @@ export async function runDecision(
 ): Promise<DecisionRun> {
   const steps: StepResult[] = [];
   const step = makeStepper(steps);
-  let browser: Browser | null = null;
+  let close: (() => Promise<void>) | null = null;
   let page: Page | null = null;
   let matchedRow: string | null = null;
 
   const sel = { ...DECISION_SELECTORS, ...selectors } as Record<string, string>;
 
   try {
-    const chromium = await loadPlaywright();
-    const executablePath = (await systemChromium()) ?? undefined;
-    browser = await chromium.launch({
-      ...(executablePath ? { executablePath } : {}),
-      args: ["--no-sandbox", "--disable-dev-shm-usage"],
-    });
-    const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
-    page = await context.newPage();
+    // The same persistent profile the export uses, so a device trusted once
+    // is trusted for both.
+    const opened = await openBrowser();
+    close = opened.close;
+    page = await opened.context.newPage();
     page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
 
     const ok = await drive(page, decision, target, reason, sel, emburseUrl, login, step, opts, (t) => (matchedRow = t));
@@ -168,7 +165,7 @@ export async function runDecision(
     steps.push({ name: "start browser", ok: false, detail: explainLaunch(err), ms: 0 });
     return { ok: false, steps, screenshot: null, matchedRow };
   } finally {
-    await browser?.close().catch(() => {});
+    await close?.().catch(() => {});
   }
 }
 
