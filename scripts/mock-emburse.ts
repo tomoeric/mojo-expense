@@ -53,6 +53,15 @@ type State = {
    *   "divs"   — no <table> at all, ARIA roles only, like Emburse's own.
    */
   gridShape: "table" | "ghost" | "divs";
+  /**
+   * How the export dialog offers a format.
+   *
+   *   "links"  — a link that opens a page of choices.
+   *   "select" — a native <select>, alongside a template one that also has to
+   *              be ignored. Clicking an <option> is not a thing you can do,
+   *              so a runner that clicks its way through times out here.
+   */
+  formatControl: "links" | "select";
   /** Codes submitted to the verification screen, right or wrong. */
   codeAttempts: number;
   /** Whether the last accepted code arrived with "remember this device" ticked. */
@@ -84,6 +93,7 @@ const state: State = {
   appPaintMs: 0,
   showNavLabel: true,
   gridShape: "table",
+  formatControl: "links",
   search: "",
   format: "CSV",
   requestedAt: null,
@@ -304,9 +314,36 @@ app.get("/dialog", (_req, res) => {
       <p>You will be exporting ${scope} that are tagged with</p>
       <div>${chips}</div>
       <p>Filter(s): ${state.receiptsFilter ? "Receipts: true" : "none"}</p>
-      <a href="/format">Select a format</a> <b>${state.format}</b>
+      ${formatControl()}
       <form method="post" action="/start"><button type="submit">EXPORT</button></form>
     </div>`));
+});
+
+const formatControl = () => {
+  if (state.formatControl === "select") {
+    // A template dropdown first, exactly as the real dialog has it — a runner
+    // that grabs the first <select> it sees picks this one and never sets the
+    // format at all.
+    return `
+      <label>Choose a template</label>
+      <select name="template">
+        <option>Default CSV export</option>
+        <option>Detailed export</option>
+      </select>
+      <label>Choose a format</label>
+      <form method="post" action="/format-select">
+        <select name="format" onchange="this.form.submit()">
+          <option ${state.format === "CSV" ? "selected" : ""}>CSV</option>
+          <option ${state.format === "PDF" ? "selected" : ""}>PDF</option>
+        </select>
+      </form>`;
+  }
+  return `<a href="/format">Select a format</a> <b>${state.format}</b>`;
+};
+
+app.post("/format-select", (req, res) => {
+  state.format = String((req.body as { format?: string }).format ?? "CSV");
+  res.redirect("/dialog");
 });
 
 app.get("/chip", (req, res) => {
@@ -363,6 +400,7 @@ app.post("/__app", (req, res) => {
   if ("paintMs" in q) state.appPaintMs = Number(q["paintMs"]) || 0;
   if ("nav" in q) state.showNavLabel = q["nav"] !== "false";
   if ("grid" in q) state.gridShape = q["grid"] as State["gridShape"];
+  if ("format" in q) state.formatControl = q["format"] as State["formatControl"];
   res.json({ ok: true });
 });
 app.post("/__reset", (_req, res) => {

@@ -510,6 +510,35 @@ check("a missing PDF option is reported on its own", /PDF in the format list/.te
   detail.slice(0, 100));
 check("…and the format was left alone", mock.state().format !== "PDF", mock.state().format);
 
+// ---------------------------------------- a format control that is a <select>
+// The failure this was written for: a native dropdown. Its <option>s are not
+// clickable, so clicking one waits for something that can never be actionable
+// and times out at exactly the step timeout — which is what the run reported,
+// with no hint that clicking was the wrong verb entirely.
+console.log("\n17. A format control that is a native dropdown");
+await forgetDevice();
+mock.reset();
+await fetch(`${mock.url}/__app?format=select`, { method: "POST" });
+
+run = await runAutoExport(settings, selectors, LOGIN, {});
+detail = run.steps.find((st) => st.name === "choose PDF")?.detail ?? "";
+check("the run gets through the format step", run.ok, run.steps.find((st) => !st.ok)?.name ?? "");
+check("PDF was actually chosen", mock.state().format === "PDF", mock.state().format);
+check("and it says how", /chose "PDF" in a dropdown/.test(detail), detail.slice(0, 90));
+
+// The dialog has a template dropdown too, and it comes first. Taking the
+// first <select> on the page would leave the format untouched and say nothing.
+check("the template dropdown was not mistaken for it",
+  mock.state().format === "PDF", mock.state().format);
+
+// The link-driven shape still works — the native path must not swallow it.
+await forgetDevice();
+mock.reset();
+await fetch(`${mock.url}/__app?format=links`, { method: "POST" });
+run = await runAutoExport(settings, selectors, LOGIN, {});
+check("a dropdown made of links still works", run.ok && mock.state().format === "PDF",
+  mock.state().format);
+
 await mock.close();
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}\n`);
 process.exit(failures === 0 ? 0 : 1);

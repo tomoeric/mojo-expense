@@ -128,7 +128,10 @@ export const DEFAULT_SELECTORS: Selectors = {
   // Either state of the control: untouched it says "Select a format"; once a
   // format has been chosen it says that format instead, and the old selector
   // then matched nothing at all.
-  formatSelect: 'text=Select a format, text=Select format, [role="combobox"], select',
+  // The dialog's wording is "Choose a template" / "Select a template" for its
+  // sibling control, so the format one is likely phrased the same way. Only
+  // used when the control is not a native <select>, which is handled directly.
+  formatSelect: 'text=Select a format, text=Choose a format, text=Select format, [role="combobox"]',
   formatOption: 'text="PDF"',
   dialogExport: 'button:has-text("EXPORT")',
   exportStarted: 'text=/export .*(started|queued|processing)/i',
@@ -441,6 +444,37 @@ export function explainLaunch(err: unknown): string {
  * email, then the password on a second screen. Filling both at once fills one
  * box and submits nothing.
  */
+/**
+ * Set the format with a native `<select>`, if that is what this is.
+ *
+ * Looks for a dropdown that actually offers PDF rather than trusting a
+ * selector to have found the right one — a dialog has several dropdowns, and
+ * the one that lists PDF is by definition the format control whatever it is
+ * labelled. Returns null when there is no such select, so the click path can
+ * take over.
+ */
+async function chooseFormatFromSelect(page: Page, sel: Selectors): Promise<string | null> {
+  // Inside the dialog if we can find it, otherwise anywhere — a dialog that
+  // does not match `dialogRoot` is a selector problem for another step, not a
+  // reason to skip a control that is plainly on the page.
+  const root = (await firstVisible(page, sel.dialogRoot, 1000)) ?? page.locator("body");
+  const selects = root.locator("select");
+
+  const n = await selects.count().catch(() => 0);
+  for (let i = 0; i < n; i++) {
+    const one = selects.nth(i);
+    if (!(await one.isVisible().catch(() => false))) continue;
+
+    const options = await one.locator("option").allTextContents().catch(() => []);
+    const pdf = options.find((t) => /\bpdf\b/i.test(t));
+    if (!pdf) continue;
+
+    await one.selectOption({ label: pdf });
+    return `format set to PDF — chose "${pdf.trim()}" in a dropdown`;
+  }
+  return null;
+}
+
 /**
  * Has the transactions grid loaded? Say how we know, or null.
  *
@@ -1057,6 +1091,15 @@ async function runSteps(
       // fall back to the whole page rather than reporting an empty string.
       return (text || (await pageText(page))).replace(/\s+/g, " ").trim();
     };
+
+    // A native <select> first, because it is the one shape where clicking is
+    // simply wrong: its <option>s are not clickable elements, so a click on
+    // one waits for something that will never become actionable and times out
+    // at exactly the step timeout — which is the failure that was seen. The
+    // dialog's sibling control ("Choose a template" → "Default CSV export")
+    // is a native select, so its format control very likely is too.
+    const viaSelect = await chooseFormatFromSelect(page, sel);
+    if (viaSelect) return viaSelect;
 
     await clickVisible(page, sel.formatSelect, "the format dropdown", inDialog);
     await clickVisible(page, sel.formatOption, "PDF in the format list", inDialog);
