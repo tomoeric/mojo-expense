@@ -153,6 +153,21 @@ check(
   signIn?.detail ?? "",
 );
 
+// ------------------------------------------- the diagnosis must be specific
+console.log("\n6. A failed sign-in must say which failure it was");
+for (const [kind, expect] of [
+  ["rejected", /rejected the credentials/],
+  ["mfa", /second factor/],
+] as const) {
+  mock.reset();
+  await fetch(`${mock.url}/__outcome/${kind}`, { method: "POST" });
+  run = await runAutoExport(settings, selectors, LOGIN, {});
+  const detail = run.steps.find((s) => s.name === "sign in")?.detail ?? "";
+  check(`a ${kind} sign-in is named as such`, expect.test(detail), detail.slice(0, 120));
+  check(`…and quotes what the page said`, /It says: "/.test(detail));
+}
+await fetch(`${mock.url}/__outcome/ok`, { method: "POST" });
+
 await mock.close();
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}\n`);
 process.exit(failures === 0 ? 0 : 1);

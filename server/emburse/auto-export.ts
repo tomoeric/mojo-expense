@@ -405,14 +405,49 @@ export async function signIn(page: Page, sel: Selectors, login: Login): Promise<
 
   await loggedIn.waitFor({ state: "visible" }).catch(() => {});
   if (!(await loggedIn.isVisible().catch(() => false))) {
-    throw new Error(
-      `signed in as ${login.email} but the app did not appear — at ${page.url()}. ` +
-        "Either the password was rejected, a second factor is being asked for, or the " +
-        "loggedIn selector does not match.",
-    );
+    throw new Error(`signed in as ${login.email} but the app did not appear — ${await whyStuck(page)}`);
   }
   return `signed in as ${login.email}`;
 }
+
+/**
+ * Why sign-in ended somewhere that is not the app.
+ *
+ * Listing the three things it might be is not much better than saying it
+ * failed. The page itself knows — a rejected password says so, a second factor
+ * asks for a code — so read it and report that instead of a shortlist. Falls
+ * back to the page's own words when nothing matches a known pattern, because
+ * unfamiliar wording is still evidence.
+ */
+async function whyStuck(page: Page): Promise<string> {
+  const url = page.url();
+  const text = ((await page.locator("body").innerText().catch(() => "")) || "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (/wrong email or password|incorrect password|invalid (email|password|credentials)|try again/i.test(text)) {
+    return `Emburse rejected the credentials. It says: "${snippet(text)}"`;
+  }
+  if (/verification code|authentication code|two-factor|2fa|one-time|authenticator|check your (phone|email)/i.test(text)) {
+    return (
+      "Emburse is asking for a second factor, which no automation can answer. " +
+      `Use an account with MFA switched off. It says: "${snippet(text)}"`
+    );
+  }
+  if (/microsoft|sign in with|single sign|saml|okta/i.test(text)) {
+    return `Emburse handed sign-in to another identity provider. It says: "${snippet(text)}"`;
+  }
+  if (!text) {
+    return `the page at ${url} has no readable text yet — it may still be loading, or be a redirect.`;
+  }
+  // Signed in fine, but nothing matched loggedIn: the likeliest remaining case.
+  return (
+    `at ${url}, and the page reads: "${snippet(text)}". If that looks like Emburse, ` +
+    "the loggedIn selector is what needs correcting."
+  );
+}
+
+const snippet = (t: string) => (t.length > 220 ? `${t.slice(0, 220)}…` : t);
 
 const signInBroke = (steps: StepResult[]) => steps.some((s) => s.name === "sign in" && !s.ok);
 

@@ -29,6 +29,7 @@ type State = {
   sections: Record<string, boolean>;
   rowsTicked: number;
   pendingUser: string;
+  loginOutcome: "ok" | "rejected" | "mfa";
   search: string;
   format: string;
   requestedAt: number | null;
@@ -50,6 +51,7 @@ const state: State = {
   },
   rowsTicked: 0,
   pendingUser: "",
+  loginOutcome: "ok",
   search: "",
   format: "CSV",
   requestedAt: null,
@@ -128,6 +130,15 @@ app.post("/login", (req, res) => {
   const { password } = req.body as { password?: string };
   if (!state.pendingUser || !password) {
     res.status(401).send(page("<p>Bad credentials</p>"));
+    return;
+  }
+  // Forced outcomes, so the diagnosis of each can be tested.
+  if (state.loginOutcome === "rejected") {
+    res.send(page("<h1>Sign in</h1><p>Wrong email or password. Please try again.</p>"));
+    return;
+  }
+  if (state.loginOutcome === "mfa") {
+    res.send(page("<h1>Verify it is you</h1><p>Enter the verification code we sent to your phone.</p>"));
     return;
   }
   state.signedIn = true;
@@ -238,6 +249,12 @@ app.get("/download", (_req, res) => {
 
 /** Test hooks, so a harness can assert what the run actually did. */
 app.get("/__state", (_req, res) => res.json(state));
+app.post("/__outcome/:kind", (req, res) => {
+  state.loginOutcome = (req.params.kind ?? "ok") as State["loginOutcome"];
+  state.signedIn = false;
+  state.pendingUser = "";
+  res.json({ ok: true });
+});
 app.post("/__reset", (_req, res) => {
   reset();
   res.json({ ok: true });
@@ -246,7 +263,7 @@ app.post("/__reset", (_req, res) => {
 const reset = () =>
   Object.assign(state, {
     signedIn: false, admin: false, receiptsFilter: false, rowsTicked: 0,
-    pendingUser: "", search: "", format: "CSV", requestedAt: null,
+    pendingUser: "", loginOutcome: "ok", search: "", format: "CSV", requestedAt: null,
     sections: {
       "Needs Review": true, "Needs Manager Review": false,
       "Pending Submission": false, Denied: true, Completed: false,
