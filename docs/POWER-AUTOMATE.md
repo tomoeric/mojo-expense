@@ -58,37 +58,88 @@ the ability to see at a glance whether a day was missed.
   - A persistent Edge/Chrome profile kept signed in as a real user. Works, but
     any forced re-auth stops the flow until someone logs in again.
 
-Store the credential in **Power Automate's credential store or Windows
-Credential Manager**, never as a literal in the flow.
+Hold the password in a flow variable marked **Sensitive** (its value is then
+masked in the designer and in run logs), or pull it from **Azure Key Vault** if
+you have the connector. Never type it into an action as a literal.
 
 ### 1. Desktop flow — "Emburse · request export"
 
+This is the flow that replaces the manual pull. Each line is a real Power
+Automate Desktop action, in order; indented lines are what you set on it.
+
 ```
 Launch new Microsoft Edge
-  └ profile: the persistent one, so the session survives reboots
-Go to web page → the Card Transactions tab
-If (sign-in form is present)
-  └ Populate text field  username / password from the credential store
-  └ Press button  Sign in
-  └ Wait for web page content  the transactions grid
-Apply Advanced Filters
-  └ Receipt: True
-  └ date range: as per the review window
-Click  select-all checkbox
-Click  Export → PDF → Export
-Wait for web page content  the "export started" confirmation
-Close web browser
+    Launch mode ............ Launch new instance
+    Initial URL ............ the Card Transactions tab
+    Window state ........... Normal        (Minimized hides real failures)
+    Clear cache / cookies .. both OFF      (this is what keeps you signed in)
+    → produces the variable  Browser
+
+If web page contains  →  Element, the sign-in form
+    Populate text field on web page    the username field
+    Populate text field on web page    the password field  (Sensitive variable)
+    Press button on web page           Sign in
+    Wait for web page content          the transactions grid appears
+End
+
+Click link on web page ............... Advanced Filters
+Set drop-down list value on web page . Receipt → True
+Press button on web page ............. Apply
+
+Wait for web page content ............ the filtered grid has finished loading
+
+Click link on web page ............... the select-all checkbox in the header
+Click link on web page ............... Export
+Set drop-down list value on web page . file type → PDF
+Press button on web page ............. Export
+
+Wait for web page content ............ the "export started" confirmation
+Close web browser .................... Browser
 ```
 
-Two notes on the UI steps:
+**The `Wait for web page content` after Apply is not optional.** The grid
+re-renders asynchronously; without it the select-all click lands on the
+unfiltered list and you export the wrong set. Same story after sign-in.
 
-- **Record the selectors, don't hand-write them.** Use the recorder, then open
-  each UI element and loosen the selector — drop generated ids and `nth-child`
-  positions, keep text and stable attributes. Emburse ships UI changes; a
-  selector pinned to a generated class name is the second thing that will break.
-- **Export caps at 2,500 transactions.** If a day's filter could exceed that,
-  split the date range and expect two files. The importer handles multiple files
-  fine — each is deduped on content hash, and rows are deduped on their own key.
+#### The part only you can do: selectors
+
+Every `Press button` / `Click link` above needs a **UI element**, and those
+cannot be written from outside — they have to be captured against the live
+Emburse DOM. Use the recorder for the whole click path in one pass, then go back
+through the UI elements repository and loosen each selector:
+
+- Delete generated ids and `nth-child(n)` position steps.
+- Keep the element's **text** and any stable `data-*` or `aria-*` attribute.
+- Where Emburse gives you nothing stable, anchor on the nearest parent that has
+  a real name rather than on a chain of divs.
+
+A selector pinned to a generated class name is the thing most likely to break,
+and it breaks the week Emburse ships a UI change.
+
+#### What to export each day
+
+**Export the whole open inbox every run, not just yesterday.** It costs a bigger
+PDF and nothing else, because the importer is built for it:
+
+- The same bytes twice is a no-op (content hash).
+- A row that reappears unchanged is left alone; a row whose note or category was
+  edited is **updated**, not duplicated.
+- A row that has left the inbox is marked `in_inbox = false`, never deleted.
+
+So a full-inbox export is self-healing: if the flow fails on Tuesday, Wednesday's
+run backfills it. A "yesterday only" export turns every missed run into a
+permanent hole in the data.
+
+The one limit to respect: **a PDF export caps at 2,500 transactions.** If the
+open inbox could exceed that, split into two date ranges and let the flow produce
+two files — the importer takes multiple files per day without complaint.
+
+#### Fail loudly
+
+On the `On error` tab of the sign-in, the Apply wait, and the final confirmation
+wait: set a couple of retries, then **send mail to the AP inbox** rather than
+letting the flow end quietly. An export automation that silently stops is worse
+than a manual one, because you stop checking.
 
 ### 2. Desktop flow — "Emburse · collect export"
 
