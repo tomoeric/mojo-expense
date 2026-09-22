@@ -45,6 +45,10 @@ process.env.EMBURSE_EXPORT_WAIT_MS ||= "60000";
 const { runAutoExport, DEFAULT_SELECTORS } = await import("../server/emburse/auto-export.js");
 type Selectors = Parameters<typeof runAutoExport>[1];
 
+// The credential the runner signs in with. In the app this comes from what
+// somebody stored under their user menu; here it only has to be non-empty.
+const LOGIN = { userId: null, email: "bot@example.invalid", password: "not-a-real-password" };
+
 // Tuned to the mock's markup. The real ones live in the app's settings.
 const selectors: Selectors = {
   ...DEFAULT_SELECTORS,
@@ -79,7 +83,7 @@ const check = (label: string, ok: boolean, detail = "") => {
 // ---------------------------------------------------------------- clean run
 console.log("\n1. A clean run, with the chips starting out wrong");
 mock.reset();
-let run = await runAutoExport(settings, selectors, {});
+let run = await runAutoExport(settings, selectors, LOGIN, {});
 for (const s of run.steps) console.log(`     ${s.ok ? "·" : "✗"} ${s.name.padEnd(34)} ${s.detail}`);
 
 check("stayed on the mock, never the real Emburse",
@@ -104,7 +108,7 @@ check(
 
 // -------------------------------------------------------- already signed in
 console.log("\n2. A second run against a live session");
-run = await runAutoExport(settings, selectors, {});
+run = await runAutoExport(settings, selectors, LOGIN, {});
 check("run succeeded", run.ok);
 check(
   "skipped sign-in rather than failing on a missing form",
@@ -119,7 +123,7 @@ check(
 console.log("\n3. A run with a row ticked, which must refuse");
 mock.reset();
 await fetch(`${mock.url}/tick`, { method: "POST" });
-run = await runAutoExport(settings, selectors, {});
+run = await runAutoExport(settings, selectors, LOGIN, {});
 
 check("run failed", !run.ok);
 check(
@@ -133,7 +137,7 @@ check("returned a screenshot to look at", (run.screenshot?.length ?? 0) > 1000);
 // -------------------------------------------------------------------- dry run
 console.log("\n4. A dry run, which must set everything up and stop");
 mock.reset();
-run = await runAutoExport(settings, selectors, { dryRun: true });
+run = await runAutoExport(settings, selectors, LOGIN, { dryRun: true });
 check("run succeeded", run.ok);
 check("never requested an export", mock.state().requestedAt === null);
 check("still set the format", mock.state().format === "PDF", mock.state().format);

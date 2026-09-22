@@ -7,7 +7,8 @@ import { syncFromSharePoint, syncOnPageLoad } from "./sync.js";
 import { isSharePointConfigured } from "./sharepoint.js";
 import { describeSchedule } from "./schedule.js";
 import { ALL_SECTIONS, cleanSchedule, readSettings, writeSettings } from "./settings.js";
-import { DEFAULT_SELECTORS, isAutoExportConfigured } from "../emburse/auto-export.js";
+import { DEFAULT_SELECTORS, envLogin } from "../emburse/auto-export.js";
+import { credentialStatus, deleteCredential, listCredentials, saveCredential } from "../emburse/credentials.js";
 import { attemptExport, nextDue, recentRuns, runScreenshot } from "../emburse/export-scheduler.js";
 
 /**
@@ -184,15 +185,6 @@ importRouter.put("/export-settings", requireAuth, requireAdmin, async (req: Requ
  */
 importRouter.post("/export-run", requireAuth, requireAdmin, async (req: Request, res: Response) => {
   if (!guard(res)) return;
-  if (!isAutoExportConfigured()) {
-    res.status(503).json({
-      error:
-        "Browser automation is not configured. Set EMBURSE_LOGIN_EMAIL and EMBURSE_LOGIN_PASSWORD " +
-        "(a dedicated Emburse service account with MFA off) and restart.",
-    });
-    return;
-  }
-
   const dryRun = req.query.dryRun === "1";
   try {
     // Through the scheduler, so a manual run is recorded like any other and
@@ -232,7 +224,7 @@ importRouter.get("/export-runs", requireAuth, async (_req: Request, res: Respons
   try {
     const { schedule } = await readSettings();
     res.json({
-      configured: isAutoExportConfigured(),
+      configured: (await listCredentials()).length > 0 || envLogin() !== null,
       due: await nextDue(schedule),
       runs: await recentRuns(20),
     });
@@ -252,4 +244,77 @@ importRouter.get("/export-runs/:id/screenshot", requireAuth, async (req: Request
   res.setHeader("content-type", "image/png");
   res.setHeader("cache-control", "private, max-age=3600");
   res.send(shot);
+});
+
+
+/**
+ * Your own Emburse login.
+ *
+ * Deliberately keyed on the caller's own user id rather than anything in the
+ * request: there is no path here that reads or writes somebody else's, so no
+ * ownership check to get wrong and no id for an administrator to substitute.
+ * The password is never returned — not to an admin, and not to its owner.
+ */
+importRouter.get("/my-emburse-login", requireAuth, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  const id = req.user?.id;
+  if (!id) {
+    res.json({ credential: null, signedIn: false });
+    return;
+  }
+  try {
+    res.json({ credential: await credentialStatus(id), signedIn: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "Could not read your login." });
+  }
+});
+
+importRouter.put("/my-emburse-login", requireAuth, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  const user = req.user;
+  if (!user) {
+    res.status(401).json({ error: "Sign in first." });
+    return;
+  }
+
+  const body = req.body as { loginEmail?: unknown; password?: unknown };
+  const loginEmail = typeof body.loginEmail === "string" ? body.loginEmail.trim() : "";
+  const password = typeof body.password === "string" ? body.password : "";
+  if (!loginEmail || !password) {
+    res.status(400).json({ error: "Both the Emburse email and the password are required." });
+    return;
+  }
+
+  try {
+    await saveCredential(user.id, user.email, loginEmail, password);
+    res.json({ credential: await credentialStatus(user.id) });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "Could not save your login." });
+  }
+});
+
+importRouter.delete("/my-emburse-login", requireAuth, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  const id = req.user?.id;
+  if (!id) {
+    res.status(401).json({ error: "Sign in first." });
+    return;
+  }
+  res.json({ removed: await deleteCredential(id) });
+});
+
+/**
+ * Who has stored a login, for an administrator setting the export up.
+ *
+ * Whose and whether, never what: knowing a working credential exists is what
+ * an admin needs in order to know the export can run. Its contents are not
+ * part of that, and this route has no way to reach them.
+ */
+importRouter.get("/emburse-logins", requireAuth, requireAdmin, async (_req: Request, res: Response) => {
+  if (!guard(res)) return;
+  try {
+    res.json({ credentials: await listCredentials(), envFallback: envLogin() !== null });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "Could not list logins." });
+  }
 });

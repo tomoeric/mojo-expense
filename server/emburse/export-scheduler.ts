@@ -1,7 +1,8 @@
 import { db, ensureSchema, isDbConfigured } from "../db.js";
 import { ingestExport } from "../import/ingest.js";
 import { readSettings, type Schedule } from "../import/settings.js";
-import { isAutoExportConfigured, runAutoExport, type ExportRun, type Selectors } from "./auto-export.js";
+import { envLogin, runAutoExport, type ExportRun, type Selectors } from "./auto-export.js";
+import { credentialForExport, noteResult } from "./credentials.js";
 
 /**
  * Run the export on the configured schedule.
@@ -176,12 +177,31 @@ export async function attemptExport(
   );
   const id = Number(rows[0]!.id);
 
-  let run: ExportRun = { ok: false, steps: [], screenshot: null, pdf: null, itemLine: null };
+  let run: ExportRun = { ok: false, signInFailed: false, steps: [], screenshot: null, pdf: null, itemLine: null };
   let importId: number | null = null;
   let error: string | null = null;
 
   try {
-    run = await runAutoExport(settings, settings.selectors as Selectors, opts);
+    // A credential someone entered in the app, else the env fallback. Neither
+    // existing is a configuration problem, not a run that failed silently.
+    const login = (await credentialForExport()) ?? envLogin();
+    if (!login) {
+      throw new Error(
+        "No Emburse login is stored. Whoever will own the export can add one under " +
+          "their user menu, or set EMBURSE_LOGIN_EMAIL and EMBURSE_LOGIN_PASSWORD.",
+      );
+    }
+
+    run = await runAutoExport(settings, settings.selectors as Selectors, login, opts);
+
+    // Only the sign-in step says anything about the credential. A later failure
+    // means Emburse moved a button, and blaming the password for that would
+    // have its owner re-typing a perfectly good one.
+    if (login.userId) {
+      const signIn = run.steps.find((s) => s.name === "sign in");
+      if (signIn) await noteResult(login.userId, signIn.ok, signIn.ok ? null : signIn.detail);
+    }
+
     if (run.ok && run.pdf) {
       const imported = await ingestExport(run.pdf, `emburse-${day}.pdf`, by);
       importId = imported.importId;
@@ -220,7 +240,10 @@ let running = false;
  */
 export function startExportScheduler(): void {
   if (timer) return;
-  if (!isDbConfigured() || !isAutoExportConfigured()) return;
+  // No credential check at boot: one can be added in the app at any time, and a
+  // scheduler that only starts when the env happens to be set would need a
+  // restart to notice. `attemptExport` reports the absence instead.
+  if (!isDbConfigured()) return;
 
   const tick = async () => {
     if (running) return;

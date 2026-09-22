@@ -12,6 +12,7 @@ import { ReportsPage } from "@/pages/reports";
 import { AnalyticsPage } from "@/pages/analytics";
 import { ImportPage } from "@/pages/import";
 import { ExportSettingsPage } from "@/pages/export-settings";
+import { MyEmburseLoginPage } from "@/pages/my-emburse-login";
 import { timeOfDay } from "@/lib/format";
 import { useSyncStatus } from "@/lib/sync";
 
@@ -32,6 +33,11 @@ const MENU_PAGES = [
     key: "settings",
     label: "Export settings",
     description: "What the daily Emburse export is supposed to contain, and what each import is checked against.",
+  },
+  {
+    key: "emburse-login",
+    label: "Your Emburse login",
+    description: "The account the app signs into Emburse with. Only you can see or change yours.",
   },
 ] as const;
 
@@ -233,6 +239,7 @@ export function App() {
           {data && route === "analytics" && <AnalyticsPage data={data} />}
           {route === "import" && <ImportPage />}
           {route === "settings" && <ExportSettingsPage isAdmin={auth.data?.isAdmin ?? false} />}
+          {route === "emburse-login" && <MyEmburseLoginPage />}
         </main>
       </div>
 

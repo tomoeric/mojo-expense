@@ -31,6 +31,14 @@ export type StepResult = {
 
 export type ExportRun = {
   ok: boolean;
+  /**
+   * Whether the failure was the sign-in itself.
+   *
+   * The one condition that should send its owner back to re-enter a password —
+   * every other step failing means Emburse moved something, not that the
+   * credential went bad.
+   */
+  signInFailed: boolean;
   steps: StepResult[];
   /** PNG of the page where it stopped, base64, present only on failure. */
   screenshot: string | null;
@@ -94,8 +102,12 @@ const ALL_CHIPS = [
   "Needs Review", "Needs Manager Review", "Pending Submission", "Denied", "Completed",
 ] as const;
 
-export function isAutoExportConfigured(): boolean {
-  return Boolean(env.emburseLogin.email && env.emburseLogin.password && env.emburseLogin.url);
+/** A stored credential, or the env fallback for a deployment without one. */
+export type Login = { userId: string | null; email: string; password: string };
+
+export function envLogin(): Login | null {
+  const { email, password } = env.emburseLogin;
+  return email && password ? { userId: null, email, password } : null;
 }
 
 /** Playwright is optional; the app must boot on a host that has no browser. */
@@ -113,6 +125,7 @@ async function loadPlaywright() {
 export async function runAutoExport(
   settings: ExportSettings,
   selectors: Selectors,
+  login: Login,
   opts: { dryRun?: boolean } = {},
 ): Promise<ExportRun> {
   const steps: StepResult[] = [];
@@ -153,10 +166,10 @@ export async function runAutoExport(
     page = await context.newPage();
     page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
 
-    const ok = await runSteps(page, settings, selectors, step, opts, (v) => (itemLine = v), (b) => (pdf = b));
+    const ok = await runSteps(page, settings, selectors, login, step, opts, (v) => (itemLine = v), (b) => (pdf = b));
 
     const screenshot = ok ? null : (await page.screenshot({ fullPage: false })).toString("base64");
-    return { ok, steps, screenshot, pdf, itemLine };
+    return { ok, signInFailed: signInBroke(steps), steps, screenshot, pdf, itemLine };
   } catch (err) {
     steps.push({
       name: "start browser",
@@ -170,16 +183,19 @@ export async function runAutoExport(
     } catch {
       /* A dead page cannot be photographed; the step detail is what matters. */
     }
-    return { ok: false, steps, screenshot, pdf, itemLine };
+    return { ok: false, signInFailed: signInBroke(steps), steps, screenshot, pdf, itemLine };
   } finally {
     await browser?.close().catch(() => {});
   }
 }
 
+const signInBroke = (steps: StepResult[]) => steps.some((s) => s.name === "sign in" && !s.ok);
+
 async function runSteps(
   page: Page,
   settings: ExportSettings,
   sel: Selectors,
+  login: Login,
   step: (name: string, fn: () => Promise<string>) => Promise<boolean>,
   opts: { dryRun?: boolean },
   setItemLine: (v: string) => void,
@@ -197,11 +213,11 @@ async function runSteps(
     const form = page.locator(sel.loginEmail).first();
     if (!(await form.isVisible().catch(() => false))) return "already signed in";
 
-    await form.fill(env.emburseLogin.email);
-    await page.locator(sel.loginPassword).first().fill(env.emburseLogin.password);
+    await form.fill(login.email);
+    await page.locator(sel.loginPassword).first().fill(login.password);
     await page.locator(sel.loginSubmit).first().click();
     await page.locator(sel.loggedIn).first().waitFor({ state: "visible" });
-    return "signed in with the service account";
+    return `signed in as ${login.email}`;
   }))) return false;
 
   if (!(await step("switch to ADMIN", async () => {

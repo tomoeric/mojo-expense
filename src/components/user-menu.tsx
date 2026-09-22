@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { LogOut, UserRound, SlidersHorizontal } from "lucide-react";
+import { LogOut, UserRound, SlidersHorizontal, KeyRound } from "lucide-react";
 import type { SessionUser } from "@/lib/api";
 
 /** Signed-in identity + sign out, in the dark header bar. */
@@ -38,6 +38,16 @@ export function UserMenu({ user, isAdmin }: { user: SessionUser; isAdmin: boolea
               </p>
               <p className="mt-0.5 truncate text-xs text-muted-foreground">{user.email}</p>
             </div>
+            {/* Everyone has their own Emburse login; only admins set the
+                export scope, which governs what everybody sees. */}
+            <a
+              href="#/emburse-login"
+              onClick={() => setOpen(false)}
+              className="flex items-center gap-2 border-b border-border px-3 py-2.5 text-sm transition-colors hover:bg-muted"
+            >
+              <KeyRound className="h-4 w-4" />
+              Your Emburse login
+            </a>
             {isAdmin && (
               <a
                 href="#/settings"

@@ -198,6 +198,11 @@ export const env = {
    * challenge — which is exactly why it should be an account that can do
    * nothing but read and export.
    */
+  /** Signs the session cookie, and by default derives the credential key. */
+  sessionSecret: str("SESSION_SECRET"),
+  /** Optional dedicated key for stored Emburse passwords. */
+  credentialKey: str("EMBURSE_CREDENTIAL_KEY"),
+
   emburseLogin: {
     url: str("EMBURSE_LOGIN_URL", "https://app.spend.emburse.com"),
     email: str("EMBURSE_LOGIN_EMAIL"),
