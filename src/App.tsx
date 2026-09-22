@@ -99,7 +99,11 @@ export function App() {
           </div>
           <div className="flex items-center gap-3">
             <span className="hidden text-xs text-white/60 sm:inline">
-              {config.data?.configured ? config.data.product : "demo mode"}
+              {config.data?.source === "imported"
+                ? "imported data"
+                : config.data?.source === "demo"
+                  ? "demo mode"
+                  : (config.data?.source ?? "")}
             </span>
             {auth.data?.user && <UserMenu user={auth.data.user} />}
           </div>

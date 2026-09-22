@@ -64,6 +64,12 @@ api.get("/config", (_req, res) => {
   const configured = isEmburseConfigured();
   res.json({
     configured,
+    /**
+     * What is actually behind the data. The old header keyed off the Emburse
+     * API being configured, which now never happens — so a page full of
+     * imported expenses announced itself as "demo mode".
+     */
+    source: isDbConfigured() ? "imported" : configured ? env.emburse.product : "demo",
     authConfigured: isAuthConfigured(),
     auditConfigured: isAuditConfigured(),
     product: env.emburse.product,

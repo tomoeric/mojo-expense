@@ -108,6 +108,7 @@ export type AuthResponse = { user: SessionUser | null; authConfigured: boolean }
 
 export type ConfigResponse = {
   configured: boolean;
+  source: "imported" | "demo" | string;
   authConfigured: boolean;
   auditConfigured: boolean;
   product: "professional" | "enterprise" | "spend";
