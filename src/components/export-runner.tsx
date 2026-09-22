@@ -56,6 +56,14 @@ type Challenge = {
 const isRunning = (r: Run) =>
   r.ok === null && Date.now() - new Date(r.startedAt).getTime() < 30 * 60_000;
 
+/** Milliseconds as mm:ss — what somebody watching a run actually wants. */
+function clock(ms: number): string {
+  const total = Math.max(0, Math.round(ms / 1000));
+  const mm = String(Math.floor(total / 60)).padStart(2, "0");
+  const ss = String(total % 60).padStart(2, "0");
+  return `${mm}:${ss}`;
+}
+
 const live = (d: { runs?: Run[]; challenge?: Challenge | null } | undefined) =>
   Boolean(d?.challenge) || (d?.runs ?? []).some(isRunning);
 
@@ -148,7 +156,15 @@ export function ExportRunner({
   // Derived from the data rather than from whether this tab started the run,
   // so a reload, a second tab, or a request the proxy dropped all still show
   // a run in progress.
+  // Ticks once a second while something is running, so the clock moves
+  // between polls rather than jumping every three seconds.
+  const [now, setNow] = useState(() => Date.now());
   const active = (q.data?.runs ?? []).find(isRunning) ?? null;
+  useEffect(() => {
+    if (!active) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [active]);
   const working = busy !== "" || active !== null;
   // Which of the two buttons is the one in flight. Both used to spin, which
   // made a test run look like a real one.
@@ -314,12 +330,7 @@ export function ExportRunner({
           {kind === "real" ? "Running…" : "Run export now"}
         </button>
 
-        {working && (
-          <span className="text-xs text-muted-foreground">
-            Running on the server — you can leave this page and come back. Emburse queues the export,
-            so a real run takes several minutes.
-          </span>
-        )}
+
       </div>
 
       {error && <p className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm">{error}</p>}
@@ -420,29 +431,54 @@ export function ExportRunner({
         </div>
       )}
 
-      {active && (
-        <p className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/40 p-2.5 text-xs">
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" aria-hidden />
-          <span>
-            Step {active.steps.length > 0 ? `${active.steps.length}: ${active.steps.at(-1)?.name}` : "starting"}
-            {" · "}
-            {Math.round((Date.now() - new Date(active.startedAt).getTime()) / 1000)}s so far.
-            {" "}
-            {active.steps.at(-1)?.name === "wait for the export and download it"
-              ? "Emburse is building the file — this is the long one, up to 15 minutes."
-              : "Expand the run below to see every step as it happens."}
-          </span>
-          {isAdmin && (
-            <button
-              type="button"
-              onClick={() => void stop(active.id)}
-              className="ml-auto rounded-lg border border-border px-2.5 py-1 font-semibold hover:bg-muted"
-            >
-              Stop this run
-            </button>
-          )}
-        </p>
-      )}
+      {active && (() => {
+        // The step list is the canonical order, so "3 of 10" is real rather
+        // than a guess, and the step currently running is the one after the
+        // last that finished.
+        const order = Object.keys(stepSelectors);
+        const done = active.steps.length;
+        const current = order[done] ?? "finishing up";
+        const elapsed = clock(now - new Date(active.startedAt).getTime());
+        const stepStarted = active.steps.reduce((sum, st) => sum + st.ms, 0);
+        const onStep = clock(now - new Date(active.startedAt).getTime() - stepStarted);
+
+        return (
+          <div className="space-y-1.5 rounded-lg border border-sky-500/30 bg-sky-500/5 p-2.5 text-xs">
+            <div className="flex flex-wrap items-center gap-2">
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-600" aria-hidden />
+              <span className="font-semibold">
+                Step {Math.min(done + 1, order.length)} of {order.length} · {current}
+              </span>
+              <span className="tnum text-muted-foreground">
+                {onStep} on this step · {elapsed} total
+              </span>
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => void stop(active.id)}
+                  className="ml-auto rounded-lg border border-border px-2.5 py-1 font-semibold hover:bg-muted"
+                >
+                  Stop this run
+                </button>
+              )}
+            </div>
+
+            {/* One bar, so how far along it is readable without counting. */}
+            <div className="h-1 w-full overflow-hidden rounded-full bg-border">
+              <div
+                className="h-full rounded-full bg-sky-600 transition-all"
+                style={{ width: `${Math.round((done / order.length) * 100)}%` }}
+              />
+            </div>
+
+            <p className="text-muted-foreground">
+              {current === "wait for the export and download it"
+                ? "Emburse is building the file. This is the long one — up to 15 minutes."
+                : "Running on the server. You can leave this page and come back."}
+            </p>
+          </div>
+        );
+      })()}
 
       {runs.length > 0 && (
         <div className="divide-y divide-border overflow-hidden rounded-xl border border-border">

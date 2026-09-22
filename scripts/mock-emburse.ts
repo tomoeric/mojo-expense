@@ -76,6 +76,16 @@ type State = {
    *             at most once, put it back, and stop.
    */
   chipState: "aria" | "icon" | "mute";
+  /**
+   * How the export comes back.
+   *
+   *   "queue"  — a row in an exports list, the shape this was built for.
+   *   "direct" — the file arrives the moment EXPORT is clicked, with no queue
+   *              to watch and no list to find.
+   */
+  exportDelivery: "queue" | "direct";
+  /** When true nothing links to the exports list, as in Emburse's own nav. */
+  hideExportsNav: boolean;
   /** Milliseconds the dialog shows only its title before drawing its body. */
   dialogBodyMs: number;
   /** When true role="dialog" wraps only the title, not the chips. */
@@ -114,6 +124,8 @@ const state: State = {
   formatControl: "links",
   chipsUnmatchable: false,
   chipState: "aria",
+  exportDelivery: "queue",
+  hideExportsNav: false,
   dialogBodyMs: 0,
   dialogRootIsHeaderOnly: false,
   search: "",
@@ -454,7 +466,27 @@ app.get("/format/:f", (req, res) => {
 
 app.post("/start", (_req, res) => {
   state.requestedAt = Date.now();
-  res.send(page(`<p>Your export has started</p><a href="/exports">Exports</a>`));
+
+  // Handed straight back, with nothing queued and nothing to go and find.
+  if (state.exportDelivery === "direct") {
+    if (!pdfPath || !fs.existsSync(pdfPath)) {
+      res.status(500).send("the mock needs a real export PDF to serve");
+      return;
+    }
+    res.setHeader("content-type", "application/pdf");
+    res.setHeader("content-disposition", 'attachment; filename="expenses.pdf"');
+    res.send(fs.readFileSync(pdfPath));
+    return;
+  }
+
+  // A nav with no way to reach the exports list — which is what Emburse's own
+  // left nav looks like, and what sent a run to poll the transactions page for
+  // fifteen minutes.
+  const nav = state.hideExportsNav
+    ? `<nav><a href="/transactions">Transactions</a> <a href="/admin">Cards</a>
+       <a href="/admin">Reimbursements</a> <a href="/admin">Accounting</a></nav>`
+    : `<nav><a href="/exports">Exports</a></nav>`;
+  res.send(page(`<p>Your export has started</p>${nav}`));
 });
 
 app.get("/exports", (_req, res) => {
@@ -494,6 +526,8 @@ app.post("/__app", (req, res) => {
   if ("format" in q) state.formatControl = q["format"] as State["formatControl"];
   if ("chips" in q) state.chipsUnmatchable = q["chips"] === "unmatchable";
   if ("chipState" in q) state.chipState = q["chipState"] as State["chipState"];
+  if ("delivery" in q) state.exportDelivery = q["delivery"] as State["exportDelivery"];
+  if ("exportsNav" in q) state.hideExportsNav = q["exportsNav"] === "hidden";
   if ("bodyMs" in q) state.dialogBodyMs = Number(q["bodyMs"]) || 0;
   if ("dialogRoot" in q) state.dialogRootIsHeaderOnly = q["dialogRoot"] === "header";
   res.json({ ok: true });

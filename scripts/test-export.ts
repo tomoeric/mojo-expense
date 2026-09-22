@@ -701,6 +701,47 @@ check("…and says it was called off",
 check("…before requesting an export", mock.state().requestedAt === null);
 check("…and stopped near where it was told to", run.steps.length <= 4, `${run.steps.length} steps`);
 
+// ------------------------------- the file itself: handed back, or gone missing
+console.log("\n25. An export handed back on the spot");
+await forgetDevice();
+mock.reset();
+await fetch(`${mock.url}/__app?delivery=direct`, { method: "POST" });
+
+run = await runAutoExport(settings, selectors, LOGIN, {});
+check("the run succeeds without any queue to watch", run.ok,
+  run.steps.find((st) => !st.ok)?.detail?.slice(0, 100) ?? "");
+check("…and the PDF is the one that arrived", (run.pdf?.length ?? 0) > 1000,
+  `${((run.pdf?.length ?? 0) / 1e6).toFixed(1)} MB`);
+check("…noted at the step that requested it",
+  /downloaded directly/.test(run.steps.find((st) => st.name === "start the export")?.detail ?? ""),
+  run.steps.find((st) => st.name === "start the export")?.detail ?? "");
+check("…and the long wait was skipped",
+  (run.steps.find((st) => st.name === "wait for the export and download it")?.ms ?? 99_999) < 2000,
+  `${run.steps.find((st) => st.name === "wait for the export and download it")?.ms ?? 0}ms`);
+
+// The real failure: no link to the exports list, the click silently swallowed,
+// and then fifteen minutes polling the transactions page for a row that could
+// never appear there.
+console.log("\n26. Nowhere to find the finished export");
+await forgetDevice();
+mock.reset();
+await fetch(`${mock.url}/__app?delivery=queue&exportsNav=hidden`, { method: "POST" });
+
+run = await runAutoExport(settings, selectors, LOGIN, {});
+const waitStep = run.steps.find((st) => st.name === "wait for the export and download it");
+detail = waitStep?.detail ?? "";
+check("the run fails", !run.ok);
+// The point: it gives up when the link cannot be found, not after the full
+// export wait. That step used to burn the whole fifteen minutes on a page
+// that could never show a finished export.
+check("…at the step timeout, not the export timeout",
+  (waitStep?.ms ?? 99_999_999) < 30_000, `${Math.round((waitStep?.ms ?? 0) / 1000)}s`);
+check("…saying it could not find the exports link",
+  /could not find the link to Emburse/.test(detail), detail.slice(0, 100));
+check("…and listing what the nav does offer",
+  /Reimbursements/.test(detail), detail.slice(0, 200));
+await fetch(`${mock.url}/__app?exportsNav=shown`, { method: "POST" });
+
 await mock.close();
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}\n`);
 process.exit(failures === 0 ? 0 : 1);

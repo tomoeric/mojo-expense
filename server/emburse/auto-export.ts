@@ -384,7 +384,10 @@ export async function runAutoExport(
     page = await opened.context.newPage();
     page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
 
-    const ok = await runSteps(page, settings, selectors, login, step, opts, (v) => (itemLine = v), (b) => (pdf = b));
+    const ok = await runSteps(
+      page, settings, selectors, login, step, opts,
+      (v) => (itemLine = v), (b) => (pdf = b), () => pdf !== null,
+    );
 
     // Whatever Emburse issued for getting this far — including for passing a
     // device check — is kept, so the next run does not start as a stranger.
@@ -468,6 +471,38 @@ export function explainLaunch(err: unknown): string {
  * email, then the password on a second screen. Filling both at once fills one
  * box and submits nothing.
  */
+/**
+ * Read a download to a Buffer, insisting it really is a PDF.
+ *
+ * Shared by both routes to a file — the one Emburse hands back on the spot and
+ * the one it queues — because "did we get a PDF" must not be answered two
+ * slightly different ways.
+ */
+async function readDownload(download: { createReadStream: () => Promise<NodeJS.ReadableStream> }): Promise<Buffer> {
+  const stream = await download.createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const c of stream) chunks.push(c as Buffer);
+  const buf = Buffer.concat(chunks);
+  if (buf.subarray(0, 4).toString("latin1") !== "%PDF") {
+    throw new Error(`downloaded ${buf.length} bytes but it is not a PDF`);
+  }
+  return buf;
+}
+
+/**
+ * What the app's navigation offers, for when a link cannot be found.
+ *
+ * The useful half of "I could not find Exports" is what there was instead.
+ */
+async function navText(page: Page): Promise<string> {
+  for (const sel of ["nav", '[role="navigation"]', "aside"]) {
+    const nav = await firstVisible(page, sel, 0);
+    const text = nav ? (await nav.innerText().catch(() => "")).replace(/\s+/g, " ").trim() : "";
+    if (text) return text;
+  }
+  return pageText(page);
+}
+
 /** The export dialog's words, for a failure that has to be readable. */
 async function dialogText(page: Page, sel: Selectors): Promise<string> {
   const root = await firstVisible(page, sel.dialogRoot, 2000);
@@ -1035,6 +1070,7 @@ async function runSteps(
   opts: { dryRun?: boolean; onChallenge?: ChallengeHook; shouldStop?: () => boolean },
   setItemLine: (v: string) => void,
   setPdf: (b: Buffer) => void,
+  gotPdf: () => boolean,
 ): Promise<boolean> {
   // From settings, so a wrong host can be corrected without a redeploy.
   const url = settings.emburseUrl || env.emburseLogin.url;
@@ -1316,19 +1352,43 @@ async function runSteps(
           `"${snippet((await root.innerText().catch(() => "")).replace(/\s+/g, " ").trim())}"`,
       );
     }
-    await button.click();
+    // Some tenants hand the file straight back instead of queueing it. Listen
+    // for that while clicking, rather than clicking and then going to look for
+    // a queue entry that was never created.
+    const [download] = await Promise.all([
+      page.waitForEvent("download", { timeout: 60_000 }).catch(() => null),
+      button.click(),
+    ]);
+    if (download) {
+      const buf = await readDownload(download);
+      setPdf(buf);
+      return `export downloaded directly, ${(buf.length / 1e6).toFixed(1)} MB`;
+    }
     return "export requested";
   }))) return false;
 
   if (!(await step("wait for the export and download it", async () => {
-    // Emburse queues the export and mails a link when it is ready, so the page
-    // has to be watched rather than awaited: poll the exports list until the
-    // newest row is complete, then take the download.
-    const deadline = Date.now() + env.emburseLogin.exportWaitMs;
-    // Best effort: some tenants land on the exports list already. If this link
-    // is not there the poll below is what decides, not this click.
-    await clickVisible(page, sel.exportsNav, "the Exports link").catch(() => {});
+    // Already in hand: Emburse gave the file back at the moment of export, so
+    // there is no queue to watch.
+    if (gotPdf()) return "already downloaded when the export was requested";
 
+    // Getting to the list is the whole premise of this step, so its failure is
+    // reported rather than swallowed. Clicking a link that is not there used
+    // to be a caught-and-ignored error, after which the *transactions* page
+    // was polled for a "Complete" row for fifteen minutes — a quarter of an
+    // hour spent on a page that could never say it.
+    const list = await firstVisible(page, sel.exportsNav, env.emburseLogin.stepTimeoutMs);
+    if (!list) {
+      throw new Error(
+        `could not find the link to Emburse's finished exports — nothing visible matched ` +
+          `${sel.exportsNav}. Open Emburse, find where a finished export appears, and put the ` +
+          `words on that link into the exportsNav selector. The page offers: ` +
+          `"${snippet(await navText(page))}"`,
+      );
+    }
+    await list.click();
+
+    const deadline = Date.now() + env.emburseLogin.exportWaitMs;
     while (Date.now() < deadline) {
       if (opts.shouldStop?.()) throw new Error("stopped — the run was called off while waiting");
       if (await firstVisible(page, sel.newestExportReady, 0)) {
@@ -1336,20 +1396,19 @@ async function runSteps(
           page.waitForEvent("download"),
           clickVisible(page, sel.newestExportDownload, "the Download link on the finished export"),
         ]);
-        const stream = await download.createReadStream();
-        const chunks: Buffer[] = [];
-        for await (const c of stream) chunks.push(c as Buffer);
-        const buf = Buffer.concat(chunks);
-        if (buf.subarray(0, 4).toString("latin1") !== "%PDF") {
-          throw new Error(`downloaded ${buf.length} bytes but it is not a PDF`);
-        }
+        const buf = await readDownload(download);
         setPdf(buf);
         return `downloaded ${(buf.length / 1e6).toFixed(1)} MB`;
       }
       await page.waitForTimeout(10_000);
       await page.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
     }
-    throw new Error(`no completed export appeared within ${Math.round(env.emburseLogin.exportWaitMs / 60000)} min`);
+    throw new Error(
+      `no completed export appeared within ` +
+        `${Math.round(env.emburseLogin.exportWaitMs / 60000)} min at ${safeUrl(page.url())}. ` +
+        `Nothing there matched ${sel.newestExportReady}. The page reads: ` +
+        `"${snippet(await pageText(page))}"`,
+    );
   }))) return false;
 
   return true;
