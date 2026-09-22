@@ -157,6 +157,23 @@ export function envLogin(): Login | null {
   return email && password ? { userId: null, email, password } : null;
 }
 
+/**
+ * The host's Chromium, if it has one.
+ *
+ * Imported lazily and tolerantly: the detector is a plain script that shells
+ * out to `which`, and a host where that is unavailable should fall back to
+ * Playwright's own browser rather than failing the run before it starts.
+ */
+async function systemChromium(): Promise<string | null> {
+  if (env.emburseLogin.chromiumPath) return env.emburseLogin.chromiumPath;
+  try {
+    const { findSystemChromium } = await import("../../scripts/find-chromium.mjs");
+    return findSystemChromium();
+  } catch {
+    return null;
+  }
+}
+
 /** Playwright is optional; the app must boot on a host that has no browser. */
 async function loadPlaywright() {
   try {
@@ -201,12 +218,14 @@ export async function runAutoExport(
 
   try {
     const chromium = await loadPlaywright();
+    // Prefer a browser the host provides. Playwright's own build is linked
+    // against libraries a Nix host does not carry, so there it installs
+    // cleanly and then will not start — and finding the host's own is not
+    // something anyone should have to do by hand, because a Nix store path
+    // contains a content hash and changes whenever the package does.
+    const executablePath = (await systemChromium()) ?? undefined;
     browser = await chromium.launch({
-      // Hosts that ship their own Chromium (Replit among them) rarely have the
-      // exact build Playwright expects, and the mismatch is a hard failure
-      // rather than a fallback. Naming the binary is the difference between
-      // "works on the VM" and "run npx playwright install".
-      ...(env.emburseLogin.chromiumPath ? { executablePath: env.emburseLogin.chromiumPath } : {}),
+      ...(executablePath ? { executablePath } : {}),
       args: ["--no-sandbox", "--disable-dev-shm-usage"],
     });
     const context = await browser.newContext({ acceptDownloads: true, viewport: { width: 1600, height: 1000 } });

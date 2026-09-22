@@ -10,7 +10,7 @@
     "build:server": "esbuild server/index.ts --bundle --platform=node --target=node20 --format=esm --packages=external --outfile=dist/server.js",
     "start": "NODE_ENV=production node dist/server.js",
     "typecheck": "tsc --noEmit",
-    "postinstall": "playwright install --only-shell chromium"
+    "postinstall": "node scripts/ensure-browser.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.122.0",

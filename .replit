@@ -1,8 +1,15 @@
 modules = ["nodejs-24"]
 
+[nix]
+channel = "stable-24_05"
+# Chromium from the host rather than Playwright's download. Playwright's build
+# is linked against libraries this image does not carry, so it installs and
+# then fails to launch; this one was built for the machine it runs on.
+packages = ["chromium"]
+
 [env]
-# Keep Playwright's browser inside node_modules so it is rebuilt with the
-# deployment; a home-directory cache does not reliably travel with one.
+# Only used if no host Chromium is found. Keeps the fallback download inside
+# node_modules, which a deployment rebuilds — a home cache is not carried.
 PLAYWRIGHT_BROWSERS_PATH = "0"
 run = "pnpm run dev"
 

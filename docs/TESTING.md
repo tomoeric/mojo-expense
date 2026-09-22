@@ -41,25 +41,33 @@ without waiting a day.
 ## Layer 1a — is there a browser on the host?
 
 The first thing to fail on a new deployment, and the one that makes every other
-question moot. `pnpm install` now installs a Chromium as a postinstall step, and
-`PLAYWRIGHT_BROWSERS_PATH=0` puts it inside `node_modules` so it is rebuilt with
-the deployment rather than left in a home-directory cache that a deploy does not
-carry.
+question moot.
 
-If a run still stops at **start browser**:
+`.replit` asks Nix for a `chromium` package, and both the postinstall step and
+the app itself look for a host-provided browser before falling back to
+Playwright's own download. On Replit that means the browser is the one the
+image built, nothing is downloaded, and no path needs configuring.
+
+That indirection exists because Playwright's own build is linked against shared
+libraries a Nix host does not carry: it installs cleanly and then refuses to
+start, which reads as *"A browser is installed but cannot start"*. A host
+browser has no such problem — it was built for the machine it runs on.
+
+Check what will be used:
+
+```bash
+node scripts/find-chromium.mjs     # prints the path, or nothing
+```
+
+Nothing printed, and a run stops at **start browser** → no host browser was
+found and the fallback download did not work either:
 
 ```bash
 pnpm exec playwright install --only-shell chromium
 ```
 
-If the download succeeds but launching fails with a missing `libnss3` or similar,
-the host has no shared libraries for Playwright's own build. Point
-`PLAYWRIGHT_CHROMIUM_PATH` at a Chromium the host already provides:
-
-```bash
-which chromium chromium-browser google-chrome 2>/dev/null
-ls -d /nix/store/*chromium*/bin/chromium 2>/dev/null | head -1
-```
+Still failing → set `PLAYWRIGHT_CHROMIUM_PATH` explicitly. It overrides the
+search, and is the escape hatch when detection guesses wrong.
 
 ## Layer 2 — can the app reach SharePoint?
 
