@@ -73,7 +73,7 @@ export type SelectorKey =
   | "mfaCode" | "mfaSubmit" | "mfaRemember"
   | "adminTab" | "grid" | "itemCount"
   | "gridPath"
-  | "exportButton" | "dialog" | "dialogRoot" | "dialogScope" | "formatSelect"
+  | "exportButton" | "dialog" | "dialogRoot" | "dialogScope" | "formatSelect" | "formatOption"
   | "dialogExport" | "exportStarted"
   | "exportsNav" | "newestExportReady" | "newestExportDownload";
 
@@ -125,7 +125,11 @@ export const DEFAULT_SELECTORS: Selectors = {
   dialogRoot: '[role="dialog"]',
   // Used to prove the dialog is exporting everything, not a row selection.
   dialogScope: 'text=all expense(s)',
-  formatSelect: 'text=Select a format',
+  // Either state of the control: untouched it says "Select a format"; once a
+  // format has been chosen it says that format instead, and the old selector
+  // then matched nothing at all.
+  formatSelect: 'text=Select a format, text=Select format, [role="combobox"], select',
+  formatOption: 'text="PDF"',
   dialogExport: 'button:has-text("EXPORT")',
   exportStarted: 'text=/export .*(started|queued|processing)/i',
 
@@ -158,7 +162,7 @@ export const STEP_SELECTORS: Record<string, SelectorKey[]> = {
   "read the item count": ["itemCount"],
   "open the export dialog": ["exportButton", "dialog"],
   "set the sections": ["dialogRoot", "dialog"],
-  "choose PDF": ["formatSelect"],
+  "choose PDF": ["formatSelect", "formatOption"],
   "confirm the scope is everything": ["dialog", "dialogScope"],
   "start the export": ["dialogRoot", "dialogExport"],
   "wait for the export and download it": ["exportsNav", "newestExportReady", "newestExportDownload"],
@@ -181,7 +185,8 @@ export const SELECTOR_HELP: Record<SelectorKey, string> = {
   dialog: "Text that proves the Export Expenses dialog is open.",
   dialogRoot: "The dialog element itself; section chips are looked for inside it.",
   dialogScope: "The line saying whether all expenses or a selection will be exported.",
-  formatSelect: "The format dropdown in the dialog.",
+  formatSelect: "The format dropdown in the dialog — the thing you click to open the list.",
+  formatOption: "The PDF entry inside that list, once it is open.",
   dialogExport: "The EXPORT button inside the dialog.",
   exportStarted: "Confirmation that the export was queued.",
   exportsNav: "The link to the list of finished exports.",
@@ -741,6 +746,32 @@ export async function firstVisible(
   return null;
 }
 
+/**
+ * Click the first visible match, or say precisely why nothing was clicked.
+ *
+ * `locator.click()` on a selector that matches nothing reports
+ * "locator.click: Timeout 30000ms exceeded", which names neither the thing it
+ * wanted nor what was actually on screen. Every one of these selectors is a
+ * guess about somebody else's markup, so the failure has to carry enough for
+ * the person reading it to write a better guess — the selector tried, and the
+ * words that were really there.
+ */
+async function clickVisible(
+  page: Page,
+  selector: string,
+  what: string,
+  context?: () => Promise<string>,
+): Promise<void> {
+  const target = await firstVisible(page, selector, env.emburseLogin.stepTimeoutMs);
+  if (!target) {
+    const seen = snippet((await context?.()) ?? (await pageText(page)));
+    throw new Error(
+      `could not find ${what} — nothing visible matched ${selector}. It reads: "${seen}"`,
+    );
+  }
+  await target.click();
+}
+
 /** The page's words, flattened — what both the diagnosis and the prompt read. */
 const pageText = async (page: Page): Promise<string> =>
   ((await page.locator("body").innerText().catch(() => "")) || "").replace(/\s+/g, " ").trim();
@@ -965,7 +996,7 @@ async function runSteps(
   });
 
   if (!(await step("open the export dialog", async () => {
-    await page.locator(sel.exportButton).first().click();
+    await clickVisible(page, sel.exportButton, "the EXPORT button above the grid");
     if (!(await firstVisible(page, sel.dialog, env.emburseLogin.stepTimeoutMs))) {
       throw new Error(
         `the export dialog did not open — nothing visible matched ${sel.dialog} at ` +
@@ -1013,9 +1044,22 @@ async function runSteps(
 
   if (!(await step("choose PDF", async () => {
     // Choosing PDF also greys out the template selector, so nothing else needed.
-    const select = page.locator(sel.formatSelect).first();
-    await select.click();
-    await page.locator('text="PDF"').last().click();
+    //
+    // This used to be two blind clicks — `.first()` on the control and
+    // `.last()` on a hard-coded "PDF" — and when the control was not where it
+    // expected, all it could say was that a click timed out. Both halves are
+    // now named, both are configurable, and a failure quotes the dialog so the
+    // right words can be read straight off it.
+    const inDialog = async () => {
+      const root = await firstVisible(page, sel.dialogRoot, 2000);
+      const text = root ? await root.innerText().catch(() => "") : "";
+      // The menu a dropdown opens is often portalled outside the dialog, so
+      // fall back to the whole page rather than reporting an empty string.
+      return (text || (await pageText(page))).replace(/\s+/g, " ").trim();
+    };
+
+    await clickVisible(page, sel.formatSelect, "the format dropdown", inDialog);
+    await clickVisible(page, sel.formatOption, "PDF in the format list", inDialog);
     return "format set to PDF";
   }))) return false;
 
@@ -1035,7 +1079,23 @@ async function runSteps(
   }
 
   if (!(await step("start the export", async () => {
-    await page.locator(sel.dialogRoot).locator(sel.dialogExport).last().click();
+    // Scoped to the dialog: the grid behind it has an EXPORT button of its own,
+    // and clicking that one reopens the dialog instead of submitting it.
+    const root = await firstVisible(page, sel.dialogRoot, env.emburseLogin.stepTimeoutMs);
+    if (!root) {
+      throw new Error(
+        `the export dialog is no longer on screen — nothing visible matched ${sel.dialogRoot}.`,
+      );
+    }
+    const button = root.locator(sel.dialogExport).last();
+    if (!(await button.isVisible().catch(() => false))) {
+      throw new Error(
+        `could not find the EXPORT button inside the dialog — nothing matched ` +
+          `${sel.dialogExport} there. The dialog reads: ` +
+          `"${snippet((await root.innerText().catch(() => "")).replace(/\s+/g, " ").trim())}"`,
+      );
+    }
+    await button.click();
     return "export requested";
   }))) return false;
 
@@ -1044,14 +1104,15 @@ async function runSteps(
     // has to be watched rather than awaited: poll the exports list until the
     // newest row is complete, then take the download.
     const deadline = Date.now() + env.emburseLogin.exportWaitMs;
-    await page.locator(sel.exportsNav).first().click().catch(() => {});
+    // Best effort: some tenants land on the exports list already. If this link
+    // is not there the poll below is what decides, not this click.
+    await clickVisible(page, sel.exportsNav, "the Exports link").catch(() => {});
 
     while (Date.now() < deadline) {
-      const ready = page.locator(sel.newestExportReady).first();
-      if (await ready.isVisible().catch(() => false)) {
+      if (await firstVisible(page, sel.newestExportReady, 0)) {
         const [download] = await Promise.all([
           page.waitForEvent("download"),
-          page.locator(sel.newestExportDownload).first().click(),
+          clickVisible(page, sel.newestExportDownload, "the Download link on the finished export"),
         ]);
         const stream = await download.createReadStream();
         const chunks: Buffer[] = [];

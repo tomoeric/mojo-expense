@@ -480,6 +480,36 @@ check("…and names both things it looked for",
   /#nothing-here/.test(detail) && /#nor-here/.test(detail), detail.slice(0, 110));
 await fetch(`${mock.url}/__app?grid=table`, { method: "POST" });
 
+// ------------------------------------ a failed click must say what it wanted
+// The real failure read, in full: "locator.click: Timeout 30000ms exceeded."
+// That names neither the thing it wanted nor what was on screen instead —
+// and every one of these selectors is a guess about somebody else's markup,
+// so the failure is the only place a better guess can come from.
+console.log("\n16. A click that cannot happen explains itself");
+await forgetDevice();
+mock.reset();
+
+run = await runAutoExport(settings, { ...selectors, formatSelect: "#no-such-dropdown" }, LOGIN,
+  { dryRun: true });
+detail = run.steps.find((st) => st.name === "choose PDF")?.detail ?? "";
+check("the run stops at the format step", run.steps.find((st) => !st.ok)?.name === "choose PDF",
+  run.steps.find((st) => !st.ok)?.name ?? "nothing failed");
+check("it names what it was looking for", /the format dropdown/.test(detail), detail.slice(0, 100));
+check("…and the selector that missed", /#no-such-dropdown/.test(detail), detail.slice(0, 100));
+check("…and quotes the dialog, so the real wording can be read off it",
+  /Export Expenses/.test(detail), detail.slice(0, 140));
+check("…rather than a bare Playwright timeout", !/^locator\.click/.test(detail), detail.slice(0, 60));
+
+// The second half of the step is a separate guess and fails separately.
+await forgetDevice();
+mock.reset();
+run = await runAutoExport(settings, { ...selectors, formatOption: "#no-such-option" }, LOGIN,
+  { dryRun: true });
+detail = run.steps.find((st) => st.name === "choose PDF")?.detail ?? "";
+check("a missing PDF option is reported on its own", /PDF in the format list/.test(detail),
+  detail.slice(0, 100));
+check("…and the format was left alone", mock.state().format !== "PDF", mock.state().format);
+
 await mock.close();
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}\n`);
 process.exit(failures === 0 ? 0 : 1);
