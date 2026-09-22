@@ -121,10 +121,10 @@ let running = false;
  * load moments after a scheduled pass does not repeat the work, and a slow sync
  * cannot have a second one pile up behind it.
  *
- * The clock is per-process. An autoscale deployment with several instances will
- * therefore sync more often than `pollMinutes` suggests — harmless, because
+ * The clock is per-process, so a restart resets it and a deployment running more
+ * than one instance will sync more often than `pollMinutes` suggests. Harmless:
  * `import_sources` skips files already seen and the content hash catches the
- * rest, but it is why the interval is a floor rather than a promise.
+ * rest. It is why the interval is a floor rather than a promise.
  */
 function kick(trigger: string): void {
   const minutes = env.sharepoint.pollMinutes;
@@ -149,19 +149,18 @@ function kick(trigger: string): void {
 /**
  * Nudge the sync when someone loads a page.
  *
- * The interval below only runs while a process is alive, and this app deploys
- * to Replit **autoscale**, which stops the container when no requests are
- * arriving. Overnight there is no traffic, so there is nothing running to fire
- * a timer — the export could sit in SharePoint until someone happened to visit.
+ * The timer below is the real scheduler — this deploys to a Reserved VM, so the
+ * process stays alive between requests and the interval fires overnight as
+ * intended. This is about latency rather than reliability: an export that lands
+ * at 06:10 would otherwise wait until the next tick, so the first person in
+ * could be looking at yesterday's data for the better part of an hour.
  *
- * Tying a check to page loads closes that gap without a second service: the
- * reviewer opening the app is exactly when the data needs to be current. It
- * returns immediately and the sync continues in the background, so nobody waits
- * on an 11 MB download.
+ * Checking on page load closes that window. The reviewer opening the app is
+ * exactly when the data needs to be current, and `kick` still refuses to run
+ * more often than `pollMinutes`, so this costs nothing on a quiet morning.
  *
- * It is a safety net, not a scheduler. If the export genuinely has to be in the
- * database before anyone asks — for an alert, say — the deployment needs to be
- * a Reserved VM that stays awake.
+ * It returns immediately and the sync continues in the background — nobody
+ * waits on an 11 MB download.
  */
 export function syncOnPageLoad(): void {
   kick("on-demand");

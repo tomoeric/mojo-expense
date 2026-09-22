@@ -2,7 +2,9 @@ modules = ["nodejs-24"]
 run = "pnpm run dev"
 
 [deployment]
-deploymentTarget = "autoscale"
+# Reserved VM, not autoscale: the process must stay alive between requests
+# so the SharePoint poll in server/import/sync.ts actually fires overnight.
+deploymentTarget = "vm"
 build = ["pnpm", "run", "build"]
 run = ["pnpm", "run", "start"]
 

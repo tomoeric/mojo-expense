@@ -432,12 +432,11 @@ hours, and shouts if it doesn't.
 
 Already built, nothing to configure beyond one permission:
 
-- Polls the folder every `SHAREPOINT_POLL_MINUTES` (default 60) **and** whenever
-  someone loads the queue or the Import page. The second path matters: this Repl
-  deploys to Replit **autoscale**, which stops the container when no requests
-  arrive, so overnight there is no process alive to fire a timer. If the export
-  must be in the database before anyone asks for it, the deployment needs to be
-  a Reserved VM that stays awake.
+- Polls the folder every `SHAREPOINT_POLL_MINUTES` (default 60), **and** whenever
+  someone loads the queue or the Import page. The deployment is a Reserved VM, so
+  the process stays alive between requests and the timer is the real scheduler;
+  the page-load check just means an export that landed at 06:10 is visible to the
+  first person in rather than waiting for the next tick.
 - Skips files already seen, by SharePoint item id + eTag — a replaced file
   counts as new.
 - Content-hashes the PDF, so re-importing the same bytes is a no-op.
