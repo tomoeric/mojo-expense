@@ -61,8 +61,8 @@ perfect flow delivers into a void.
 
 Still no automation. You are testing the pipeline the flow will feed.
 
-1. Do the export by hand, exactly as the flow will: ADMIN tab, four Section
-   chips, Receipts: true, PDF.
+1. Do the export by hand, exactly as the flow will: ADMIN tab, the three Section
+   chips (Needs Review, Needs Manager Review, Denied), Receipts: true, PDF.
 2. Drop the PDF into **AI Projects → Shared Documents → Emburse Transactions**.
 3. **Sync now**.
 
@@ -94,7 +94,8 @@ Then check, in this order:
 
 1. It landed on **ADMIN**, not PERSONAL.
 2. The grid's item count after APPLY matches what you get filtering by hand.
-3. The dialog shows **four** blue Section chips and Completed grey.
+3. The dialog shows exactly **three** blue Section chips — Needs Review, Needs
+   Manager Review, Denied — with Pending Submission and Completed grey.
 4. The dialog header says **"all expense(s)"**, not "N expense(s)".
 5. Format is PDF and the template dropdown is greyed out.
 
@@ -117,10 +118,10 @@ containing nothing, which the importer would accept without complaint.
 
 ### A section chip is in the wrong state
 
-**Manually toggle Completed on, then run.** The flow must switch it back off. Then
-**toggle a wanted chip off** and run — it must switch that one on. If the flow
-clicks chips unconditionally, one of these two runs ends up inverted and still
-looks successful.
+**Manually toggle Pending Submission on, then run.** The flow must switch it back
+off. Then **toggle a wanted chip off** and run — it must switch that one on. If
+the flow clicks chips unconditionally, one of these two runs ends up inverted and
+still looks successful.
 
 ### The session has expired
 

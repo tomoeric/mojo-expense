@@ -205,13 +205,14 @@ export
         Press button on web page ........... EXPORT  (top right of the grid)
   +     Wait for web page content .......... the Export Expenses dialog is up
 
-  +     For each of the four Section chips to include:
+  +     For each of the three Section chips to include:
             If web page contains ........... that chip in its UNCHECKED state
                 Click link on web page ..... that chip
             End
-  +     If web page contains ............... Completed in its CHECKED state
-            Click link on web page ......... Completed        (switch it off)
-        End
+  +     For each of the two chips to exclude:
+            If web page contains ........... that chip in its CHECKED state
+                Click link on web page ..... that chip        (switch it off)
+            End
         └ the chips are toggles, so clicking blind turns an already-on section
           OFF; test the state and click only when it needs changing
 
@@ -256,19 +257,19 @@ left you.
 
 #### The Section chips, set in the dialog
 
-The export covers the **Section(s)** ticked in the Export Expenses dialog. Four
-are wanted, and one is not:
+The export covers the **Section(s)** ticked in the Export Expenses dialog. Three
+are wanted, two are not:
 
-| Section | Include |
-| --- | --- |
-| Needs Review | yes |
-| Needs Manager Review | yes |
-| Pending Submission | yes |
-| Denied | yes |
-| Completed | no |
+| Section | Include | Why |
+| --- | --- | --- |
+| Needs Review | yes | the reviewer's queue |
+| Needs Manager Review | yes | in flight, still needs watching |
+| Denied | yes | resolved-but-not-finished; they come back |
+| Pending Submission | **no** | not yet submitted — the employee's to finish, not the reviewer's |
+| Completed | no | done, and the thing whose absence signals completion |
 
-Widening from one section to four is the difference between 34 rows and 275, so
-keep the **2,500-transaction export cap** in view as volume grows.
+Widening past a single section is the difference between 34 rows and several
+hundred, so keep the **2,500-transaction export cap** in view as volume grows.
 
 **The chips are toggles.** Clicking one that is already blue switches it *off*,
 so a flow that clicks all four unconditionally lands on the inverse of the
@@ -277,10 +278,11 @@ contains` against the chip's *unchecked* appearance and click only when it needs
 changing. Capture the checked and unchecked variants as separate UI elements;
 they differ by the tick and the fill.
 
-One consequence worth knowing downstream: with these four sections the export is
-everything that is not Completed, so the app's `in_inbox` flag comes to mean
-"still somewhere in the approval pipeline" rather than "awaiting first review".
-Rows drop out when they complete, which is the behaviour you want.
+One consequence worth knowing downstream: with these three sections, the app's
+`in_inbox` flag comes to mean "submitted and not yet finished" — a row leaves the
+inbox when it completes, and never enters it while the employee is still sitting
+on it. That is the right boundary for a reviewer console: everything in it is
+something someone here can act on.
 
 #### Capture the item count
 
