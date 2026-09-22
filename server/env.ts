@@ -157,8 +157,20 @@ export const env = {
   },
 
   audit: {
-    /** Anthropic API key. Absent = receipt auditing is unavailable. */
-    apiKey: str("ANTHROPIC_API_KEY"),
+    /**
+     * Anthropic credentials. Two shapes are accepted, checked in this order:
+     *
+     *   1. Replit's Anthropic AI integration — AI_INTEGRATIONS_ANTHROPIC_API_KEY
+     *      plus AI_INTEGRATIONS_ANTHROPIC_BASE_URL. This is what
+     *      ninja-live-status already uses, so provisioning the integration on
+     *      this Repl needs no new account and no separate billing.
+     *   2. A direct key from console.anthropic.com in ANTHROPIC_API_KEY.
+     *
+     * The integration key only works against its own gateway, which is why the
+     * base URL travels with it.
+     */
+    apiKey: str("AI_INTEGRATIONS_ANTHROPIC_API_KEY") || str("ANTHROPIC_API_KEY"),
+    baseUrl: str("AI_INTEGRATIONS_ANTHROPIC_BASE_URL") || str("ANTHROPIC_BASE_URL"),
     /**
      * Opus 5 is the default. Vision extraction is cheap at low effort, and a
      * misread receipt costs a reviewer more than the tokens save. Override to

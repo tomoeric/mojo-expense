@@ -74,6 +74,11 @@ app.listen(env.port, "0.0.0.0", () => {
   } else {
     console.log("No database configured (NEON_DATABASE_URL / EXTERNAL_DATABASE_URL / DATABASE_URL) — imports are unavailable.");
   }
+  console.log(
+    env.audit.apiKey
+      ? `Receipt checking: ${env.audit.model}${env.audit.baseUrl ? " via integration gateway" : ""}`
+      : "Receipt checking: no Anthropic key — the check is unavailable",
+  );
   const allowed = allowListSize();
   console.log(
     allowed > 0

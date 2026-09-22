@@ -301,11 +301,24 @@ colouring the benign cases red would train reviewers to ignore the badge.
 The model is never told the claimed amount; it reads the receipt cold and the
 comparison happens in code, so it cannot be nudged into agreeing.
 
-Requires `ANTHROPIC_API_KEY`. Configuration:
+Two credential shapes are accepted, checked in this order:
+
+1. **Replit's Anthropic AI integration** — `AI_INTEGRATIONS_ANTHROPIC_API_KEY`
+   plus `AI_INTEGRATIONS_ANTHROPIC_BASE_URL`. This is what ninja-live-status
+   already uses, so provisioning the integration on this Repl needs no separate
+   Anthropic account and no separate billing. The key only works against its
+   own gateway, which is why the base URL travels with it.
+2. **A direct key** from console.anthropic.com in `ANTHROPIC_API_KEY`.
+
+The boot log says which one was found, and whether it is going through the
+gateway. If the gateway rejects the default model, set `RECEIPT_AUDIT_MODEL` to
+one it serves — ninja-live-status uses `claude-sonnet-4-6` through it.
+
+Configuration:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | — | Absent = the check is unavailable; everything else still works |
+| `AI_INTEGRATIONS_ANTHROPIC_*` or `ANTHROPIC_API_KEY` | — | Absent = the check is unavailable; everything else still works |
 | `RECEIPT_AUDIT_MODEL` | `claude-opus-5` | Runs at low effort — extraction, not reasoning |
 | `RECEIPT_AUDIT_TOLERANCE` | `0.02` | Absolute dollar slack |
 | `RECEIPT_AUDIT_TOLERANCE_PCT` | `0.01` | Proportional slack, for conversion and rounding |

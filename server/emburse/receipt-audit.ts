@@ -71,7 +71,13 @@ const cache = new Map<string, AuditResult>();
 const key = (line: ExpenseLine) => `${line.id}:${line.amount.toFixed(2)}`;
 
 let client: Anthropic | null = null;
-const anthropic = (): Anthropic => (client ??= new Anthropic({ apiKey: env.audit.apiKey }));
+const anthropic = (): Anthropic =>
+  (client ??= new Anthropic({
+    apiKey: env.audit.apiKey,
+    // Only set when routing through Replit's integration gateway; the SDK
+    // defaults to api.anthropic.com for a direct key.
+    ...(env.audit.baseUrl ? { baseURL: env.audit.baseUrl } : {}),
+  }));
 
 /** Slack allowed before a difference is called out at all. */
 function tolerance(claimed: number): number {
