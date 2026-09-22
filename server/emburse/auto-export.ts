@@ -1106,47 +1106,61 @@ async function runSteps(
     const want = new Set(settings.sections);
     const changed: string[] = [];
 
-    // Before touching anything: can every section we were told to export
-    // actually be found? A chip that does not match the selector used to be
-    // skipped in silence, so a dialog where none of them matched produced
-    // "already correct" and an export of whatever Emburse happened to have
-    // selected. That is the one failure this whole step exists to prevent,
-    // and it is invisible in the result — the PDF is valid, it parses, it
-    // reconciles against its own total. Only the sections are wrong.
-    const missing: string[] = [];
-    for (const name of want) {
-      if (!(await chipLocator(page, sel, name).isVisible().catch(() => false))) missing.push(name);
-    }
-    if (missing.length) {
-      throw new Error(
-        `could not find the section chip${missing.length === 1 ? "" : "s"} for ` +
-          `${missing.join(", ")} in the export dialog, so the export would have covered the ` +
-          `wrong sections. The dialog reads: "${snippet(await dialogText(page, sel))}"`,
-      );
-    }
-
+    // Re-found at the top of every pass, never cached across one — and waited
+    // for, never peeked at. Both halves were wrong at different times.
+    //
+    // Peeking: the dialog's title renders before its body, so asking whether a
+    // chip is visible the instant the dialog opens reliably says no. That came
+    // back in 0.0s having concluded the chips were missing, on a dialog whose
+    // whole text was still "Export Expenses".
+    //
+    // Caching: clicking a chip re-renders the dialog, so a root taken before
+    // the click points at a page that no longer exists. The pass after a click
+    // then read an empty document, found no chips, and reported that they
+    // would not take — having in fact just set one correctly.
+    let scoped = true;
     for (let pass = 0; pass <= ALL_CHIPS.length; pass++) {
+      const here = await findChipRoot(page, sel, [...want]);
+      if (!here) {
+        // Before anything was touched this is a selector problem, and the one
+        // this step exists to catch: a chip that cannot be read used to be
+        // skipped in silence, so a dialog where none matched produced "already
+        // correct" and an export of whatever Emburse had selected. That is
+        // invisible downstream — the PDF is valid, parses, and reconciles
+        // against its own total. Only the sections are wrong.
+        const names = [...want].join(", ");
+        throw new Error(
+          pass === 0
+            ? `could not find the section chip${want.size === 1 ? "" : "s"} for ${names} in the ` +
+              `export dialog, so the export would have covered the wrong sections. Looked inside ` +
+              `${sel.dialogRoot} and across the whole page. It reads: ` +
+              `"${snippet(await dialogText(page, sel))}"`
+            : `the section chips did not come back after ${changed.join(" ")}. The dialog reads: ` +
+              `"${snippet(await dialogText(page, sel))}"`,
+        );
+      }
+      scoped = here.scoped;
+
       let clicked = false;
       for (const name of ALL_CHIPS) {
-        const chip = chipLocator(page, sel, name);
+        const chip = chipLocator(here.root, name);
         if (!(await chip.isVisible().catch(() => false))) continue;
         if ((await isChipOn(chip)) === want.has(name)) continue;
 
         await chip.click();
-        // Clicking re-renders the dialog; wait for it before reading again.
-        await firstVisible(page, sel.dialog, env.emburseLogin.stepTimeoutMs);
         changed.push(`${want.has(name) ? "+" : "-"}${name}`);
         clicked = true;
         break;
       }
+      // One change per pass. The next pass waits for the dialog to come back
+      // before reading anything, which is what makes the click observable.
       if (clicked) continue;
 
-      // Settled. Now say what is actually on, rather than that nothing needed
-      // doing — "already correct" is a claim, and it was being made without
-      // ever having read a chip.
+      // Settled. Say what is actually on, rather than that nothing needed
+      // doing — "already correct" was a claim made without reading a chip.
       const on: string[] = [];
       for (const name of ALL_CHIPS) {
-        const chip = chipLocator(page, sel, name);
+        const chip = chipLocator(here.root, name);
         if (!(await chip.isVisible().catch(() => false))) continue;
         if (await isChipOn(chip)) on.push(name);
       }
@@ -1157,7 +1171,10 @@ async function runSteps(
             `ended up with ${on.join(", ") || "none"}.`,
         );
       }
-      return `${changed.length ? `${changed.join(" ")} — ` : ""}on: ${on.join(", ") || "none"}`;
+      // Saying when the chips were only reachable outside the dialog turns a
+      // silent near-miss into a one-line selector fix.
+      const note = scoped ? "" : ` (found outside ${sel.dialogRoot} — worth correcting)`;
+      return `${changed.length ? `${changed.join(" ")} — ` : ""}on: ${on.join(", ") || "none"}${note}`;
     }
     // A chip that never takes means the state could not be read, and exporting
     // the wrong sections looks exactly like exporting the right ones.
@@ -1194,11 +1211,37 @@ async function runSteps(
   if (!(await step("confirm the scope is everything", async () => {
     // With rows ticked the dialog says "1 expense(s)" and exports only those —
     // a valid PDF of almost nothing, which every later check would accept.
-    const body = await page.locator(sel.dialog).first().locator("xpath=ancestor::*[3]").innerText();
-    if (!/all\s+expense/i.test(body)) {
-      throw new Error(`dialog is scoped to a row selection, not all expenses: ${body.slice(0, 120)}`);
-    }
-    return "exporting all expenses";
+    //
+    // Waited for, not sampled. This line lives in the dialog's body, which is
+    // drawn after its title, and reading it too early finds a dialog that says
+    // only "Export Expenses" — which does not match "all expenses" and so
+    // reads as a row selection. Refusing to export because the page had not
+    // finished rendering is a bad way to lose a morning.
+    const deadline = Date.now() + env.emburseLogin.stepTimeoutMs;
+    let body = "";
+    do {
+      // The dialog first, then the page — same reason the chips need it: a
+      // dialogRoot that matches only the header leaves this line outside it,
+      // and an inconclusive read is not a reason to refuse.
+      for (const read of [() => dialogText(page, sel), () => pageText(page)]) {
+        body = await read();
+        if (/all\s+expense/i.test(body)) return "exporting all expenses";
+        // A definite answer: it named a count, so the scope really is a
+        // selection, and no amount of waiting will change that.
+        if (/\d+\s+expense\(s\)/i.test(body)) {
+          throw new Error(`dialog is scoped to a row selection, not all expenses: ${snippet(body)}`);
+        }
+      }
+      await page.waitForTimeout(250);
+    } while (Date.now() < deadline);
+
+    // Never found either phrasing. Refusing is the safe direction: this is the
+    // check that stops a valid PDF of almost nothing being exported and
+    // accepted by every test downstream.
+    throw new Error(
+      `could not tell whether the dialog is exporting everything or a row selection — ` +
+        `nothing matched "all expense(s)" or "N expense(s)". It reads: ${snippet(body)}`,
+    );
   }))) return false;
 
   if (opts.dryRun) {
@@ -1271,13 +1314,52 @@ async function runSteps(
  * confuse "Needs Review" with "Needs Manager Review"; the anchoring also rules
  * out ancestors, whose text contains the label plus everything around it.
  */
-function chipLocator(page: Page, sel: Selectors, name: string) {
+function chipLocator(root: Locator, name: string) {
   const label = new RegExp(`^[\\s\u2713\u2714\u2705*]*${escapeRe(name)}[\\s]*$`, "i");
-  return page
-    .locator(sel.dialogRoot)
+  return root
     .locator('a, button, [role="button"], [role="checkbox"], label, span, div')
     .filter({ hasText: label })
     .first();
+}
+
+/**
+ * Find where the section chips live, waiting for them to be drawn.
+ *
+ * Two mistakes are avoided here, and the first one shipped.
+ *
+ * **Peeking.** The dialog's title appears before its body, so asking whether a
+ * chip is visible the instant the dialog opens reliably says no — the step
+ * came back in 0.0s having concluded the chips could not be found, on a dialog
+ * whose text was still just "Export Expenses". The rule this file already
+ * learned twice: wait for a condition, do not sample one.
+ *
+ * **Trusting the scope.** Chips are looked for inside `dialogRoot`, and if
+ * that selector matches a header rather than the whole dialog, the chips are
+ * real and on screen and still unreachable. So the page is tried as well, and
+ * the answer says which worked — a run that only succeeds unscoped is a
+ * dialogRoot worth correcting, not a mystery.
+ */
+async function findChipRoot(
+  page: Page,
+  sel: Selectors,
+  want: string[],
+): Promise<{ root: Locator; scoped: boolean } | null> {
+  const has = async (root: Locator) => {
+    for (const name of want) {
+      if (!(await chipLocator(root, name).isVisible().catch(() => false))) return false;
+    }
+    return want.length > 0;
+  };
+
+  const deadline = Date.now() + env.emburseLogin.stepTimeoutMs;
+  do {
+    const dialog = await firstVisible(page, sel.dialogRoot, 0);
+    if (dialog && (await has(dialog))) return { root: dialog, scoped: true };
+    const body = page.locator("body");
+    if (await has(body)) return { root: body, scoped: false };
+    await page.waitForTimeout(250);
+  } while (Date.now() < deadline);
+  return null;
 }
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

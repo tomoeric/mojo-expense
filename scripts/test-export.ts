@@ -588,6 +588,39 @@ check("…and it did not settle for the template dropdown above it",
   /was CSV/.test(detail), detail.slice(0, 90));
 await fetch(`${mock.url}/__app?format=links`, { method: "POST" });
 
+// ------------------------------- a dialog that has not finished drawing itself
+// The check added above fired on the real Emburse — and was wrong. It peeked
+// the instant the dialog opened, found a dialog whose entire text was
+// "Export Expenses", and reported the chips missing in 0.0s. The title renders
+// before the body. Waiting for a condition, not sampling one: the rule this
+// file has now had to learn three times.
+console.log("\n20. A dialog whose body arrives after its title");
+await forgetDevice();
+mock.reset();
+await fetch(`${mock.url}/__app?bodyMs=4000`, { method: "POST" });
+
+run = await runAutoExport(settings, selectors, LOGIN, { dryRun: true });
+detail = run.steps.find((st) => st.name === "set the sections")?.detail ?? "";
+check("it waits for the chips instead of declaring them missing", run.ok,
+  run.steps.find((st) => !st.ok)?.detail?.slice(0, 90) ?? "");
+check("and sets them", /on: Needs Review, Needs Manager Review/.test(detail), detail.slice(0, 100));
+check("…and did not give up instantly",
+  (run.steps.find((st) => st.name === "set the sections")?.ms ?? 0) > 500,
+  `${run.steps.find((st) => st.name === "set the sections")?.ms ?? 0}ms`);
+
+console.log("\n21. A dialogRoot that only wraps the title");
+await forgetDevice();
+mock.reset();
+await fetch(`${mock.url}/__app?bodyMs=0&dialogRoot=header`, { method: "POST" });
+
+run = await runAutoExport(settings, selectors, LOGIN, { dryRun: true });
+detail = run.steps.find((st) => st.name === "set the sections")?.detail ?? "";
+check("the chips are still found, outside the dialog", run.ok,
+  run.steps.find((st) => !st.ok)?.detail?.slice(0, 90) ?? "");
+check("…and it says the scope is worth correcting", /worth correcting/.test(detail),
+  detail.slice(0, 110));
+await fetch(`${mock.url}/__app?dialogRoot=whole`, { method: "POST" });
+
 await mock.close();
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}\n`);
 process.exit(failures === 0 ? 0 : 1);

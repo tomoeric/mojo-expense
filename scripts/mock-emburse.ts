@@ -64,6 +64,10 @@ type State = {
   formatControl: "links" | "select" | "mui";
   /** When true the chips render as something the chip selector cannot match. */
   chipsUnmatchable: boolean;
+  /** Milliseconds the dialog shows only its title before drawing its body. */
+  dialogBodyMs: number;
+  /** When true role="dialog" wraps only the title, not the chips. */
+  dialogRootIsHeaderOnly: boolean;
   /** Codes submitted to the verification screen, right or wrong. */
   codeAttempts: number;
   /** Whether the last accepted code arrived with "remember this device" ticked. */
@@ -97,6 +101,8 @@ const state: State = {
   gridShape: "table",
   formatControl: "links",
   chipsUnmatchable: false,
+  dialogBodyMs: 0,
+  dialogRootIsHeaderOnly: false,
   search: "",
   format: "CSV",
   requestedAt: null,
@@ -317,14 +323,42 @@ app.get("/dialog", (_req, res) => {
         : `<a role="button" aria-pressed="${on}" href="/chip?name=${encodeURIComponent(name)}"
             style="border:1px solid #888;padding:2px 6px;margin:2px">${on ? "✓ " : ""}${name}</a>`)
     .join("");
-  res.send(page(`
-    <div role="dialog">
-      <h2>Export Expenses</h2>
+  const body = `
       <p>You will be exporting ${scope} that are tagged with</p>
       <div>${chips}</div>
       <p>Filter(s): ${state.receiptsFilter ? "Receipts: true" : "none"}</p>
       ${formatControl()}
-      <form method="post" action="/start"><button type="submit">EXPORT</button></form>
+      <form method="post" action="/start"><button type="submit">EXPORT</button></form>`;
+
+  // role="dialog" around the title only. The chips are on screen and real, and
+  // anything scoping its search to the dialog cannot reach them — which reads
+  // exactly like chips that do not exist.
+  if (state.dialogRootIsHeaderOnly) {
+    res.send(page(`<div role="dialog"><h2>Export Expenses</h2></div><div>${body}</div>`));
+    return;
+  }
+
+  // The title first, the body a beat later. Checking the instant the dialog
+  // opens finds a dialog whose whole text is "Export Expenses" and concludes
+  // the chips are missing — in 0.0s, which is the tell.
+  if (state.dialogBodyMs > 0) {
+    res.send(page(`
+      <div role="dialog">
+        <h2>Export Expenses</h2>
+        <div id="body"></div>
+      </div>
+      <script>
+        setTimeout(function () {
+          document.getElementById("body").innerHTML = ${JSON.stringify(body)};
+        }, ${state.dialogBodyMs});
+      </script>`));
+    return;
+  }
+
+  res.send(page(`
+    <div role="dialog">
+      <h2>Export Expenses</h2>
+      ${body}
     </div>`));
 });
 
@@ -427,6 +461,8 @@ app.post("/__app", (req, res) => {
   if ("grid" in q) state.gridShape = q["grid"] as State["gridShape"];
   if ("format" in q) state.formatControl = q["format"] as State["formatControl"];
   if ("chips" in q) state.chipsUnmatchable = q["chips"] === "unmatchable";
+  if ("bodyMs" in q) state.dialogBodyMs = Number(q["bodyMs"]) || 0;
+  if ("dialogRoot" in q) state.dialogRootIsHeaderOnly = q["dialogRoot"] === "header";
   res.json({ ok: true });
 });
 app.post("/__reset", (_req, res) => {
