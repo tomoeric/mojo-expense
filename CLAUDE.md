@@ -190,9 +190,14 @@ the blocks.
 
 ## The review drawer
 
-- **The receipt is IN the drawer, not behind a click.** The picture is the
-  thing being reviewed; a reviewer who has to ask for it will sometimes not
-  bother. Clicking it opens the zoom/pan viewer.
+- **The receipt gets its own pane on the left, and it zooms.** The picture is
+  the thing being reviewed; embedding it in the flow of the details meant
+  scrolling away from it to reach the decision. The pane stays put while the
+  details beside it scroll, and the ⤢ button hands off to full screen.
+- **One zoom implementation, not two.** `ReceiptPane` holds the load /
+  zoom / pan logic and takes a `tone`; `ReceiptViewer` is that pane with
+  full-screen chrome. They were briefly separate and the inline one had no
+  zoom, which is the one thing a reviewer squinting at thermal paper needs.
 - **Approve and deny live there too.** The drawer is where somebody has
   actually read the receipt, which is the moment the decision is made — going
   back to the table to click Approve puts a step between looking and saying so.

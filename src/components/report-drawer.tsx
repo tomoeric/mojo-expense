@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { X, ReceiptText, AlertTriangle, ScanSearch, Loader2, Maximize2, ImageOff } from "lucide-react";
+import { X, ReceiptText, AlertTriangle, ScanSearch, Loader2, Eye } from "lucide-react";
 import { auditReport, type AuditResult, type ExpenseLine, type ExpenseReport } from "@/lib/api";
 import { moneyExact, shortDate } from "@/lib/format";
 import { useDecisions } from "@/lib/decisions";
 import { StatusPill } from "./ui";
-import { ReceiptViewer } from "./receipt-viewer";
+import { ReceiptPane, ReceiptViewer } from "./receipt-viewer";
 import { ReceiptItems, useReceiptItems, type ReceiptDetail } from "./receipt-items";
 import { AuditBadge } from "./audit-badge";
 import { DecideButtons } from "./decide-controls";
@@ -30,12 +30,16 @@ export function ReportDrawer({
   const [auditError, setAuditError] = useState("");
   const [decideError, setDecideError] = useState("");
 
-  const receipted = report.lines.filter((l) => l.hasReceipt).length;
-
   // Deciding from here rather than only from the queue: this is the window
   // where somebody has actually read the receipt, which is the moment the
   // decision is made. Going back to the table to click Approve puts a step
   // between looking and saying so.
+  // The receipt in the left pane. Defaults to the first one there is, which
+  // for a single-line report — nearly all of them — means it is simply open.
+  const receipted = useMemo(() => report.lines.filter((l) => l.hasReceipt), [report.lines]);
+  const [showingId, setShowingId] = useState<string | null>(null);
+  const showing = receipted.find((l) => l.id === showingId) ?? receipted[0] ?? null;
+
   const lineIds = useMemo(() => report.lines.map((l) => l.id), [report.lines]);
   const { byExpense, canDecide, decide, cancel } = useDecisions(lineIds);
 
@@ -75,8 +79,12 @@ export function ReportDrawer({
   return (
     <div className="fixed inset-0 z-40 flex justify-end">
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-      <aside className="relative flex h-full w-full max-w-2xl flex-col overflow-y-auto border-l border-border bg-card shadow-2xl">
-        <header className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-border bg-card px-5 py-4">
+      {/* Wide enough for two columns. The receipt is the thing being reviewed,
+          so it gets a pane of its own that stays put while the details beside
+          it scroll — squeezing it into the flow meant scrolling away from the
+          picture to reach the decision. */}
+      <aside className="relative flex h-full w-full max-w-[min(97vw,1280px)] flex-col border-l border-border bg-card shadow-2xl">
+        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-border bg-card px-5 py-4">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="truncate text-lg font-bold">{report.name}</h2>
@@ -96,7 +104,14 @@ export function ReportDrawer({
           </button>
         </header>
 
-        <div className="space-y-5 px-5 py-5">
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+        {showing && (
+          <div className="flex h-80 shrink-0 flex-col border-b border-border lg:h-auto lg:w-[44%] lg:border-r lg:border-b-0">
+            <ReceiptPane line={showing} onExpand={() => setViewing(showing)} className="flex-1" />
+          </div>
+        )}
+
+        <div className="min-w-0 flex-1 space-y-5 overflow-y-auto px-5 py-5">
           <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Fact label="Total" value={moneyExact(report.total)} />
             <Fact label="Reimbursable" value={moneyExact(report.reimbursableTotal)} />
@@ -144,20 +159,20 @@ export function ReportDrawer({
               <h3 className="text-xs font-bold tracking-wide text-muted-foreground uppercase">
                 Lines ({report.lines.length})
               </h3>
-              {receipted > 0 && (
+              {receipted.length > 0 && (
                 <button
                   type="button"
                   onClick={runCheck}
                   disabled={checking}
                   title={
                     auditConfigured
-                      ? `Read each receipt and compare its total to the claim (${receipted} receipts)`
+                      ? `Read each receipt and compare its total to the claim (${receipted.length} receipts)`
                       : "Receipt checking needs ANTHROPIC_API_KEY"
                   }
                   className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-semibold transition-colors hover:bg-muted disabled:opacity-60"
                 >
                   {checking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ScanSearch className="h-3.5 w-3.5" />}
-                  {checking ? "Reading receipts…" : `Check ${receipted} receipt${receipted === 1 ? "" : "s"}`}
+                  {checking ? "Reading receipts…" : `Check ${receipted.length} receipt${receipted.length === 1 ? "" : "s"}`}
                 </button>
               )}
             </div>
@@ -190,7 +205,8 @@ export function ReportDrawer({
                     items={items.data?.byExpense?.[l.id]}
                     itemsLoading={items.isLoading}
                     itemsEnabled={items.data?.enabled ?? false}
-                    onEnlarge={() => setViewing(l)}
+                    onShow={receipted.length > 1 ? () => setShowingId(l.id) : null}
+                    isShowing={showing?.id === l.id}
                     decide={
                       !canDecide ? null : (
                       <DecideButtons
@@ -222,6 +238,7 @@ export function ReportDrawer({
             )}
           </section>
         </div>
+      </div>
       </aside>
 
       {viewing && <ReceiptViewer line={viewing} onClose={() => setViewing(null)} />}
@@ -239,7 +256,7 @@ export function ReportDrawer({
  * ask for it will sometimes not bother.
  */
 function LineCard({
-  line, department, flagged, audit, items, itemsLoading, itemsEnabled, onEnlarge, decide,
+  line, department, flagged, audit, items, itemsLoading, itemsEnabled, onShow, isShowing, decide,
 }: {
   line: ExpenseLine;
   department: string;
@@ -248,10 +265,11 @@ function LineCard({
   items: ReceiptDetail[] | undefined;
   itemsLoading: boolean;
   itemsEnabled: boolean;
-  onEnlarge: () => void;
+  /** Null when there is only one receipt, so there is nothing to choose. */
+  onShow: (() => void) | null;
+  isShowing: boolean;
   decide: React.ReactNode;
 }) {
-  const [broken, setBroken] = useState(false);
 
   const facts: [string, string][] = [
     ["Location / Site", line.location],
@@ -285,42 +303,27 @@ function LineCard({
       <div className="px-4 py-3">
         {line.hasReceipt ? (
           <>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-bold tracking-wide text-muted-foreground uppercase">Receipt</span>
               {audit && <AuditBadge result={audit} />}
-              <button
-                type="button"
-                onClick={onEnlarge}
-                className="ml-auto inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-muted"
-              >
-                <Maximize2 className="h-3.5 w-3.5" /> Enlarge
-              </button>
+              {/* The picture itself is in the left pane. With one receipt it is
+                  already the one on screen, so the control only appears when
+                  there is a choice to make. */}
+              {onShow && (
+                <button
+                  type="button"
+                  onClick={onShow}
+                  disabled={isShowing}
+                  className={`ml-auto inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${
+                    isShowing
+                      ? "border-sky-500/50 bg-sky-500/10 font-semibold text-sky-700"
+                      : "border-border hover:bg-muted"
+                  }`}
+                >
+                  <Eye className="h-3.5 w-3.5" /> {isShowing ? "Showing" : "Show this one"}
+                </button>
+              )}
             </div>
-
-            {broken ? (
-              <p className="mt-2 flex items-center gap-2 rounded-lg border border-dashed border-border px-3 py-6 text-xs text-muted-foreground">
-                <ImageOff className="h-4 w-4" />
-                The receipt image could not be loaded.
-              </p>
-            ) : (
-              <button
-                type="button"
-                onClick={onEnlarge}
-                title="Enlarge"
-                className="mt-2 block w-full overflow-hidden rounded-lg border border-border bg-muted/40"
-              >
-                {/* Capped rather than full height: the picture is here to be
-                    read at a glance, and a full-length receipt would push the
-                    decision off the bottom of the drawer. */}
-                <img
-                  src={`/api/receipts/${encodeURIComponent(line.id)}`}
-                  alt={`Receipt for ${line.merchant}`}
-                  loading="lazy"
-                  onError={() => setBroken(true)}
-                  className="max-h-80 w-full object-contain"
-                />
-              </button>
-            )}
 
             <div className="mt-2">
               <ReceiptItems
