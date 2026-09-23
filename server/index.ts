@@ -14,6 +14,7 @@ import { startDecisionWorker } from "./emburse/decision-worker.js";
 import { startReceiptReader } from "./emburse/receipt-reader.js";
 import { ensureSchema, isDbConfigured } from "./db.js";
 import { rulesRouter } from "./rules/routes.js";
+import { refuseWritesWhileViewingAs, viewAsMiddleware } from "./auth/view-as.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -26,6 +27,11 @@ app.use((req, res, next) =>
 app.use(cookieParser());
 // Populates req.user from the session cookie before anything reads it.
 app.use(authMiddleware);
+// After authMiddleware, so it decides from the REAL session whether the
+// viewer may look through somebody else's eyes — and before the routers, so
+// every read sees the swapped identity and every write is refused.
+app.use(viewAsMiddleware);
+app.use(refuseWritesWhileViewingAs);
 app.use("/api", authRouter);
 app.use("/api", importRouter);
 app.use("/api", decisionRouter);

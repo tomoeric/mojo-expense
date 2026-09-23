@@ -114,9 +114,19 @@ export type ReportsResponse = {
 
 export type SessionUser = { id: string; email: string; name: string; exp: number; isAdmin?: boolean };
 
-export type AuthResponse = { user: SessionUser | null; authConfigured: boolean; isAdmin: boolean };
+export type ViewingAs = { real: string; as: string };
+
+export type AuthResponse = {
+  user: SessionUser | null;
+  authConfigured: boolean;
+  isAdmin: boolean;
+  /** Set while an admin is looking through somebody else's eyes. */
+  viewingAs: ViewingAs | null;
+};
 
 export type ConfigResponse = {
+  /** Emails with a stored Emburse login — who an admin may view the app as. */
+  deciders?: string[];
   configured: boolean;
   source: "imported" | "demo" | string;
   authConfigured: boolean;

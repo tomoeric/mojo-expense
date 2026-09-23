@@ -2,10 +2,10 @@ import { Router, type Request, type Response } from "express";
 import { db, isDbConfigured } from "../db.js";
 import { readSettings } from "../import/settings.js";
 import { requireAuth } from "../auth/index.js";
-import { answerChallenge, cancelChallenge, currentChallenge } from "../emburse/challenge.js";
+import { answerChallenge, cancelChallenge, currentChallenge, waitForCode } from "../emburse/challenge.js";
 import { browserQueue, whyWaiting } from "./browser-lock.js";
-import { credentialForUser, hasCredential } from "./credentials.js";
-import { runDecision, type Decision, type Target } from "./decide.js";
+import { credentialForUser, hasCredential, noteResult } from "./credentials.js";
+import { runDecision, testConnection, type Decision, type Target } from "./decide.js";
 import {
   cancelDecision, decisionsFor, pendingDecisions, queueDecision, recentDecisions,
 } from "./decisions.js";
@@ -46,6 +46,55 @@ async function targetFor(dedupeKey: string): Promise<Target | null> {
     date: r.expense_date ? r.expense_date.toISOString().slice(0, 10) : null,
   };
 }
+
+/**
+ * Test this person's own Emburse connection.
+ *
+ * Signs in as them and stops. Approving used to be the only way to find out
+ * whether a login worked, so the first thing a new reviewer learned was that a
+ * real expense "did not go through".
+ *
+ * Always the REAL signed-in person, never an impersonated one: this signs in
+ * to Emburse, and the verification code it may raise goes to that person's own
+ * phone. An admin cannot answer it for them, so there is nothing to gain by
+ * letting them try.
+ */
+decisionRouter.post("/emburse-check", requireAuth, async (req: Request, res: Response) => {
+  const who = req.viewingAs?.real ?? req.user?.email ?? "";
+  const login = await credentialForUser(who);
+  if (!login) {
+    res.status(400).json({
+      error: "You have no Emburse login stored. Add one under “Your Emburse login” in the user menu.",
+    });
+    return;
+  }
+
+  try {
+    const settings = await readSettings();
+    const run = await testConnection(settings.selectors, settings.emburseUrl, login, {
+      // Somebody pressed a button and is watching, so a code CAN be asked for —
+      // and answering it here is the whole reason to press it.
+      onChallenge: (ctx: { prompt: string; screenshot: string | null; attempt: number; lastError: string | null }) =>
+        waitForCode({ ...ctx, owner: who }),
+    });
+    // A failed connection test is NOT automatically a wrong password: a device
+    // check and a moved button fail the same way, and flagging those for
+    // re-entry asks somebody to retype a password that was never the problem.
+    const why = run.ok ? null : lastFailure(run.steps);
+    await noteResult(who, run.ok, why, Boolean(why && /password|credential|rejected/i.test(why)));
+    res.json({
+      ok: run.ok,
+      who,
+      steps: run.steps,
+      screenshot: run.screenshot,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "The test could not run." });
+  }
+});
+
+const lastFailure = (steps: { ok: boolean; detail: string }[]): string =>
+  steps.filter((s) => !s.ok).map((s) => s.detail).join(" — ") || "The sign-in did not complete.";
 
 /**
  * Answer the verification code a decision is parked on.

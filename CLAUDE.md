@@ -194,6 +194,30 @@ the blocks.
   the rail entry and pick up nesting, deep links and the mobile second row for
   free.
 
+## Testing a connection, and viewing as somebody else
+
+- **"Test connection" signs in and opens the grid, and decides nothing.**
+  Approving a real expense used to be the only way to find out whether a login
+  worked, so a new reviewer's first lesson was that a real expense "did not go
+  through". It goes as far as the grid on purpose: the two failures people hit
+  are the device check (at sign-in) and the grid not appearing (after it), and
+  a test that stopped at "signed in" would call the second one fine.
+- **It always uses the REAL signed-in person**, never an impersonated one — it
+  signs in to Emburse, and the code it may raise goes to that person's phone.
+- **Never report a missing grid as "the grid did not appear".** `whyNoGrid`
+  separates the four causes that have four different fixes: bounced back to
+  sign-in, genuinely no results, a selector matching only hidden elements, or
+  nothing matching at all — and it quotes the page.
+- **Viewing as somebody else is READ ONLY** (`auth/view-as.ts`), and the server
+  enforces it rather than the UI: every non-GET is refused while it is on, bar
+  switching target, switching back, and the dry run. An admin clicking Approve
+  in somebody else's view would put their name on a financial approval they
+  never made.
+- **The view-as cookie carries a name, never authority.** Whether it is
+  honoured is re-decided from the real session on every request, so setting it
+  by hand as a non-admin achieves nothing. It cannot reach anybody's password:
+  those stay sealed and are only opened server-side by the worker.
+
 ## The review drawer
 
 - **The receipt gets its own pane on the left, and it zooms.** The picture is

@@ -7,6 +7,7 @@ import {
   setSessionCookie,
   type SessionUser,
 } from "./session.js";
+import { clearViewAs, setViewAs } from "./view-as.js";
 
 /**
  * Microsoft SSO via Entra ID (OpenID Connect + PKCE), matching how
@@ -169,9 +170,38 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 
 export const authRouter: IRouter = Router();
 
+/**
+ * Look at the app as somebody else. Admin only, and read-only — see view-as.ts.
+ *
+ * Declared here rather than in a router mounted later because it has to work
+ * even while `refuseWritesWhileViewingAs` is turning writes away: switching
+ * targets, and switching back, are the two things that must never be blocked
+ * by the thing they control.
+ */
+authRouter.post("/view-as", requireAuth, requireAdmin, (req: Request, res: Response) => {
+  const email = String((req.body as { email?: unknown })?.email ?? "").trim().toLowerCase();
+  if (!email.includes("@")) {
+    res.status(400).json({ error: "Which person? Give an email address." });
+    return;
+  }
+  if (email === (req.viewingAs?.real ?? req.user?.email ?? "").toLowerCase()) {
+    res.status(400).json({ error: "That is you." });
+    return;
+  }
+  setViewAs(res, email);
+  res.json({ ok: true, as: email });
+});
+
+authRouter.delete("/view-as", requireAuth, (req: Request, res: Response) => {
+  clearViewAs(res);
+  res.json({ ok: true });
+});
+
 authRouter.get("/auth/user", (req: Request, res: Response) => {
   res.json({
     user: req.user ? { ...req.user, isAdmin: isAdmin(req.user.email) } : null,
+    // Who is really signed in, when they are wearing somebody else's face.
+    viewingAs: req.viewingAs ?? null,
     authConfigured: isAuthConfigured(),
     // With sign-in off there is no identity, so the UI should not hide admin
     // affordances behind a check the server is not making either.

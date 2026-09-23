@@ -9,6 +9,7 @@ import { SectionTitle, LiveStrip, SegmentedControl, Empty } from "@/components/u
 import { NotConnected } from "@/components/not-connected";
 import { SignIn } from "@/components/sign-in";
 import { UserMenu } from "@/components/user-menu";
+import { ViewAsBanner } from "@/components/view-as";
 import { ReportDrawer } from "@/components/report-drawer";
 import { QueuePage } from "@/pages/queue";
 import { ReportsPage } from "@/pages/reports";
@@ -153,6 +154,10 @@ export function App() {
     setOpen(null);
   }, [route]);
 
+  // Who an admin can look at the app as: the people who can decide, which is
+  // the only group whose view differs in a way worth inspecting.
+  const deciders = config.data?.deciders ?? [];
+
   const active =
     RAIL_PAGES.find((r) => r.key === route) ?? MENU_PAGES.find((m) => m.key === route) ?? RAIL[0]!;
   const data = reports.data;
@@ -174,6 +179,9 @@ export function App() {
 
   return (
     <div className="min-h-screen">
+      {/* Above the header, full width, impossible to miss: everything below it
+          is somebody else's view and none of it can act. */}
+      {auth.data?.viewingAs && <ViewAsBanner viewingAs={auth.data.viewingAs} />}
       <header className="border-b border-border bg-black text-white">
         <div className="mx-auto flex max-w-[1800px] items-center justify-between gap-4 px-5 py-3">
           <div className="flex items-baseline gap-2.5">
@@ -188,7 +196,13 @@ export function App() {
                   ? "demo mode"
                   : (config.data?.source ?? "")}
             </span>
-            {auth.data?.user && <UserMenu user={auth.data.user} isAdmin={auth.data.isAdmin} />}
+            {auth.data?.user && (
+              <UserMenu
+                user={auth.data.user}
+                isAdmin={auth.data.isAdmin}
+                viewAsPeople={deciders}
+              />
+            )}
           </div>
         </div>
       </header>

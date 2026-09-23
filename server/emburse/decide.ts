@@ -252,6 +252,117 @@ export async function runDecisions(
 }
 
 /** One queued decision, as the batch runner needs it. */
+/**
+ * Why the grid is not there.
+ *
+ * "The results grid did not appear" is true and tells nobody what to do: the
+ * grid selector could be wrong, the gridPath could be wrong, Emburse could
+ * have bounced the session back to a sign-in, or the search could simply have
+ * matched nothing. Those have four different fixes, and the page itself
+ * distinguishes them.
+ */
+async function whyNoGrid(page: Page, sel: Record<string, string>): Promise<string> {
+  const where = safeUrl(page.url());
+  const text = (await page.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+
+  if (/sign in|log in|password|code-authentication/i.test(text) || /login|auth/i.test(page.url())) {
+    return `Emburse sent us back to sign in at ${where} — the session did not survive the search. ` +
+      "Test your Emburse connection to sign in again.";
+  }
+  if (/no results|no expenses|nothing to show|0 results/i.test(text)) {
+    return `the grid loaded at ${where} but Emburse says there are no results for that search.`;
+  }
+
+  // Present in the DOM but never visible is a different fault from absent, and
+  // it is the one that means the selector is matching the wrong thing.
+  const present = await page.locator(sel.grid!).count().catch(() => 0);
+  if (present > 0) {
+    return `the grid selector matched ${present} element(s) at ${where}, but none of them ever became ` +
+      `visible — “${sel.grid}” is probably matching a hidden measuring table rather than the real grid.`;
+  }
+  return `no grid at ${where}. Nothing matched “${sel.grid}”. Either that selector is wrong for this ` +
+    `page, or gridPath (“${sel.gridPath}”) is pointing somewhere other than the expenses list. ` +
+    `The page says: ${text.slice(0, 160) || "(nothing readable)"}`;
+}
+
+/**
+ * Sign in as one person and stop there.
+ *
+ * The connection test. Approving used to be the only way to find out whether
+ * somebody's Emburse login worked — so the first thing a new reviewer learned
+ * was that a real expense "did not go through", with the real cause (a device
+ * that has never been verified) three screens away in the export log.
+ *
+ * It reaches a signed-in ADMIN view and does nothing else: no grid, no row, no
+ * decision. The code prompt is offered, which is the point — answering it once
+ * here leaves the device remembered, and every later approval goes straight
+ * through.
+ */
+export async function testConnection(
+  selectors: Record<string, string>,
+  emburseUrl: string,
+  login: Login,
+  opts: { onChallenge?: ChallengeHook } = {},
+): Promise<DecisionRun> {
+  const steps: StepResult[] = [];
+  const step = makeStepper(steps);
+  const sel = { ...DECISION_SELECTORS, ...selectors } as Record<string, string>;
+
+  return withBrowser("testing an Emburse login", async () => {
+    let close: (() => Promise<void>) | null = null;
+    let page: Page | null = null;
+    try {
+      const opened = await openBrowser();
+      close = opened.close;
+      const sheet = await opened.context.newPage();
+      page = sheet;
+      sheet.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
+
+      let ok = await signInOnce(sheet, sel, emburseUrl, login, step, opts.onChallenge);
+
+      // One step further than signing in, because signing in is not where it
+      // has been failing. Opening the grid is everything a decision does
+      // except click the button, so this reproduces the real failure on
+      // demand instead of requiring somebody to approve a real expense to
+      // find out.
+      if (ok) {
+        ok = await step("open the expenses grid", async () => {
+          await sheet.goto(gridUrl(emburseUrl, { query: "", path: sel.gridPath }), {
+            waitUntil: "domcontentloaded",
+          });
+          if (!(await firstVisible(sheet, sel.grid!, env.emburseLogin.stepTimeoutMs))) {
+            throw new Error(await whyNoGrid(sheet, sel));
+          }
+          const rows = await sheet.locator(sel.resultRow!).count().catch(() => 0);
+          return `the grid is there with ${rows} row(s) — a decision could find its expense here`;
+        });
+      }
+
+      return {
+        ok,
+        steps,
+        matchedRow: null,
+        screenshot: ok ? null : (await sheet.screenshot().catch(() => null))?.toString("base64") ?? null,
+      };
+    } catch (err) {
+      steps.push({
+        name: "connect",
+        ok: false,
+        detail: err instanceof Error ? err.message : String(err),
+        ms: 0,
+      });
+      return {
+        ok: false,
+        steps,
+        matchedRow: null,
+        screenshot: page ? ((await page.screenshot().catch(() => null))?.toString("base64") ?? null) : null,
+      };
+    } finally {
+      await close?.().catch(() => {});
+    }
+  });
+}
+
 export type BatchItem = {
   id: number;
   decision: Decision;
@@ -356,7 +467,7 @@ async function applyOne(
     // Any visible match, not element number one: a grid's hidden measuring
     // rows come first in the DOM and never become visible.
     if (!(await firstVisible(page, sel.grid!, env.emburseLogin.stepTimeoutMs))) {
-      throw new Error(`the results grid did not appear at ${safeUrl(page.url())}.`);
+      throw new Error(await whyNoGrid(page, sel));
     }
 
     const rows = page.locator(sel.resultRow!);

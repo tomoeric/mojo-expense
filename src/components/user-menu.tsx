@@ -1,9 +1,19 @@
 import { useState } from "react";
+import { ViewAsPicker } from "./view-as";
 import { LogOut, UserRound, SlidersHorizontal, KeyRound } from "lucide-react";
 import type { SessionUser } from "@/lib/api";
 
 /** Signed-in identity + sign out, in the dark header bar. */
-export function UserMenu({ user, isAdmin }: { user: SessionUser; isAdmin: boolean }) {
+export function UserMenu({
+  user,
+  isAdmin,
+  viewAsPeople = [],
+}: {
+  user: SessionUser;
+  isAdmin: boolean;
+  /** People an admin can look at the app as. Empty for everybody else. */
+  viewAsPeople?: string[];
+}) {
   const [open, setOpen] = useState(false);
   const initials =
     user.name
@@ -58,9 +68,10 @@ export function UserMenu({ user, isAdmin }: { user: SessionUser; isAdmin: boolea
                 Export settings
               </a>
             )}
+            {isAdmin && <ViewAsPicker people={viewAsPeople} />}
             <a
               href="/api/logout"
-              className="flex items-center gap-2 px-3 py-2.5 text-sm transition-colors hover:bg-muted"
+              className="flex items-center gap-2 border-t border-border px-3 py-2.5 text-sm transition-colors hover:bg-muted"
             >
               <LogOut className="h-4 w-4" />
               Sign out
