@@ -1,8 +1,8 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod/v4";
 import { db, ensureSchema, isDbConfigured } from "../db.js";
 import { env, isAuditConfigured } from "../env.js";
+import { callAnthropic, describeAiConfig } from "../ai.js";
 
 /**
  * What was actually bought, read off the receipt itself.
@@ -118,12 +118,6 @@ const cents = (n: number | null | undefined): number | null =>
 const dollars = (c: string | number | null): number | null =>
   c === null ? null : Number(c) / 100;
 
-let client: Anthropic | null = null;
-const anthropic = (): Anthropic =>
-  (client ??= new Anthropic({
-    apiKey: env.audit.apiKey,
-    ...(env.audit.baseUrl ? { baseURL: env.audit.baseUrl } : {}),
-  }));
 
 const SYSTEM = `You read retail and restaurant receipts and list what was bought.
 
@@ -138,7 +132,7 @@ worse than a missing one, because it will be believed.`;
 
 /** Read one receipt image. Throws only for a failure worth retrying. */
 export async function readReceipt(image: Buffer, contentType = "image/jpeg"): Promise<ReceiptReading> {
-  const response = await anthropic().messages.parse({
+  const response = await callAnthropic((c) => c.messages.parse({
     model: env.audit.model,
     max_tokens: 8000,
     system: SYSTEM,
@@ -162,7 +156,7 @@ export async function readReceipt(image: Buffer, contentType = "image/jpeg"): Pr
         ],
       },
     ],
-  });
+  }));
 
   const parsed = response.parsed_output;
   if (!parsed) throw new Error("The receipt reading came back in an unexpected shape.");
@@ -197,7 +191,11 @@ export async function extractReceipt(
   try {
     reading = await readReceipt(blob.bytes, blob.content_type);
   } catch (err) {
-    error = err instanceof Error ? err.message.slice(0, 500) : "The receipt could not be read.";
+    // A configuration failure gets its own sentence. Stored on the row, so a
+    // reviewer looking at an unread receipt is told what to fix rather than
+    // being shown a status code from a gateway they have never heard of.
+    error = describeAiConfig(err)
+      ?? (err instanceof Error ? err.message.slice(0, 500) : "The receipt could not be read.");
   }
 
   const client2 = await db().connect();

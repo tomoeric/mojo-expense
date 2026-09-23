@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod/v4";
 import { env, isAuditConfigured, isEmburseConfigured } from "../env.js";
+import { callAnthropic, describeAiConfig } from "../ai.js";
 import { fetchReceipt, ReceiptError } from "./receipts.js";
 import type { ExpenseLine } from "./types.js";
 
@@ -69,15 +70,6 @@ export type AuditResult = {
  */
 const cache = new Map<string, AuditResult>();
 const key = (line: ExpenseLine) => `${line.id}:${line.amount.toFixed(2)}`;
-
-let client: Anthropic | null = null;
-const anthropic = (): Anthropic =>
-  (client ??= new Anthropic({
-    apiKey: env.audit.apiKey,
-    // Only set when routing through Replit's integration gateway; the SDK
-    // defaults to api.anthropic.com for a direct key.
-    ...(env.audit.baseUrl ? { baseURL: env.audit.baseUrl } : {}),
-  }));
 
 /** Slack allowed before a difference is called out at all. */
 function tolerance(claimed: number): number {
@@ -199,7 +191,7 @@ async function read(contentType: string, body: Buffer): Promise<ReceiptReading> 
           },
         };
 
-  const response = await anthropic().messages.parse({
+  const response = await callAnthropic((c) => c.messages.parse({
     model: env.audit.model,
     max_tokens: 2000,
     system: SYSTEM,
@@ -214,7 +206,7 @@ async function read(contentType: string, body: Buffer): Promise<ReceiptReading> 
         content: [media, { type: "text", text: "Read this receipt." }],
       },
     ],
-  });
+  }));
 
   const parsed = response.parsed_output;
   if (!parsed) throw new Error("The receipt reading came back in an unexpected shape.");
@@ -260,7 +252,10 @@ function simulate(
 }
 
 function describe(err: unknown): string {
-  if (err instanceof Anthropic.AuthenticationError) return "ANTHROPIC_API_KEY was rejected.";
+  // Configuration failures first: "HTTP 404" is true and useless, and this one
+  // has a fix that nobody would guess from it.
+  const config = describeAiConfig(err);
+  if (config) return config;
   if (err instanceof Anthropic.RateLimitError) return "Rate limited while reading the receipt — try again shortly.";
   if (err instanceof Anthropic.BadRequestError) {
     return `The receipt could not be sent for reading (${err.message.slice(0, 120)}).`;

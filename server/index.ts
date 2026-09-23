@@ -3,6 +3,7 @@ import cookieParser from "cookie-parser";
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
+import { logAiCredential } from "./ai.js";
 import { env, databaseHost, databaseUrlSource } from "./env.js";
 import { api } from "./routes.js";
 import { allowListSize, authMiddleware, authRouter, isAuthConfigured } from "./auth/index.js";
@@ -84,9 +85,12 @@ app.listen(env.port, "0.0.0.0", () => {
   }
   console.log(
     env.audit.apiKey
-      ? `Receipt checking: ${env.audit.model}${env.audit.baseUrl ? " via integration gateway" : ""}`
+      ? `Receipt checking: ${env.audit.model}`
       : "Receipt checking: no Anthropic key — the check is unavailable",
   );
+  // Which credential, spelled out. A copied integration key looks identical to
+  // a working one in the secrets list and only differs at the first call.
+  logAiCredential();
   const allowed = allowListSize();
   console.log(
     allowed > 0
