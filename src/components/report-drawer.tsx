@@ -210,12 +210,13 @@ export function ReportDrawer({
                         without opening a picture — which is the whole point of
                         having read it. */}
                     {report.lines.map((l) =>
-                      l.hasReceipt && (items.data?.byExpense?.[l.id]?.length ?? 0) > 0 ? (
+                      l.hasReceipt ? (
                         <tr key={`${l.id}-items`} className="border-t border-border/60">
                           <td colSpan={audits.size > 0 ? 6 : 5} className="px-3 pt-1 pb-3">
                             <ReceiptItems
                               details={items.data?.byExpense?.[l.id]}
                               loading={items.isLoading}
+                              enabled={items.data?.enabled ?? false}
                               claimed={l.amount}
                             />
                           </td>

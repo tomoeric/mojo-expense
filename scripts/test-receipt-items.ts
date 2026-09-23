@@ -1,17 +1,23 @@
 /**
  * Storing what a receipt says was bought.
  *
- *   pnpm exec tsx scripts/test-receipt-items.ts          (needs DATABASE_URL)
- *   pnpm exec tsx scripts/test-receipt-items.ts --live <image.jpg>
+ *   pnpm exec tsx scripts/test-receipt-items.ts            the storage rules
+ *   pnpm exec tsx scripts/test-receipt-items.ts --stored   read a real one
+ *   pnpm exec tsx scripts/test-receipt-items.ts --stored 7f3a   that one
+ *   pnpm exec tsx scripts/test-receipt-items.ts --live photo.jpg
  *
- * Without --live this spends no tokens: it exercises the storage, which is
- * where the properties that matter live. One receipt is read once however many
- * expenses share it, a re-read replaces rather than merges, and — the point of
- * the whole feature — the items outlive the image, because an approved
- * expense's receipt is deleted and can never be fetched again.
+ * All three need DATABASE_URL; the last two also need an Anthropic key.
  *
- * With --live it calls the model on a real image and prints what came back,
- * which is the only way to judge whether the reading is any good.
+ * Plain, it spends no tokens: it exercises the storage, which is where the
+ * properties that matter live. One receipt is read once however many expenses
+ * share it, a re-read replaces rather than merges, and — the point of the
+ * whole feature — the items outlive the image, because an approved expense's
+ * receipt is deleted and can never be fetched again.
+ *
+ * `--stored` reads a receipt this app already holds and prints what came back,
+ * which is the only way to judge whether the reading is any good. Newest
+ * first, or the one whose id starts with what you pass. `--live` does the same
+ * for a loose image file, which is rarely what you have.
  */
 
 import fs from "node:fs";
@@ -27,24 +33,75 @@ await ensureSchema();
 const { receiptDetail, detailsForExpenses, unreadReceipts } =
   await import("../server/emburse/receipt-items.js");
 
+// ------------------------------------------------- read one we already hold
+/** Print a reading the way a person wants to check one: as the receipt reads. */
+function show(reading: {
+  merchant: string | null; purchasedAt: string | null; notes: string;
+  items: { description: string; quantity: number | null; amount: number | null }[];
+  subtotal: number | null; tax: number | null; tip: number | null; total: number | null;
+}) {
+  const amount = (n: number | null) => (n === null ? "—" : `$${n.toFixed(2)}`);
+  console.log(`\nmerchant: ${reading.merchant ?? "—"}   date: ${reading.purchasedAt ?? "—"}\n`);
+  for (const i of reading.items) {
+    const qty = i.quantity !== null && i.quantity !== 1 ? ` x${i.quantity}` : "";
+    console.log(`  ${(i.description + qty).slice(0, 52).padEnd(54)}${amount(i.amount).padStart(10)}`);
+  }
+  if (reading.items.length === 0) console.log("  (no itemised lines on this receipt)");
+  console.log(`  ${"".padEnd(54)}${"".padStart(10, "-")}`);
+  for (const [label, value] of [["subtotal", reading.subtotal], ["tax", reading.tax],
+                                ["tip", reading.tip], ["TOTAL", reading.total]] as const) {
+    if (value !== null) console.log(`  ${label.padEnd(54)}${amount(value).padStart(10)}`);
+  }
+  if (reading.notes) console.log(`\nnote: ${reading.notes}`);
+}
+
+const stored = process.argv.indexOf("--stored");
+if (stored !== -1) {
+  const prefix = (process.argv[stored + 1] ?? "").replace(/[^0-9a-f]/gi, "");
+  const { rows } = await db().query<{ sha256: string; byte_size: number }>(
+    `SELECT sha256, byte_size FROM receipt_blobs
+      WHERE ($1 = '' OR sha256 LIKE $1 || '%')
+      ORDER BY created_at DESC LIMIT 1`, [prefix]);
+  const blob = rows[0];
+  if (!blob) {
+    console.error(prefix ? `No stored receipt starts with ${prefix}.` : "No receipts are stored yet.");
+    process.exit(2);
+  }
+
+  const { extractReceipt, canReadReceipts } = await import("../server/emburse/receipt-items.js");
+  if (!canReadReceipts()) {
+    // Said here rather than letting the SDK's "could not resolve
+    // authentication method" stand in for it.
+    console.error(
+      "Reading receipts needs an Anthropic key: AI_INTEGRATIONS_ANTHROPIC_API_KEY (Replit's\n" +
+      "Anthropic integration) or ANTHROPIC_API_KEY. Without one the background reader stays off too.");
+    process.exit(2);
+  }
+  console.log(`reading ${blob.sha256.slice(0, 12)} (${(blob.byte_size / 1024).toFixed(0)} KB)…`);
+  const detail = await extractReceipt(blob.sha256, { force: true });
+  if (!detail) {
+    console.error("That receipt image is no longer stored.");
+    process.exit(1);
+  }
+  if (detail.error) {
+    console.error(`\nCould not read it: ${detail.error}`);
+    process.exit(1);
+  }
+  show(detail);
+  console.log(`\nStored against ${detail.sha256.slice(0, 12)} — kept even after the image is released.`);
+  process.exit(0);
+}
+
 // --------------------------------------------------------------- live read
 const live = process.argv.indexOf("--live");
 if (live !== -1) {
   const path = process.argv[live + 1];
   if (!path || !fs.existsSync(path)) {
-    console.error("Usage: --live <image.jpg>");
+    console.error("Usage: --live path/to/image.jpg");
     process.exit(2);
   }
   const { readReceipt } = await import("../server/emburse/receipt-items.js");
-  const reading = await readReceipt(fs.readFileSync(path));
-  console.log(`\nmerchant: ${reading.merchant ?? "—"}   date: ${reading.purchasedAt ?? "—"}`);
-  for (const i of reading.items) {
-    console.log(`  ${i.description.padEnd(44)} ${i.amount === null ? "—" : `$${i.amount.toFixed(2)}`}`);
-  }
-  console.log(`  ${"subtotal".padEnd(44)} ${reading.subtotal ?? "—"}`);
-  console.log(`  ${"tax".padEnd(44)} ${reading.tax ?? "—"}`);
-  console.log(`  ${"TOTAL".padEnd(44)} ${reading.total ?? "—"}`);
-  if (reading.notes) console.log(`\nnote: ${reading.notes}`);
+  show(await readReceipt(fs.readFileSync(path)));
   process.exit(0);
 }
 

@@ -20,7 +20,8 @@ pnpm exec tsx scripts/test-browser-lock.ts     # one browser at a time
 pnpm exec tsx scripts/test-stale-import.ts     # refusing an out-of-date export
 pnpm exec tsx scripts/test-receipt-quality.ts <export.pdf>   # receipts kept at full resolution
 pnpm exec tsx scripts/test-receipt-items.ts    # storing what a receipt says (needs DATABASE_URL)
-pnpm exec tsx scripts/test-receipt-items.ts --live <image.jpg>   # one real read, printed
+pnpm exec tsx scripts/test-receipt-items.ts --stored          # read a receipt the app holds
+pnpm exec tsx scripts/test-receipt-items.ts --stored 7f3a     # that one, by id prefix
 pnpm exec tsx scripts/test-receipt-cleanup.ts  # releasing approved receipts (needs DATABASE_URL)
 pnpm exec tsx scripts/test-decisions.ts        # the decision queue (needs DATABASE_URL + a browser)
 pnpm exec tsx scripts/test-settings-check.ts   # the export-scope warning

@@ -51,10 +51,13 @@ export function useReceiptItems(keys: string[]) {
 export function ReceiptItems({
   details,
   loading,
+  enabled,
   claimed,
 }: {
   details: ReceiptDetail[] | undefined;
   loading: boolean;
+  /** False when there is no Anthropic key, so nothing will ever be read. */
+  enabled: boolean;
   /** What the expense claims, so a total that disagrees can say so. */
   claimed?: number;
 }) {
@@ -68,9 +71,13 @@ export function ReceiptItems({
 
   const detail = details?.[0];
   if (!detail) {
+    // "Not read yet" is a promise, and it would be a false one with no key —
+    // this receipt would never be read at all.
     return (
       <p className="text-xs text-muted-foreground">
-        Not read yet. New receipts are read shortly after they arrive.
+        {enabled
+          ? "Not read yet. New receipts are read shortly after they arrive."
+          : "Reading receipts is off — no Anthropic key is set on this deployment."}
       </p>
     );
   }
