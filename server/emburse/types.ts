@@ -59,6 +59,8 @@ export type ExpenseLine = {
    * so it can be a column, sorted and searched, instead of prose inside one.
    */
   location: string;
+  /** How it was paid — "Corporate card", "Out of pocket". */
+  method: string;
   /** Emburse section, when an import made it knowable. */
   section: string | null;
   /**

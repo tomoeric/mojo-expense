@@ -27,7 +27,17 @@ const check = (label: string, ok: boolean, detail = "") => {
 // /direct plays api.anthropic.com.
 let gatewayCalls = 0;
 let directCalls = 0;
+/** Flips the stand-in from "not configured" to "here is a 401". */
+let rejecting = false;
 const server = http.createServer((req, res) => {
+  if (rejecting) {
+    res.writeHead(401, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      type: "error",
+      error: { type: "authentication_error", message: "invalid x-api-key" },
+    }));
+    return;
+  }
   if (req.url?.startsWith("/gw")) {
     gatewayCalls++;
     res.writeHead(404, { "content-type": "application/json" });
@@ -118,6 +128,41 @@ try {
   check("a connection failure is read the same way as the 404", Boolean(viaDead));
   check("and it too lands on the direct key", ai.aiVia() === "direct", String(ai.aiVia()));
   check("the direct endpoint served it", directCalls === 1, `direct=${directCalls}`);
+
+  // A 401 is a different failure from "not configured": something received the
+  // call and turned it down. The message has to name WHICH credential, because
+  // the old wording named ANTHROPIC_API_KEY even when the sidecar was in use.
+  console.log("\nA credential that is present but rejected");
+  rejecting = true;
+  const reject = async (): Promise<string> => {
+    ai.resetAiClient();
+    try {
+      await ai.callAnthropic(ask);
+    } catch (e) {
+      return ai.describeAiConfig(e) ?? "(no configuration message)";
+    }
+    return "(the call unexpectedly succeeded)";
+  };
+
+  // The direct key turned down. Nothing to re-provision — the key is wrong.
+  delete process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY;
+  delete process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL;
+  const direct401 = await reject();
+  check("a rejected direct key says it is wrong rather than missing",
+    /direct ANTHROPIC_API_KEY was rejected/.test(direct401) && /sk-ant-/.test(direct401), direct401);
+  check("…and does not send you to Integrations for a key problem",
+    !/Setup → Integrations/.test(direct401));
+
+  // The sidecar turned it down. Same HTTP status, completely different fix —
+  // and the old wording blamed ANTHROPIC_API_KEY for both.
+  process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY = "_DUMMY_API_KEY_";
+  process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL = `${base}/gw`;
+  const sidecar401 = await reject();
+  check("a rejected sidecar call blames the sidecar, not the key",
+    /sidecar rejected/.test(sidecar401) && !/sk-ant-/.test(sidecar401), sidecar401);
+  check("…and sends you where the fix actually is",
+    /Setup → Integrations/.test(sidecar401) && /deployment/.test(sidecar401));
+  rejecting = false;
 
   // 3. A direct key on its own.
   console.log("\nA direct key on its own");

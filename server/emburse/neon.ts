@@ -109,6 +109,7 @@ function toReport(key: string, group: Row[], hits: Map<string, Hit[]>): ExpenseR
     glCode: "",
     note: r.note ?? "",
     location: r.location ?? "",
+    method: r.method ?? "",
     section: r.section,
     changes: (r.changes ?? []).map((c) => ({
       field: c.field, before: c.before_value, after: c.after_value,

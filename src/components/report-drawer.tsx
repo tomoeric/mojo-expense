@@ -1,11 +1,13 @@
-import { useEffect, useState } from "react";
-import { X, ReceiptText, AlertTriangle, ScanSearch, Loader2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { X, ReceiptText, AlertTriangle, ScanSearch, Loader2, Maximize2, ImageOff } from "lucide-react";
 import { auditReport, type AuditResult, type ExpenseLine, type ExpenseReport } from "@/lib/api";
 import { moneyExact, shortDate } from "@/lib/format";
+import { useDecisions } from "@/lib/decisions";
 import { StatusPill } from "./ui";
 import { ReceiptViewer } from "./receipt-viewer";
-import { ReceiptItems, useReceiptItems } from "./receipt-items";
+import { ReceiptItems, useReceiptItems, type ReceiptDetail } from "./receipt-items";
 import { AuditBadge } from "./audit-badge";
+import { DecideButtons } from "./decide-controls";
 
 /** Line-level detail for one report — what a reviewer actually reads before approving. */
 export function ReportDrawer({
@@ -26,8 +28,16 @@ export function ReportDrawer({
   const [audits, setAudits] = useState<Map<string, AuditResult>>(new Map());
   const [checking, setChecking] = useState(false);
   const [auditError, setAuditError] = useState("");
+  const [decideError, setDecideError] = useState("");
 
   const receipted = report.lines.filter((l) => l.hasReceipt).length;
+
+  // Deciding from here rather than only from the queue: this is the window
+  // where somebody has actually read the receipt, which is the moment the
+  // decision is made. Going back to the table to click Approve puts a step
+  // between looking and saying so.
+  const lineIds = useMemo(() => report.lines.map((l) => l.id), [report.lines]);
+  const { byExpense, canDecide, decide, cancel } = useDecisions(lineIds);
 
   async function runCheck() {
     setChecking(true);
@@ -94,6 +104,18 @@ export function ReportDrawer({
             <Fact label="Approved" value={shortDate(report.approvedDate)} />
           </dl>
 
+          {decideError && (
+            <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm">{decideError}</p>
+          )}
+
+          {!canDecide && (
+            <p className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+              To approve or deny, add your Emburse login under{" "}
+              <strong className="text-foreground">Your Emburse login</strong> in the user menu. Decisions
+              are made in Emburse as you, so the approval carries your name.
+            </p>
+          )}
+
           {report.flags.length > 0 && (
             <section>
               <h3 className="mb-2 text-xs font-bold tracking-wide text-muted-foreground uppercase">
@@ -157,75 +179,46 @@ export function ReportDrawer({
                 This tenant did not return line detail for the report.
               </p>
             ) : (
-              <div className="overflow-x-auto rounded-lg border border-border">
-                <table className="w-full text-sm">
-                  <thead className="bg-muted text-left text-xs text-muted-foreground">
-                    <tr>
-                      <th className="px-3 py-2 font-semibold">Date</th>
-                      <th className="px-3 py-2 font-semibold">Category</th>
-                      <th className="px-3 py-2 font-semibold">Merchant</th>
-                      <th className="px-3 py-2 text-center font-semibold">Receipt</th>
-                      {audits.size > 0 && <th className="px-3 py-2 text-center font-semibold">Check</th>}
-                      <th className="px-3 py-2 text-right font-semibold">Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {report.lines.map((l) => (
-                      <tr
-                        key={l.id}
-                        className={`border-t border-border ${flaggedLineIds.has(l.id) ? "bg-amber-50/60" : ""}`}
-                      >
-                        <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">{shortDate(l.date)}</td>
-                        <td className="px-3 py-2">{l.category}</td>
-                        <td className="px-3 py-2 text-muted-foreground">{l.merchant}</td>
-                        <td className="px-3 py-2 text-center">
-                          {l.hasReceipt ? (
-                            <button
-                              type="button"
-                              onClick={() => setViewing(l)}
-                              title="View receipt"
-                              className="mx-auto flex items-center gap-1 rounded px-1.5 py-1 text-emerald-700 transition-colors hover:bg-emerald-50"
-                            >
-                              <ReceiptText className="h-4 w-4" />
-                              <span className="text-[11px] font-semibold">View</span>
-                            </button>
-                          ) : (
-                            <span className="text-xs font-semibold text-amber-600">none</span>
-                          )}
-                        </td>
-                        {audits.size > 0 && (
-                          <td className="px-3 py-2 text-center">
-                            {audits.get(l.id) ? (
-                              <AuditBadge result={audits.get(l.id)!} />
-                            ) : (
-                              <span className="text-xs text-muted-foreground">—</span>
-                            )}
-                          </td>
-                        )}
-                        <td className="tnum px-3 py-2 text-right font-semibold">{moneyExact(l.amount)}</td>
-                      </tr>
-                    ))}
-                    {/* The items sit under the line they belong to rather than
-                        in the viewer, so a reviewer reads what was bought
-                        without opening a picture — which is the whole point of
-                        having read it. */}
-                    {report.lines.map((l) =>
-                      l.hasReceipt ? (
-                        <tr key={`${l.id}-items`} className="border-t border-border/60">
-                          <td colSpan={audits.size > 0 ? 6 : 5} className="px-3 pt-1 pb-3">
-                            <ReceiptItems
-                              details={items.data?.byExpense?.[l.id]}
-                              loading={items.isLoading}
-                              enabled={items.data?.enabled ?? false}
-                              claimed={l.amount}
-                            />
-                          </td>
-                        </tr>
-                      ) : null,
-                    )}
-                  </tbody>
-                </table>
-              </div>
+              <ul className="space-y-3">
+                {report.lines.map((l) => (
+                  <LineCard
+                    key={l.id}
+                    line={l}
+                    department={report.department}
+                    flagged={flaggedLineIds.has(l.id)}
+                    audit={audits.get(l.id)}
+                    items={items.data?.byExpense?.[l.id]}
+                    itemsLoading={items.isLoading}
+                    itemsEnabled={items.data?.enabled ?? false}
+                    onEnlarge={() => setViewing(l)}
+                    decide={
+                      !canDecide ? null : (
+                      <DecideButtons
+                        canDecide={canDecide}
+                        expense={{
+                          dedupeKey: l.id, employee: report.employeeName,
+                          merchant: l.merchant, amount: l.amount, date: l.date,
+                        }}
+                        decision={byExpense[l.id]}
+                        busy={decide.isPending}
+                        onApprove={() => {
+                          setDecideError("");
+                          decide.mutate({ dedupeKey: l.id, decision: "approve" },
+                            { onError: (e) => setDecideError((e as Error).message) });
+                        }}
+                        onDeny={(reason) => {
+                          setDecideError("");
+                          decide.mutate({ dedupeKey: l.id, decision: "deny", reason },
+                            { onError: (e) => setDecideError((e as Error).message) });
+                        }}
+                        onCancel={(id) =>
+                          cancel.mutate(id, { onError: (e) => setDecideError((e as Error).message) })}
+                      />
+                      )
+                    }
+                  />
+                ))}
+              </ul>
             )}
           </section>
         </div>
@@ -233,6 +226,125 @@ export function ReportDrawer({
 
       {viewing && <ReceiptViewer line={viewing} onClose={() => setViewing(null)} />}
     </div>
+  );
+}
+
+/**
+ * One expense, in full.
+ *
+ * A table row could not carry what a reviewer actually needs — the note, the
+ * site, what it was paid with, what the receipt says, and the decision itself.
+ * So each line is a card, and the receipt sits IN it rather than behind a
+ * click: the picture is the thing being reviewed, and a reviewer who has to
+ * ask for it will sometimes not bother.
+ */
+function LineCard({
+  line, department, flagged, audit, items, itemsLoading, itemsEnabled, onEnlarge, decide,
+}: {
+  line: ExpenseLine;
+  department: string;
+  flagged: boolean;
+  audit: AuditResult | undefined;
+  items: ReceiptDetail[] | undefined;
+  itemsLoading: boolean;
+  itemsEnabled: boolean;
+  onEnlarge: () => void;
+  decide: React.ReactNode;
+}) {
+  const [broken, setBroken] = useState(false);
+
+  const facts: [string, string][] = [
+    ["Location / Site", line.location],
+    ["Department", department],
+    ["Paid with", line.method],
+    ["Note", line.note],
+  ];
+  const shown = facts.filter(([, v]) => v && v.trim());
+
+  return (
+    <li className={`rounded-xl border ${flagged ? "border-amber-300 bg-amber-50/40" : "border-border"}`}>
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-border/70 px-4 py-3">
+        <span className="text-sm font-bold">{line.merchant}</span>
+        <span className="text-xs text-muted-foreground">
+          {shortDate(line.date)} · {line.category}
+        </span>
+        <span className="tnum ml-auto text-base font-extrabold">{moneyExact(line.amount)}</span>
+      </div>
+
+      {shown.length > 0 && (
+        <dl className="grid gap-x-4 gap-y-1.5 border-b border-border/70 px-4 py-3 text-sm sm:grid-cols-2">
+          {shown.map(([label, value]) => (
+            <div key={label} className="flex gap-2">
+              <dt className="shrink-0 text-xs text-muted-foreground">{label}</dt>
+              <dd className="ml-auto min-w-0 truncate text-right" title={value}>{value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+
+      <div className="px-4 py-3">
+        {line.hasReceipt ? (
+          <>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold tracking-wide text-muted-foreground uppercase">Receipt</span>
+              {audit && <AuditBadge result={audit} />}
+              <button
+                type="button"
+                onClick={onEnlarge}
+                className="ml-auto inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-muted"
+              >
+                <Maximize2 className="h-3.5 w-3.5" /> Enlarge
+              </button>
+            </div>
+
+            {broken ? (
+              <p className="mt-2 flex items-center gap-2 rounded-lg border border-dashed border-border px-3 py-6 text-xs text-muted-foreground">
+                <ImageOff className="h-4 w-4" />
+                The receipt image could not be loaded.
+              </p>
+            ) : (
+              <button
+                type="button"
+                onClick={onEnlarge}
+                title="Enlarge"
+                className="mt-2 block w-full overflow-hidden rounded-lg border border-border bg-muted/40"
+              >
+                {/* Capped rather than full height: the picture is here to be
+                    read at a glance, and a full-length receipt would push the
+                    decision off the bottom of the drawer. */}
+                <img
+                  src={`/api/receipts/${encodeURIComponent(line.id)}`}
+                  alt={`Receipt for ${line.merchant}`}
+                  loading="lazy"
+                  onError={() => setBroken(true)}
+                  className="max-h-80 w-full object-contain"
+                />
+              </button>
+            )}
+
+            <div className="mt-2">
+              <ReceiptItems
+                details={items}
+                loading={itemsLoading}
+                enabled={itemsEnabled}
+                claimed={line.amount}
+              />
+            </div>
+          </>
+        ) : (
+          <p className="flex items-center gap-2 text-xs font-semibold text-amber-600">
+            <ReceiptText className="h-4 w-4" /> No receipt attached.
+          </p>
+        )}
+      </div>
+
+      {/* Dropped entirely rather than showing an empty footer: with no stored
+          Emburse login there is nothing to put here, and the notice at the top
+          of the drawer has already said why. */}
+      {decide && (
+        <div className="flex flex-wrap items-center gap-2 border-t border-border/70 px-4 py-3">{decide}</div>
+      )}
+    </li>
   );
 }
 

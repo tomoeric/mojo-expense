@@ -48,6 +48,7 @@ export function toLine(row: Row): ExpenseLine {
     glCode: asString(pick(row, "GLCode", "GlCode", "AccountCode", "glCode", "gl_code")),
     note: asString(pick(row, "Note", "Notes", "Reason", "note", "memo")),
     location: asString(pick(row, "Location", "Site", "LocationSite", "location", "site")),
+    method: asString(pick(row, "PaymentMethod", "Method", "paymentMethod", "method")),
   };
 }
 

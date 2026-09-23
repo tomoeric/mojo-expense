@@ -146,9 +146,21 @@ export function describeAiConfig(err: unknown): string | null {
         "console.anthropic.com, which bypasses Replit entirely.";
   }
   if (err instanceof Anthropic.AuthenticationError) {
-    return via === "replit"
-      ? "Replit's AI sidecar rejected the call. Re-connect Anthropic under Setup → Integrations and republish."
-      : "ANTHROPIC_API_KEY was rejected.";
+    // Which credential was rejected is the whole question, and the bare
+    // "ANTHROPIC_API_KEY was rejected" named the one that may not even be in
+    // use. A 401 also rules out the configuration faults above: something
+    // received the call and turned it down.
+    return aiVia() === "replit"
+      ? "Replit's AI sidecar rejected the call (401). The integration is attached but is not accepting it — " +
+        "re-connect Anthropic under Setup → Integrations, check it is enabled for the deployment, and republish."
+      : "The direct ANTHROPIC_API_KEY was rejected (401). The key reached Anthropic and was turned down, so it is " +
+        "wrong rather than missing: check the secret for a stray space, quote or truncation, that it starts " +
+        "sk-ant-, and that it has not been revoked at console.anthropic.com.";
+  }
+  if (err instanceof Anthropic.PermissionDeniedError) {
+    return aiVia() === "replit"
+      ? "Replit's AI sidecar refused the call (403). Check the Anthropic integration is enabled for the deployment."
+      : "ANTHROPIC_API_KEY was refused (403) — the key is valid but not allowed to use this model.";
   }
   return null;
 }

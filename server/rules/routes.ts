@@ -6,7 +6,7 @@ import { hasCredential, listCredentials } from "../emburse/credentials.js";
 import { listTaxonomy } from "../import/taxonomy.js";
 import {
   ACTIONS, FIELDS, FIELD_LABEL, FIELD_LIST, MONEY_TOLERANCE_ABS, MONEY_TOLERANCE_PCT,
-  OPS, OP_LABEL, comparableTo, opsFor,
+  OPS, OP_LABEL, comparableTo, opLabel, opsFor,
   type Action, type Condition, type Field, type Op, type RuleBody,
 } from "./engine.js";
 import {
@@ -42,7 +42,7 @@ export function readBody(raw: unknown): RuleBody | { error: string } {
     if (!(FIELDS as readonly string[]).includes(field)) return { error: `Unknown field “${field}”.` };
     if (!(OPS as readonly string[]).includes(op)) return { error: `Unknown test “${op}”.` };
     if (!opsFor(field).includes(op)) {
-      return { error: `${FIELD_LABEL[field]} cannot be tested with “${OP_LABEL[op]}”.` };
+      return { error: `${FIELD_LABEL[field]} cannot be tested with “${opLabel(field, op)}”.` };
     }
     // A comparison against another column, which is how "the receipt's own
     // total must equal the amount claimed" is expressed.
@@ -93,7 +93,7 @@ rulesRouter.get("/rules/options", requireAuth, async (_req: Request, res: Respon
     res.json({
       fields: FIELDS.map((f) => ({
         value: f, label: FIELD_LABEL[f], list: FIELD_LIST[f] ?? null,
-        ops: opsFor(f).map((o) => ({ value: o, label: OP_LABEL[o] })),
+        ops: opsFor(f).map((o) => ({ value: o, label: opLabel(f, o) })),
         // Which other columns this one may be compared against, so the editor
         // cannot offer a comparison the server would refuse.
         comparable: comparableTo(f).map((c) => ({ value: c, label: FIELD_LABEL[c] })),

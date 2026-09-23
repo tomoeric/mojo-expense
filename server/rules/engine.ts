@@ -93,6 +93,24 @@ export const OP_LABEL: Record<Op, string> = {
   is_not_blank: "is not blank",
 };
 
+/**
+ * How an operator reads for a given field.
+ *
+ * "is" is fine for a category and ambiguous for money — nobody asks whether an
+ * amount "is" another amount, they ask whether it equals it. The wording is
+ * per-field for that reason, and it is the server's answer rather than the
+ * editor's so the rule reads the same everywhere it is printed.
+ */
+export function opLabel(field: Field, op: Op): string {
+  if (MONEY.has(field)) {
+    if (op === "is") return "equals";
+    if (op === "is_not") return "does not equal";
+    if (op === "is_blank") return "was not read";
+    if (op === "is_not_blank") return "was read";
+  }
+  return OP_LABEL[op];
+}
+
 /** Which operators make sense for a field — the UI offers only these. */
 export function opsFor(field: Field): Op[] {
   if (field === "amount") return ["is", "is_not", "gt", "lt"];
@@ -300,11 +318,11 @@ export function explain(subject: Subject, rule: RuleBody): string {
   // A field-against-a-field mismatch reads best as the two figures side by
   // side — "$43.57 against $39.88" says more than either half alone.
   if (rule.must.compare) {
-    return `Expected ${FIELD_LABEL[rule.must.field]} ${OP_LABEL[rule.must.op]} ` +
+    return `Expected ${FIELD_LABEL[rule.must.field]} ${opLabel(rule.must.field, rule.must.op)} ` +
       `${FIELD_LABEL[rule.must.compare]}, but found ${got} against ` +
       `${shown(subject, rule.must.compare)}.`;
   }
-  return `${FIELD_LABEL[rule.must.field]} ${OP_LABEL[rule.must.op]} ` +
+  return `${FIELD_LABEL[rule.must.field]} ${opLabel(rule.must.field, rule.must.op)} ` +
     `${rule.must.value ? `“${rule.must.value}”` : ""} was expected — found “${got}”.`;
 }
 
@@ -312,10 +330,10 @@ export function explain(subject: Subject, rule: RuleBody): string {
 export function summarise(rule: RuleBody): string {
   const cond = (c: Condition) =>
     c.op === "is_blank" || c.op === "is_not_blank"
-      ? `${FIELD_LABEL[c.field]} ${OP_LABEL[c.op]}`
+      ? `${FIELD_LABEL[c.field]} ${opLabel(c.field, c.op)}`
       : c.compare
-        ? `${FIELD_LABEL[c.field]} ${OP_LABEL[c.op]} ${FIELD_LABEL[c.compare]}`
-        : `${FIELD_LABEL[c.field]} ${OP_LABEL[c.op]} “${c.value}”`;
+        ? `${FIELD_LABEL[c.field]} ${opLabel(c.field, c.op)} ${FIELD_LABEL[c.compare]}`
+        : `${FIELD_LABEL[c.field]} ${opLabel(c.field, c.op)} “${c.value}”`;
   const when = rule.when.map(cond).join(rule.match === "any" ? " or " : " and ");
   const then = rule.action === "flag" ? "flag it" : rule.action === "deny" ? "deny it" : "approve it";
   if (!rule.must) return `When ${when} — ${then}.`;
@@ -334,17 +352,17 @@ export function problems(rule: RuleBody): string[] {
     c.op !== "is_blank" && c.op !== "is_not_blank" && !c.compare;
   for (const c of [...rule.when, ...(rule.must ? [rule.must] : [])]) {
     if (needsValue(c) && !c.value.trim()) {
-      out.push(`“${FIELD_LABEL[c.field]} ${OP_LABEL[c.op]}” needs a value.`);
+      out.push(`“${FIELD_LABEL[c.field]} ${opLabel(c.field, c.op)}” needs a value.`);
     }
     if (c.field === "amount" && needsValue(c) && !Number.isFinite(Number(c.value))) {
       out.push(`“${c.value}” is not an amount.`);
     }
     if (!opsFor(c.field).includes(c.op)) {
-      out.push(`${FIELD_LABEL[c.field]} cannot be tested with “${OP_LABEL[c.op]}”.`);
+      out.push(`${FIELD_LABEL[c.field]} cannot be tested with “${opLabel(c.field, c.op)}”.`);
     }
     if (c.compare) {
       if (c.op === "is_blank" || c.op === "is_not_blank") {
-        out.push(`“${OP_LABEL[c.op]}” does not take another column to compare with.`);
+        out.push(`“${opLabel(c.field, c.op)}” does not take another column to compare with.`);
       } else if (!comparableTo(c.field).includes(c.compare)) {
         out.push(`${FIELD_LABEL[c.field]} cannot be compared with ${FIELD_LABEL[c.compare]}.`);
       }

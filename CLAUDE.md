@@ -104,6 +104,11 @@ the blocks.
   rule, while the rule looked correct. Unknown never fires: not a flag, not a
   denial, and not an approval either. An unjudgeable WHEN condition does not
   match, so the expense stays out of the rule's scope entirely.
+- **Operator wording is per-field** (`opLabel`), and it is the server's answer
+  so a rule reads the same in the editor, the list and the flag. "is" is fine
+  for a category and ambiguous for money — nobody asks whether one amount "is"
+  another, so money says **equals** / **does not equal**, and a receipt total
+  says **was read** / **was not read** rather than blank.
 - **A blank value must never match everything.** An empty `contains` that
   matched every row would, on an approve rule, approve the entire queue. Guarded
   in `test()` and asserted in `test-rules.ts`.
@@ -171,6 +176,20 @@ the blocks.
   nowhere is the other kind of dead control. New sub-pages go in `children` on
   the rail entry and pick up nesting, deep links and the mobile second row for
   free.
+
+## The review drawer
+
+- **The receipt is IN the drawer, not behind a click.** The picture is the
+  thing being reviewed; a reviewer who has to ask for it will sometimes not
+  bother. Clicking it opens the zoom/pan viewer.
+- **Approve and deny live there too.** The drawer is where somebody has
+  actually read the receipt, which is the moment the decision is made — going
+  back to the table to click Approve puts a step between looking and saying so.
+  It uses the same `useDecisions` hook as the queue, so both stay in step.
+- **A line is a card, not a table row**, because the row could not carry the
+  note, the site, what it was paid with, the receipt and the decision. With no
+  stored Emburse login the decide footer is dropped entirely rather than
+  rendering an empty bar.
 
 ## The permanent lists
 

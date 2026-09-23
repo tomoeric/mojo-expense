@@ -206,6 +206,9 @@ function ConditionRow({
   const takesOperand = condition.op !== "is_blank" && condition.op !== "is_not_blank";
   const comparing = Boolean(condition.compare);
   const needsValue = takesOperand && !comparing;
+  // Money is the case where comparing two columns is the normal thing to want,
+  // so it gets the explicit dropdown rather than the compact switch.
+  const isMoney = condition.field === "amount" || condition.field === "receiptTotal";
 
   // Changing the field can strand an operator the new field does not support,
   // which the server would reject on save. Moved to the field's first operator
@@ -251,7 +254,27 @@ function ConditionRow({
         ))}
       </select>
 
-      {comparing && (
+      {/* For money, the choice between typing a figure and pointing at another
+          column IS the question — "does the receipt total equal the amount
+          claimed" cannot be asked any other way. So it is one dropdown that
+          offers both, rather than a mode switch you have to find first. */}
+      {takesOperand && isMoney && comparable.length > 0 && (
+        <select
+          value={condition.compare ?? ""}
+          onChange={(e) => {
+            const picked = e.target.value;
+            onChange({ ...condition, compare: picked ? (picked as Field) : null, value: "" });
+          }}
+          className={`${select} max-w-72 min-w-44 ${comparing ? "border-sky-500/50 bg-sky-500/5 font-medium" : ""}`}
+        >
+          <option value="">a value I type…</option>
+          {comparable.map((c) => (
+            <option key={c.value} value={c.value}>{c.label}</option>
+          ))}
+        </select>
+      )}
+
+      {comparing && !isMoney && (
         <select
           value={condition.compare ?? ""}
           onChange={(e) => onChange({ ...condition, compare: e.target.value as Field })}
@@ -287,7 +310,7 @@ function ConditionRow({
       {/* The switch between "a value I type" and "another column". Without it
           the one check an expense queue most needs — the receipt's own total
           against the amount claimed — cannot be written at all. */}
-      {takesOperand && comparable.length > 0 && (
+      {takesOperand && !isMoney && comparable.length > 0 && (
         <button
           type="button"
           onClick={() =>
@@ -296,13 +319,15 @@ function ConditionRow({
               value: "",
               compare: comparing ? null : (comparable[0]!.value as Field),
             })}
+          // Says what the click DOES, not what the state is — a button labelled
+          // with its own current mode reads as either, and gets misread.
           title={comparing ? "Compare with a value you type instead" : "Compare with another column instead"}
           className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1.5 text-xs transition-colors ${
             comparing ? "border-sky-500 bg-sky-500/10 font-semibold text-sky-700" : "border-border text-muted-foreground hover:text-foreground"
           }`}
         >
           <ArrowLeftRight className="h-3.5 w-3.5" />
-          {comparing ? "column" : "value"}
+          {comparing ? "type a value" : "use a column"}
         </button>
       )}
 

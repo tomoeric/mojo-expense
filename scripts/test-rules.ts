@@ -15,7 +15,8 @@
 process.env.SESSION_SECRET ||= "test-secret-for-sealing-credentials";
 
 import {
-  applies, evaluate, fires, explain, problems, summarise, test, type RuleBody, type Subject,
+  applies, evaluate, fires, explain, opLabel, problems, summarise, test,
+  type RuleBody, type Subject,
 } from "../server/rules/engine.js";
 import type { Hit } from "../server/rules/store.js";
 
@@ -114,8 +115,19 @@ check("the example rule is valid", problems(matchRule).length === 0,
   problems(matchRule).join(" "));
 check("it reads as the sentence it is",
   summarise(matchRule) ===
-    "When Receipt is not blank, Receipt total (read off the image) is Amount — otherwise flag it.",
+    "When Receipt is not blank, Receipt total (read off the image) equals Amount — otherwise flag it.",
   summarise(matchRule));
+// "is" is fine for a category and ambiguous for money — nobody asks whether one
+// amount "is" another. The wording is per-field, and it is the server's answer
+// so the rule reads the same in the editor, the list and the flag.
+check("money says equals, not is",
+  opLabel("amount", "is") === "equals" && opLabel("receiptTotal", "is_not") === "does not equal",
+  `${opLabel("amount", "is")} / ${opLabel("receiptTotal", "is_not")}`);
+check("…and a text column still says is",
+  opLabel("category", "is") === "is" && opLabel("note", "contains") === "contains");
+check("a receipt nobody has read reads as such, not as blank",
+  opLabel("receiptTotal", "is_blank") === "was not read",
+  opLabel("receiptTotal", "is_blank"));
 
 check("a receipt showing the claimed amount passes",
   evaluate(expense({ amountCents: 4512, receiptTotalCents: 4512 }), matchRule) === "pass");
