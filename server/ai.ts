@@ -7,20 +7,26 @@ import { env } from "./env.js";
  * Credentials come in two shapes and the difference matters, because one of
  * them fails in a way that looks like a bug in this app:
  *
- *   1. Replit's Anthropic integration — AI_INTEGRATIONS_ANTHROPIC_API_KEY plus
- *      AI_INTEGRATIONS_ANTHROPIC_BASE_URL. The key is only valid against that
- *      gateway, and the gateway is only valid for the Repl the integration was
- *      provisioned on. Copying the two secrets from another Repl gets you a
- *      complete-looking pair that answers every call with
- *      `404 Replit AI Integrations is not configured`.
+ *   1. Replit's Anthropic integration. This is NOT a key. Replit injects
+ *      AI_INTEGRATIONS_ANTHROPIC_API_KEY=_DUMMY_API_KEY_ and points
+ *      AI_INTEGRATIONS_ANTHROPIC_BASE_URL at a sidecar on localhost — today
+ *      `http://localhost:1106/modelfarm/anthropic` — which holds the real
+ *      credential and forwards the call. So the secrets look filled in on the
+ *      Secrets page whether or not the integration behind them exists, and
+ *      there is no way to tell from the outside: the sidecar answers
+ *      `404 Replit AI Integrations is not configured` when nothing is
+ *      connected to it, which is a normal HTTP failure from a URL that is
+ *      plainly present.
  *   2. A direct key from console.anthropic.com, billed separately.
  *
  * The integration is preferred because it puts the cost on the Replit bill.
- * But a 404 from the gateway used to be fatal even with a direct key sitting
+ * But a 404 from the sidecar used to be fatal even with a direct key sitting
  * right there in the environment, unused, because the integration won on
- * precedence and nothing ever reconsidered. So the gateway gets one chance:
- * if it says it is not configured and a direct key exists, the client is
- * rebuilt on the direct key and stays that way for the life of the process.
+ * precedence and nothing ever reconsidered. So the sidecar gets one chance:
+ * if it says it is not configured — or is not listening at all, which is what
+ * a deployment without the integration looks like — and a direct key exists,
+ * the client is rebuilt on the direct key and stays that way for the life of
+ * the process.
  */
 
 type Via = "replit" | "direct" | null;
@@ -95,10 +101,23 @@ export function retryOnDirectKey(err: unknown): boolean {
   return true;
 }
 
+/**
+ * Two ways the sidecar says it cannot help, and they mean the same thing:
+ * no Anthropic integration is attached to this app.
+ *
+ *   - 404 "Replit AI Integrations is not configured" — it is listening, with
+ *     nothing behind it.
+ *   - a connection error — it is not running at all, which is what a
+ *     deployment gets when the integration was only enabled for the workspace.
+ */
 function isGatewayUnconfigured(err: unknown): boolean {
-  if (!(err instanceof Anthropic.APIError)) return false;
-  if (err.status !== 404) return false;
-  return /ai integrations?.*not configured|not configured/i.test(err.message ?? "");
+  if (err instanceof Anthropic.APIError && err.status === 404) {
+    return /not configured/i.test(err.message ?? "");
+  }
+  if (err instanceof Anthropic.APIConnectionError) {
+    return /localhost|127\.0\.0\.1/i.test(gateway().url);
+  }
+  return false;
 }
 
 /** Run an Anthropic call, retrying once on a direct key if the gateway disowns us. */
@@ -119,14 +138,16 @@ export async function callAnthropic<T>(fn: (c: Anthropic) => Promise<T>): Promis
 export function describeAiConfig(err: unknown): string | null {
   if (isGatewayUnconfigured(err)) {
     return direct()
-      ? "The Replit Anthropic integration is not set up for this app, and the direct ANTHROPIC_API_KEY was not accepted either."
-      : "The Replit Anthropic integration is not set up for this app. Its secrets are present but they belong to a different Repl — " +
-        "copying AI_INTEGRATIONS_ANTHROPIC_API_KEY across does not work. Add the Anthropic integration to this Repl under " +
-        "Setup → Integrations and republish, or set ANTHROPIC_API_KEY to a direct key from console.anthropic.com.";
+      ? "No Anthropic integration is attached to this app, and the direct ANTHROPIC_API_KEY was not accepted either."
+      : "No Anthropic integration is attached to this app. The AI_INTEGRATIONS_ANTHROPIC_* secrets always look filled in — " +
+        "the key is a placeholder and the URL points at a Replit sidecar that holds the real credential — so a complete " +
+        "Secrets page proves nothing. Connect Anthropic under Setup → Integrations, make sure it is enabled for the " +
+        "deployment and not just the workspace, and republish. Or set ANTHROPIC_API_KEY to a direct key from " +
+        "console.anthropic.com, which bypasses Replit entirely.";
   }
   if (err instanceof Anthropic.AuthenticationError) {
     return via === "replit"
-      ? "The Replit Anthropic integration key was rejected. Re-provision the integration under Setup → Integrations and republish."
+      ? "Replit's AI sidecar rejected the call. Re-connect Anthropic under Setup → Integrations and republish."
       : "ANTHROPIC_API_KEY was rejected.";
   }
   return null;
@@ -138,7 +159,10 @@ export function logAiCredential(): void {
   if (!v) {
     console.log("ai: no Anthropic credential — receipt reading and checking are off.");
   } else if (v === "replit") {
-    console.log(`ai: using Replit's Anthropic integration (${gateway().url || "no base URL set"}).`);
+    console.log(
+      `ai: routing through Replit's AI sidecar at ${gateway().url || "(no base URL set)"} — ` +
+      "the key here is a placeholder, so this only works if an Anthropic integration is attached to this app.",
+    );
   } else {
     console.log(`ai: using a direct ANTHROPIC_API_KEY${directUrl() ? ` via ${directUrl()}` : ""}.`);
   }

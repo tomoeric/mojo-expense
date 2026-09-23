@@ -5,12 +5,14 @@
  *   pnpm exec tsx scripts/test-ai-credential.ts     (no key or network needed)
  *
  * This exists because the failure it covers is indistinguishable from a
- * working setup right up to the first call. AI_INTEGRATIONS_ANTHROPIC_API_KEY
- * and AI_INTEGRATIONS_ANTHROPIC_BASE_URL copied from another Repl look
- * complete in the secrets list, pass every "is it configured" check, and then
- * answer every request with `404 Replit AI Integrations is not configured` —
- * while a perfectly good ANTHROPIC_API_KEY sits unused beside them because the
- * integration wins on precedence.
+ * working setup right up to the first call. Replit's integration is not a key:
+ * it sets AI_INTEGRATIONS_ANTHROPIC_API_KEY to the literal string
+ * `_DUMMY_API_KEY_` and points the base URL at a sidecar on localhost that
+ * holds the real credential. Both secrets are therefore always present and
+ * always look right, whether or not an Anthropic integration is attached — and
+ * when none is, every call comes back `404 Replit AI Integrations is not
+ * configured`, while a perfectly good ANTHROPIC_API_KEY sits unused beside
+ * them because the integration wins on precedence.
  */
 
 import http from "node:http";
@@ -55,7 +57,8 @@ const ask = (c: { messages: { create: (b: never) => Promise<unknown> } }) =>
 
 try {
   // 1. Gateway alone, unprovisioned, with no direct key to fall back to.
-  process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY = "replit-key";
+  // Exactly what Replit injects, placeholder and all.
+  process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY = "_DUMMY_API_KEY_";
   process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL = `${base}/gw`;
   delete process.env.ANTHROPIC_API_KEY;
   delete process.env.ANTHROPIC_BASE_URL;
@@ -78,8 +81,12 @@ try {
   check("the failure names the fix, not the status code",
     Boolean(said && /Setup → Integrations/.test(said) && !/HTTP 404/.test(said)),
     said ?? "(nothing)");
-  check("it says a copied key is the likely cause",
-    Boolean(said && /different Repl/i.test(said)));
+  check("it says the filled-in secrets prove nothing",
+    Boolean(said && /placeholder/i.test(said) && /proves nothing/i.test(said)));
+  check("it covers the deployment-vs-workspace trap",
+    Boolean(said && /deployment/i.test(said)));
+  check("and offers the way out that does not involve Replit",
+    Boolean(said && /console\.anthropic\.com/.test(said)));
 
   // 2. Same gateway, but a direct key is available.
   console.log("\nAn unprovisioned gateway WITH a direct key");
@@ -101,12 +108,23 @@ try {
   check("the dead gateway is not tried again", gatewayCalls === 1, `gateway=${gatewayCalls}`);
   check("the second call went direct too", directCalls === 2, `direct=${directCalls}`);
 
+  // 2b. The sidecar not listening at all — a deployment where the integration
+  // was only ever enabled for the workspace. Same meaning, different error.
+  console.log("\nThe sidecar not running at all");
+  process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL = "http://127.0.0.1:5407/modelfarm/anthropic";
+  directCalls = 0;
+  ai.resetAiClient();
+  const viaDead = await ai.callAnthropic(ask);
+  check("a connection failure is read the same way as the 404", Boolean(viaDead));
+  check("and it too lands on the direct key", ai.aiVia() === "direct", String(ai.aiVia()));
+  check("the direct endpoint served it", directCalls === 1, `direct=${directCalls}`);
+
   // 3. A direct key on its own.
   console.log("\nA direct key on its own");
   delete process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY;
   delete process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL;
   ai.resetAiClient();
-  check("it is used without touching any gateway", ai.aiVia() === "direct", String(ai.aiVia()));
+  check("it is used without touching any sidecar", ai.aiVia() === "direct", String(ai.aiVia()));
 
   // 4. Nothing at all.
   console.log("\nNo credential at all");
