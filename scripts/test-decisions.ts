@@ -185,6 +185,39 @@ check("the failed one is marked failed",
 check("…with the reason kept", /none of the 3 rows/.test(after.find((d) => d.id === pend[1]!.id)?.error ?? ""));
 check("…and the queue is empty", (await pendingDecisions()).length === 0);
 
+console.log("\n8. A failed decision can be taken again");
+// The first failure that reached a real reviewer left the expense stranded:
+// the badge said "did not go through" and there was nothing to click. A
+// failure leaves the expense UNDECIDED in Emburse, so it has to be re-doable.
+const failedKey = pend[1]!.dedupeKey;
+const stuck = (await decisionsFor([failedKey])).get(failedKey);
+check("the failure is what the expense shows", stuck?.state === "failed", stuck?.state);
+check("…and it carries the reason the reviewer needs to read",
+  /none of the 3 rows/.test(stuck?.error ?? ""), stuck?.error ?? "(none)");
+
+const retry = await queueDecision({
+  dedupeKey: failedKey,
+  decision: "approve",
+  reason: "retrying after the first attempt failed",
+  decidedBy: "tester@example.invalid",
+  target: { employee: "Kevin Bray", merchant: "SQ *COFFEE", amount: 8.5, date: "2026-09-13" },
+});
+check("a failed expense accepts a fresh decision", retry.ok, retry.ok ? "" : retry.error);
+const now = (await decisionsFor([failedKey])).get(failedKey);
+check("…and the new attempt is what the expense shows, not the old failure",
+  now?.state === "pending", now?.state);
+
+// The guard that stops two in flight must still hold on the retry.
+const twice = await queueDecision({
+  dedupeKey: failedKey,
+  decision: "approve",
+  reason: "again",
+  decidedBy: "tester@example.invalid",
+  target: { employee: "Kevin Bray", merchant: "SQ *COFFEE", amount: 8.5, date: "2026-09-13" },
+});
+check("but still only one in flight at a time",
+  !twice.ok && /already waiting/.test(twice.ok ? "" : twice.error));
+
 await db().query("DELETE FROM expense_decisions WHERE dedupe_key LIKE 'test-%'");
 await db().query("DELETE FROM expenses WHERE dedupe_key LIKE 'test-%'");
 await mock.close();

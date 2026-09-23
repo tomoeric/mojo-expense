@@ -59,6 +59,12 @@ the blocks.
   name one expense and describe another.
 - **A denial needs a reason**, enforced in `queueDecision` rather than only in
   the dialog.
+- **A failed decision must be re-doable, and must say why it failed.** A
+  failure leaves the expense UNDECIDED in Emburse, so a badge with no action
+  strands the row — which is exactly what happened the first time a reviewer
+  hit one. `failed` therefore shows the badge AND the Approve/Deny buttons, and
+  the reason is on screen rather than in a `title` tooltip nobody hovers.
+  `decisionsFor` returns the newest attempt, so a retry supersedes the failure.
 - **Receipts are released only once an export confirms the expense left the
   inbox.** An approval is known to have taken only then, and by that point the
   image can never be fetched again. Links go first, images only when nothing

@@ -33,8 +33,12 @@ export function DecideButtons({
 }) {
   const [denying, setDenying] = useState(false);
 
-  // Already decided: show what happened, not another pair of buttons.
-  if (decision && decision.state !== "cancelled") {
+  // Already decided AND it stuck: show what happened, not another pair of
+  // buttons. A failure is different — it left the expense undecided in
+  // Emburse, so it has to be re-doable or the row is simply stranded, which
+  // is what happened the first time somebody hit one.
+  const settled = decision && decision.state !== "cancelled" && decision.state !== "failed";
+  if (settled) {
     return (
       <>
         <DecisionBadge decision={decision} onCancel={onCancel} />
@@ -45,10 +49,19 @@ export function DecideButtons({
     );
   }
 
-  if (!canDecide) return <span className="text-xs text-muted-foreground">—</span>;
+  if (!canDecide) {
+    return decision?.state === "failed" ? (
+      <DecisionBadge decision={decision} onCancel={onCancel} />
+    ) : (
+      <span className="text-xs text-muted-foreground">—</span>
+    );
+  }
 
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex flex-wrap items-center gap-1">
+      {decision?.state === "failed" && (
+        <DecisionBadge decision={decision} onCancel={onCancel} />
+      )}
       <button
         type="button"
         disabled={busy}
@@ -84,6 +97,37 @@ export function DecideButtons({
 }
 
 /** What became of a decision, and the one way back out of it. */
+function FailedBadge({ decision, word }: { decision: QueuedDecision; word: string }) {
+  const [open, setOpen] = useState(false);
+  const why = decision.error?.trim();
+
+  return (
+    <span className="inline-flex max-w-full flex-col items-start gap-1">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+        title={why ? undefined : "No reason was recorded."}
+        className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-400"
+      >
+        <AlertTriangle className="h-3 w-3" />
+        {word} · did not go through
+        {why && <span className="opacity-70">{open ? "▴" : "▾"}</span>}
+      </button>
+      {open && (
+        <span className="block max-w-md rounded-lg border border-amber-500/40 bg-amber-500/5 px-2 py-1.5 text-xs break-words text-amber-800 dark:text-amber-300">
+          {why || "Emburse gave no reason."}
+          {decision.attempts > 1 && (
+            <span className="mt-1 block opacity-70">Tried {decision.attempts} times.</span>
+          )}
+        </span>
+      )}
+    </span>
+  );
+}
+
 export function DecisionBadge({
   decision,
   onCancel,
@@ -122,15 +166,10 @@ export function DecisionBadge({
   }
 
   if (decision.state === "failed") {
-    return (
-      <span
-        title={decision.error ?? undefined}
-        className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-400"
-      >
-        <AlertTriangle className="h-3 w-3" />
-        {word} · did not go through
-      </span>
-    );
+    // The reason used to live in a `title` tooltip, which meant a reviewer
+    // looking at a failed decision was told only that it failed. Whatever
+    // Emburse said is the whole value of the row, so it is on screen.
+    return <FailedBadge decision={decision} word={word} />;
   }
 
   return (
