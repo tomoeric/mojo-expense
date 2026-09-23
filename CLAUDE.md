@@ -156,6 +156,22 @@ the blocks.
 - Never report an AI failure as a status code. `describeAiConfig()` turns the
   configuration ones into the fix.
 
+## Navigation
+
+- **The rail is Review Queue · All Reports · Analytics · Rules · Import ·
+  Configuration**, with the three permanent lists nested under Configuration.
+  They are reference data — what Emburse offers, not what anybody does today —
+  and having four of eight top-level buttons be lists buried the ones that are
+  actual work.
+- **A group opens when you are inside it and closes when you leave**, with no
+  toggle. A collapse control that the current page immediately overrides is a
+  dead control, and the group's own page lists the same destinations anyway.
+- **A group's button navigates somewhere.** `configuration` is a real route
+  with a contents page, not a disclosure widget — a rail button that goes
+  nowhere is the other kind of dead control. New sub-pages go in `children` on
+  the rail entry and pick up nesting, deep links and the mobile second row for
+  free.
+
 ## The permanent lists
 
 - **Categories, Locations/Sites and Departments are kept, not just displayed**
