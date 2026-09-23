@@ -80,6 +80,54 @@ the blocks.
   (`receipt-reader.ts`) runs shortly after each import for that reason, not on
   a daily schedule.
 
+## Rules
+
+- **A rule is an expectation, not a filter**: WHEN conditions pick the
+  expenses, MUST says what they have to be, and the action applies to the ones
+  that do not. `server/rules/engine.ts` is pure and has no database in it; the
+  store and the runner are separate so the logic can be tested without one.
+- **`flag` and `deny` act on the FAILURES; `approve` acts on the PASSES.** That
+  asymmetry is the only reading under which both "deny anything from this
+  merchant" and "approve anything matching this pattern" fit one shape.
+- **Evaluation is JavaScript over rows, never generated SQL.** Rules are
+  user-authored data; building a WHERE clause out of them is a standing
+  invitation to get that wrong once. At this size the scan costs nothing.
+- **A blank value must never match everything.** An empty `contains` that
+  matched every row would, on an approve rule, approve the entire queue. Guarded
+  in `test()` and asserted in `test-rules.ts`.
+- **Four fences on approving and denying, and all four must hold**: the expense
+  is still in the inbox; nothing is already queued or applied for it; the rule's
+  owner has a stored Emburse login (there is no shared fallback — Emburse
+  records the decision against whoever signs in); and no more than
+  `MAX_DECISIONS_PER_RUN` per rule per run. The cap is the important one — a
+  mistyped condition is the normal first draft of a rule, and the cap is the
+  difference between catching it at 25 expenses and at 400.
+- **Rules run after the import COMMITS**, never inside its transaction: a
+  decision must not exist for an expense whose import rolled back. A failure
+  there is a warning on the import, not a failed import.
+- **Editing a rule deletes its hits.** Verdicts reached under the old
+  definition are not evidence of anything, and an expense the edited rule no
+  longer matches would otherwise keep a flag from a rule that has stopped
+  saying it.
+- **Rules can test receipt line items**, so `ensureRules()` creates the
+  receipt-items tables too. Without that, an app with no working Anthropic key
+  has no `receipt_items` table and every import's rule run dies on the join.
+
+## Anthropic credentials
+
+- **Replit's integration is not a key.** It injects
+  `AI_INTEGRATIONS_ANTHROPIC_API_KEY=_DUMMY_API_KEY_` and points
+  `AI_INTEGRATIONS_ANTHROPIC_BASE_URL` at a sidecar on localhost that holds the
+  real credential. Both secrets are therefore always present and always look
+  right whether or not an integration is attached — a full Secrets page proves
+  nothing, and the only symptom is `404 Replit AI Integrations is not
+  configured` at the first call.
+- **One client, in `server/ai.ts`.** The sidecar gets one chance: if it 404s or
+  is not listening, and `ANTHROPIC_API_KEY` is set, the client rebuilds on the
+  direct key and stays there for the process. Tried once, not once per receipt.
+- Never report an AI failure as a status code. `describeAiConfig()` turns the
+  configuration ones into the fix.
+
 ## The permanent lists
 
 - **Categories, Locations/Sites and Departments are kept, not just displayed**

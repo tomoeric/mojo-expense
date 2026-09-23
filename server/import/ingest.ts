@@ -6,6 +6,8 @@ import { dedupeKey, sha256 } from "./key.js";
 import { checkAgainstSettings, readSettings } from "./settings.js";
 import { nudgeReceiptReader } from "../emburse/receipt-reader.js";
 import { ensureTaxonomy, recordTaxonomy, type NewNames } from "./taxonomy.js";
+import { ensureRules } from "../rules/store.js";
+import { runRules } from "../rules/run.js";
 
 /**
  * Ingest one daily Emburse export.
@@ -39,6 +41,8 @@ export type ImportResult = {
   receiptsSkipped: number;
   /** Category / location / department names this import put on the list for the first time. */
   newNames: NewNames;
+  /** What the rules said about the expenses this import touched. */
+  rules: { failed: number; approved: number; denied: number } | null;
   totalCents: number;
   statedTotalCents: number | null;
   reconciled: boolean;
@@ -104,6 +108,7 @@ export async function ingestExport(
     importId: null, filename, pageCount: parsed.pageCount, parsedRows: parsed.expenses.length,
     inserted: 0, updated: 0, unchanged: 0, leftInbox: 0, receiptsAdded: 0, receiptsSkipped: 0,
     newNames: { category: [], location: [], department: [] },
+    rules: null,
     totalCents, statedTotalCents: parsed.statedTotalCents, reconciled, duplicateFile: false, warnings,
   };
 
@@ -114,6 +119,7 @@ export async function ingestExport(
   // Outside the transaction: creating the taxonomy table is DDL, and an import
   // that rolls back must not take the table with it.
   await ensureTaxonomy();
+  await ensureRules();
 
   const client = await db().connect();
   try {
@@ -273,13 +279,37 @@ export async function ingestExport(
 
     await client.query("COMMIT");
 
+    // Rules run AFTER the commit, deliberately. They can queue approvals and
+    // denials, and a decision must never exist for an expense whose import
+    // rolled back. Failures here are reported, not fatal: the import itself
+    // has already succeeded and re-running it to retry the rules would be far
+    // more dangerous than a missing flag.
+    let rules: ImportResult["rules"] = null;
+    try {
+      const ran = await runRules({ keys: [...keys.keys()] });
+      rules = { failed: ran.failed, approved: ran.approved, denied: ran.denied };
+      if (ran.warnings.length > 0) {
+        warnings.push(...ran.warnings);
+        // The import row's warnings were written inside the transaction, before
+        // the rules had anything to say. Re-written here so an unattended run's
+        // rule warnings are not lost with the response nobody is reading.
+        await db().query("UPDATE expense_imports SET warnings = $2 WHERE id = $1", [importId, warnings]);
+      }
+      if (ran.approved + ran.denied > 0) {
+        console.log(`import: rules queued ${ran.approved} approval(s) and ${ran.denied} denial(s)`);
+      }
+    } catch (err) {
+      console.error("import: rules failed to run:", err);
+      warnings.push("The expense rules could not be run over this import, so nothing was flagged by them.");
+    }
+
     // New pictures to read. Prompt rather than wait: reading them is minutes
     // of vision calls, and an import that held its transaction open for that
     // would fail as a unit on one bad receipt.
     if (receipts.added > 0) nudgeReceiptReader();
 
     return { ...base, importId, inserted, updated, unchanged, leftInbox,
-      receiptsAdded: receipts.added, receiptsSkipped: receipts.skipped, newNames, warnings };
+      receiptsAdded: receipts.added, receiptsSkipped: receipts.skipped, newNames, rules, warnings };
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;

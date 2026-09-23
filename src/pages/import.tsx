@@ -13,6 +13,7 @@ type ImportResult = {
   leftInbox: number;
   receiptsAdded: number;
   newNames?: { category: string[]; location: string[]; department: string[] };
+  rules?: { failed: number; approved: number; denied: number } | null;
   totalCents: number;
   statedTotalCents: number | null;
   reconciled: boolean;
@@ -307,6 +308,7 @@ function ImportSummary({ result }: { result: ImportResult }) {
           <Fact label="unchanged" value={result.unchanged} />
           <Fact label="left inbox" value={result.leftInbox} />
           <Fact label="receipts added" value={result.receiptsAdded} />
+          {result.rules && <Fact label="caught by rules" value={result.rules.failed} />}
           <Fact label="total" value={money(result.totalCents / 100)} />
         </div>
       )}
@@ -322,6 +324,18 @@ function ImportSummary({ result }: { result: ImportResult }) {
       {/* A name nobody has used before is worth saying out loud: it is either a
           new site opening or somebody picking the wrong thing off the menu. */}
       <NewNames names={result.newNames} />
+      {/* Decisions a rule queued reach Emburse without anyone clicking, so the
+          import that caused them is where it has to be said. */}
+      {result.rules && result.rules.approved + result.rules.denied > 0 && (
+        <p className="mt-2 text-xs text-amber-800">
+          <strong>
+            Rules queued {result.rules.approved > 0 && `${result.rules.approved} approval${result.rules.approved === 1 ? "" : "s"}`}
+            {result.rules.approved > 0 && result.rules.denied > 0 && " and "}
+            {result.rules.denied > 0 && `${result.rules.denied} denial${result.rules.denied === 1 ? "" : "s"}`}
+          </strong>{" "}
+          — they are applied in Emburse shortly after, under the rule owner's login.
+        </p>
+      )}
       {result.warnings.map((w, i) => (
         <p key={i} className="mt-1.5 text-xs text-amber-800">
           {w}

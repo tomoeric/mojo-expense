@@ -113,6 +113,17 @@ const ensure = (): Promise<void> =>
     await db().query(SCHEMA);
   }));
 
+/**
+ * Create the tables without reading anything.
+ *
+ * Rules can be written against receipt line items, so the rule runner joins
+ * `receipt_items` — on a database where no receipt has ever been read, that
+ * table does not exist and the join is a hard error. Which is not a corner
+ * case: it is exactly the state of an app with no working Anthropic key, where
+ * the reader never runs and nothing else would ever have created it.
+ */
+export const ensureReceiptItems = ensure;
+
 const cents = (n: number | null | undefined): number | null =>
   n === null || n === undefined || !Number.isFinite(n) ? null : Math.round(n * 100);
 const dollars = (c: string | number | null): number | null =>

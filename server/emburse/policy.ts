@@ -94,7 +94,17 @@ export function flagsForReport(report: Omit<ExpenseReport, "flags">): PolicyFlag
   return flags;
 }
 
-/** Attach flags to a report built by a provider. */
-export function withFlags(report: Omit<ExpenseReport, "flags">): ExpenseReport {
-  return { ...report, flags: flagsForReport(report) };
+/**
+ * Attach flags to a report built by a provider.
+ *
+ * `extra` is for flags the provider worked out for itself — today, the ones
+ * the user's own rules raised. They go FIRST: a rule is something somebody
+ * deliberately asked to be told about, which outranks the built-in policy
+ * checks that fire on every report.
+ */
+export function withFlags(
+  report: Omit<ExpenseReport, "flags">,
+  extra: PolicyFlag[] = [],
+): ExpenseReport {
+  return { ...report, flags: [...extra, ...flagsForReport(report)] };
 }

@@ -1,6 +1,7 @@
 import { db } from "../db.js";
 import { withFlags } from "./policy.js";
-import type { EmburseProvider, ExpenseLine, ExpenseReport, FetchWindow, ProviderResult } from "./types.js";
+import { hitsFor, type Hit } from "../rules/store.js";
+import type { EmburseProvider, ExpenseLine, ExpenseReport, FetchWindow, PolicyFlag, ProviderResult } from "./types.js";
 
 /**
  * Reads imported expenses out of Neon.
@@ -69,7 +70,17 @@ export class NeonProvider implements EmburseProvider {
       else groups.set(key, [r]);
     }
 
-    const reports = [...groups.entries()].map(([key, group]) => toReport(key, group));
+    // What the rules make of these expenses. Read once for the whole window
+    // rather than per report: the queue is hundreds of reports and this is the
+    // difference between one query and hundreds.
+    let hits = new Map<string, Hit[]>();
+    try {
+      hits = await hitsFor(rows.map((r) => r.dedupe_key));
+    } catch (err) {
+      console.error("rules: could not read hits:", err);
+    }
+
+    const reports = [...groups.entries()].map(([key, group]) => toReport(key, group, hits));
 
     const warnings: string[] = [];
     const undated = rows.filter((r) => !r.expense_date).length;
@@ -79,7 +90,7 @@ export class NeonProvider implements EmburseProvider {
   }
 }
 
-function toReport(key: string, group: Row[]): ExpenseReport {
+function toReport(key: string, group: Row[], hits: Map<string, Hit[]>): ExpenseReport {
   const first = group[0]!;
   const date = iso(first.expense_date);
   const lines: ExpenseLine[] = group.map((r) => ({
@@ -109,6 +120,27 @@ function toReport(key: string, group: Row[]): ExpenseReport {
   const processedAt = group.map((r) => r.left_inbox_at).filter(Boolean).sort()[0] ?? null;
 
   const sites = [...new Set(group.map((r) => r.location).filter(Boolean))];
+  // A rule mismatch is a flag like any other, so it lands in the same place a
+  // reviewer already looks — one per rule, naming the rule, because "three
+  // problems" tells nobody which three.
+  const ruleFlags: PolicyFlag[] = [];
+  const byRule = new Map<string, { label: string; lineIds: string[] }>();
+  for (const line of lines) {
+    for (const hit of hits.get(line.id) ?? []) {
+      const seen = byRule.get(hit.ruleName);
+      if (seen) seen.lineIds.push(line.id);
+      else byRule.set(hit.ruleName, { label: hit.detail, lineIds: [line.id] });
+    }
+  }
+  for (const [name, { label, lineIds }] of byRule) {
+    ruleFlags.push({
+      code: "rule-mismatch",
+      label: `${name}${label ? ` — ${label}` : ""}`,
+      severity: "warn",
+      lineIds,
+    });
+  }
+
   return withFlags({
     id: key,
     name: lines.length === 1 ? lines[0]!.merchant : `${lines.length} expenses`,
@@ -129,7 +161,7 @@ function toReport(key: string, group: Row[]): ExpenseReport {
     currency: "USD",
     lineCount: lines.length,
     lines,
-  });
+  }, ruleFlags);
 }
 
 const iso = (d: Date | null): string | null => (d ? d.toISOString().slice(0, 10) : null);

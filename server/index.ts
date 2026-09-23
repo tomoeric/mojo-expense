@@ -13,6 +13,7 @@ import { startExportScheduler } from "./emburse/export-scheduler.js";
 import { startDecisionWorker } from "./emburse/decision-worker.js";
 import { startReceiptReader } from "./emburse/receipt-reader.js";
 import { ensureSchema, isDbConfigured } from "./db.js";
+import { rulesRouter } from "./rules/routes.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -28,6 +29,7 @@ app.use(authMiddleware);
 app.use("/api", authRouter);
 app.use("/api", importRouter);
 app.use("/api", decisionRouter);
+app.use("/api", rulesRouter);
 app.use("/api", api);
 
 // Anything left under /api is a genuine 404. Without this it falls through to

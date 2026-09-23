@@ -21,7 +21,8 @@ export type PolicyFlagCode =
   | "large-line"
   | "weekend-spend"
   | "possible-duplicate"
-  | "ageing";
+  | "ageing"
+  | "rule-mismatch";
 
 export type PolicyFlag = {
   code: PolicyFlagCode;
