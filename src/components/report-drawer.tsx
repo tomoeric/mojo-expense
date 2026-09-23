@@ -4,6 +4,7 @@ import { auditReport, type AuditResult, type ExpenseLine, type ExpenseReport } f
 import { moneyExact, shortDate } from "@/lib/format";
 import { StatusPill } from "./ui";
 import { ReceiptViewer } from "./receipt-viewer";
+import { ReceiptItems, useReceiptItems } from "./receipt-items";
 import { AuditBadge } from "./audit-badge";
 
 /** Line-level detail for one report — what a reviewer actually reads before approving. */
@@ -19,6 +20,9 @@ export function ReportDrawer({
   auditConfigured: boolean;
 }) {
   const [viewing, setViewing] = useState<ExpenseLine | null>(null);
+  // Only the lines in this drawer, and only those with a receipt: asking about
+  // every expense to show a handful would be the whole queue per open.
+  const items = useReceiptItems(report.lines.filter((l) => l.hasReceipt).map((l) => l.id));
   const [audits, setAudits] = useState<Map<string, AuditResult>>(new Map());
   const [checking, setChecking] = useState(false);
   const [auditError, setAuditError] = useState("");
@@ -201,6 +205,23 @@ export function ReportDrawer({
                         <td className="tnum px-3 py-2 text-right font-semibold">{moneyExact(l.amount)}</td>
                       </tr>
                     ))}
+                    {/* The items sit under the line they belong to rather than
+                        in the viewer, so a reviewer reads what was bought
+                        without opening a picture — which is the whole point of
+                        having read it. */}
+                    {report.lines.map((l) =>
+                      l.hasReceipt && (items.data?.byExpense?.[l.id]?.length ?? 0) > 0 ? (
+                        <tr key={`${l.id}-items`} className="border-t border-border/60">
+                          <td colSpan={audits.size > 0 ? 6 : 5} className="px-3 pt-1 pb-3">
+                            <ReceiptItems
+                              details={items.data?.byExpense?.[l.id]}
+                              loading={items.isLoading}
+                              claimed={l.amount}
+                            />
+                          </td>
+                        </tr>
+                      ) : null,
+                    )}
                   </tbody>
                 </table>
               </div>

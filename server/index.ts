@@ -10,6 +10,7 @@ import { importRouter } from "./import/routes.js";
 import { decisionRouter } from "./emburse/decision-routes.js";
 import { startExportScheduler } from "./emburse/export-scheduler.js";
 import { startDecisionWorker } from "./emburse/decision-worker.js";
+import { startReceiptReader } from "./emburse/receipt-reader.js";
 import { ensureSchema, isDbConfigured } from "./db.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -75,6 +76,7 @@ app.listen(env.port, "0.0.0.0", () => {
       .then(() => {
         startExportScheduler();
         startDecisionWorker();
+        startReceiptReader();
       })
       .catch((err: unknown) => console.error("schema bootstrap failed:", err));
   } else {

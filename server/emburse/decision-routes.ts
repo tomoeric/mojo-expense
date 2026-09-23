@@ -177,3 +177,46 @@ decisionRouter.post("/decisions/:id/test", requireAuth, async (req: Request, res
     res.status(500).json({ error: err instanceof Error ? err.message : "The test could not run." });
   }
 });
+
+/**
+ * What a receipt says was bought.
+ *
+ * Read from our own stored image, keyed by its content hash — so one receipt
+ * shared by several expenses is read once, and the items survive the image
+ * being released after an approval.
+ */
+decisionRouter.get("/receipt-items", requireAuth, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  const keys = String((req.query as { keys?: string }).keys ?? "")
+    .split(",").map((k) => k.trim()).filter(Boolean).slice(0, 500);
+  const { detailsForExpenses, canReadReceipts } = await import("./receipt-items.js");
+  res.json({
+    enabled: canReadReceipts(),
+    byExpense: Object.fromEntries(await detailsForExpenses(keys)),
+  });
+});
+
+/** Read one now, rather than waiting for the background pass. */
+decisionRouter.post("/receipt-items/:sha", requireAuth, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  const sha = String(req.params.sha ?? "");
+  if (!/^[0-9a-f]{64}$/i.test(sha)) {
+    res.status(400).json({ error: "Not a receipt id." });
+    return;
+  }
+  const { extractReceipt, canReadReceipts } = await import("./receipt-items.js");
+  if (!canReadReceipts()) {
+    res.status(400).json({ error: "Reading receipts needs an Anthropic API key." });
+    return;
+  }
+  try {
+    const detail = await extractReceipt(sha, { force: req.query.force === "1" });
+    if (!detail) {
+      res.status(404).json({ error: "That receipt image is no longer stored." });
+      return;
+    }
+    res.json(detail);
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : "The receipt could not be read." });
+  }
+});

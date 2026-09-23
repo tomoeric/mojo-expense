@@ -258,6 +258,14 @@ export const env = {
      * trade accuracy for cost.
      */
     model: str("RECEIPT_AUDIT_MODEL", "claude-opus-5"),
+    /**
+     * Effort for reading line items off a receipt.
+     *
+     * Higher than the total-only check, which is one number. This is a long
+     * transcription off a photograph of faded thermal paper, and a list that
+     * quietly drops half the lines looks exactly like a short receipt.
+     */
+    itemsEffort: str("RECEIPT_ITEMS_EFFORT", "medium") as "low" | "medium" | "high",
     /** Absolute dollar slack before a difference counts (rounding, cents). */
     toleranceAbs: num("RECEIPT_AUDIT_TOLERANCE", 0.02),
     /** Proportional slack, for currency conversion and rounding on big lines. */

@@ -72,6 +72,13 @@ the blocks.
   the page geometry — measured, that lost 72% of the pixels.
 - `RENDER_VERSION` must be bumped whenever rendering changes, or re-imports
   will not replace the older images.
+- **Line items are read once per image and stored** (`receipt-items.ts`), keyed
+  on the same content hash as the picture — so a shared receipt is read once,
+  and the items survive the image being released after an approval. That
+  survival is the point: an approved expense's receipt can never be fetched
+  again, so anything unread when it goes is unread forever. The reader
+  (`receipt-reader.ts`) runs shortly after each import for that reason, not on
+  a daily schedule.
 
 ## Shape
 

@@ -4,6 +4,7 @@ import { db } from "../db.js";
 import { parseExpensesPdf, type ParsedExpense, type ParsedReceipt } from "./parse-pdf.js";
 import { dedupeKey, sha256 } from "./key.js";
 import { checkAgainstSettings, readSettings } from "./settings.js";
+import { nudgeReceiptReader } from "../emburse/receipt-reader.js";
 
 /**
  * Ingest one daily Emburse export.
@@ -259,6 +260,12 @@ export async function ingestExport(
     }
 
     await client.query("COMMIT");
+
+    // New pictures to read. Prompt rather than wait: reading them is minutes
+    // of vision calls, and an import that held its transaction open for that
+    // would fail as a unit on one bad receipt.
+    if (receipts.added > 0) nudgeReceiptReader();
+
     return { ...base, importId, inserted, updated, unchanged, leftInbox,
       receiptsAdded: receipts.added, receiptsSkipped: receipts.skipped, warnings };
   } catch (err) {
