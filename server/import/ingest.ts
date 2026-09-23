@@ -5,6 +5,7 @@ import { parseExpensesPdf, type ParsedExpense, type ParsedReceipt } from "./pars
 import { dedupeKey, sha256 } from "./key.js";
 import { checkAgainstSettings, readSettings } from "./settings.js";
 import { nudgeReceiptReader } from "../emburse/receipt-reader.js";
+import { ensureTaxonomy, recordTaxonomy, type NewNames } from "./taxonomy.js";
 
 /**
  * Ingest one daily Emburse export.
@@ -36,6 +37,8 @@ export type ImportResult = {
   leftInbox: number;
   receiptsAdded: number;
   receiptsSkipped: number;
+  /** Category / location / department names this import put on the list for the first time. */
+  newNames: NewNames;
   totalCents: number;
   statedTotalCents: number | null;
   reconciled: boolean;
@@ -100,12 +103,17 @@ export async function ingestExport(
   const base: ImportResult = {
     importId: null, filename, pageCount: parsed.pageCount, parsedRows: parsed.expenses.length,
     inserted: 0, updated: 0, unchanged: 0, leftInbox: 0, receiptsAdded: 0, receiptsSkipped: 0,
+    newNames: { category: [], location: [], department: [] },
     totalCents, statedTotalCents: parsed.statedTotalCents, reconciled, duplicateFile: false, warnings,
   };
 
   if (parsed.expenses.length === 0) {
     throw new Error("No expense rows were found. Is this the Emburse Spend 'Expenses' export?");
   }
+
+  // Outside the transaction: creating the taxonomy table is DDL, and an import
+  // that rolls back must not take the table with it.
+  await ensureTaxonomy();
 
   const client = await db().connect();
   try {
@@ -242,6 +250,10 @@ export async function ingestExport(
       [[...keys.keys()]]);
     const leftInbox = gone.rowCount ?? 0;
 
+    // Every name this file carried goes on the permanent lists. Inside the
+    // transaction, so names never outlive the rows they came from.
+    const newNames = await recordTaxonomy(client, parsed.expenses);
+
     const receipts = await storeReceipts(client, file, parsed.receipts, keys, warnings);
 
     // Now that this export has confirmed which expenses left the inbox, the
@@ -267,7 +279,7 @@ export async function ingestExport(
     if (receipts.added > 0) nudgeReceiptReader();
 
     return { ...base, importId, inserted, updated, unchanged, leftInbox,
-      receiptsAdded: receipts.added, receiptsSkipped: receipts.skipped, warnings };
+      receiptsAdded: receipts.added, receiptsSkipped: receipts.skipped, newNames, warnings };
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;

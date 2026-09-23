@@ -8,6 +8,7 @@ import type { ExpenseReport, ProviderResult } from "./emburse/types.js";
 import { fetchReceipt, ReceiptError } from "./emburse/receipts.js";
 import { auditLine, cachedAudit } from "./emburse/receipt-audit.js";
 import { db, isDbConfigured } from "./db.js";
+import { isKind, listTaxonomy, taxonomyCounts } from "./import/taxonomy.js";
 import type { ExpenseLine } from "./emburse/types.js";
 
 const cache = new TtlCache<ProviderResult & { demo: boolean }>(env.emburse.cacheTtlSec * 1000);
@@ -82,6 +83,43 @@ api.get("/config", (_req, res) => {
         ? ["EMBURSE_API_KEY", "EMBURSE_API_SECRET"]
         : ["EMBURSE_ACCESS_TOKEN — or EMBURSE_CLIENT_ID + EMBURSE_CLIENT_SECRET + EMBURSE_TOKEN_URL"],
   });
+});
+
+/**
+ * The permanent lists: Categories, Locations/Sites and Departments.
+ *
+ * Read-only on purpose. The lists are derived from what Emburse has actually
+ * sent, so there is nothing here a person could usefully edit — a name typed in
+ * by hand would belong to no expense, and a name deleted here would come back
+ * with the next export that mentions it.
+ */
+api.get("/taxonomy", requireAuth, async (_req, res) => {
+  if (!isDbConfigured()) {
+    res.status(503).json({ error: "No database is configured, so there are no lists yet." });
+    return;
+  }
+  try {
+    res.json({ counts: await taxonomyCounts() });
+  } catch (err) {
+    res.status(500).json({ error: describe(err) });
+  }
+});
+
+api.get("/taxonomy/:kind", requireAuth, async (req, res) => {
+  if (!isDbConfigured()) {
+    res.status(503).json({ error: "No database is configured, so there are no lists yet." });
+    return;
+  }
+  const kind = String(req.params.kind);
+  if (!isKind(kind)) {
+    res.status(404).json({ error: `No such list: ${kind}` });
+    return;
+  }
+  try {
+    res.json(await listTaxonomy(kind));
+  } catch (err) {
+    res.status(500).json({ error: describe(err) });
+  }
 });
 
 api.get("/reports", requireAuth, async (req, res) => {

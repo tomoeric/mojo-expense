@@ -260,8 +260,7 @@ function toExpense(row: RawRow, page: number): ParsedExpense {
     date,
     method,
     receiptLabel,
-    location: capture(details, /Location\s*\/\s*Site\s*-\s*(.*?)(?=Department\s*-|$)/),
-    department: capture(details, /Department\s*-\s*(.*?)(?=Location\s*\/\s*Site\s*-|$)/),
+    ...parseDetails(details),
     category: unwrap(row.rest.filter((l) => inCol(l.x, "category")).map((l) => l.text)),
     amountCents: toCents(MONEY.exec(amountText)?.[0] ?? ""),
     sourcePage: page,
@@ -306,6 +305,29 @@ function unwrap(parts: string[]): string {
     out += glue + next;
   }
   return out.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Pull Location / Site and Department out of the Details cell.
+ *
+ * Emburse prints the cell as labelled pairs on one wrapped line,
+ *
+ *   Location / Site - Richland Department - Maintenance
+ *
+ * in whichever order the fields are configured, so each field is read by
+ * stopping at the other's label rather than at a fixed position. The labels
+ * are the only reliable boundary: values contain spaces, commas and hyphens,
+ * and the cell wraps mid-value.
+ *
+ * Exported so it can be tested against real cell text without a PDF — the
+ * geometry above needs a file, this does not, and this is the part that
+ * silently returns "" when Emburse changes a label.
+ */
+export function parseDetails(details: string): { location: string; department: string } {
+  return {
+    location: capture(details, /Location\s*\/\s*Site\s*-\s*(.*?)(?=Department\s*-|$)/),
+    department: capture(details, /Department\s*-\s*(.*?)(?=Location\s*\/\s*Site\s*-|$)/),
+  };
 }
 
 function capture(text: string, re: RegExp): string {

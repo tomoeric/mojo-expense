@@ -83,6 +83,8 @@ CREATE INDEX IF NOT EXISTS expenses_date_idx     ON expenses (expense_date DESC)
 CREATE INDEX IF NOT EXISTS expenses_inbox_idx    ON expenses (in_inbox);
 CREATE INDEX IF NOT EXISTS expenses_employee_idx ON expenses (employee);
 CREATE INDEX IF NOT EXISTS expenses_dept_idx     ON expenses (department);
+CREATE INDEX IF NOT EXISTS expenses_category_idx ON expenses (category);
+CREATE INDEX IF NOT EXISTS expenses_location_idx ON expenses (location);
 
 -- Receipt bytes are stored ONCE, keyed by content hash. The same receipt
 -- arrives in every daily export and can also be shared by several expense

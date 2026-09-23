@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ListChecks, FileText, BarChart3, Loader2, Upload } from "lucide-react";
+import { ListChecks, FileText, BarChart3, Loader2, Upload, Tags, MapPin, Building2 } from "lucide-react";
 import { useAuth, useConfig, useReports, type ExpenseReport } from "@/lib/api";
 import { SectionTitle, LiveStrip, SegmentedControl, Empty } from "@/components/ui";
 import { NotConnected } from "@/components/not-connected";
@@ -13,14 +13,25 @@ import { AnalyticsPage } from "@/pages/analytics";
 import { ImportPage } from "@/pages/import";
 import { ExportSettingsPage } from "@/pages/export-settings";
 import { MyEmburseLoginPage } from "@/pages/my-emburse-login";
+import { TaxonomyPage } from "@/pages/taxonomy";
 import { timeOfDay } from "@/lib/format";
 
 const RAIL = [
   { key: "queue", label: "Review Queue", Icon: ListChecks, description: "Expense reports waiting on a decision, oldest first." },
   { key: "reports", label: "All Reports", Icon: FileText, description: "Every report in the window, filterable by status and department." },
   { key: "analytics", label: "Analytics", Icon: BarChart3, description: "Where the money went — by category, department and month." },
+  { key: "categories", label: "Categories", Icon: Tags, description: "Every expense category Emburse has sent, whether or not anything is using it today." },
+  { key: "locations", label: "Locations & Sites", Icon: MapPin, description: "Every location / site Emburse has sent, whether or not anything is using it today." },
+  { key: "departments", label: "Departments", Icon: Building2, description: "Every department Emburse has sent, whether or not anything is using it today." },
   { key: "import", label: "Import", Icon: Upload, description: "What the daily export brought in, and a way to load one by hand." },
 ] as const;
+
+/**
+ * The three rail items that are permanent lists, and the field each is drawn
+ * from. Kept as a map rather than three near-identical routes, so adding a
+ * fourth list is one line here and one line in the rail.
+ */
+const LISTS = { categories: "category", locations: "location", departments: "department" } as const;
 
 /**
  * Pages reachable from the user menu rather than the rail. They are settings
@@ -43,7 +54,7 @@ const MENU_PAGES = [
 type RailKey = (typeof RAIL)[number]["key"] | (typeof MENU_PAGES)[number]["key"];
 
 /** Pages that stand alone — no report window, no live strip. */
-const isStandalone = (k: RailKey) => k === "import" || k === "settings";
+const isStandalone = (k: RailKey) => k === "import" || k === "settings" || k in LISTS;
 
 /**
  * How far back to load, with no selector to change it.
@@ -219,6 +230,7 @@ export function App() {
           {data && route === "reports" && <ReportsPage data={data} config={config.data} onOpen={setOpen} />}
           {data && route === "analytics" && <AnalyticsPage data={data} />}
           {route === "import" && <ImportPage />}
+          {route in LISTS && <TaxonomyPage kind={LISTS[route as keyof typeof LISTS]} />}
           {route === "settings" && <ExportSettingsPage isAdmin={auth.data?.isAdmin ?? false} />}
           {route === "emburse-login" && <MyEmburseLoginPage />}
         </main>

@@ -12,6 +12,7 @@ type ImportResult = {
   unchanged: number;
   leftInbox: number;
   receiptsAdded: number;
+  newNames?: { category: string[]; location: string[]; department: string[] };
   totalCents: number;
   statedTotalCents: number | null;
   reconciled: boolean;
@@ -318,9 +319,34 @@ function ImportSummary({ result }: { result: ImportResult }) {
             : "Could not reconcile against the export's own total — see the warnings below."}
         </p>
       )}
+      {/* A name nobody has used before is worth saying out loud: it is either a
+          new site opening or somebody picking the wrong thing off the menu. */}
+      <NewNames names={result.newNames} />
       {result.warnings.map((w, i) => (
         <p key={i} className="mt-1.5 text-xs text-amber-800">
           {w}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+function NewNames({ names }: { names?: ImportResult["newNames"] }) {
+  const groups: [string, string[]][] = [
+    ["categories", names?.category ?? []],
+    ["locations", names?.location ?? []],
+    ["departments", names?.department ?? []],
+  ];
+  const shown = groups.filter(([, list]) => list.length > 0);
+  if (shown.length === 0) return null;
+  return (
+    <div className="mt-2 space-y-0.5">
+      {shown.map(([label, list]) => (
+        <p key={label} className="text-xs text-blue-800">
+          <strong>
+            {list.length} new {list.length === 1 ? label.replace(/(ies|s)$/, (m) => (m === "ies" ? "y" : "")) : label}
+          </strong>{" "}
+          added to the list: {list.join(", ")}
         </p>
       ))}
     </div>

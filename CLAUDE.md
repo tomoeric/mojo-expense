@@ -80,6 +80,28 @@ the blocks.
   (`receipt-reader.ts`) runs shortly after each import for that reason, not on
   a daily schedule.
 
+## The permanent lists
+
+- **Categories, Locations/Sites and Departments are kept, not just displayed**
+  (`server/import/taxonomy.ts`). Every name an import carries goes into
+  `expense_taxonomy` and stays there, whether or not anything is using it
+  today: "no open expenses" and "no longer a real value" are different things,
+  and only Emburse knows which.
+- **Nothing on the lists is authored by hand**, and the routes are read-only.
+  A name typed in would belong to no expense; a name deleted would come back
+  with the next export that mentions it.
+- **Counts are never stored.** They are counted off `expenses` at read time, so
+  they cannot go stale across re-imports, releases and the inbox flag. The
+  table holds names and dates only.
+- **`ensureTaxonomy()` backfills from `expenses` on every boot**, which is how
+  a database that predates the table comes out complete. It inserts nothing
+  when there is nothing new.
+- **Location and Department come out of one wrapped Details cell**, as labelled
+  pairs in either order (`parseDetails` in `parse-pdf.ts`). If Emburse renames
+  a label the field must come back empty rather than wrong — a blank site is
+  visible on the Locations page, a wrong one is not. The Locations page shows
+  the blank count beside the names for exactly that reason.
+
 ## Shape
 
 - Standalone app. Not part of ninja-live-status: own repo, own Replit app, own
