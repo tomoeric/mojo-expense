@@ -129,6 +129,7 @@ export class DemoProvider implements EmburseProvider {
           receiptUrl: "",
           glCode: `6${100 + Math.floor(rand() * 40)}`,
           note: rand() < 0.25 ? "Approved by regional manager" : "",
+          location: ["Richland", "Corsicana", "Kearney", "Sioux Falls"][Math.floor(rand() * 4)]!,
         });
       }
 

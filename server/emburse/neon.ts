@@ -107,7 +107,8 @@ function toReport(key: string, group: Row[], hits: Map<string, Hit[]>): ExpenseR
     receiptId: Number(r.receipt_count) > 0 ? r.dedupe_key : "",
     receiptUrl: "",
     glCode: "",
-    note: [r.note, r.location ? `Site: ${r.location}` : ""].filter(Boolean).join(" · "),
+    note: r.note ?? "",
+    location: r.location ?? "",
     section: r.section,
     changes: (r.changes ?? []).map((c) => ({
       field: c.field, before: c.before_value, after: c.after_value,

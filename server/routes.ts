@@ -313,6 +313,7 @@ async function findLine(lineId: string, window: { startDate: string; endDate: st
       amount: Number(r.amount_cents) / 100, currency: "USD",
       reimbursable: true, billable: false, hasReceipt: Number(r.receipts) > 0,
       receiptId: r.dedupe_key, receiptUrl: "", glCode: "", note: r.note ?? "",
+      location: "",
     };
   }
   const data = await load(window, false);

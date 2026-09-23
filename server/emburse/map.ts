@@ -47,6 +47,7 @@ export function toLine(row: Row): ExpenseLine {
     receiptUrl: asString(pick(row, "ReceiptURL", "ReceiptUrl", "receiptUrl", "receipt_url", "ImageURL")),
     glCode: asString(pick(row, "GLCode", "GlCode", "AccountCode", "glCode", "gl_code")),
     note: asString(pick(row, "Note", "Notes", "Reason", "note", "memo")),
+    location: asString(pick(row, "Location", "Site", "LocationSite", "location", "site")),
   };
 }
 

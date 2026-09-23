@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ArrowDown, ArrowUp, ChevronsUpDown, Search, Receipt, AlertTriangle,
-  Columns3, ChevronLeft, ChevronRight, RotateCcw, X, Sparkles,
+  Columns3, ChevronLeft, ChevronRight, RotateCcw, X, Sparkles, Plus,
 } from "lucide-react";
 import type { ExpenseReport, ExpenseLine, ReportsResponse } from "@/lib/api";
 import { money, shortDate, daysAgo } from "@/lib/format";
@@ -31,7 +31,7 @@ export type Row = {
 };
 
 type ColumnKey =
-  | "date" | "employee" | "merchant" | "category" | "department"
+  | "date" | "employee" | "merchant" | "category" | "department" | "location"
   | "note" | "receipt" | "changed" | "age" | "flags" | "amount" | "decide";
 
 type Column = {
@@ -42,8 +42,10 @@ type Column = {
   /**
    * Share of the table width. `table-fixed` divides only what is left over
    * between columns with no width — with eleven columns that rounds to zero and
-   * they vanish under their neighbours, so every column states its own share
-   * and they add up to 100.
+   * they vanish under their neighbours, so every column states its own share.
+   *
+   * These are relative, not absolute: hiding a column would otherwise leave its
+   * share as dead space, so the visible ones are rescaled to fill the table.
    */
   pct: number;
   value: (r: Row) => string | number;
@@ -58,6 +60,10 @@ const COLUMNS: Column[] = [
   { key: "merchant", label: "Merchant", pct: 13, value: (r) => r.line.merchant },
   { key: "category", label: "Category", pct: 9, value: (r) => r.line.category },
   { key: "department", label: "Department", pct: 10, value: (r) => r.department },
+  // Hidden by default: twelve columns already fill the width, and this one is
+  // worth adding deliberately rather than shrinking everything else on its
+  // behalf. It is what the Add column control has to offer on a fresh install.
+  { key: "location", label: "Location / Site", pct: 9, value: (r) => r.line.location },
   { key: "note", label: "Note", pct: 10, value: (r) => r.line.note },
   { key: "receipt", label: "Receipt", pct: 6,
     value: (r) => (r.line.hasReceipt ? 1 : 0),
@@ -112,46 +118,96 @@ const COLUMNS: Column[] = [
 ];
 
 const DEFAULT_ORDER: ColumnKey[] = COLUMNS.map((c) => c.key);
+const DEFAULT_HIDDEN: ColumnKey[] = ["location"];
 const ORDER_STORAGE = "mojo-expense.columns.v1";
+const HIDDEN_STORAGE = "mojo-expense.columns.hidden.v1";
 
-/** Column order is a per-viewer preference, so it belongs in their browser. */
-function useColumnOrder() {
+const read = <T,>(key: string): T | null => {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : null;
+  } catch {
+    // Private windows, cleared site data and blocked storage all land here.
+    return null;
+  }
+};
+
+const write = (key: string, value: unknown): void => {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* Not worth telling anyone: the table still works, it just forgets. */
+  }
+};
+
+/**
+ * Which columns are shown, and in what order — a per-viewer preference, so it
+ * belongs in their browser rather than the database.
+ *
+ * Order and visibility are stored under separate keys so that adding this did
+ * not invalidate an order somebody had already arranged.
+ */
+function useColumns() {
   const [order, setOrder] = useState<ColumnKey[]>(DEFAULT_ORDER);
+  const [hidden, setHidden] = useState<ColumnKey[]>(DEFAULT_HIDDEN);
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(ORDER_STORAGE);
-      if (!raw) return;
-      const saved = JSON.parse(raw) as ColumnKey[];
+    const savedOrder = read<ColumnKey[]>(ORDER_STORAGE);
+    if (savedOrder) {
       // Reconcile rather than trust: a stored order from an older build can be
       // missing a column that now exists, or name one that no longer does.
-      const known = saved.filter((k) => DEFAULT_ORDER.includes(k));
+      const known = savedOrder.filter((k) => DEFAULT_ORDER.includes(k));
       setOrder([...known, ...DEFAULT_ORDER.filter((k) => !known.includes(k))]);
-    } catch {
-      /* Private windows and cleared site data both land here; the default is fine. */
+    }
+    const savedHidden = read<ColumnKey[]>(HIDDEN_STORAGE);
+    // A column added in a later build is hidden by default for existing
+    // viewers too — otherwise a new column silently rearranges their table.
+    if (savedHidden) {
+      const known = savedHidden.filter((k) => DEFAULT_ORDER.includes(k));
+      const unknownToThem = DEFAULT_HIDDEN.filter(
+        (k) => !savedOrder?.includes(k) && !known.includes(k),
+      );
+      setHidden([...known, ...unknownToThem]);
     }
   }, []);
 
-  const save = (next: ColumnKey[]) => {
+  const saveOrder = (next: ColumnKey[]) => {
     setOrder(next);
-    try {
-      localStorage.setItem(ORDER_STORAGE, JSON.stringify(next));
-    } catch {
-      /* Not worth telling anyone: the table still works, it just forgets. */
-    }
+    write(ORDER_STORAGE, next);
   };
+  const saveHidden = (next: ColumnKey[]) => {
+    setHidden(next);
+    write(HIDDEN_STORAGE, next);
+  };
+
+  const visible = order.filter((k) => !hidden.includes(k));
 
   return {
     order,
+    hidden,
+    visible,
     move: (key: ColumnKey, delta: number) => {
-      const i = order.indexOf(key);
-      const j = i + delta;
-      if (i < 0 || j < 0 || j >= order.length) return;
+      // Step over hidden columns: moving left past something invisible looks
+      // like the button did nothing.
+      const i = visible.indexOf(key);
+      const target = visible[i + delta];
+      if (i < 0 || target === undefined) return;
       const next = [...order];
-      [next[i], next[j]] = [next[j]!, next[i]!];
-      save(next);
+      const from = next.indexOf(key);
+      const to = next.indexOf(target);
+      [next[from], next[to]] = [next[to]!, next[from]!];
+      saveOrder(next);
     },
-    reset: () => save(DEFAULT_ORDER),
+    /** Refuses the last one: a table with no columns is not a state to allow. */
+    hide: (key: ColumnKey) => {
+      if (visible.length <= 1) return;
+      if (!hidden.includes(key)) saveHidden([...hidden, key]);
+    },
+    show: (key: ColumnKey) => saveHidden(hidden.filter((k) => k !== key)),
+    reset: () => {
+      saveOrder(DEFAULT_ORDER);
+      saveHidden(DEFAULT_HIDDEN);
+    },
   };
 }
 
@@ -184,13 +240,26 @@ export function ExpenseTable({
   emptyMessage?: string;
 }) {
   const [diff, setDiff] = useState<Row | null>(null);
-  const { order, move, reset } = useColumnOrder();
+  const { visible, hidden, move, hide, show, reset } = useColumns();
   const [sort, setSort] = useState<{ key: ColumnKey; dir: 1 | -1 }>({ key: "date", dir: -1 });
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState(false);
 
-  const byKey = useMemo(() => new Map(COLUMNS.map((c) => [c.key, c])), []);
-  const columns = order.map((k) => byKey.get(k)!).filter(Boolean);
+  const byKey = useMemo(() => new Map(COLUMNS.map((c) => [c.key, c] as const)), []);
+  const columns = visible.map((k) => byKey.get(k)).filter((c): c is Column => Boolean(c));
+  const hiddenColumns = hidden.map((k) => byKey.get(k)).filter((c): c is Column => Boolean(c));
+
+  // Widths are relative, so a hidden column's share is given back to the rest
+  // rather than left as dead space at the end of the row.
+  const widthTotal = columns.reduce((a, c) => a + c.pct, 0) || 1;
+
+  // Sorting by a column nobody can see is a table that reorders for no visible
+  // reason. Moved to the first column still on screen.
+  useEffect(() => {
+    if (visible.length > 0 && !visible.includes(sort.key)) {
+      setSort({ key: visible[0]!, dir: 1 });
+    }
+  }, [visible, sort.key]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -198,7 +267,7 @@ export function ExpenseTable({
     // Person-first, but merchant and note are searched too: reviewers arrive
     // with "who was this" as often as with a name.
     return rows.filter((r) =>
-      [r.employee, r.line.merchant, r.department, r.line.category, r.line.note]
+      [r.employee, r.line.merchant, r.department, r.line.category, r.line.note, r.line.location]
         .some((v) => (v ?? "").toLowerCase().includes(q)),
     );
   }, [rows, query]);
@@ -263,9 +332,9 @@ export function ExpenseTable({
 
       {editing && (
         <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-border bg-muted/40 p-2">
-          <span className="mr-1 text-xs font-semibold text-muted-foreground">Order:</span>
+          <span className="mr-1 text-xs font-semibold text-muted-foreground">Columns:</span>
           {columns.map((c, i) => (
-            <span key={c.key} className="inline-flex items-center gap-0.5 rounded-md border border-border bg-card px-1.5 py-0.5 text-xs">
+            <span key={c.key} className="inline-flex items-center gap-0.5 rounded-md border border-border bg-card py-0.5 pr-0.5 pl-1.5 text-xs">
               <button
                 type="button"
                 disabled={i === 0}
@@ -285,8 +354,23 @@ export function ExpenseTable({
               >
                 <ChevronRight className="h-3.5 w-3.5" />
               </button>
+              {/* Separated from the arrows, because the cost of a misclick is
+                  different: one nudges, the other takes the column away. */}
+              <button
+                type="button"
+                disabled={columns.length <= 1}
+                onClick={() => hide(c.key)}
+                aria-label={`Remove the ${c.label} column`}
+                title={columns.length <= 1 ? "The last column cannot be removed." : `Remove ${c.label}`}
+                className="ml-0.5 rounded-sm border-l border-border pl-1 text-muted-foreground hover:text-red-600 disabled:opacity-30 disabled:hover:text-muted-foreground"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
             </span>
           ))}
+
+          <AddColumn hidden={hiddenColumns} onAdd={show} />
+
           <button
             type="button"
             onClick={reset}
@@ -308,7 +392,11 @@ export function ExpenseTable({
                   const on = sort.key === c.key;
                   const Icon = !on ? ChevronsUpDown : sort.dir === 1 ? ArrowUp : ArrowDown;
                   return (
-                    <th key={c.key} style={{ width: `${c.pct}%` }} className={`px-2 py-2 font-semibold ${c.numeric ? "text-right" : ""}`}>
+                    <th
+                      key={c.key}
+                      style={{ width: `${(c.pct / widthTotal) * 100}%` }}
+                      className={`px-2 py-2 font-semibold ${c.numeric ? "text-right" : ""}`}
+                    >
                       <button
                         type="button"
                         onClick={() => toggle(c.key)}
@@ -357,6 +445,66 @@ export function ExpenseTable({
 
       {diff && <ChangeDialog row={diff} onClose={() => setDiff(null)} />}
     </div>
+  );
+}
+
+/**
+ * Bringing a removed column back.
+ *
+ * A menu rather than a row of greyed-out chips: the columns somebody has taken
+ * away are, by definition, the ones they did not want taking up room.
+ */
+function AddColumn({ hidden, onAdd }: { hidden: Column[]; onAdd: (key: ColumnKey) => void }) {
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    // A click anywhere else, or Escape, dismisses it — the usual way out of a
+    // menu, and cheaper than a backdrop element.
+    window.addEventListener("click", close);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <span className="relative" onClick={(e) => e.stopPropagation()}>
+      <button
+        type="button"
+        disabled={hidden.length === 0}
+        onClick={() => setOpen((v) => !v)}
+        title={hidden.length === 0 ? "Every column is already shown." : "Add a column"}
+        className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-1 text-xs transition-colors ${
+          open ? "border-sky-500 bg-sky-500/10" : "border-dashed border-border hover:bg-muted"
+        } disabled:opacity-40`}
+      >
+        <Plus className="h-3.5 w-3.5" />
+        Add column
+        {hidden.length > 0 && <span className="text-muted-foreground">({hidden.length})</span>}
+      </button>
+
+      {open && hidden.length > 0 && (
+        <span className="absolute top-full left-0 z-20 mt-1 block min-w-44 rounded-lg border border-border bg-card p-1 shadow-lg">
+          {hidden.map((c) => (
+            <button
+              key={c.key}
+              type="button"
+              onClick={() => {
+                onAdd(c.key);
+                setOpen(false);
+              }}
+              className="block w-full rounded-md px-2 py-1.5 text-left text-xs hover:bg-muted"
+            >
+              {c.label}
+            </button>
+          ))}
+        </span>
+      )}
+    </span>
   );
 }
 

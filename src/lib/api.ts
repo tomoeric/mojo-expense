@@ -24,6 +24,8 @@ export type ExpenseLine = {
   receiptUrl: string;
   glCode: string;
   note: string;
+  /** Emburse's Location / Site. */
+  location: string;
   /** Emburse section, when an import made it knowable. */
   section: string | null;
   /** What the most recent import changed on this expense; usually empty. */

@@ -54,6 +54,11 @@ export type ExpenseLine = {
   receiptUrl: string;
   glCode: string;
   note: string;
+  /**
+   * Emburse's Location / Site. Its own field rather than appended to the note,
+   * so it can be a column, sorted and searched, instead of prose inside one.
+   */
+  location: string;
   /** Emburse section, when an import made it knowable. */
   section: string | null;
   /**
