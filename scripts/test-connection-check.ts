@@ -65,6 +65,27 @@ try {
 
   // Eric can export; Brian cannot approve. Same selectors, different account —
   // so the difference is Emburse permissions, and the ADMIN tab is the tell.
+  // Only the EXPORT used to save the cookie jar. So somebody who cleared a
+  // device check while approving had the trust cookie written into the browser
+  // profile and nowhere else — and Replit rebuilds that directory on every
+  // deploy, so they were asked for a code again on the next ship.
+  if (process.env.DATABASE_URL) {
+    console.log("\nKeeping the device trusted");
+    const { cookiesSavedAt } = await import("../server/emburse/browser-state.js");
+    const { db } = await import("../server/db.js");
+    await db().query("DELETE FROM emburse_browser_state").catch(() => {});
+    check("nothing is remembered to begin with", (await cookiesSavedAt()) === null);
+    await set("/__reset");
+    const kept = await testConnection(sel, mock.url, login);
+    check("the connection test signs in", kept.ok, names(kept));
+    check("…and saves the jar, so the next deploy does not start as a stranger",
+      (await cookiesSavedAt()) !== null);
+    await db().query("DELETE FROM emburse_browser_state").catch(() => {});
+    await db().end();
+  } else {
+    console.log("\nDATABASE_URL not set — skipping the remembered-device check.");
+  }
+
   console.log("\nAn account with no ADMIN tab");
   await set("/__reset");
   const noAdmin = await testConnection({ ...sel, adminTab: "a.no-such-admin-tab" }, mock.url, login);

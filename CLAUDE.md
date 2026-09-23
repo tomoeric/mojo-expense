@@ -202,11 +202,9 @@ the blocks.
   through". It goes as far as the grid on purpose: the two failures people hit
   are the device check (at sign-in) and the grid not appearing (after it), and
   a test that stopped at "signed in" would call the second one fine.
-- **While viewing as somebody, it tests THEIR login.** The first version always
-  used the real signed-in person, which is precisely the login that already
-  works — an admin diagnosing somebody else learned nothing. The code prompt
-  still goes to whoever pressed the button, and the code itself still arrives
-  on the tested account's phone, so the admin has to ask them to read it out.
+- **It tests the signed-in person's own login**, and everybody can press it —
+  `requireAuth`, not `requireAdmin`. A verification code it raises goes to that
+  person's own phone, so they are the one who can clear it.
 - **A MISSING ADMIN TAB IS NOT A SUCCESS.** The grid every decision searches is
   Emburse's team-wide view, reached through the ADMIN tab, so an account
   without admin rights there signs in perfectly and then has no grid — and it
@@ -216,15 +214,7 @@ the blocks.
   separates the four causes that have four different fixes: bounced back to
   sign-in, genuinely no results, a selector matching only hidden elements, or
   nothing matching at all — and it quotes the page.
-- **Viewing as somebody else is READ ONLY** (`auth/view-as.ts`), and the server
-  enforces it rather than the UI: every non-GET is refused while it is on, bar
-  switching target, switching back, and the dry run. An admin clicking Approve
-  in somebody else's view would put their name on a financial approval they
-  never made.
-- **The view-as cookie carries a name, never authority.** Whether it is
-  honoured is re-decided from the real session on every request, so setting it
-  by hand as a non-admin achieves nothing. It cannot reach anybody's password:
-  those stay sealed and are only opened server-side by the worker.
+
 
 ## The review drawer
 
@@ -259,6 +249,10 @@ the blocks.
 - **Anything missing from the newest export leaves the queue** — `in_inbox =
   false, left_inbox_at = now()`. Flagged, never deleted: it was processed, not
   forgotten, and its history is worth keeping.
+- **Nothing on a settings page may look saved when it is not.** The export
+  settings page is long and its Save button sat at the bottom; unchecking a
+  section looked like it took effect and was silently lost on refresh. A
+  sticky bar now appears the moment anything is dirty.
 - **`note` is deliberately NOT in the key** so an edited description updates
   the row. The seven fields that ARE in it mean a re-categorised expense
   arrives as a new row while the old one leaves — correct for deciding (the
@@ -316,6 +310,13 @@ Three things follow, and all three are easy to break:
   and a failed run names the step, quotes what it looked for, and hands back a
   screenshot. Never hard-code a new one; add it to `DEFAULT_SELECTORS`,
   `SELECTOR_HELP` and `STEP_SELECTORS` so it can be corrected without a deploy.
+- **EVERY path that signs in must save the cookie jar, not just the export.**
+  `rememberCookies` was called only by `runAutoExport`, so somebody who cleared
+  a device check while approving had the trust written into the browser
+  profile and nowhere else — and Replit rebuilds that directory on every
+  deploy. They were asked for a code again on the next ship, while the page
+  said Emburse trusts this browser. It does; just not as them. Trust is per
+  Emburse ACCOUNT, so each person verifies once themselves.
 - **The remembered device lives in two places, and needs both.** The browser
   profile (`EMBURSE_PROFILE_DIR`) carries Emburse's "remember this device"
   between runs — but it sits in the app directory, which **Replit rebuilds on

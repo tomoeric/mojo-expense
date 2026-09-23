@@ -31,7 +31,6 @@ pnpm exec tsx scripts/test-rules.ts            # rules + the fences on deciding 
 pnpm exec tsx scripts/test-rule-editors.ts     # who may write rules (needs DATABASE_URL)
 pnpm exec tsx scripts/test-code-first.ts       # Emburse opening straight on a code page (needs a browser)
 pnpm exec tsx scripts/test-connection-check.ts # the Emburse connection test (needs a browser)
-pnpm exec tsx scripts/test-view-as.ts          # viewing as somebody else stays read-only
 pnpm exec tsx scripts/test-ai-credential.ts    # which Anthropic credential is used, and the connection test (no key needed)
 pnpm exec tsx scripts/verify-import.ts <export.pdf>
 ```

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Save, ShieldAlert, Check, Clock, Info } from "lucide-react";
+import { Loader2, Save, ShieldAlert, Check, Clock, Info, AlertTriangle } from "lucide-react";
 import { ExportRunner } from "@/components/export-runner";
 
 type Schedule = {
@@ -283,6 +283,42 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
 
       {error && (
         <p className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm">{error}</p>
+      )}
+
+      {/* A sticky bar, because this page is long and the Save button used to sit
+          at the bottom of it. Unchecking a section looked like it had taken
+          effect, and the change was silently lost on the next refresh — the
+          setting was never written. Nothing on a settings page should be able
+          to look saved when it is not. */}
+      {dirty && (
+        <div className="sticky bottom-0 z-10 -mx-1 flex flex-wrap items-center gap-3 rounded-t-xl border border-b-0 border-amber-300 bg-amber-50 px-4 py-3 shadow-[0_-4px_12px_rgba(0,0,0,0.06)]">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-700" />
+          <span className="text-sm font-semibold text-amber-900">
+            Unsaved changes — nothing here takes effect until you save.
+          </span>
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setSections(q.data?.sections ?? []);
+                setReceiptsOnly(q.data?.receiptsOnly ?? true);
+                setSchedule(q.data?.schedule ?? null);
+              }}
+              className="rounded-lg border border-amber-400 px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100"
+            >
+              Discard
+            </button>
+            <button
+              type="button"
+              disabled={!isAdmin || saving || sections.length === 0}
+              onClick={() => void save()}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-800 disabled:opacity-40"
+            >
+              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+              Save changes
+            </button>
+          </div>
+        </div>
       )}
 
       <div className="flex items-center gap-3">

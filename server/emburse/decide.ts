@@ -1,4 +1,4 @@
-import type { Page } from "playwright";
+import type { BrowserContext, Page } from "playwright";
 import { env } from "../env.js";
 import {
   explainLaunch, firstVisible, gridUrl, makeStepper, openBrowser, safeUrl, signIn,
@@ -6,6 +6,7 @@ import {
   type Login, type StepResult,
 } from "./auto-export.js";
 import { withBrowser } from "./browser-lock.js";
+import { rememberCookies } from "./browser-state.js";
 
 /**
  * Approve or deny one expense in Emburse, by driving the UI.
@@ -162,6 +163,9 @@ export async function runDecision(
     page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
 
     const ok = await drive(page, decision, target, reason, sel, emburseUrl, login, step, opts, (t) => (matchedRow = t));
+    // Whatever the decision itself did, a sign-in that got through is worth
+    // keeping — including a device check somebody just cleared by hand.
+    if (steps.find((st) => st.name === "sign in")?.ok) await keepTrust(opened.context);
     const screenshot = ok ? null : (await page.screenshot()).toString("base64");
     return { ok, steps, screenshot, matchedRow };
   } catch (err) {
@@ -205,6 +209,7 @@ export async function runDecisions(
       // Once, for the whole batch.
       const shared: StepResult[] = [];
       const signedIn = await signInOnce(page, sel, emburseUrl, login, makeStepper(shared), opts.onChallenge);
+      if (signedIn) await keepTrust(opened.context);
       if (!signedIn) {
         // Nothing can be applied, and each item should say why rather than
         // failing with a blank.
@@ -321,6 +326,7 @@ export async function testConnection(
       sheet.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
 
       let ok = await signInOnce(sheet, sel, emburseUrl, login, step, opts.onChallenge);
+      if (ok) await keepTrust(opened.context);
 
       // One step further than signing in, because signing in is not where it
       // has been failing. Opening the grid is everything a decision does
@@ -397,6 +403,20 @@ async function drive(
  * would be half an hour of browser time, and the export could not run in any
  * of it.
  */
+/**
+ * Keep whatever Emburse issued for getting this far — including for passing a
+ * device check.
+ *
+ * Only the export used to do this. So somebody who verified their device while
+ * approving had the trust cookie written into the browser PROFILE and nowhere
+ * else — and Replit rebuilds that directory on every deploy. They were asked
+ * for a code again on the next ship, and the next, with the page cheerfully
+ * reporting that Emburse trusts this browser (it did; just not as them).
+ */
+async function keepTrust(context: BrowserContext): Promise<void> {
+  await rememberCookies(context).catch(() => 0);
+}
+
 async function signInOnce(
   page: Page,
   sel: Record<string, string>,

@@ -3,8 +3,7 @@ import { env, isAuditConfigured, isEmburseConfigured } from "./env.js";
 import { TtlCache } from "./cache.js";
 import { HttpError } from "./http.js";
 import { resolveProvider } from "./emburse/provider.js";
-import { isAdmin, isAuthConfigured, requireAdmin, requireAuth } from "./auth/index.js";
-import { listCredentials } from "./emburse/credentials.js";
+import { isAuthConfigured, requireAdmin, requireAuth } from "./auth/index.js";
 import type { ExpenseReport, ProviderResult } from "./emburse/types.js";
 import { fetchReceipt, ReceiptError } from "./emburse/receipts.js";
 import { auditLine, cachedAudit } from "./emburse/receipt-audit.js";
@@ -63,20 +62,9 @@ function refusesUnauthenticated(): string | null {
 }
 
 /** What the UI needs to render its "connected / not connected" state. */
-api.get("/config", async (req, res) => {
+api.get("/config", (_req, res) => {
   const configured = isEmburseConfigured();
-  // Who an admin may look at the app as: the people with a stored Emburse
-  // login, since theirs is the view whose differences are worth inspecting.
-  // Addresses only — never anything that could stand in for a credential.
-  let deciders: string[] = [];
-  if (isDbConfigured() && req.user && isAdmin(req.user.email)) {
-    deciders = (await listCredentials().catch(() => []))
-      .map((c) => c.userEmail.toLowerCase())
-      .filter((e) => e && e !== (req.viewingAs?.real ?? req.user!.email).toLowerCase())
-      .sort();
-  }
   res.json({
-    deciders,
     configured,
     /**
      * What is actually behind the data. The old header keyed off the Emburse

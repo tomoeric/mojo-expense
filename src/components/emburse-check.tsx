@@ -16,7 +16,7 @@ type Result = { ok: boolean; who?: string; steps?: Step[]; screenshot?: string |
  * and a verification code raised along the way can be answered here — once,
  * after which the device is remembered.
  */
-export function EmburseCheck({ canDecide, viewingAs }: { canDecide: boolean; viewingAs?: string | null }) {
+export function EmburseCheck({ canDecide }: { canDecide: boolean }) {
   const [result, setResult] = useState<Result | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -37,15 +37,11 @@ export function EmburseCheck({ canDecide, viewingAs }: { canDecide: boolean; vie
     <div className="rounded-lg border border-border bg-muted/30 px-3 py-2.5">
       <div className="flex flex-wrap items-center gap-2">
         <PlugZap className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <p className="text-sm font-semibold">
-          {viewingAs ? `${viewingAs}'s Emburse connection` : "Your Emburse connection"}
-        </p>
+        <p className="text-sm font-semibold">Your Emburse connection</p>
         <p className="text-xs text-muted-foreground">
-          {!canDecide
-            ? `${viewingAs ?? "You"} ${viewingAs ? "has" : "have"} no Emburse login stored — nothing to test yet.`
-            : viewingAs
-              ? `Signs in as ${viewingAs} and opens the expenses grid. Approves nothing.`
-              : "Signs in as you and opens the expenses grid. Approves nothing."}
+          {canDecide
+            ? "Signs in as you and opens the expenses grid. Approves nothing."
+            : "Add your Emburse login first — there is nothing to test yet."}
         </p>
         <button
           type="button"
@@ -61,9 +57,7 @@ export function EmburseCheck({ canDecide, viewingAs }: { canDecide: boolean; vie
       {busy && (
         <p className="mt-2 text-xs text-muted-foreground">
           Signing in to Emburse in a real browser. If it asks to verify the device, the prompt appears
-          above — {viewingAs
-            ? `but the code goes to ${viewingAs}, so you will need them to read it out.`
-            : "and the code goes to you."}
+          above — the code goes to you.
         </p>
       )}
 
