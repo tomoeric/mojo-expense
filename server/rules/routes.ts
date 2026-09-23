@@ -5,7 +5,8 @@ import { isDbConfigured } from "../db.js";
 import { hasCredential, listCredentials } from "../emburse/credentials.js";
 import { listTaxonomy } from "../import/taxonomy.js";
 import {
-  ACTIONS, FIELDS, FIELD_LABEL, FIELD_LIST, OPS, OP_LABEL, opsFor,
+  ACTIONS, FIELDS, FIELD_LABEL, FIELD_LIST, MONEY_TOLERANCE_ABS, MONEY_TOLERANCE_PCT,
+  OPS, OP_LABEL, comparableTo, opsFor,
   type Action, type Condition, type Field, type Op, type RuleBody,
 } from "./engine.js";
 import {
@@ -29,7 +30,7 @@ function guard(res: Response): boolean {
  * on an approve rule means it silently stops approving and on a deny rule means
  * it silently starts denying everything.
  */
-function readBody(raw: unknown): RuleBody | { error: string } {
+export function readBody(raw: unknown): RuleBody | { error: string } {
   if (!raw || typeof raw !== "object") return { error: "Send a rule." };
   const r = raw as Record<string, unknown>;
 
@@ -43,7 +44,13 @@ function readBody(raw: unknown): RuleBody | { error: string } {
     if (!opsFor(field).includes(op)) {
       return { error: `${FIELD_LABEL[field]} cannot be tested with “${OP_LABEL[op]}”.` };
     }
-    return { field, op, value: String(c.value ?? "").slice(0, 300) };
+    // A comparison against another column, which is how "the receipt's own
+    // total must equal the amount claimed" is expressed.
+    const compare = c.compare ? (String(c.compare) as Field) : null;
+    if (compare && !comparableTo(field).includes(compare)) {
+      return { error: `${FIELD_LABEL[field]} cannot be compared with “${compare}”.` };
+    }
+    return { field, op, value: String(c.value ?? "").slice(0, 300), compare };
   };
 
   const whenRaw = Array.isArray(r.when) ? r.when : [];
@@ -87,6 +94,9 @@ rulesRouter.get("/rules/options", requireAuth, async (_req: Request, res: Respon
       fields: FIELDS.map((f) => ({
         value: f, label: FIELD_LABEL[f], list: FIELD_LIST[f] ?? null,
         ops: opsFor(f).map((o) => ({ value: o, label: OP_LABEL[o] })),
+        // Which other columns this one may be compared against, so the editor
+        // cannot offer a comparison the server would refuse.
+        comparable: comparableTo(f).map((c) => ({ value: c, label: FIELD_LABEL[c] })),
       })),
       lists: {
         category: categories.entries.map((e) => e.name),
@@ -94,6 +104,7 @@ rulesRouter.get("/rules/options", requireAuth, async (_req: Request, res: Respon
         department: departments.entries.map((e) => e.name),
       },
       maxDecisionsPerRun: MAX_DECISIONS_PER_RUN,
+      moneyTolerance: { abs: MONEY_TOLERANCE_ABS, pct: MONEY_TOLERANCE_PCT },
     });
   } catch (err) {
     res.status(500).json({ error: describe(err) });

@@ -30,7 +30,7 @@ const expense = (over: Partial<Subject> = {}): Subject => ({
   note: "Gas for truck", category: "Auto Fee & Fuel", location: "Richland",
   department: "Operations and Field", method: "Corporate card", amountCents: 4512,
   hasReceipt: true, receiptItems: "UNLEADED REGULAR | MONSTER ENERGY", inInbox: true,
-  date: "2026-09-18", ...over,
+  receiptTotalCents: 4512, date: "2026-09-18", ...over,
 });
 
 const rule = (over: Partial<RuleBody> = {}): RuleBody => ({
@@ -79,13 +79,13 @@ check("or-matching needs only one", applies(expense({ merchant: "Kwik Star" }), 
          { field: "merchant", op: "contains", value: "racetrac" }],
 })));
 check("amounts compare as numbers, not strings",
-  test(expense({ amountCents: 900_00 }), { field: "amount", op: "gt", value: "100" })
+  true === test(expense({ amountCents: 900_00 }), { field: "amount", op: "gt", value: "100" })
     && !test(expense({ amountCents: 90_00 }), { field: "amount", op: "gt", value: "100" }));
 check("a missing receipt is testable",
-  test(expense({ hasReceipt: false }), { field: "receipt", op: "is_blank", value: "" })
-    && test(expense(), { field: "receipt", op: "is_not_blank", value: "" }));
+  test(expense({ hasReceipt: false }), { field: "receipt", op: "is_blank", value: "" }) === true
+    && test(expense(), { field: "receipt", op: "is_not_blank", value: "" }) === true);
 check("receipt line items are searchable",
-  test(expense(), { field: "receiptItems", op: "contains", value: "monster" }));
+  test(expense(), { field: "receiptItems", op: "contains", value: "monster" }) === true);
 
 // The one that turns a half-written rule into a disaster: an empty value on a
 // `contains` would make every expense match, and on an approve rule that is
@@ -97,6 +97,111 @@ check("…and `does not contain` with a blank value is not universally true",
   !test(expense(), { field: "note", op: "not_contains", value: "" }));
 check("a rule with no conditions matches nothing",
   !applies(expense(), rule({ when: [] })));
+
+console.log("\nThe receipt's own total against the amount claimed");
+
+// The check an expense queue most needs, and the one a field-against-a-constant
+// rule cannot state. "WHEN there is a receipt, the total read off it MUST equal
+// the amount claimed."
+const matchRule = rule({
+  name: "Receipt must match the claim",
+  when: [{ field: "receipt", op: "is_not_blank", value: "" }],
+  must: { field: "receiptTotal", op: "is", value: "", compare: "amount" },
+  message: "The receipt does not show the amount claimed.",
+});
+
+check("the example rule is valid", problems(matchRule).length === 0,
+  problems(matchRule).join(" "));
+check("it reads as the sentence it is",
+  summarise(matchRule) ===
+    "When Receipt is not blank, Receipt total (read off the image) is Amount — otherwise flag it.",
+  summarise(matchRule));
+
+check("a receipt showing the claimed amount passes",
+  evaluate(expense({ amountCents: 4512, receiptTotalCents: 4512 }), matchRule) === "pass");
+check("a receipt showing something else fails",
+  evaluate(expense({ amountCents: 4512, receiptTotalCents: 8899 }), matchRule) === "fail");
+check("the mismatch shows both figures",
+  /\$45\.12/.test(explain(expense({ amountCents: 4512, receiptTotalCents: 8899 }),
+    { ...matchRule, message: "" }))
+    && /\$88\.99/.test(explain(expense({ amountCents: 4512, receiptTotalCents: 8899 }),
+      { ...matchRule, message: "" })),
+  explain(expense({ amountCents: 4512, receiptTotalCents: 8899 }), { ...matchRule, message: "" }));
+
+// Two figures for the same purchase differ by a cent for reasons nobody wants
+// to be told about. A rule that flags those is a rule people switch off.
+check("a one-cent difference is not a mismatch",
+  evaluate(expense({ amountCents: 4512, receiptTotalCents: 4511 }), matchRule) === "pass");
+check("…but a real difference still is",
+  evaluate(expense({ amountCents: 4512, receiptTotalCents: 4600 }), matchRule) === "fail");
+check("the slack scales with the amount, so big claims are not held to a cent",
+  evaluate(expense({ amountCents: 500_000, receiptTotalCents: 500_300 }), matchRule) === "pass");
+
+// THE ONE THAT MATTERS. Receipts are read by a background pass that needs an
+// Anthropic key. Until one is working, every receipt total is null — and
+// treating null as "does not match" would flag the entire queue the moment
+// somebody saved this rule, while the rule looked perfectly correct.
+check("an UNREAD receipt is not a mismatch",
+  evaluate(expense({ receiptTotalCents: null }), matchRule) === "not-applicable");
+check("…nor is it a pass, which would be just as wrong",
+  evaluate(expense({ receiptTotalCents: null }), matchRule) !== "pass");
+check("so nothing fires on it, for any action",
+  !fires(evaluate(expense({ receiptTotalCents: null }), matchRule), "flag")
+    && !fires(evaluate(expense({ receiptTotalCents: null }), matchRule), "deny")
+    && !fires(evaluate(expense({ receiptTotalCents: null }), matchRule), "approve"));
+check("an unjudgeable condition in WHEN does not drag the expense into scope",
+  !applies(expense({ receiptTotalCents: null }),
+    rule({ when: [{ field: "receiptTotal", op: "gt", value: "100" }] })));
+
+// Finding the ones nobody could read is its own useful rule.
+check("an unread receipt is findable on purpose",
+  test(expense({ receiptTotalCents: null }), { field: "receiptTotal", op: "is_blank", value: "" }) === true
+    && test(expense({ receiptTotalCents: 4512 }), { field: "receiptTotal", op: "is_blank", value: "" }) === false);
+
+check("a column cannot be compared with one of a different kind",
+  problems(rule({ must: { field: "merchant", op: "is", value: "", compare: "amount" } }))
+    .some((p) => /cannot be compared/.test(p)));
+check("“is blank” takes no column to compare with",
+  problems(rule({ must: { field: "receiptTotal", op: "is_blank", value: "", compare: "amount" } }))
+    .some((p) => /does not take another column/.test(p)));
+check("a comparison needs no typed value",
+  problems(rule({ must: { field: "receiptTotal", op: "is", value: "", compare: "amount" } })).length === 0);
+
+// The request parser, not just the engine. A rule arrives as JSON and is
+// rebuilt field by field rather than trusted — and a field the parser forgets
+// to carry is invisible to every test above, because they construct the rule
+// in memory. That is exactly how `compare` was dropped once.
+console.log("\nA rule survives the round trip through the request parser");
+const { readBody } = await import("../server/rules/routes.js");
+const parsed = readBody({
+  name: "Receipt must match the claim",
+  enabled: true,
+  match: "all",
+  when: [{ field: "receipt", op: "is_not_blank", value: "" }],
+  must: { field: "receiptTotal", op: "is", value: "", compare: "amount" },
+  action: "flag",
+  message: "",
+});
+check("the request is accepted", !("error" in parsed),
+  "error" in parsed ? parsed.error : "");
+if (!("error" in parsed)) {
+  check("the comparison survives the parse", parsed.must?.compare === "amount",
+    JSON.stringify(parsed.must));
+  check("and the parsed rule is valid", problems(parsed).length === 0,
+    problems(parsed).join(" "));
+  check("it evaluates the same as the one built in memory",
+    evaluate(expense({ amountCents: 4512, receiptTotalCents: 8899 }), parsed) === "fail"
+      && evaluate(expense({ amountCents: 4512, receiptTotalCents: 4512 }), parsed) === "pass"
+      && evaluate(expense({ receiptTotalCents: null }), parsed) === "not-applicable");
+}
+const refused = readBody({
+  name: "Nonsense", enabled: true, match: "all",
+  when: [{ field: "merchant", op: "is", value: "", compare: "amount" }],
+  action: "flag", message: "",
+});
+check("a comparison between different kinds of column is refused at the door",
+  "error" in refused && /cannot be compared/.test(refused.error),
+  "error" in refused ? refused.error : "accepted");
 
 console.log("\nWhat a rule is not allowed to be");
 check("a rule needs a name", problems(rule({ name: "  " })).some((p) => /needs a name/.test(p)));

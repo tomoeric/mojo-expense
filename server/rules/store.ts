@@ -2,7 +2,7 @@ import type pg from "pg";
 import { db, ensureSchema } from "../db.js";
 import { ensureReceiptItems } from "../emburse/receipt-items.js";
 import {
-  ACTIONS, FIELDS, OPS, opsFor, problems, summarise,
+  ACTIONS, FIELDS, OPS, comparableTo, opsFor, problems, summarise,
   type Action, type Condition, type Field, type Op, type RuleBody, type Subject,
 } from "./engine.js";
 
@@ -106,7 +106,15 @@ function condition(raw: unknown): Condition | null {
   if (!(FIELDS as readonly string[]).includes(field)) return null;
   if (!(OPS as readonly string[]).includes(op)) return null;
   if (!opsFor(field).includes(op)) return null;
-  return { field, op, value: typeof r.value === "string" ? r.value : String(r.value ?? "") };
+  const compare = typeof r.compare === "string" ? (r.compare as Field) : null;
+  return {
+    field,
+    op,
+    value: typeof r.value === "string" ? r.value : String(r.value ?? ""),
+    // A comparison this build no longer allows is dropped, not kept: it would
+    // read as a literal against an empty string and quietly match nothing.
+    compare: compare && comparableTo(field).includes(compare) ? compare : null,
+  };
 }
 
 function shape(row: Row): Rule {
@@ -225,7 +233,7 @@ export async function subjects(
     dedupe_key: string; employee: string; merchant: string; note: string | null;
     category: string | null; location: string | null; department: string | null;
     method: string | null; amount_cents: string; receipts: string; items: string | null;
-    in_inbox: boolean; expense_date: string | null;
+    in_inbox: boolean; expense_date: string | null; receipt_total_cents: string | null;
   }>(
     `SELECT e.dedupe_key, e.employee, e.merchant, e.note, e.category, e.location,
             e.department, e.method, e.amount_cents, e.in_inbox,
@@ -234,7 +242,16 @@ export async function subjects(
             (SELECT string_agg(i.description, ' | ')
                FROM expense_receipts r
                JOIN receipt_items i ON i.sha256 = r.sha256
-              WHERE r.dedupe_key = e.dedupe_key) AS items
+              WHERE r.dedupe_key = e.dedupe_key) AS items,
+            -- The total the reader took off the receipt image. Summed because
+            -- an expense can carry more than one receipt, and NULL when none
+            -- has been read — which is not zero and must not compare as one.
+            (SELECT sum(rr.total_cents)
+               FROM expense_receipts r
+               JOIN receipt_readings rr ON rr.sha256 = r.sha256
+              WHERE r.dedupe_key = e.dedupe_key
+                AND rr.error IS NULL
+                AND rr.total_cents IS NOT NULL) AS receipt_total_cents
        FROM expenses e
       ${keys ? "WHERE e.dedupe_key = ANY($1::text[])" : ""}`,
     keys ? [keys] : [],
@@ -252,6 +269,7 @@ export async function subjects(
     amountCents: Number(r.amount_cents),
     hasReceipt: Number(r.receipts) > 0,
     receiptItems: r.items ?? "",
+    receiptTotalCents: r.receipt_total_cents === null ? null : Number(r.receipt_total_cents),
     inInbox: r.in_inbox,
     date: r.expense_date,
   }));

@@ -92,6 +92,18 @@ the blocks.
 - **Evaluation is JavaScript over rows, never generated SQL.** Rules are
   user-authored data; building a WHERE clause out of them is a standing
   invitation to get that wrong once. At this size the scan costs nothing.
+- **A condition can compare two columns** (`Condition.compare`), which is the
+  only way to say "the total read off the receipt must equal the amount
+  claimed" — the check an expense queue most needs, and one that a
+  field-against-a-constant rule cannot state. Only same-kind columns compare;
+  money compares with tolerance (2¢ or 1%), because two figures for one
+  purchase differ by a cent for reasons nobody wants to be told about.
+- **`test()` is three-state: true, false, or NULL for "cannot be judged".**
+  A receipt total is null until the reader has read it, and treating that as
+  "does not match" would flag the whole queue the moment somebody wrote the
+  rule, while the rule looked correct. Unknown never fires: not a flag, not a
+  denial, and not an approval either. An unjudgeable WHEN condition does not
+  match, so the expense stays out of the rule's scope entirely.
 - **A blank value must never match everything.** An empty `contains` that
   matched every row would, on an approve rule, approve the entire queue. Guarded
   in `test()` and asserted in `test-rules.ts`.
@@ -102,6 +114,10 @@ the blocks.
   `MAX_DECISIONS_PER_RUN` per rule per run. The cap is the important one — a
   mistyped condition is the normal first draft of a rule, and the cap is the
   difference between catching it at 25 expenses and at 400.
+- **Test through `readBody`, not only the engine.** A rule arrives as JSON and
+  is rebuilt field by field rather than trusted, so a field the parser forgets
+  to carry is invisible to every test that constructs a rule in memory. That is
+  exactly how `compare` was dropped once, with the engine tests all green.
 - **Rules run after the import COMMITS**, never inside its transaction: a
   decision must not exist for an expense whose import rolled back. A failure
   there is a warning on the import, not a failed import.

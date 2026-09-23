@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Plus, X, Loader2, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { Plus, X, Loader2, AlertTriangle, CheckCircle2, ArrowLeftRight } from "lucide-react";
 import { money } from "@/lib/format";
 import { SegmentedControl } from "@/components/ui";
 import { preview, type Action, type Condition, type Field, type Op, type Options, type Preview, type RuleBody } from "@/lib/rules";
@@ -202,7 +202,10 @@ function ConditionRow({
   const field = options?.fields.find((f) => f.value === condition.field);
   const ops = field?.ops ?? [];
   const list = field?.list ? options?.lists[field.list] : undefined;
-  const needsValue = condition.op !== "is_blank" && condition.op !== "is_not_blank";
+  const comparable = field?.comparable ?? [];
+  const takesOperand = condition.op !== "is_blank" && condition.op !== "is_not_blank";
+  const comparing = Boolean(condition.compare);
+  const needsValue = takesOperand && !comparing;
 
   // Changing the field can strand an operator the new field does not support,
   // which the server would reject on save. Moved to the field's first operator
@@ -210,10 +213,15 @@ function ConditionRow({
   const changeField = (value: Field) => {
     const next = options?.fields.find((f) => f.value === value);
     const keep = next?.ops.some((o) => o.value === condition.op);
+    // A comparison that made sense for the old field rarely survives the new
+    // one, and a stale one would be refused on save.
+    const keepCompare =
+      condition.compare && next?.comparable.some((c) => c.value === condition.compare);
     onChange({
       field: value,
       op: keep ? condition.op : ((next?.ops[0]?.value ?? "contains") as Op),
       value: "",
+      compare: keepCompare ? condition.compare : null,
     });
   };
 
@@ -227,11 +235,33 @@ function ConditionRow({
         ))}
       </select>
 
-      <select value={condition.op} onChange={(e) => onChange({ ...condition, op: e.target.value as Op })} className={select}>
+      <select
+        value={condition.op}
+        onChange={(e) => {
+          const op = e.target.value as Op;
+          // "is blank" takes nothing on the right, so a comparison left over
+          // from the previous operator has to go with it.
+          const blank = op === "is_blank" || op === "is_not_blank";
+          onChange({ ...condition, op, compare: blank ? null : condition.compare });
+        }}
+        className={select}
+      >
         {ops.map((o) => (
           <option key={o.value} value={o.value}>{o.label}</option>
         ))}
       </select>
+
+      {comparing && (
+        <select
+          value={condition.compare ?? ""}
+          onChange={(e) => onChange({ ...condition, compare: e.target.value as Field })}
+          className={`${select} max-w-72 min-w-44 border-sky-500/50 bg-sky-500/5`}
+        >
+          {comparable.map((c) => (
+            <option key={c.value} value={c.value}>{c.label}</option>
+          ))}
+        </select>
+      )}
 
       {needsValue && (list && list.length > 0 ? (
         // A taxonomy field gets the permanent list, so a rule cannot be written
@@ -253,6 +283,28 @@ function ConditionRow({
           className={`${select} w-48`}
         />
       ))}
+
+      {/* The switch between "a value I type" and "another column". Without it
+          the one check an expense queue most needs — the receipt's own total
+          against the amount claimed — cannot be written at all. */}
+      {takesOperand && comparable.length > 0 && (
+        <button
+          type="button"
+          onClick={() =>
+            onChange({
+              ...condition,
+              value: "",
+              compare: comparing ? null : (comparable[0]!.value as Field),
+            })}
+          title={comparing ? "Compare with a value you type instead" : "Compare with another column instead"}
+          className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1.5 text-xs transition-colors ${
+            comparing ? "border-sky-500 bg-sky-500/10 font-semibold text-sky-700" : "border-border text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <ArrowLeftRight className="h-3.5 w-3.5" />
+          {comparing ? "column" : "value"}
+        </button>
+      )}
 
       {onRemove && (
         <button type="button" onClick={onRemove} className="text-muted-foreground hover:text-foreground" title="Remove">

@@ -25,7 +25,7 @@
 
 export const FIELDS = [
   "note", "merchant", "category", "location", "department", "employee",
-  "amount", "method", "receipt", "receiptItems",
+  "amount", "method", "receipt", "receiptItems", "receiptTotal",
 ] as const;
 export type Field = (typeof FIELDS)[number];
 
@@ -40,7 +40,33 @@ export const FIELD_LABEL: Record<Field, string> = {
   method: "Payment method",
   receipt: "Receipt",
   receiptItems: "Receipt line items",
+  receiptTotal: "Receipt total (read off the image)",
 };
+
+/**
+ * Fields holding money. They compare with a tolerance, because two figures for
+ * the same purchase differ by a cent for reasons nobody wants to be told
+ * about: rounding, a tip line, a currency conversion.
+ */
+const MONEY: ReadonlySet<Field> = new Set<Field>(["amount", "receiptTotal"]);
+
+/** Absolute and proportional slack before two amounts count as different. */
+export const MONEY_TOLERANCE_ABS = 0.02;
+export const MONEY_TOLERANCE_PCT = 0.01;
+
+const tolerance = (a: number, b: number): number =>
+  Math.max(MONEY_TOLERANCE_ABS, Math.abs(b || a) * MONEY_TOLERANCE_PCT);
+
+/**
+ * Which fields a given field can be compared against.
+ *
+ * Same kind only. "Merchant is more than Amount" is not a question, and an
+ * editor that offers it invites a rule that can never be true.
+ */
+export function comparableTo(field: Field): Field[] {
+  if (field === "receipt") return [];
+  return FIELDS.filter((f) => f !== field && f !== "receipt" && MONEY.has(f) === MONEY.has(field));
+}
 
 /** Fields whose values come from a permanent list, so the UI offers a dropdown. */
 export const FIELD_LIST: Partial<Record<Field, "category" | "location" | "department">> = {
@@ -69,7 +95,10 @@ export const OP_LABEL: Record<Op, string> = {
 
 /** Which operators make sense for a field — the UI offers only these. */
 export function opsFor(field: Field): Op[] {
-  if (field === "amount") return ["gt", "lt", "is", "is_not"];
+  if (field === "amount") return ["is", "is_not", "gt", "lt"];
+  // Unlike Amount, this one can be absent: the receipt may not have been read,
+  // or may have been unreadable. "is blank" is how you find those.
+  if (field === "receiptTotal") return ["is", "is_not", "gt", "lt", "is_blank", "is_not_blank"];
   if (field === "receipt") return ["is_blank", "is_not_blank"];
   return ["contains", "not_contains", "is", "is_not", "starts_with", "is_blank", "is_not_blank"];
 }
@@ -77,7 +106,19 @@ export function opsFor(field: Field): Op[] {
 export const ACTIONS = ["flag", "approve", "deny"] as const;
 export type Action = (typeof ACTIONS)[number];
 
-export type Condition = { field: Field; op: Op; value: string };
+export type Condition = {
+  field: Field;
+  op: Op;
+  value: string;
+  /**
+   * Compare against another field instead of `value`.
+   *
+   * This is what makes "the receipt's own total must equal the amount claimed"
+   * expressible — the check that matters most on an expense queue, and the one
+   * a field-against-a-constant rule can never state.
+   */
+  compare?: Field | null;
+};
 
 export type RuleBody = {
   name: string;
@@ -106,6 +147,12 @@ export type Subject = {
   hasReceipt: boolean;
   /** Every line item read off the attached receipts, joined. */
   receiptItems: string;
+  /**
+   * The total read off the receipt image, in cents — null when no receipt has
+   * been read, which is NOT the same as zero and must never be treated as a
+   * mismatch.
+   */
+  receiptTotalCents: number | null;
   inInbox: boolean;
   /**
    * Not a field a rule can test — carried so a decision the rule queues can
@@ -115,6 +162,15 @@ export type Subject = {
 };
 
 const norm = (s: string): string => s.trim().toLowerCase();
+
+/** Null for a money field with no figure — an unread or unreadable receipt. */
+function numberOf(subject: Subject, field: Field): number | null {
+  if (field === "amount") return subject.amountCents / 100;
+  if (field === "receiptTotal") {
+    return subject.receiptTotalCents === null ? null : subject.receiptTotalCents / 100;
+  }
+  return null;
+}
 
 function textOf(subject: Subject, field: Field): string {
   switch (field) {
@@ -128,25 +184,58 @@ function textOf(subject: Subject, field: Field): string {
     case "receiptItems": return subject.receiptItems;
     case "receipt": return subject.hasReceipt ? "receipt" : "";
     case "amount": return (subject.amountCents / 100).toFixed(2);
+    case "receiptTotal":
+      return subject.receiptTotalCents === null ? "" : (subject.receiptTotalCents / 100).toFixed(2);
   }
 }
 
-export function test(subject: Subject, c: Condition): boolean {
-  if (c.field === "amount") {
-    const claimed = subject.amountCents / 100;
-    const want = Number(c.value);
-    if (!Number.isFinite(want)) return false;
+/** What the right-hand side of a condition is: another field, or a literal. */
+function rightHandSide(subject: Subject, c: Condition): { text: string; number: number | null } {
+  if (c.compare) {
+    return { text: textOf(subject, c.compare), number: numberOf(subject, c.compare) };
+  }
+  const n = Number(c.value);
+  return { text: c.value, number: Number.isFinite(n) && c.value.trim() !== "" ? n : null };
+}
+
+/**
+ * Judge one condition.
+ *
+ * Returns **null when it cannot be judged** — a receipt total that has not been
+ * read yet, most of the time. That third state is the whole reason this is not
+ * a boolean: treating an unread receipt as "does not match the amount" would
+ * flag every expense in the queue the moment somebody wrote the rule, and the
+ * rule would look right while being worse than useless.
+ */
+export function test(subject: Subject, c: Condition): boolean | null {
+  const numeric = c.field === "amount" || c.field === "receiptTotal";
+
+  if (numeric) {
+    const got = numberOf(subject, c.field);
+
+    // Blankness is knowable even when the figure is not, and "the receipt
+    // could not be read" is a rule worth being able to write.
+    if (c.op === "is_blank") return got === null;
+    if (c.op === "is_not_blank") return got !== null;
+    if (got === null) return null;
+
+    const rhs = rightHandSide(subject, c);
+    if (rhs.number === null) return c.compare ? null : false;
+    const want = rhs.number;
+    const slack = MONEY.has(c.field) ? tolerance(got, want) : 0.005;
+
     switch (c.op) {
-      case "gt": return claimed > want;
-      case "lt": return claimed < want;
-      case "is": return Math.abs(claimed - want) < 0.005;
-      case "is_not": return Math.abs(claimed - want) >= 0.005;
+      case "gt": return got > want;
+      case "lt": return got < want;
+      case "is": return Math.abs(got - want) <= slack;
+      case "is_not": return Math.abs(got - want) > slack;
       default: return false;
     }
   }
 
   const got = norm(textOf(subject, c.field));
-  const want = norm(c.value);
+  const rhs = rightHandSide(subject, c);
+  const want = norm(rhs.text);
 
   switch (c.op) {
     case "is_blank": return got === "";
@@ -155,19 +244,24 @@ export function test(subject: Subject, c: Condition): boolean {
     // is how a half-finished rule quietly starts approving the whole queue.
     case "contains": return want !== "" && got.includes(want);
     case "not_contains": return want !== "" && !got.includes(want);
-    case "is": return got === want;
-    case "is_not": return got !== want;
+    case "is": return want !== "" && got === want;
+    case "is_not": return want !== "" && got !== want;
     case "starts_with": return want !== "" && got.startsWith(want);
     default: return false;
   }
 }
 
-/** Does this rule apply to this expense at all? */
+/**
+ * Does this rule apply to this expense at all?
+ *
+ * A condition that cannot be judged does not match. Erring the other way would
+ * pull every unread receipt into every rule's scope.
+ */
 export function applies(subject: Subject, rule: RuleBody): boolean {
   if (rule.when.length === 0) return false;
   return rule.match === "any"
-    ? rule.when.some((c) => test(subject, c))
-    : rule.when.every((c) => test(subject, c));
+    ? rule.when.some((c) => test(subject, c) === true)
+    : rule.when.every((c) => test(subject, c) === true);
 }
 
 export type Verdict = "not-applicable" | "pass" | "fail";
@@ -175,7 +269,12 @@ export type Verdict = "not-applicable" | "pass" | "fail";
 export function evaluate(subject: Subject, rule: RuleBody): Verdict {
   if (!applies(subject, rule)) return "not-applicable";
   if (!rule.must) return "fail";
-  return test(subject, rule.must) ? "pass" : "fail";
+  const met = test(subject, rule.must);
+  // Unknown is not failure. An expectation nobody can check yet — a receipt
+  // waiting to be read — earns no verdict at all, so no flag, no denial, and
+  // no approval either.
+  if (met === null) return "not-applicable";
+  return met ? "pass" : "fail";
 }
 
 /** Whether the rule's action should fire, given the verdict. */
@@ -186,13 +285,25 @@ export function fires(verdict: Verdict, action: Action): boolean {
   return action === "approve" ? verdict === "pass" : verdict === "fail";
 }
 
+const shown = (subject: Subject, field: Field): string => {
+  const n = numberOf(subject, field);
+  if (n !== null) return `$${n.toFixed(2)}`;
+  return textOf(subject, field) || "(blank)";
+};
+
 /** What the reviewer is told, in the rule's own terms. */
 export function explain(subject: Subject, rule: RuleBody): string {
   if (rule.message.trim()) return rule.message.trim();
   if (!rule.must) return `Matches “${rule.name}”.`;
-  const got = rule.must.field === "amount"
-    ? `$${(subject.amountCents / 100).toFixed(2)}`
-    : textOf(subject, rule.must.field) || "(blank)";
+  const got = shown(subject, rule.must.field);
+
+  // A field-against-a-field mismatch reads best as the two figures side by
+  // side — "$43.57 against $39.88" says more than either half alone.
+  if (rule.must.compare) {
+    return `Expected ${FIELD_LABEL[rule.must.field]} ${OP_LABEL[rule.must.op]} ` +
+      `${FIELD_LABEL[rule.must.compare]}, but found ${got} against ` +
+      `${shown(subject, rule.must.compare)}.`;
+  }
   return `${FIELD_LABEL[rule.must.field]} ${OP_LABEL[rule.must.op]} ` +
     `${rule.must.value ? `“${rule.must.value}”` : ""} was expected — found “${got}”.`;
 }
@@ -202,7 +313,9 @@ export function summarise(rule: RuleBody): string {
   const cond = (c: Condition) =>
     c.op === "is_blank" || c.op === "is_not_blank"
       ? `${FIELD_LABEL[c.field]} ${OP_LABEL[c.op]}`
-      : `${FIELD_LABEL[c.field]} ${OP_LABEL[c.op]} “${c.value}”`;
+      : c.compare
+        ? `${FIELD_LABEL[c.field]} ${OP_LABEL[c.op]} ${FIELD_LABEL[c.compare]}`
+        : `${FIELD_LABEL[c.field]} ${OP_LABEL[c.op]} “${c.value}”`;
   const when = rule.when.map(cond).join(rule.match === "any" ? " or " : " and ");
   const then = rule.action === "flag" ? "flag it" : rule.action === "deny" ? "deny it" : "approve it";
   if (!rule.must) return `When ${when} — ${then}.`;
@@ -217,7 +330,8 @@ export function problems(rule: RuleBody): string[] {
   if (!rule.name.trim()) out.push("A rule needs a name.");
   if (rule.when.length === 0) out.push("A rule needs at least one condition.");
 
-  const needsValue = (c: Condition) => c.op !== "is_blank" && c.op !== "is_not_blank";
+  const needsValue = (c: Condition) =>
+    c.op !== "is_blank" && c.op !== "is_not_blank" && !c.compare;
   for (const c of [...rule.when, ...(rule.must ? [rule.must] : [])]) {
     if (needsValue(c) && !c.value.trim()) {
       out.push(`“${FIELD_LABEL[c.field]} ${OP_LABEL[c.op]}” needs a value.`);
@@ -227,6 +341,13 @@ export function problems(rule: RuleBody): string[] {
     }
     if (!opsFor(c.field).includes(c.op)) {
       out.push(`${FIELD_LABEL[c.field]} cannot be tested with “${OP_LABEL[c.op]}”.`);
+    }
+    if (c.compare) {
+      if (c.op === "is_blank" || c.op === "is_not_blank") {
+        out.push(`“${OP_LABEL[c.op]}” does not take another column to compare with.`);
+      } else if (!comparableTo(c.field).includes(c.compare)) {
+        out.push(`${FIELD_LABEL[c.field]} cannot be compared with ${FIELD_LABEL[c.compare]}.`);
+      }
     }
   }
 

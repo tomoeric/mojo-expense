@@ -10,7 +10,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 export type Field =
   | "note" | "merchant" | "category" | "location" | "department"
-  | "employee" | "amount" | "method" | "receipt" | "receiptItems";
+  | "employee" | "amount" | "method" | "receipt" | "receiptItems" | "receiptTotal";
 
 export type Op =
   | "contains" | "not_contains" | "is" | "is_not" | "starts_with"
@@ -18,7 +18,13 @@ export type Op =
 
 export type Action = "flag" | "approve" | "deny";
 
-export type Condition = { field: Field; op: Op; value: string };
+export type Condition = {
+  field: Field;
+  op: Op;
+  value: string;
+  /** Compare against another column instead of a typed-in value. */
+  compare?: Field | null;
+};
 
 export type RuleBody = {
   name: string;
@@ -62,9 +68,11 @@ export type Options = {
     label: string;
     list: "category" | "location" | "department" | null;
     ops: { value: Op; label: string }[];
+    comparable: { value: Field; label: string }[];
   }[];
   lists: Record<"category" | "location" | "department", string[]>;
   maxDecisionsPerRun: number;
+  moneyTolerance: { abs: number; pct: number };
 };
 
 export type Preview = {
