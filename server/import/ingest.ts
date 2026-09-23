@@ -169,12 +169,33 @@ export async function ingestExport(
     const only = parsed.header?.sections.length === 1 ? parsed.header.sections[0]!.trim() : null;
     const section = only && only.toLowerCase() !== "inbox" ? only : null;
 
+    // Genuinely identical rows get an occurrence index rather than collapsing
+    // into one. Two rows the export describes identically are still two
+    // expenses, and the old behaviour — later row overwrites earlier — lost
+    // one of them: it never reached the queue and could never be approved.
     const keys = new Map<string, ParsedExpense>();
-    for (const e of parsed.expenses) keys.set(dedupeKey(e), e);
-    if (keys.size !== parsed.expenses.length) {
+    const seen = new Map<string, number>();
+    let identical = 0;
+    for (const e of parsed.expenses) {
+      const base = dedupeKey(e);
+      const n = seen.get(base) ?? 0;
+      seen.set(base, n + 1);
+      if (n > 0) identical++;
+      keys.set(n === 0 ? base : dedupeKey(e, n), e);
+    }
+    if (identical > 0) {
       warnings.push(
-        `${parsed.expenses.length - keys.size} rows share a dedupe key and were collapsed. ` +
-          `Two expenses are identical in employee, date, merchant, amount, category, location and department.`,
+        `${identical} expense${identical === 1 ? " is" : "s are"} identical to another in employee, date, ` +
+          `merchant, amount, category, location and department. Kept as separate rows — the export ` +
+          `describes them identically, but they are separate expenses and each needs its own decision.`,
+      );
+    }
+    if (keys.size !== parsed.expenses.length) {
+      // Should now be impossible. Kept because silently storing fewer rows
+      // than were parsed is the one failure here worth never repeating.
+      warnings.push(
+        `${parsed.expenses.length - keys.size} parsed rows did not become expenses. This is a bug — ` +
+          `the totals on this import will not add up.`,
       );
     }
 

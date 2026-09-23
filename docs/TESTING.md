@@ -18,6 +18,7 @@ Runs anywhere, including here. No credentials, no Emburse, no browser.
 pnpm exec tsx scripts/verify-schedule.ts       # 26 boundary cases
 pnpm exec tsx scripts/test-browser-lock.ts     # one browser at a time
 pnpm exec tsx scripts/test-stale-import.ts     # refusing an out-of-date export
+pnpm exec tsx scripts/test-identical-rows.ts   # two expenses the export describes identically
 pnpm exec tsx scripts/test-receipt-quality.ts <export.pdf>   # receipts kept at full resolution
 pnpm exec tsx scripts/test-receipt-items.ts    # storing what a receipt says (needs DATABASE_URL)
 pnpm exec tsx scripts/test-receipt-items.ts --stored          # read a receipt the app holds

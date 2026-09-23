@@ -245,6 +245,26 @@ the blocks.
   stored Emburse login the decide footer is dropped entirely rather than
   rendering an empty bar.
 
+## What a daily import does to what is already there
+
+- **Identical rows are kept apart, not collapsed.** The export has no
+  transaction id, so an expense is seven fields — and two fuel purchases at the
+  same pump for the same amount on the same day match on all seven. The
+  importer used to key a Map on that, so the second row overwrote the first:
+  rows parsed, fewer stored, and a real expense that never reached the queue.
+  `dedupeKey(e, occurrence)` separates them; occurrence 0 hashes exactly as
+  before, so no existing expense is re-identified.
+- **Re-importing changes nothing.** The keys are deterministic and the upsert
+  is `ON CONFLICT (dedupe_key)`, so the same export twice is a no-op.
+- **Anything missing from the newest export leaves the queue** — `in_inbox =
+  false, left_inbox_at = now()`. Flagged, never deleted: it was processed, not
+  forgotten, and its history is worth keeping.
+- **`note` is deliberately NOT in the key** so an edited description updates
+  the row. The seven fields that ARE in it mean a re-categorised expense
+  arrives as a new row while the old one leaves — correct for deciding (the
+  new version is what needs a decision) but worth knowing before somebody
+  reports it as a duplicate.
+
 ## The permanent lists
 
 - **Categories, Locations/Sites and Departments are kept, not just displayed**
