@@ -88,7 +88,6 @@ for (const [method, path] of [
   ["POST", "/api/decisions/apply"],
   ["POST", "/api/rules"],
   ["PUT", "/api/rules/3"],
-  ["POST", "/api/emburse-check"],
   ["POST", "/api/import"],
 ] as const) {
   const r = as(admin, method, path);
@@ -106,6 +105,11 @@ check("switching back is allowed, or you could be stuck as them",
   as(admin, "DELETE", "/api/view-as").passedWrite);
 check("the dry run is allowed — it decides nothing and is the point of the feature",
   as(admin, "POST", "/api/decisions/42/test").passedWrite);
+// Testing the OTHER person's connection is the whole reason to be in their
+// view: the first version always tested the admin's own login, which is
+// precisely the one that already works.
+check("the connection test is allowed, so it can be run as the person who is failing",
+  as(admin, "POST", "/api/emburse-check").passedWrite);
 check("…but only the dry run, not a decision that looks like one",
   !as(admin, "POST", "/api/decisions/42/testing").passedWrite);
 

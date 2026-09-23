@@ -323,7 +323,7 @@ export function App() {
           )}
 
           {data && route === "queue" && (
-            <QueuePage data={data} onOpen={setOpen} />
+            <QueuePage data={data} onOpen={setOpen} viewingAs={auth.data?.viewingAs?.as ?? null} />
           )}
           {data && route === "reports" && <ReportsPage data={data} config={config.data} onOpen={setOpen} />}
           {data && route === "analytics" && <AnalyticsPage data={data} />}

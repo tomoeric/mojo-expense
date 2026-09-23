@@ -28,6 +28,11 @@ const HARMLESS_WRITES = [
   // A dry run: it drives Emburse under the decider's login and reports each
   // step without deciding anything. It is the entire point of the feature.
   /^\/api\/decisions\/\d+\/test$/,
+  // Likewise the connection test — it signs in and looks, and decides nothing.
+  // Being able to run it AS the person who is failing is the whole reason an
+  // admin would view as them: the first version always tested the admin's own
+  // login, which is precisely the one that already works.
+  /^\/api\/emburse-check$/,
 ];
 
 export type ViewingAs = { real: string; as: string };

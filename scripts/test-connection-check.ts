@@ -63,6 +63,17 @@ try {
     asked === 1, `asked ${asked} time(s)`);
   check("and the connection then works", coded.ok, names(coded));
 
+  // Eric can export; Brian cannot approve. Same selectors, different account —
+  // so the difference is Emburse permissions, and the ADMIN tab is the tell.
+  console.log("\nAn account with no ADMIN tab");
+  await set("/__reset");
+  const noAdmin = await testConnection({ ...sel, adminTab: "a.no-such-admin-tab" }, mock.url, login);
+  const adminStep = noAdmin.steps.find((s) => /ADMIN/i.test(s.name));
+  check("a missing ADMIN tab is called out, not passed over silently",
+    /NO ADMIN TAB/.test(adminStep?.detail ?? ""), adminStep?.detail);
+  check("…and it says what that means for deciding",
+    /team view/i.test(adminStep?.detail ?? ""), adminStep?.detail);
+
   console.log("\nA grid that does not appear");
   await set("/__reset");
   // The exact failure a reviewer just hit: signed in fine, no grid after it.
@@ -73,6 +84,8 @@ try {
   check("…and says which selector found nothing, rather than just “did not appear”",
     /nothing-matches-this/.test(why), why.slice(0, 160));
   check("…and quotes what the page actually said", /The page says/.test(why), why.slice(0, 200));
+  check("…and names the account as a likely cause when the export works but this does not",
+    /this account is the difference/.test(why), why.slice(0, 120));
   check("…with a screenshot of where it stopped", Boolean(blind.screenshot));
 } finally {
   await mock.close();

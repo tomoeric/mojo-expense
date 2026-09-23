@@ -202,8 +202,16 @@ the blocks.
   through". It goes as far as the grid on purpose: the two failures people hit
   are the device check (at sign-in) and the grid not appearing (after it), and
   a test that stopped at "signed in" would call the second one fine.
-- **It always uses the REAL signed-in person**, never an impersonated one — it
-  signs in to Emburse, and the code it may raise goes to that person's phone.
+- **While viewing as somebody, it tests THEIR login.** The first version always
+  used the real signed-in person, which is precisely the login that already
+  works — an admin diagnosing somebody else learned nothing. The code prompt
+  still goes to whoever pressed the button, and the code itself still arrives
+  on the tested account's phone, so the admin has to ask them to read it out.
+- **A MISSING ADMIN TAB IS NOT A SUCCESS.** The grid every decision searches is
+  Emburse's team-wide view, reached through the ADMIN tab, so an account
+  without admin rights there signs in perfectly and then has no grid — and it
+  surfaced three steps later as a grid problem. "Export works, approvals do
+  not, same selectors" means the account, not the markup.
 - **Never report a missing grid as "the grid did not appear".** `whyNoGrid`
   separates the four causes that have four different fixes: bounced back to
   sign-in, genuinely no results, a selector matching only hidden elements, or

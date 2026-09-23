@@ -60,7 +60,10 @@ async function targetFor(dedupeKey: string): Promise<Target | null> {
  * letting them try.
  */
 decisionRouter.post("/emburse-check", requireAuth, async (req: Request, res: Response) => {
-  const who = req.viewingAs?.real ?? req.user?.email ?? "";
+  // While viewing as somebody, test THEIR login — that is the point of being
+  // in their view. Everywhere else this is the real signed-in person.
+  const who = req.user?.email ?? "";
+  const pressedBy = req.viewingAs?.real ?? who;
   const login = await credentialForUser(who);
   if (!login) {
     res.status(400).json({
@@ -74,14 +77,19 @@ decisionRouter.post("/emburse-check", requireAuth, async (req: Request, res: Res
     const run = await testConnection(settings.selectors, settings.emburseUrl, login, {
       // Somebody pressed a button and is watching, so a code CAN be asked for —
       // and answering it here is the whole reason to press it.
+      // Owned by whoever pressed the button, so the prompt appears to them.
+      // The code itself still goes to the tested account's phone, so an admin
+      // testing somebody else has to ask them to read it out — which is
+      // exactly what happens on a support call anyway.
       onChallenge: (ctx: { prompt: string; screenshot: string | null; attempt: number; lastError: string | null }) =>
-        waitForCode({ ...ctx, owner: who }),
+        waitForCode({ ...ctx, owner: pressedBy }),
     });
     // A failed connection test is NOT automatically a wrong password: a device
     // check and a moved button fail the same way, and flagging those for
     // re-entry asks somebody to retype a password that was never the problem.
     const why = run.ok ? null : lastFailure(run.steps);
     await noteResult(who, run.ok, why, Boolean(why && /password|credential|rejected/i.test(why)));
+    if (pressedBy !== who) console.log(`emburse-check: ${pressedBy} tested ${who} — ${run.ok ? "ok" : why}`);
     res.json({
       ok: run.ok,
       who,

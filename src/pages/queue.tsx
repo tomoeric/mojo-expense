@@ -22,9 +22,12 @@ import { EmburseCheck } from "@/components/emburse-check";
 export function QueuePage({
   data,
   onOpen,
+  viewingAs = null,
 }: {
   data: ReportsResponse;
   onOpen: (r: ExpenseReport) => void;
+  /** Whose view this is, when an admin is looking through somebody else's eyes. */
+  viewingAs?: string | null;
 }) {
   const waiting = useMemo(
     () => buildRows(data, data.reports.filter((r) => r.status === "submitted")),
@@ -75,7 +78,7 @@ export function QueuePage({
         <p className="rounded-lg border border-red-500/30 bg-red-500/10 p-2.5 text-sm">{error}</p>
       )}
 
-      <EmburseCheck canDecide={canDecide} />
+      <EmburseCheck canDecide={canDecide} viewingAs={viewingAs} />
 
       {/* Above everything: a decision is held until this is answered, and the
           person who can answer it is the one reading this. */}

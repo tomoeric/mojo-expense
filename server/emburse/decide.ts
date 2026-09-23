@@ -280,9 +280,11 @@ async function whyNoGrid(page: Page, sel: Record<string, string>): Promise<strin
     return `the grid selector matched ${present} element(s) at ${where}, but none of them ever became ` +
       `visible — “${sel.grid}” is probably matching a hidden measuring table rather than the real grid.`;
   }
-  return `no grid at ${where}. Nothing matched “${sel.grid}”. Either that selector is wrong for this ` +
-    `page, or gridPath (“${sel.gridPath}”) is pointing somewhere other than the expenses list. ` +
-    `The page says: ${text.slice(0, 160) || "(nothing readable)"}`;
+  return `no grid at ${where}. Nothing matched “${sel.grid}”. If the export works but this does not, ` +
+    `the selector is fine and this account is the difference: “${sel.gridPath}” is Emburse's team-wide ` +
+    `view, and an account without admin rights there signs in normally and simply has no grid. ` +
+    `Otherwise that selector or gridPath is wrong. The page says: ` +
+    `${text.slice(0, 160) || "(nothing readable)"}`;
 }
 
 /**
@@ -429,7 +431,12 @@ async function signInOnce(
       return "clicked ADMIN";
     }
     if (await page.locator(sel.loggedIn!).first().isVisible().catch(() => false)) {
-      return "no ADMIN tab on this page, but the app is loaded";
+      // NOT a success, and it used to read like one. The ADMIN tab is how an
+      // Emburse admin reaches the team-wide view, and the grid every decision
+      // searches IS that view. An account without the tab signs in perfectly
+      // well and then has no grid — which is reported as a grid problem three
+      // steps later, when it is really a permissions one.
+      return "NO ADMIN TAB — this account may not have Emburse's team view, which is where decisions look";
     }
     throw new Error(`no ADMIN tab and the app is not loaded — at ${safeUrl(page.url())}`);
   }))) return false;
