@@ -165,6 +165,66 @@ export function describeAiConfig(err: unknown): string | null {
   return null;
 }
 
+export type AiCheck = {
+  ok: boolean;
+  /** Which credential was used, as the app sees it right now. */
+  via: Via;
+  /** Where the sidecar is, when one is configured — the thing that cannot be copied. */
+  gatewayUrl: string;
+  model: string;
+  /** Present on success: what actually answered. */
+  served?: string;
+  /** Present on failure: a sentence with the fix in it. */
+  error?: string;
+};
+
+/**
+ * Ask Anthropic one trivial question and report what happened.
+ *
+ * Until this existed the only way to find out whether the credential worked
+ * was to open an expense, find one with a receipt, and press Check — three
+ * steps away from the setting being changed, with an error that could mean
+ * four different things. Configuration should be testable where it is set.
+ *
+ * A real `messages.create` rather than a cheaper metadata call: the point is to
+ * exercise the path the receipt reader uses, including whichever proxy sits in
+ * front of it, and a gateway can serve `/v1/models` while refusing the model.
+ */
+export async function checkAi(model = env.audit.model): Promise<AiCheck> {
+  const base: AiCheck = { ok: false, via: aiVia(), gatewayUrl: gateway().url, model };
+
+  if (!aiVia()) {
+    return { ...base, error: "No Anthropic credential is set, so receipt reading and checking are off." };
+  }
+
+  try {
+    const response = await callAnthropic((c) =>
+      c.messages.create({
+        model,
+        // Four tokens: this is a connectivity check, not a question.
+        max_tokens: 4,
+        messages: [{ role: "user", content: "Reply with the single word: ok" }],
+      }),
+    );
+    return { ...base, ok: true, via: aiVia(), served: response.model };
+  } catch (err) {
+    return {
+      ...base,
+      via: aiVia(),
+      error:
+        describeAiConfig(err) ??
+        (err instanceof Anthropic.NotFoundError
+          ? `The credential works, but “${model}” was not found. Set RECEIPT_AUDIT_MODEL to a model this ` +
+            `gateway serves — ninja-live-status uses claude-sonnet-4-6.`
+          : err instanceof Anthropic.APIError
+            ? `The call failed (HTTP ${err.status}): ${err.message.slice(0, 200)}`
+            : err instanceof Error
+              ? err.message.slice(0, 300)
+              : "The call failed."),
+    };
+  }
+}
+
 /** One line at boot saying which credential is in play, so a 404 later is not a mystery. */
 export function logAiCredential(): void {
   const v = aiVia();

@@ -314,7 +314,9 @@ export function App() {
           {data && route === "reports" && <ReportsPage data={data} config={config.data} onOpen={setOpen} />}
           {data && route === "analytics" && <AnalyticsPage data={data} />}
           {route === "import" && <ImportPage />}
-          {route === "configuration" && <ConfigurationPage onOpen={setRoute} />}
+          {route === "configuration" && (
+            <ConfigurationPage onOpen={setRoute} isAdmin={auth.data?.isAdmin ?? false} />
+          )}
           {route in LISTS && <TaxonomyPage kind={LISTS[route as keyof typeof LISTS]} />}
           {route === "rules" && <RulesPage isAdmin={auth.data?.isAdmin ?? false} />}
           {route === "settings" && <ExportSettingsPage isAdmin={auth.data?.isAdmin ?? false} />}

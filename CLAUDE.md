@@ -160,6 +160,17 @@ the blocks.
   direct key and stays there for the process. Tried once, not once per receipt.
 - Never report an AI failure as a status code. `describeAiConfig()` turns the
   configuration ones into the fix.
+- **Configuration is testable where it is set.** `POST /api/ai-check` makes one
+  four-token call and reports which credential answered, surfaced as "Test the
+  connection" on the Configuration page. Before it existed the only way to find
+  out was to open an expense, find a receipt and press Check — three steps from
+  the setting, with an error that could mean four different things.
+- **The integration cannot be copied between Repls, and this is not a bug.**
+  The key is the literal `_DUMMY_API_KEY_` and the URL is `localhost`; the real
+  credential lives in a sidecar process that Replit runs only inside a Repl
+  that has the integration. Each app needs its own, which is also how the
+  billing is scoped. A direct `ANTHROPIC_API_KEY` *is* portable, because it is
+  a credential rather than a pointer.
 
 ## Navigation
 

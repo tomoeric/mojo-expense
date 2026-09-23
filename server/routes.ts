@@ -3,11 +3,12 @@ import { env, isAuditConfigured, isEmburseConfigured } from "./env.js";
 import { TtlCache } from "./cache.js";
 import { HttpError } from "./http.js";
 import { resolveProvider } from "./emburse/provider.js";
-import { isAuthConfigured, requireAuth } from "./auth/index.js";
+import { isAuthConfigured, requireAdmin, requireAuth } from "./auth/index.js";
 import type { ExpenseReport, ProviderResult } from "./emburse/types.js";
 import { fetchReceipt, ReceiptError } from "./emburse/receipts.js";
 import { auditLine, cachedAudit } from "./emburse/receipt-audit.js";
 import { db, isDbConfigured } from "./db.js";
+import { checkAi } from "./ai.js";
 import { isKind, listTaxonomy, taxonomyCounts } from "./import/taxonomy.js";
 import type { ExpenseLine } from "./emburse/types.js";
 
@@ -93,6 +94,27 @@ api.get("/config", (_req, res) => {
  * by hand would belong to no expense, and a name deleted here would come back
  * with the next export that mentions it.
  */
+/**
+ * Is the Anthropic credential actually working?
+ *
+ * Admin-only and rate-limited by hand, because every call costs a fraction of
+ * a cent and there is no reason to press it in a loop.
+ */
+let lastAiCheck = 0;
+api.post("/ai-check", requireAuth, requireAdmin, async (_req, res) => {
+  const since = Date.now() - lastAiCheck;
+  if (since < 3000) {
+    res.status(429).json({ error: "Give it a moment before testing again." });
+    return;
+  }
+  lastAiCheck = Date.now();
+  try {
+    res.json(await checkAi());
+  } catch (err) {
+    res.status(500).json({ error: describe(err) });
+  }
+});
+
 api.get("/taxonomy", requireAuth, async (_req, res) => {
   if (!isDbConfigured()) {
     res.status(503).json({ error: "No database is configured, so there are no lists yet." });

@@ -38,6 +38,14 @@ const server = http.createServer((req, res) => {
     }));
     return;
   }
+  if (req.url?.startsWith("/missing-model")) {
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      type: "error",
+      error: { type: "not_found_error", message: "model: claude-opus-5" },
+    }));
+    return;
+  }
   if (req.url?.startsWith("/gw")) {
     gatewayCalls++;
     res.writeHead(404, { "content-type": "application/json" });
@@ -163,6 +171,49 @@ try {
   check("…and sends you where the fix actually is",
     /Setup → Integrations/.test(sidecar401) && /deployment/.test(sidecar401));
   rejecting = false;
+
+  // The button on the Configuration page. Its whole job is to turn each of the
+  // states above into a sentence somebody can act on, in the place the setting
+  // is changed — rather than three screens away as a failed receipt check.
+  console.log("\nThe connection test");
+  rejecting = false;
+  process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY = "_DUMMY_API_KEY_";
+  process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL = `${base}/direct`;
+  delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_BASE_URL;
+  ai.resetAiClient();
+  const good = await ai.checkAi("claude-opus-5");
+  check("a working credential reports ok, and which one", good.ok && good.via === "replit",
+    JSON.stringify(good));
+  check("…and names what answered", good.served === "claude-opus-5", String(good.served));
+
+  process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL = `${base}/gw`;
+  ai.resetAiClient();
+  const unconfigured = await ai.checkAi("claude-opus-5");
+  check("an unattached integration reports the fix, not a status code",
+    !unconfigured.ok && /Setup → Integrations/.test(unconfigured.error ?? ""), unconfigured.error);
+
+  delete process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY;
+  delete process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL;
+  ai.resetAiClient();
+  const none = await ai.checkAi("claude-opus-5");
+  check("no credential at all says so plainly",
+    !none.ok && none.via === null && /No Anthropic credential/.test(none.error ?? ""), none.error);
+
+  // A credential that works against a gateway serving a different model is its
+  // own failure, and "not found" on its own would read as a broken key.
+  process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY = "_DUMMY_API_KEY_";
+  process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL = `${base}/missing-model`;
+  ai.resetAiClient();
+  const wrongModel = await ai.checkAi("claude-opus-5");
+  check("a model the gateway does not serve is called out as a model problem",
+    !wrongModel.ok && /RECEIPT_AUDIT_MODEL/.test(wrongModel.error ?? ""), wrongModel.error);
+
+  // Put back what this block borrowed. The cases below assert on the direct
+  // key, and a block that quietly leaves the environment changed makes the
+  // next one fail for a reason that has nothing to do with it.
+  process.env.ANTHROPIC_API_KEY = "direct-key";
+  process.env.ANTHROPIC_BASE_URL = `${base}/direct`;
 
   // 3. A direct key on its own.
   console.log("\nA direct key on its own");
