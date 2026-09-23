@@ -1,7 +1,8 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { requireAuth } from "../auth/index.js";
+import { adminListSize, isAdmin, isAuthConfigured, requireAdmin, requireAuth } from "../auth/index.js";
+import { canWriteRules, isRestricted, listEditors, requireRuleEditor, setEditor } from "./editors.js";
 import { isDbConfigured } from "../db.js";
-import { hasCredential } from "../emburse/credentials.js";
+import { hasCredential, listCredentials } from "../emburse/credentials.js";
 import { listTaxonomy } from "../import/taxonomy.js";
 import {
   ACTIONS, FIELDS, FIELD_LABEL, FIELD_LIST, OPS, OP_LABEL, opsFor,
@@ -99,6 +100,69 @@ rulesRouter.get("/rules/options", requireAuth, async (_req: Request, res: Respon
   }
 });
 
+/**
+ * Who may write rules, and everybody who could be added.
+ *
+ * Candidates are people the app already knows — anyone with a stored Emburse
+ * login, anyone who has authored a rule, and the viewer. So Brian appears here
+ * on his own once he stores his Emburse login, which he has to do anyway
+ * before a rule of his could decide anything.
+ */
+rulesRouter.get("/rules/editors", requireAuth, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  try {
+    const [editors, credentials, rules] = await Promise.all([
+      listEditors(), listCredentials(), listRules(),
+    ]);
+    // Only things that could actually be toggled. A rule authored before
+    // sign-in was configured carries `createdBy: "unknown"`, which is not a
+    // person and would be refused by setEditor anyway.
+    const known = new Set<string>();
+    const add = (v: string | null | undefined) => {
+      const email = (v ?? "").trim().toLowerCase();
+      if (email.includes("@")) known.add(email);
+    };
+    for (const e of editors) add(e.email);
+    for (const c of credentials) add(c.userEmail);
+    for (const r of rules) add(r.createdBy);
+    add(req.user?.email);
+
+    const allowed = new Set(editors.map((e) => e.email));
+    res.json({
+      you: req.user?.email?.toLowerCase() ?? null,
+      youAreAdmin: !isAuthConfigured() || (req.user ? isAdmin(req.user.email) : false),
+      restricted: allowed.size > 0,
+      // With AUTH_ADMINS unset every signed-in person is an admin and could
+      // add themselves back, so the page must not imply this is a lock.
+      adminsRestricted: adminListSize() > 0,
+      people: [...known].sort().map((email) => ({
+        email,
+        allowed: allowed.has(email),
+        hasEmburseLogin: credentials.some((c) => c.userEmail.toLowerCase() === email),
+      })),
+    });
+  } catch (err) {
+    res.status(500).json({ error: describe(err) });
+  }
+});
+
+/** Admin-only: the toggle itself. */
+rulesRouter.post("/rules/editors", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  const body = req.body as { email?: unknown; allowed?: unknown };
+  const email = String(body?.email ?? "").trim();
+  if (!email) {
+    res.status(400).json({ error: "Which person?" });
+    return;
+  }
+  try {
+    await setEditor(email, body?.allowed === true, req.user?.email ?? "unknown");
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: describe(err) });
+  }
+});
+
 rulesRouter.get("/rules", requireAuth, async (req: Request, res: Response) => {
   if (!guard(res)) return;
   try {
@@ -112,6 +176,8 @@ rulesRouter.get("/rules", requireAuth, async (req: Request, res: Response) => {
 
     res.json({
       you: req.user?.email ?? null,
+      youCanWrite: await canWriteRules(req.user?.email),
+      restricted: await isRestricted(),
       maxDecisionsPerRun: MAX_DECISIONS_PER_RUN,
       rules: rules.map((r) => ({
         ...r,
@@ -126,7 +192,7 @@ rulesRouter.get("/rules", requireAuth, async (req: Request, res: Response) => {
   }
 });
 
-rulesRouter.post("/rules", requireAuth, async (req: Request, res: Response) => {
+rulesRouter.post("/rules", requireAuth, requireRuleEditor, async (req: Request, res: Response) => {
   if (!guard(res)) return;
   const body = readBody(req.body);
   if ("error" in body) {
@@ -149,7 +215,7 @@ rulesRouter.post("/rules", requireAuth, async (req: Request, res: Response) => {
   }
 });
 
-rulesRouter.put("/rules/:id", requireAuth, async (req: Request, res: Response) => {
+rulesRouter.put("/rules/:id", requireAuth, requireRuleEditor, async (req: Request, res: Response) => {
   if (!guard(res)) return;
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) {
@@ -174,7 +240,7 @@ rulesRouter.put("/rules/:id", requireAuth, async (req: Request, res: Response) =
   }
 });
 
-rulesRouter.post("/rules/:id/enabled", requireAuth, async (req: Request, res: Response) => {
+rulesRouter.post("/rules/:id/enabled", requireAuth, requireRuleEditor, async (req: Request, res: Response) => {
   if (!guard(res)) return;
   const id = Number(req.params.id);
   const enabled = (req.body as { enabled?: unknown })?.enabled === true;
@@ -191,7 +257,7 @@ rulesRouter.post("/rules/:id/enabled", requireAuth, async (req: Request, res: Re
   }
 });
 
-rulesRouter.delete("/rules/:id", requireAuth, async (req: Request, res: Response) => {
+rulesRouter.delete("/rules/:id", requireAuth, requireRuleEditor, async (req: Request, res: Response) => {
   if (!guard(res)) return;
   try {
     const gone = await deleteRule(Number(req.params.id));
@@ -230,7 +296,7 @@ rulesRouter.post("/rules/preview", requireAuth, async (req: Request, res: Respon
 });
 
 /** Re-run every rule over everything. Decides only if asked, and says so. */
-rulesRouter.post("/rules/run", requireAuth, async (req: Request, res: Response) => {
+rulesRouter.post("/rules/run", requireAuth, requireRuleEditor, async (req: Request, res: Response) => {
   if (!guard(res)) return;
   const decide = (req.body as { decide?: unknown })?.decide === true;
   try {

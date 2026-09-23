@@ -44,6 +44,18 @@ export type Rule = RuleBody & {
   ownerCanDecide: boolean;
 };
 
+export type Person = { email: string; allowed: boolean; hasEmburseLogin: boolean };
+
+export type Editors = {
+  you: string | null;
+  youAreAdmin: boolean;
+  /** True once somebody has been named, which is when the list starts biting. */
+  restricted: boolean;
+  /** False while AUTH_ADMINS is unset, when any signed-in person could undo this. */
+  adminsRestricted: boolean;
+  people: Person[];
+};
+
 export type Options = {
   fields: {
     value: Field;
@@ -108,7 +120,23 @@ export function useRules() {
 
   const list = useQuery({
     queryKey: ["rules"],
-    queryFn: () => send<{ you: string | null; maxDecisionsPerRun: number; rules: Rule[] }>("/api/rules"),
+    queryFn: () => send<{
+      you: string | null; youCanWrite: boolean; restricted: boolean;
+      maxDecisionsPerRun: number; rules: Rule[];
+    }>("/api/rules"),
+  });
+
+  const editors = useQuery({
+    queryKey: ["rules", "editors"],
+    queryFn: () => send<Editors>("/api/rules/editors"),
+  });
+
+  const setEditor = useMutation({
+    mutationFn: (input: { email: string; allowed: boolean }) =>
+      send<{ ok: true }>("/api/rules/editors", json(input)),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["rules"] });
+    },
   });
 
   const options = useQuery({
@@ -144,7 +172,7 @@ export function useRules() {
     onSuccess: invalidate,
   });
 
-  return { list, options, save, remove, toggle, runAll };
+  return { list, options, editors, setEditor, save, remove, toggle, runAll };
 }
 
 export const preview = (body: RuleBody): Promise<Preview> =>

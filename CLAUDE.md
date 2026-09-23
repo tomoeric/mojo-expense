@@ -109,6 +109,18 @@ the blocks.
   definition are not evidence of anything, and an expense the edited rule no
   longer matches would otherwise keep a flag from a rule that has stopped
   saying it.
+- **Writing a rule is its own permission**, not `isAdmin` (`rules/editors.ts`).
+  Admin is about shared settings; this is about approving and denying real
+  expenses. The list is stored, not an env var, so somebody can be added
+  without a redeploy — which is the point.
+- **An empty editor list means "any admin", not "nobody".** A default-deny
+  allow-list would lock out the person who has to populate it. Restriction
+  starts the moment somebody is named, and emptying the list opens it back up.
+- **The editor list is only as strong as `AUTH_ADMINS`.** Managing it is
+  admin-only, and with `AUTH_ADMINS` unset everyone signing in is an admin and
+  could re-add themselves. The panel says so rather than implying a security
+  property it does not have. Do not remove that warning without setting
+  `AUTH_ADMINS`.
 - **Rules can test receipt line items**, so `ensureRules()` creates the
   receipt-items tables too. Without that, an app with no working Anthropic key
   has no `receipt_items` table and every import's rule run dies on the join.

@@ -1,9 +1,10 @@
 import { useState } from "react";
 import {
-  Loader2, Plus, Pencil, Trash2, AlertTriangle, ShieldCheck, Flag, Ban, Play,
+  Loader2, Plus, Pencil, Trash2, AlertTriangle, ShieldCheck, Flag, Ban, Play, Settings2,
 } from "lucide-react";
 import { StatChip, StatChipRow, Empty } from "@/components/ui";
 import { RuleEditor } from "@/components/rule-editor";
+import { RuleEditors } from "@/components/rule-editors";
 import { BLANK, useRules, type Action, type Rule, type RuleBody } from "@/lib/rules";
 
 /**
@@ -23,9 +24,10 @@ const TONE: Record<Action, string> = {
 };
 
 export function RulesPage({ isAdmin }: { isAdmin: boolean }) {
-  const { list, options, save, remove, toggle, runAll } = useRules();
+  const { list, options, editors, setEditor, save, remove, toggle, runAll } = useRules();
   const [editing, setEditing] = useState<{ id?: number; body: RuleBody } | null>(null);
   const [ran, setRan] = useState<string | null>(null);
+  const [showWho, setShowWho] = useState(false);
 
   const rules = list.data?.rules ?? [];
 
@@ -47,6 +49,10 @@ export function RulesPage({ isAdmin }: { isAdmin: boolean }) {
     );
   }
 
+  // Being an admin is no longer enough: the rule-editor list, when somebody has
+  // set one, is narrower. The buttons follow the server's answer rather than
+  // guessing, so a 403 is never the way a person finds out.
+  const canWrite = list.data?.youCanWrite ?? false;
   const catching = rules.filter((r) => r.enabled).reduce((a, r) => a + r.stats.fail, 0);
   const deciding = rules.filter((r) => r.enabled && r.action !== "flag").length;
   const stuck = rules.filter((r) => r.enabled && r.action !== "flag" && !r.ownerCanDecide);
@@ -58,8 +64,20 @@ export function RulesPage({ isAdmin }: { isAdmin: boolean }) {
         <StatChip value={rules.filter((r) => r.enabled).length} label="enabled" tone="emerald" />
         <StatChip value={catching} label="expenses currently caught" tone="amber" />
         {deciding > 0 && <StatChip value={deciding} label="that approve or deny" tone="red" />}
-        {isAdmin && (
-          <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-2">
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => setShowWho((v) => !v)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs hover:bg-muted"
+              title="Choose who can write rules"
+            >
+              <Settings2 className="h-3.5 w-3.5" />
+              Who can write
+            </button>
+          )}
+        {canWrite && (
+          <>
             <button
               type="button"
               disabled={runAll.isPending}
@@ -81,9 +99,21 @@ export function RulesPage({ isAdmin }: { isAdmin: boolean }) {
             >
               <Plus className="h-3.5 w-3.5" /> New rule
             </button>
-          </div>
+          </>
         )}
+        </div>
       </StatChipRow>
+
+      {showWho && (
+        <RuleEditors
+          data={editors.data}
+          pending={editors.isFetching || setEditor.isPending}
+          onToggle={(email, allowed) => setEditor.mutate({ email, allowed })}
+        />
+      )}
+      {setEditor.error && (
+        <p className="text-sm text-red-600">{(setEditor.error as Error).message}</p>
+      )}
 
       {ran && <p className="text-xs text-muted-foreground">{ran}</p>}
 
@@ -116,6 +146,15 @@ export function RulesPage({ isAdmin }: { isAdmin: boolean }) {
         />
       )}
 
+      {/* Said once, plainly, rather than leaving somebody clicking buttons that
+          are not there. */}
+      {isAdmin && !canWrite && list.data?.restricted && (
+        <p className="text-xs text-muted-foreground">
+          Rules here are read-only for you — {list.data.you ?? "you"} is not on the list of people who may
+          write them. An administrator can change that under “Who can write”.
+        </p>
+      )}
+
       {rules.length === 0 && !editing ? (
         <Empty>
           <p className="font-semibold">No rules yet</p>
@@ -131,7 +170,7 @@ export function RulesPage({ isAdmin }: { isAdmin: boolean }) {
             <RuleRow
               key={rule.id}
               rule={rule}
-              isAdmin={isAdmin}
+              isAdmin={canWrite}
               onEdit={() => {
                 save.reset();
                 setEditing({ id: rule.id, body: rule });

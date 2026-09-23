@@ -27,6 +27,7 @@ pnpm exec tsx scripts/test-decisions.ts        # the decision queue (needs DATAB
 pnpm exec tsx scripts/test-settings-check.ts   # the export-scope warning
 pnpm exec tsx scripts/test-taxonomy.ts         # the permanent lists (DB half needs DATABASE_URL)
 pnpm exec tsx scripts/test-rules.ts            # rules + the fences on deciding (DB half needs DATABASE_URL)
+pnpm exec tsx scripts/test-rule-editors.ts     # who may write rules (needs DATABASE_URL)
 pnpm exec tsx scripts/test-ai-credential.ts    # which Anthropic credential is used (no key or network needed)
 pnpm exec tsx scripts/verify-import.ts <export.pdf>
 ```
