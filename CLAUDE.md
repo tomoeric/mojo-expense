@@ -279,6 +279,19 @@ Three things follow, and all three are easy to break:
   also how a parked verification-code prompt reaches the screen. Never make
   the page await a run, and never `res.json()` a response without checking it
   is JSON.
+- **A verification code can arrive BEFORE the sign-in form.** With a session
+  already remembered, Emburse skips email and password and opens straight on
+  `/code-authentication`. `signIn` raced only the form and the app, so neither
+  appeared, it timed out, and it blamed the `loginEmail` selector for a page
+  that selector was never meant to match — while a code box sat there waiting.
+  The code box is in that race now. No amount of correcting selectors fixes
+  this one, so the message must never suggest it.
+- **Decisions can ask for a code too.** `decide.ts` shares `signIn` with the
+  export but passed no challenge hook, so the first decision from an account
+  the server's browser had never signed in as simply failed. The worker now
+  passes one owned by the decider — who clicked Approve moments ago, so there
+  is somebody to ask — and the prompt appears on the QUEUE, not only on the
+  admin Import page where the export's copy lives.
 - **Absence is never success.** A selector that matches nothing must fail, not
   be read as "already done". That mistake shipped four times: a failed login
   reported as three green steps, an exports link silently not clicked, section

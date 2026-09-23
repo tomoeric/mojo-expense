@@ -26,6 +26,17 @@ export type QueuedDecision = {
   error: string | null;
 };
 
+export type Challenge = {
+  prompt: string;
+  screenshot: string | null;
+  owner: string;
+  attempt: number;
+  maxAttempts: number;
+  lastError: string | null;
+  /** True when the viewer is the one who can answer it. */
+  mine: boolean;
+};
+
 export type DecisionsResponse = {
   /** Whether this person has an Emburse login, without which they cannot decide. */
   canDecide: boolean;
@@ -33,6 +44,8 @@ export type DecisionsResponse = {
   recent: QueuedDecision[];
   byExpense: Record<string, QueuedDecision>;
   browser: { holder: { label: string; since: number } | null; waiting: string[] };
+  /** Set when a decision is parked waiting for a device-verification code. */
+  challenge: Challenge | null;
 };
 
 async function readJson<T>(res: Response): Promise<T> {
@@ -62,8 +75,10 @@ export function useDecisions(keys: string[]) {
       return body;
     },
     // Only while something is waiting to reach Emburse. A queue page with
-    // nothing pending has no reason to poll.
-    refetchInterval: (query) => ((query.state.data?.pending.length ?? 0) > 0 ? 5000 : false),
+    // nothing pending has no reason to poll — except while a sign-in is parked
+    // on a code, which is exactly when the page has to stay live.
+    refetchInterval: (query) =>
+      (query.state.data?.pending.length ?? 0) > 0 || query.state.data?.challenge ? 3000 : false,
     refetchIntervalInBackground: true,
   });
 
@@ -72,6 +87,20 @@ export function useDecisions(keys: string[]) {
     // The queue itself changes once a decision lands, so it is refreshed too.
     void qc.invalidateQueries({ queryKey: ["reports"] });
   };
+
+  const answerCode = useMutation({
+    mutationFn: async (code: string) => {
+      const res = await fetch("/api/decisions/challenge", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      const body = await readJson<{ ok?: boolean; error?: string }>(res);
+      if (!res.ok) throw new Error(body.error ?? "That code was not accepted.");
+      return body;
+    },
+    onSuccess: invalidate,
+  });
 
   const decide = useMutation({
     mutationFn: async (input: { dedupeKey: string; decision: "approve" | "deny"; reason?: string }) => {
@@ -110,9 +139,11 @@ export function useDecisions(keys: string[]) {
     pending: q.data?.pending ?? [],
     recent: q.data?.recent ?? [],
     browser: q.data?.browser,
+    challenge: q.data?.challenge ?? null,
     decide,
     cancel,
     applyNow,
+    answerCode,
   };
 }
 

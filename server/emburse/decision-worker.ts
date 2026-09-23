@@ -2,6 +2,7 @@ import { isDbConfigured } from "../db.js";
 import { readSettings } from "../import/settings.js";
 import { credentialForUser } from "./credentials.js";
 import { runDecisions, type BatchItem } from "./decide.js";
+import { waitForCode } from "./challenge.js";
 import { pendingDecisions, settleDecision } from "./decisions.js";
 
 /**
@@ -65,7 +66,15 @@ async function tick(): Promise<void> {
       }));
 
       console.log(`decisions: applying ${batch.length} as ${decider}`);
-      const results = await runDecisions(batch, settings.selectors, settings.emburseUrl, login);
+      // A verification code CAN be asked here, unlike a 6am scheduled export:
+      // the decider clicked Approve moments ago, so there is somebody to ask.
+      // Without this a decision could not get past Emburse's device check at
+      // all — which is what happens the first time anybody decides from an
+      // account this browser has never signed in as, and it failed with no
+      // way to put it right.
+      const results = await runDecisions(batch, settings.selectors, settings.emburseUrl, login, {
+        onChallenge: (ctx) => waitForCode({ ...ctx, owner: decider }),
+      });
 
       for (const item of items) {
         const run = results.get(item.id);

@@ -4,6 +4,7 @@ import type { ExpenseReport, ReportsResponse } from "@/lib/api";
 import { ExpenseTable, buildRows, type Row } from "@/components/expense-table";
 import { DecideButtons, TestDecision } from "@/components/decide-controls";
 import { useDecisions } from "@/lib/decisions";
+import { CodePrompt } from "@/components/code-prompt";
 
 /**
  * The reviewer's landing page: one line per expense still awaiting a decision.
@@ -30,7 +31,8 @@ export function QueuePage({
   );
 
   const keys = useMemo(() => waiting.map((r) => r.line.id), [waiting]);
-  const { byExpense, pending, browser, canDecide, decide, cancel, applyNow } = useDecisions(keys);
+  const { byExpense, pending, browser, canDecide, challenge, decide, cancel, applyNow, answerCode } =
+    useDecisions(keys);
   const [error, setError] = useState("");
 
   const rows: Row[] = useMemo(
@@ -70,6 +72,17 @@ export function QueuePage({
     <div className="space-y-3">
       {error && (
         <p className="rounded-lg border border-red-500/30 bg-red-500/10 p-2.5 text-sm">{error}</p>
+      )}
+
+      {/* First, and above everything: a decision is held until this is
+          answered, and the person who can answer it is the one reading this. */}
+      {challenge && (
+        <CodePrompt
+          challenge={challenge}
+          busy={answerCode.isPending}
+          error={answerCode.error ? (answerCode.error as Error).message : ""}
+          onAnswer={(code) => answerCode.mutate(code)}
+        />
       )}
 
       {!canDecide && (

@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from "express";
 import { db, isDbConfigured } from "../db.js";
 import { readSettings } from "../import/settings.js";
 import { requireAuth } from "../auth/index.js";
+import { answerChallenge, cancelChallenge, currentChallenge } from "../emburse/challenge.js";
 import { browserQueue, whyWaiting } from "./browser-lock.js";
 import { credentialForUser, hasCredential } from "./credentials.js";
 import { runDecision, type Decision, type Target } from "./decide.js";
@@ -45,6 +46,33 @@ async function targetFor(dedupeKey: string): Promise<Target | null> {
     date: r.expense_date ? r.expense_date.toISOString().slice(0, 10) : null,
   };
 }
+
+/**
+ * Answer the verification code a decision is parked on.
+ *
+ * requireAuth rather than requireAdmin: the gate that matters is OWNERSHIP,
+ * which answerChallenge enforces itself — only the person whose sign-in
+ * raised it can complete it. Requiring admin as well would lock out exactly
+ * the reviewer who has the code on their phone.
+ */
+decisionRouter.post("/decisions/challenge", requireAuth, (req: Request, res: Response) => {
+  const { code } = req.body as { code?: unknown };
+  const result = answerChallenge(code, req.user?.email ?? "");
+  if (!result.ok) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+  res.json({ ok: true });
+});
+
+decisionRouter.delete("/decisions/challenge", requireAuth, (req: Request, res: Response) => {
+  const result = cancelChallenge("Cancelled from the queue.", req.user?.email ?? "");
+  if (!result.ok) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+  res.json({ ok: true });
+});
 
 /** Approve or deny an expense. Recorded now, applied by the worker shortly after. */
 decisionRouter.post("/decisions", requireAuth, async (req: Request, res: Response) => {
@@ -108,6 +136,14 @@ decisionRouter.get("/decisions", requireAuth, async (req: Request, res: Response
     // Whether this person can decide at all. The buttons ask first rather
     // than letting somebody work through a queue and be refused each time.
     canDecide: await hasCredential(req.user?.email ?? ""),
+    // Carried on the thing the queue already polls. A decision can park on a
+    // device-verification code, and the person who has to type it is the one
+    // who just clicked Approve — not an admin looking at the Import page,
+    // which is the only place this used to appear.
+    challenge: (() => {
+      const c = currentChallenge();
+      return c && { ...c, mine: c.owner === (req.user?.email ?? "") };
+    })(),
     pending: await pendingDecisions(),
     recent: await recentDecisions(50),
     // Keyed by expense, so the queue page can badge each row without a

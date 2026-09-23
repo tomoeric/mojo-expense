@@ -621,14 +621,48 @@ export async function signIn(
   // Wait, do not peek. account.emburse.app draws its form with JavaScript, so
   // asking whether the box is visible the instant domcontentloaded fires
   // reliably says no — and then a correct selector looks like a wrong one.
-  // Race the two outcomes instead: whichever appears, that is where we are.
+  // Race the outcomes instead: whichever appears, that is where we are.
+  //
+  // THE CODE BOX IS ONE OF THEM. With a session already remembered, Emburse
+  // skips email and password entirely and opens straight on
+  // /code-authentication — so neither the form nor the app ever appears, the
+  // race times out, and the run used to die claiming the loginEmail selector
+  // was wrong while a code box sat on screen waiting to be filled in.
+  const codeBoxEarly = page.locator(sel.mfaCode).first();
   await Promise.race([
     emailBox.waitFor({ state: "visible" }),
     loggedIn.waitFor({ state: "visible" }),
+    codeBoxEarly.waitFor({ state: "visible" }),
   ]).catch(() => {});
 
   if (!(await emailBox.isVisible().catch(() => false))) {
     if (await loggedIn.isVisible().catch(() => false)) return "already signed in";
+
+    // Straight to a verification code, before any form. Clearable by a person,
+    // so ask — and if nobody is there to ask, say THAT rather than blaming a
+    // selector for a page it was never meant to match.
+    if (challengeKind(await pageText(page), page.url()) !== null) {
+      if (challenge) {
+        const how = await passChallenge(page, sel, challenge);
+        if (how) {
+          const landed = await waitForApp(page, sel, appUrl);
+          if (landed === "app" || landed === "app-unmatched") {
+            return `signed in as ${login.email} — ${how}`;
+          }
+        }
+        throw new SignInFailed(
+          `Emburse asked to verify this device and the app did not appear afterwards — ${await whyStuck(page)}`,
+          false,
+        );
+      }
+      throw new SignInFailed(
+        "Emburse is asking for a verification code before it will sign in, and this run had nobody " +
+          "to ask. Start it yourself so the code can be entered — once answered, this device stays " +
+          "trusted and later runs go straight through.",
+        false,
+      );
+    }
+
     throw new Error(
       `no sign-in form and the app is not loaded after waiting — at ${safeUrl(page.url())}. ` +
         "Check the loginEmail selector against that page.",

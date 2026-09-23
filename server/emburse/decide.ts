@@ -2,6 +2,7 @@ import type { Page } from "playwright";
 import { env } from "../env.js";
 import {
   explainLaunch, firstVisible, gridUrl, makeStepper, openBrowser, safeUrl, signIn,
+  type ChallengeHook,
   type Login, type StepResult,
 } from "./auto-export.js";
 import { withBrowser } from "./browser-lock.js";
@@ -141,7 +142,7 @@ export async function runDecision(
   selectors: Record<string, string>,
   emburseUrl: string,
   login: Login,
-  opts: { dryRun?: boolean } = {},
+  opts: { dryRun?: boolean; onChallenge?: ChallengeHook } = {},
 ): Promise<DecisionRun> {
   const steps: StepResult[] = [];
   const step = makeStepper(steps);
@@ -185,7 +186,7 @@ export async function runDecisions(
   selectors: Record<string, string>,
   emburseUrl: string,
   login: Login,
-  opts: { dryRun?: boolean } = {},
+  opts: { dryRun?: boolean; onChallenge?: ChallengeHook } = {},
 ): Promise<Map<number, DecisionRun>> {
   const results = new Map<number, DecisionRun>();
   if (items.length === 0) return results;
@@ -203,7 +204,7 @@ export async function runDecisions(
 
       // Once, for the whole batch.
       const shared: StepResult[] = [];
-      const signedIn = await signInOnce(page, sel, emburseUrl, login, makeStepper(shared));
+      const signedIn = await signInOnce(page, sel, emburseUrl, login, makeStepper(shared), opts.onChallenge);
       if (!signedIn) {
         // Nothing can be applied, and each item should say why rather than
         // failing with a blank.
@@ -267,10 +268,10 @@ async function drive(
   emburseUrl: string,
   login: Login,
   step: (name: string, fn: () => Promise<string>) => Promise<boolean>,
-  opts: { dryRun?: boolean },
+  opts: { dryRun?: boolean; onChallenge?: ChallengeHook },
   setRow: (text: string) => void,
 ): Promise<boolean> {
-  if (!(await signInOnce(page, sel, emburseUrl, login, step))) return false;
+  if (!(await signInOnce(page, sel, emburseUrl, login, step, opts.onChallenge))) return false;
   return applyOne(page, decision, target, reason, sel, emburseUrl, step, opts, setRow);
 }
 
@@ -289,6 +290,16 @@ async function signInOnce(
   emburseUrl: string,
   login: Login,
   step: (name: string, fn: () => Promise<string>) => Promise<boolean>,
+  /**
+   * Answers a device-verification code, when somebody is there to answer it.
+   *
+   * Without this a decision could not get past Emburse's device check at all —
+   * it simply failed, which is what a reviewer saw the first time they
+   * approved something from an account the server's browser had never signed
+   * in as. The export path has always had it; the decision path did not, and
+   * the two share the same sign-in.
+   */
+  onChallenge?: ChallengeHook,
 ): Promise<boolean> {
   if (!(await step("open Emburse", async () => {
     await page.goto(emburseUrl, { waitUntil: "domcontentloaded" });
@@ -298,7 +309,7 @@ async function signInOnce(
   // The same sign-in the export uses, not a second copy of it: the subtleties
   // (two-step identity page, absence not meaning success) are worth having in
   // exactly one place.
-  if (!(await step("sign in", async () => signIn(page, sel as never, login, emburseUrl)))) return false;
+  if (!(await step("sign in", async () => signIn(page, sel as never, login, emburseUrl, onChallenge)))) return false;
 
   if (!(await step("switch to ADMIN", async () => {
     const tab = page.locator(sel.adminTab!).first();

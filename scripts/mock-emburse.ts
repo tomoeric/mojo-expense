@@ -32,7 +32,7 @@ type State = {
   sections: Record<string, boolean>;
   rowsTicked: number;
   pendingUser: string;
-  loginOutcome: "ok" | "rejected" | "mfa" | "device" | "code";
+  loginOutcome: "ok" | "rejected" | "mfa" | "device" | "code" | "code-first";
   /**
    * Milliseconds the signed-in app spends blank before it paints.
    *
@@ -200,6 +200,15 @@ app.get("/", (_req, res) => {
 });
 
 app.get("/identity", (_req, res) => {
+  // Emburse with a session already remembered: it skips email and password
+  // entirely and opens straight on the code page. Neither the sign-in form nor
+  // the app ever appears, which is the shape that used to time out and get
+  // reported as a broken loginEmail selector.
+  if (state.loginOutcome === "code-first" && !/trusted=1/.test(_req.headers.cookie ?? "")) {
+    res.redirect("/code-authentication");
+    return;
+  }
+
   // Drawn by JavaScript after a beat, like account.emburse.app. A check that
   // runs the instant domcontentloaded fires sees an empty page here, which is
   // exactly how a correct selector came to look like a wrong one.
@@ -266,6 +275,10 @@ app.post("/login", (req, res) => {
   }
   state.signedIn = true;
   res.redirect("/");
+});
+
+app.get("/code-authentication", (_req, res) => {
+  res.send(codePage(null));
 });
 
 const codePage = (error: string | null) =>
