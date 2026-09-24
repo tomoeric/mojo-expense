@@ -6,7 +6,7 @@ import { hasCredential, listCredentials } from "../emburse/credentials.js";
 import { listTaxonomy } from "../import/taxonomy.js";
 import {
   ACTIONS, FIELDS, FIELD_LABEL, FIELD_LIST, MONEY_TOLERANCE_ABS, MONEY_TOLERANCE_PCT,
-  OPS, OP_LABEL, comparableTo, opLabel, opsFor,
+  OPS, OP_LABEL, comparableTo, isGroupField, opLabel, opsFor,
   type Action, type Condition, type Field, type Op, type RuleBody,
 } from "./engine.js";
 import {
@@ -97,6 +97,10 @@ rulesRouter.get("/rules/options", requireAuth, async (_req: Request, res: Respon
         // Which other columns this one may be compared against, so the editor
         // cannot offer a comparison the server would refuse.
         comparable: comparableTo(f).map((c) => ({ value: c, label: FIELD_LABEL[c] })),
+        // Counts and totals are computed FROM the WHEN, so the editor must not
+        // offer them there — a rule that counted its own conditions would be
+        // circular, and the server refuses it anyway.
+        mustOnly: isGroupField(f),
       })),
       lists: {
         category: categories.entries.map((e) => e.name),

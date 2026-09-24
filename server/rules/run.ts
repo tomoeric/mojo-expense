@@ -3,7 +3,7 @@ import { db } from "../db.js";
 import { queueDecision, decisionsFor } from "../emburse/decisions.js";
 import { hasCredential } from "../emburse/credentials.js";
 import { nudgeDecisionWorker } from "../emburse/decision-worker.js";
-import { evaluate, explain, fires, type Subject } from "./engine.js";
+import { applies, evaluate, explain, fires, type Group, type RuleBody, type Subject } from "./engine.js";
 import { activeRules, ensureRules, subjects, type Rule } from "./store.js";
 
 /**
@@ -73,11 +73,13 @@ export async function runRules(opts: { keys?: string[]; decide?: boolean } = {})
   const acting = new Map<number, { subject: Subject; detail: string }[]>();
 
   for (const rule of rules) {
+    const groups = groupsFor(rows, rule);
     for (const subject of rows) {
-      const verdict = evaluate(subject, rule);
+      const group = groups.get(dayKey(subject));
+      const verdict = evaluate(subject, rule, group);
       if (verdict === "not-applicable") continue;
 
-      const detail = verdict === "fail" ? explain(subject, rule) : "";
+      const detail = verdict === "fail" ? explain(subject, rule, group) : "";
       verdicts.push({ key: subject.dedupeKey, ruleId: rule.id, verdict, detail });
       if (verdict === "fail") result.failed++;
       else result.passed++;
@@ -105,6 +107,30 @@ export async function runRules(opts: { keys?: string[]; decide?: boolean } = {})
   }
 
   return result;
+}
+
+/** One person, one day — the unit "three meals in a day" is counted over. */
+const dayKey = (s: Subject): string => `${s.employee.trim().toLowerCase()}|${s.date ?? ""}`;
+
+/**
+ * How many of the expenses this rule matched fall on the same person's same
+ * day, and what they add up to.
+ *
+ * Computed per rule, from the WHEN only: "three meals in a day" counts the
+ * meals, not everything that day. An expense with no date is counted in its
+ * own bucket rather than lumped with every other undated one.
+ */
+function groupsFor(rows: Subject[], rule: RuleBody): Map<string, Group> {
+  const out = new Map<string, Group>();
+  for (const s of rows) {
+    if (!applies(s, rule)) continue;
+    const k = dayKey(s);
+    const g = out.get(k) ?? { count: 0, totalCents: 0 };
+    g.count += 1;
+    g.totalCents += s.amountCents;
+    out.set(k, g);
+  }
+  return out;
 }
 
 async function writeVerdicts(
@@ -206,8 +232,10 @@ export async function previewRule(rule: Rule, limit = 50): Promise<{
   let passing = 0;
   let wouldAct = 0;
 
+  const groups = groupsFor(rows, rule);
   for (const subject of rows) {
-    const verdict = evaluate(subject, rule);
+    const group = groups.get(dayKey(subject));
+    const verdict = evaluate(subject, rule, group);
     if (verdict === "not-applicable") continue;
     if (verdict === "fail") failing++;
     else passing++;
@@ -221,7 +249,7 @@ export async function previewRule(rule: Rule, limit = 50): Promise<{
         category: subject.category,
         note: subject.note,
         verdict,
-        detail: verdict === "fail" ? explain(subject, rule) : "",
+        detail: verdict === "fail" ? explain(subject, rule, group) : "",
         inInbox: subject.inInbox,
       });
     }

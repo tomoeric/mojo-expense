@@ -98,6 +98,20 @@ the blocks.
 - **Evaluation is JavaScript over rows, never generated SQL.** Rules are
   user-authored data; building a WHERE clause out of them is a standing
   invitation to get that wrong once. At this size the scan costs nothing.
+- **Two fields describe a GROUP, not one expense**: `dayCount` ("Matching
+  expenses that day") and `dayTotal` ("Matching total that day"), counted over
+  the expenses the WHEN matched, for one person on one day. "More than three
+  meals in a day" and "more than $75 of meals in a day" are the two most useful
+  things to ask of an expense queue, and no single row can answer either.
+  They are MUST-only — computed FROM the WHEN, so using one in the WHEN would
+  be circular, and `problems()` refuses it.
+- **Group fields need the group passed in.** `evaluate(subject, rule, group)`:
+  without it they return null and the rule fires on nothing, rather than
+  guessing. `runRules` and `previewRule` both build the groups the same way,
+  or the preview would lie about what the rule does.
+- **`lte` / `gte` exist because "at most 3" is how a limit is spoken.**
+  Writing it as "less than 4" is an off-by-one somebody gets wrong once and
+  never notices.
 - **A condition can compare two columns** (`Condition.compare`), which is the
   only way to say "the total read off the receipt must equal the amount
   claimed" — the check an expense queue most needs, and one that a

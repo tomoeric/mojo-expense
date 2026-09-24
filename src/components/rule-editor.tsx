@@ -115,6 +115,7 @@ export function RuleEditor({
           <ConditionRow
             condition={body.must}
             options={options}
+            allowGroupFields
             onChange={(must) => set({ must })}
             onRemove={() => set({ must: null })}
           />
@@ -193,12 +194,16 @@ function ConditionRow({
   options,
   onChange,
   onRemove,
+  /** WHEN rows cannot use the group fields — they are computed from the WHEN. */
+  allowGroupFields = false,
 }: {
   condition: Condition;
   options: Options | undefined;
   onChange: (c: Condition) => void;
   onRemove?: () => void;
+  allowGroupFields?: boolean;
 }) {
+  const offered = (options?.fields ?? []).filter((f) => allowGroupFields || !f.mustOnly);
   const field = options?.fields.find((f) => f.value === condition.field);
   const ops = field?.ops ?? [];
   const list = field?.list ? options?.lists[field.list] : undefined;
@@ -214,7 +219,7 @@ function ConditionRow({
   // which the server would reject on save. Moved to the field's first operator
   // instead, so the form cannot express something that will not store.
   const changeField = (value: Field) => {
-    const next = options?.fields.find((f) => f.value === value);
+    const next = offered.find((f) => f.value === value);
     const keep = next?.ops.some((o) => o.value === condition.op);
     // A comparison that made sense for the old field rarely survives the new
     // one, and a stale one would be refused on save.
@@ -233,7 +238,7 @@ function ConditionRow({
   return (
     <div className="flex flex-wrap items-center gap-2">
       <select value={condition.field} onChange={(e) => changeField(e.target.value as Field)} className={select}>
-        {(options?.fields ?? []).map((f) => (
+        {offered.map((f) => (
           <option key={f.value} value={f.value}>{f.label}</option>
         ))}
       </select>

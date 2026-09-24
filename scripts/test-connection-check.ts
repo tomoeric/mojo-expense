@@ -81,7 +81,8 @@ try {
     check("…and saves the jar, so the next deploy does not start as a stranger",
       (await cookiesSavedAt()) !== null);
     await db().query("DELETE FROM emburse_browser_state").catch(() => {});
-    await db().end();
+    // The pool stays open: the blocks below still sign in, and every sign-in
+    // now saves the jar. Closing it here made those log a pool error.
   } else {
     console.log("\nDATABASE_URL not set — skipping the remembered-device check.");
   }

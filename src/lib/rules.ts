@@ -10,11 +10,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 export type Field =
   | "note" | "merchant" | "category" | "location" | "department"
-  | "employee" | "amount" | "method" | "receipt" | "receiptItems" | "receiptTotal";
+  | "employee" | "amount" | "method" | "receipt" | "receiptItems" | "receiptTotal"
+  | "dayCount" | "dayTotal";
 
 export type Op =
   | "contains" | "not_contains" | "is" | "is_not" | "starts_with"
-  | "gt" | "lt" | "is_blank" | "is_not_blank";
+  | "gt" | "lt" | "gte" | "lte" | "is_blank" | "is_not_blank";
 
 export type Action = "flag" | "approve" | "deny";
 
@@ -69,6 +70,8 @@ export type Options = {
     list: "category" | "location" | "department" | null;
     ops: { value: Op; label: string }[];
     comparable: { value: Field; label: string }[];
+    /** Computed from the WHEN, so only offered in MUST. */
+    mustOnly: boolean;
   }[];
   lists: Record<"category" | "location" | "department", string[]>;
   maxDecisionsPerRun: number;

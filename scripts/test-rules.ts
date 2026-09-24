@@ -215,6 +215,78 @@ check("a comparison between different kinds of column is refused at the door",
   "error" in refused && /cannot be compared/.test(refused.error),
   "error" in refused ? refused.error : "accepted");
 
+// "More than three meals in a day" and "more than $75 of meals in a day" are
+// the two most useful things to ask of an expense queue, and neither can be
+// answered by looking at one expense. They are computed over the expenses the
+// WHEN matched, for one person on one day.
+console.log("\nCounting and totalling a person's day");
+
+const { runRules: runAll } = await import("../server/rules/run.js");
+void runAll;
+const { applies: appliesTo } = await import("../server/rules/engine.js");
+
+const mealRule = rule({
+  name: "No more than three meals a day",
+  when: [{ field: "category", op: "contains", value: "meals" }],
+  must: { field: "dayCount", op: "lte", value: "3" },
+  message: "More than three meals claimed on one day.",
+});
+const spendRule = rule({
+  name: "Meals under $75 a day",
+  when: [{ field: "category", op: "contains", value: "meals" }],
+  must: { field: "dayTotal", op: "lte", value: "75" },
+  message: "More than $75 of meals on one day.",
+});
+
+check("both rules are valid", problems(mealRule).length === 0 && problems(spendRule).length === 0,
+  [...problems(mealRule), ...problems(spendRule)].join(" "));
+check("the count rule reads as a limit, not an off-by-one",
+  summarise(mealRule) === "When Category contains “meals”, Matching expenses that day is at most “3” — otherwise flag it.",
+  summarise(mealRule));
+
+const meal = (over: Partial<Subject> = {}) =>
+  expense({ category: "Meals & Entertainment", note: "lunch", ...over });
+
+// The group the runner builds: everything the WHEN matched, same person, same day.
+const group = (subjects: Subject[]) => ({
+  count: subjects.length,
+  totalCents: subjects.reduce((a, s) => a + s.amountCents, 0),
+});
+
+const three = [meal(), meal(), meal()];
+const four = [meal(), meal(), meal(), meal()];
+
+check("three meals is within the limit",
+  evaluate(three[0]!, mealRule, group(three)) === "pass");
+check("the fourth puts the day over it",
+  evaluate(four[0]!, mealRule, group(four)) === "fail");
+check("…and every meal that day is flagged, not just the last one",
+  four.every((m) => evaluate(m, mealRule, group(four)) === "fail"));
+check("the flag says how many there were",
+  /four|4/i.test(explain(four[0]!, { ...mealRule, message: "" }, group(four))),
+  explain(four[0]!, { ...mealRule, message: "" }, group(four)));
+
+const under = [meal({ amountCents: 2000 }), meal({ amountCents: 3000 })];
+const over = [meal({ amountCents: 4000 }), meal({ amountCents: 4000 })];
+check("$50 of meals is under the $75 limit",
+  evaluate(under[0]!, spendRule, group(under)) === "pass");
+check("$80 is over it", evaluate(over[0]!, spendRule, group(over)) === "fail");
+check("the flag shows the day's total, not one receipt",
+  /80\.00/.test(explain(over[0]!, { ...spendRule, message: "" }, group(over))),
+  explain(over[0]!, { ...spendRule, message: "" }, group(over)));
+
+// Only the matching expenses count. A fuel receipt on the same day is not a meal.
+check("the count covers what the WHEN matched, not everything that day",
+  !appliesTo(expense({ category: "Auto Fee & Fuel", note: "gas" }), mealRule));
+
+// Without a group there is nothing to count, and a guess would flag the queue.
+check("no group means no verdict, rather than a wrong one",
+  evaluate(meal(), mealRule) === "not-applicable");
+
+check("a group field in the WHEN is refused as circular",
+  problems(rule({ when: [{ field: "dayCount", op: "lte", value: "3" }] }))
+    .some((p) => /only be used in MUST/.test(p)));
+
 console.log("\nWhat a rule is not allowed to be");
 check("a rule needs a name", problems(rule({ name: "  " })).some((p) => /needs a name/.test(p)));
 check("a rule needs a condition", problems(rule({ when: [] })).some((p) => /at least one condition/.test(p)));

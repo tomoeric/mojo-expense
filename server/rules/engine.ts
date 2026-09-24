@@ -26,6 +26,7 @@
 export const FIELDS = [
   "note", "merchant", "category", "location", "department", "employee",
   "amount", "method", "receipt", "receiptItems", "receiptTotal",
+  "dayCount", "dayTotal",
 ] as const;
 export type Field = (typeof FIELDS)[number];
 
@@ -41,14 +42,32 @@ export const FIELD_LABEL: Record<Field, string> = {
   receipt: "Receipt",
   receiptItems: "Receipt line items",
   receiptTotal: "Receipt total (read off the image)",
+  dayCount: "Matching expenses that day",
+  dayTotal: "Matching total that day",
 };
+
+/**
+ * Fields that describe a GROUP rather than one expense: how many of the
+ * expenses this rule matched belong to the same person on the same day, and
+ * what they add up to.
+ *
+ * "More than three meals in a day" and "more than $75 of meals in a day" are
+ * not questions a single row can answer, and they are the two most useful
+ * things to ask of an expense queue. They can only appear in MUST — they are
+ * computed FROM the WHEN, so putting one in the WHEN would be circular.
+ */
+export const GROUP_FIELDS: ReadonlySet<Field> = new Set<Field>(["dayCount", "dayTotal"]);
+export const isGroupField = (f: Field): boolean => GROUP_FIELDS.has(f);
+
+/** Count and sum of the expenses a rule matched, for one person on one day. */
+export type Group = { count: number; totalCents: number };
 
 /**
  * Fields holding money. They compare with a tolerance, because two figures for
  * the same purchase differ by a cent for reasons nobody wants to be told
  * about: rounding, a tip line, a currency conversion.
  */
-const MONEY: ReadonlySet<Field> = new Set<Field>(["amount", "receiptTotal"]);
+const MONEY: ReadonlySet<Field> = new Set<Field>(["amount", "receiptTotal", "dayTotal"]);
 
 /** Absolute and proportional slack before two amounts count as different. */
 export const MONEY_TOLERANCE_ABS = 0.02;
@@ -64,7 +83,9 @@ const tolerance = (a: number, b: number): number =>
  * editor that offers it invites a rule that can never be true.
  */
 export function comparableTo(field: Field): Field[] {
-  if (field === "receipt") return [];
+  // A group figure against another column is not a question anybody asks, and
+  // offering it would invite a rule that can never mean anything.
+  if (field === "receipt" || isGroupField(field)) return [];
   return FIELDS.filter((f) => f !== field && f !== "receipt" && MONEY.has(f) === MONEY.has(field));
 }
 
@@ -77,7 +98,7 @@ export const FIELD_LIST: Partial<Record<Field, "category" | "location" | "depart
 
 export const OPS = [
   "contains", "not_contains", "is", "is_not", "starts_with",
-  "gt", "lt", "is_blank", "is_not_blank",
+  "gt", "lt", "gte", "lte", "is_blank", "is_not_blank",
 ] as const;
 export type Op = (typeof OPS)[number];
 
@@ -89,6 +110,10 @@ export const OP_LABEL: Record<Op, string> = {
   starts_with: "starts with",
   gt: "is more than",
   lt: "is less than",
+  // "at most 3" is how a limit is actually spoken. Expressing it as "less than
+  // 4" is the sort of off-by-one somebody gets wrong once and never notices.
+  gte: "is at least",
+  lte: "is at most",
   is_blank: "is blank",
   is_not_blank: "is not blank",
 };
@@ -113,6 +138,7 @@ export function opLabel(field: Field, op: Op): string {
 
 /** Which operators make sense for a field — the UI offers only these. */
 export function opsFor(field: Field): Op[] {
+  if (isGroupField(field)) return ["lte", "gte", "gt", "lt", "is", "is_not"];
   if (field === "amount") return ["is", "is_not", "gt", "lt"];
   // Unlike Amount, this one can be absent: the receipt may not have been read,
   // or may have been unreadable. "is blank" is how you find those.
@@ -181,12 +207,14 @@ export type Subject = {
 
 const norm = (s: string): string => s.trim().toLowerCase();
 
-/** Null for a money field with no figure — an unread or unreadable receipt. */
-function numberOf(subject: Subject, field: Field): number | null {
+/** Null when there is no figure — an unread receipt, or a group not yet counted. */
+function numberOf(subject: Subject, field: Field, group?: Group): number | null {
   if (field === "amount") return subject.amountCents / 100;
   if (field === "receiptTotal") {
     return subject.receiptTotalCents === null ? null : subject.receiptTotalCents / 100;
   }
+  if (field === "dayCount") return group ? group.count : null;
+  if (field === "dayTotal") return group ? group.totalCents / 100 : null;
   return null;
 }
 
@@ -204,6 +232,11 @@ function textOf(subject: Subject, field: Field): string {
     case "amount": return (subject.amountCents / 100).toFixed(2);
     case "receiptTotal":
       return subject.receiptTotalCents === null ? "" : (subject.receiptTotalCents / 100).toFixed(2);
+    // Only meaningful with a group, which textOf has no access to. Group
+    // fields are numeric and never reach the text path.
+    case "dayCount":
+    case "dayTotal":
+      return "";
   }
 }
 
@@ -225,11 +258,11 @@ function rightHandSide(subject: Subject, c: Condition): { text: string; number: 
  * flag every expense in the queue the moment somebody wrote the rule, and the
  * rule would look right while being worse than useless.
  */
-export function test(subject: Subject, c: Condition): boolean | null {
-  const numeric = c.field === "amount" || c.field === "receiptTotal";
+export function test(subject: Subject, c: Condition, group?: Group): boolean | null {
+  const numeric = c.field === "amount" || c.field === "receiptTotal" || isGroupField(c.field);
 
   if (numeric) {
-    const got = numberOf(subject, c.field);
+    const got = numberOf(subject, c.field, group);
 
     // Blankness is knowable even when the figure is not, and "the receipt
     // could not be read" is a rule worth being able to write.
@@ -245,6 +278,8 @@ export function test(subject: Subject, c: Condition): boolean | null {
     switch (c.op) {
       case "gt": return got > want;
       case "lt": return got < want;
+      case "gte": return got >= want - slack;
+      case "lte": return got <= want + slack;
       case "is": return Math.abs(got - want) <= slack;
       case "is_not": return Math.abs(got - want) > slack;
       default: return false;
@@ -284,10 +319,10 @@ export function applies(subject: Subject, rule: RuleBody): boolean {
 
 export type Verdict = "not-applicable" | "pass" | "fail";
 
-export function evaluate(subject: Subject, rule: RuleBody): Verdict {
+export function evaluate(subject: Subject, rule: RuleBody, group?: Group): Verdict {
   if (!applies(subject, rule)) return "not-applicable";
   if (!rule.must) return "fail";
-  const met = test(subject, rule.must);
+  const met = test(subject, rule.must, group);
   // Unknown is not failure. An expectation nobody can check yet — a receipt
   // waiting to be read — earns no verdict at all, so no flag, no denial, and
   // no approval either.
@@ -303,24 +338,25 @@ export function fires(verdict: Verdict, action: Action): boolean {
   return action === "approve" ? verdict === "pass" : verdict === "fail";
 }
 
-const shown = (subject: Subject, field: Field): string => {
-  const n = numberOf(subject, field);
+const shown = (subject: Subject, field: Field, group?: Group): string => {
+  if (field === "dayCount") return group ? String(group.count) : "(not counted)";
+  const n = numberOf(subject, field, group);
   if (n !== null) return `$${n.toFixed(2)}`;
   return textOf(subject, field) || "(blank)";
 };
 
 /** What the reviewer is told, in the rule's own terms. */
-export function explain(subject: Subject, rule: RuleBody): string {
+export function explain(subject: Subject, rule: RuleBody, group?: Group): string {
   if (rule.message.trim()) return rule.message.trim();
   if (!rule.must) return `Matches “${rule.name}”.`;
-  const got = shown(subject, rule.must.field);
+  const got = shown(subject, rule.must.field, group);
 
   // A field-against-a-field mismatch reads best as the two figures side by
   // side — "$43.57 against $39.88" says more than either half alone.
   if (rule.must.compare) {
     return `Expected ${FIELD_LABEL[rule.must.field]} ${opLabel(rule.must.field, rule.must.op)} ` +
       `${FIELD_LABEL[rule.must.compare]}, but found ${got} against ` +
-      `${shown(subject, rule.must.compare)}.`;
+      `${shown(subject, rule.must.compare, group)}.`;
   }
   return `${FIELD_LABEL[rule.must.field]} ${opLabel(rule.must.field, rule.must.op)} ` +
     `${rule.must.value ? `“${rule.must.value}”` : ""} was expected — found “${got}”.`;
@@ -359,6 +395,12 @@ export function problems(rule: RuleBody): string[] {
     }
     if (!opsFor(c.field).includes(c.op)) {
       out.push(`${FIELD_LABEL[c.field]} cannot be tested with “${opLabel(c.field, c.op)}”.`);
+    }
+    if (isGroupField(c.field) && rule.when.includes(c)) {
+      out.push(
+        `“${FIELD_LABEL[c.field]}” can only be used in MUST — it counts the expenses the WHEN picked, ` +
+          `so putting it in the WHEN would be circular.`,
+      );
     }
     if (c.compare) {
       if (c.op === "is_blank" || c.op === "is_not_blank") {

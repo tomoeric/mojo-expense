@@ -204,7 +204,11 @@ app.get("/identity", (_req, res) => {
   // entirely and opens straight on the code page. Neither the sign-in form nor
   // the app ever appears, which is the shape that used to time out and get
   // reported as a broken loginEmail selector.
-  if (state.loginOutcome === "code-first" && !/trusted=1/.test(_req.headers.cookie ?? "")) {
+  // Unconditional, unlike the other code outcome: this one is a forced test
+  // instruction about the SHAPE of the page (a code before any form), and a
+  // caller that asked for it has to get it. Gating it on the trust cookie made
+  // it depend on whatever an earlier sign-in left in the browser profile.
+  if (state.loginOutcome === "code-first") {
     res.redirect("/code-authentication");
     return;
   }
