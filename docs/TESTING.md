@@ -23,7 +23,8 @@ pnpm exec tsx scripts/test-receipt-quality.ts <export.pdf>   # receipts kept at 
 pnpm exec tsx scripts/test-receipt-items.ts    # storing what a receipt says (needs DATABASE_URL)
 pnpm exec tsx scripts/test-receipt-items.ts --stored          # read a receipt the app holds
 pnpm exec tsx scripts/test-receipt-items.ts --stored 7f3a     # that one, by id prefix
-pnpm exec tsx scripts/test-receipt-cleanup.ts  # releasing approved receipts (needs DATABASE_URL)
+pnpm exec tsx scripts/test-receipt-cleanup.ts  # releasing finished receipts (needs DATABASE_URL)
+pnpm exec tsx scripts/test-release-on-import.ts # what an import reclaims (needs DATABASE_URL)
 pnpm exec tsx scripts/test-decisions.ts        # the decision queue (needs DATABASE_URL + a browser)
 pnpm exec tsx scripts/test-settings-check.ts   # the export-scope warning
 pnpm exec tsx scripts/test-taxonomy.ts         # the permanent lists (DB half needs DATABASE_URL)

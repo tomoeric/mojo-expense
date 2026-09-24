@@ -65,10 +65,21 @@ the blocks.
   hit one. `failed` therefore shows the badge AND the Approve/Deny buttons, and
   the reason is on screen rather than in a `title` tooltip nobody hovers.
   `decisionsFor` returns the newest attempt, so a retry supersedes the failure.
-- **Receipts are released only once an export confirms the expense left the
-  inbox.** An approval is known to have taken only then, and by that point the
-  image can never be fetched again. Links go first, images only when nothing
-  references them — they are shared by content hash.
+- **An import keeps the receipt images of expenses still in the inbox, and
+  releases every other one.** The newest export is the truth about what is
+  under review: approved, denied, and decided directly in Emburse all end the
+  same way. The old rule released only what THIS APP had approved, which —
+  before anybody was approving here — was nothing, while 300 images a day
+  accumulated for expenses long gone.
+- **Still never before the expense leaves.** An expense in the inbox is still
+  being reviewed, and by the time one leaves the image can never be fetched
+  again. Links go first, images only when nothing references them — they are
+  shared by content hash, so one purchase split across sites points several
+  expenses at the same picture.
+- **What the receipt SAID outlives the picture.** `receipt_readings` and
+  `receipt_items` have no foreign key to the blob for exactly this reason: the
+  megabytes are the image, the line items are a few hundred bytes of text, and
+  they are the record of what was bought on an expense somebody approved.
 
 ## Receipts
 

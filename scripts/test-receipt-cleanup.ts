@@ -1,18 +1,23 @@
 /**
- * Letting go of receipts for approved expenses, safely.
+ * Letting go of receipts once their expense has left the queue.
  *
  *   pnpm exec tsx scripts/test-receipt-cleanup.ts     (needs DATABASE_URL)
  *
- * Two ways this could quietly destroy something:
+ * The newest export is the truth about what is under review, so an image
+ * belongs to the app only while its expense is still in the inbox. Approved,
+ * denied, or decided directly in Emburse all end the same way.
  *
- *   - Deleting too early. An approval is only known to have taken once the
- *     expense stops appearing in the export, and by then the image cannot be
- *     fetched again — an expense out of the inbox is out of every future
- *     export too. Delete on the click and a failed approval loses the receipt
- *     for an expense still in the queue.
+ * It used to release only what THIS APP had approved, which — before anybody
+ * was approving here — was nothing, while 300 receipts a day accumulated.
+ *
+ * Two ways it could quietly destroy something, and both still hold:
+ *
+ *   - Deleting too early. An expense still in the inbox is still being
+ *     reviewed, and by the time it leaves, the image can never be fetched
+ *     again. Nothing in the queue may lose its picture.
  *   - Deleting a shared image. Receipts are stored once by content hash, so
  *     one purchase split across sites points several expenses at the same
- *     picture. Dropping it because one owner was approved blanks the others.
+ *     picture. Dropping it because one owner is finished blanks the others.
  */
 
 import { db, ensureSchema } from "../server/db.js";
@@ -39,9 +44,8 @@ await clean();
 async function sweep(): Promise<{ links: number; blobs: number }> {
   const links = await db().query(
     `DELETE FROM expense_receipts er
-      USING expense_decisions d, expenses e
-      WHERE er.dedupe_key = d.dedupe_key AND e.dedupe_key = d.dedupe_key
-        AND d.decision = 'approve' AND d.state = 'applied' AND e.in_inbox = false`);
+      USING expenses e
+      WHERE er.dedupe_key = e.dedupe_key AND e.in_inbox = false`);
   const blobs = await db().query(
     `DELETE FROM receipt_blobs b
       WHERE NOT EXISTS (SELECT 1 FROM expense_receipts er WHERE er.sha256 = b.sha256)
@@ -85,28 +89,40 @@ swept = await sweep();
 check("nothing is released while Emburse still lists it", swept.links === 0, `${swept.links}`);
 check("…and the image is still there", (await blobsLeft()) === 1);
 
-console.log("\n3. Approval queued but not applied — kept");
-await clean();
-await expense("rc-pending", "Brianna Ruth", false);
-await blob("rc-img-3"); await link("rc-pending", "rc-img-3"); await decide("rc-pending", "pending");
-swept = await sweep();
-check("a decision that has not reached Emburse releases nothing", swept.links === 0, `${swept.links}`);
-
-console.log("\n4. An approval that failed — kept");
-await clean();
-await expense("rc-failed", "Brianna Ruth", false);
-await blob("rc-img-4"); await link("rc-failed", "rc-img-4"); await decide("rc-failed", "failed");
-swept = await sweep();
-check("a failed approval keeps its receipt", swept.links === 0, `${swept.links}`);
-
-console.log("\n5. Denied and gone — kept, because denials come back");
+console.log("\n3. Denied and gone — released too");
 await clean();
 await expense("rc-denied", "Brianna Ruth", false);
 await blob("rc-img-5"); await link("rc-denied", "rc-img-5"); await decide("rc-denied", "applied", "deny");
 swept = await sweep();
-check("a denial does not release its receipt", swept.links === 0, `${swept.links}`);
+check("a denial releases its receipt as well as an approval", swept.links === 1, `${swept.links}`);
 
-console.log("\n6. A shared image, one owner approved");
+console.log("\n4. Gone without this app deciding it — released");
+await clean();
+// The common case by far: somebody actioned it in Emburse directly, so there
+// is no decision row here at all. These were being kept forever.
+await expense("rc-elsewhere", "Brianna Ruth", false);
+await blob("rc-img-6"); await link("rc-elsewhere", "rc-img-6");
+swept = await sweep();
+check("an expense decided outside this app still lets its receipt go",
+  swept.links === 1 && swept.blobs === 1, `${swept.links} links, ${swept.blobs} images`);
+
+console.log("\n5. Queued but not yet applied, and still in the inbox — kept");
+await clean();
+await expense("rc-pending", "Brianna Ruth", true);
+await blob("rc-img-3"); await link("rc-pending", "rc-img-3"); await decide("rc-pending", "pending");
+swept = await sweep();
+check("a decision still in flight keeps its receipt while the expense waits",
+  swept.links === 0, `${swept.links}`);
+
+console.log("\n6. An approval that failed, expense back in the queue — kept");
+await clean();
+await expense("rc-failed", "Brianna Ruth", true);
+await blob("rc-img-4"); await link("rc-failed", "rc-img-4"); await decide("rc-failed", "failed");
+swept = await sweep();
+check("a failure that left the expense in the queue keeps the picture to retry with",
+  swept.links === 0, `${swept.links}`);
+
+console.log("\n7. A shared image, one owner finished");
 await clean();
 await expense("rc-split-a", "Brianna Ruth", false);
 await expense("rc-split-b", "Kevin McBride", true);
@@ -115,14 +131,14 @@ await link("rc-split-a", "rc-shared");
 await link("rc-split-b", "rc-shared");
 await decide("rc-split-a", "applied");
 swept = await sweep();
-check("the approved owner's link goes", swept.links === 1, `${swept.links}`);
+check("the finished owner's link goes", swept.links === 1, `${swept.links}`);
 check("…but the image stays, because the other still needs it",
   swept.blobs === 0 && (await blobsLeft()) === 1, `${swept.blobs} deleted`);
 const stillLinked = Number((await db().query(
   "SELECT count(*) c FROM expense_receipts WHERE dedupe_key = 'rc-split-b'")).rows[0].c);
 check("…and the other expense can still show its receipt", stillLinked === 1, `${stillLinked}`);
 
-console.log("\n7. Then the other is approved too");
+console.log("\n8. Then the other leaves too");
 await db().query("UPDATE expenses SET in_inbox = false WHERE dedupe_key = 'rc-split-b'");
 await decide("rc-split-b", "applied");
 swept = await sweep();

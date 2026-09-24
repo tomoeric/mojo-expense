@@ -43,6 +43,8 @@ export type ImportResult = {
   newNames: NewNames;
   /** What the rules said about the expenses this import touched. */
   rules: { failed: number; approved: number; denied: number } | null;
+  /** Receipt images let go of because their expense has left the queue. */
+  receiptsReleased: { images: number; bytes: number };
   totalCents: number;
   statedTotalCents: number | null;
   reconciled: boolean;
@@ -109,6 +111,7 @@ export async function ingestExport(
     inserted: 0, updated: 0, unchanged: 0, leftInbox: 0, receiptsAdded: 0, receiptsSkipped: 0,
     newNames: { category: [], location: [], department: [] },
     rules: null,
+    receiptsReleased: { images: 0, bytes: 0 },
     totalCents, statedTotalCents: parsed.statedTotalCents, reconciled, duplicateFile: false, warnings,
   };
 
@@ -283,9 +286,10 @@ export async function ingestExport(
 
     const receipts = await storeReceipts(client, file, parsed.receipts, keys, warnings);
 
-    // Now that this export has confirmed which expenses left the inbox, the
-    // receipts for the ones this app approved are safe to let go of.
-    const freed = await dropApprovedReceipts(client);
+    // Now that this export has confirmed which expenses are still in the
+    // queue, every picture belonging to one that is not can go. The newest
+    // export is the truth about what is under review.
+    const freed = await releaseFinishedReceipts(client);
 
     // Last, because storeReceipts appends to `warnings` too.
     await client.query("UPDATE expense_imports SET warnings = $2 WHERE id = $1", [importId, warnings]);
@@ -295,7 +299,10 @@ export async function ingestExport(
               left_inbox_count=$5, receipts_added=$6 WHERE id=$1`,
       [importId, inserted, updated, unchanged, leftInbox, receipts.added]);
     if (freed.images > 0) {
-      console.log(`import: released ${freed.images} receipt image(s) for ${freed.expenses} approved expense(s)`);
+      console.log(
+        `import: released ${freed.images} receipt image(s) (${(freed.bytes / 1e6).toFixed(1)} MB) ` +
+        `for ${freed.expenses} expense(s) that have left the queue`,
+      );
     }
 
     await client.query("COMMIT");
@@ -330,7 +337,8 @@ export async function ingestExport(
     if (receipts.added > 0) nudgeReceiptReader();
 
     return { ...base, importId, inserted, updated, unchanged, leftInbox,
-      receiptsAdded: receipts.added, receiptsSkipped: receipts.skipped, newNames, rules, warnings };
+      receiptsAdded: receipts.added, receiptsSkipped: receipts.skipped, newNames, rules,
+      receiptsReleased: { images: freed.images, bytes: freed.bytes }, warnings };
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;
@@ -619,14 +627,26 @@ export function staleExportReason(
  * references it any more. Dropping the image because one of its owners was
  * approved would blank the receipt on the others.
  */
-async function dropApprovedReceipts(client: pg.PoolClient): Promise<{ expenses: number; images: number }> {
+async function releaseFinishedReceipts(
+  client: pg.PoolClient,
+): Promise<{ expenses: number; images: number; bytes: number }> {
+  // Everything that has left the inbox, not only what this app approved.
+  // Approved, denied, and decided directly in Emburse all end the same way:
+  // the expense is no longer in the queue, so its picture is no longer being
+  // reviewed. The old rule kept an image for every expense that left without
+  // this app deciding it — which, before anybody was approving here, was all
+  // of them, and 300+ receipts a day were accumulating for nothing.
   const links = await client.query(
     `DELETE FROM expense_receipts er
-      USING expense_decisions d, expenses e
-      WHERE er.dedupe_key = d.dedupe_key
-        AND e.dedupe_key  = d.dedupe_key
-        AND d.decision = 'approve' AND d.state = 'applied'
+      USING expenses e
+      WHERE er.dedupe_key = e.dedupe_key
         AND e.in_inbox = false`,
+  );
+
+  // Measured before deleting, so the import can say what it reclaimed.
+  const { rows } = await client.query<{ bytes: string | null }>(
+    `SELECT sum(byte_size) AS bytes FROM receipt_blobs b
+      WHERE NOT EXISTS (SELECT 1 FROM expense_receipts er WHERE er.sha256 = b.sha256)`,
   );
 
   const blobs = await client.query(
@@ -634,7 +654,16 @@ async function dropApprovedReceipts(client: pg.PoolClient): Promise<{ expenses: 
       WHERE NOT EXISTS (SELECT 1 FROM expense_receipts er WHERE er.sha256 = b.sha256)`,
   );
 
-  return { expenses: links.rowCount ?? 0, images: blobs.rowCount ?? 0 };
+  // What the receipt said is NOT deleted with the picture. `receipt_readings`
+  // and `receipt_items` have no foreign key to the blob precisely so the line
+  // items outlive it: they are a few hundred bytes of text and they are the
+  // record of what was actually bought on an expense somebody approved. The
+  // megabytes are the image, and the image is what goes.
+  return {
+    expenses: links.rowCount ?? 0,
+    images: blobs.rowCount ?? 0,
+    bytes: Number(rows[0]?.bytes ?? 0),
+  };
 }
 
 /** The largest image on the page, as [x, y, w, h] in points. */

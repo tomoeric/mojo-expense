@@ -14,6 +14,7 @@ type ImportResult = {
   receiptsAdded: number;
   newNames?: { category: string[]; location: string[]; department: string[] };
   rules?: { failed: number; approved: number; denied: number } | null;
+  receiptsReleased?: { images: number; bytes: number };
   totalCents: number;
   statedTotalCents: number | null;
   reconciled: boolean;
@@ -309,6 +310,12 @@ function ImportSummary({ result }: { result: ImportResult }) {
           <Fact label="left inbox" value={result.leftInbox} />
           <Fact label="receipts added" value={result.receiptsAdded} />
           {result.rules && <Fact label="caught by rules" value={result.rules.failed} />}
+          {(result.receiptsReleased?.images ?? 0) > 0 && (
+            <Fact
+              label="receipts released"
+              value={`${result.receiptsReleased!.images} · ${(result.receiptsReleased!.bytes / 1e6).toFixed(1)} MB`}
+            />
+          )}
           <Fact label="total" value={money(result.totalCents / 100)} />
         </div>
       )}
