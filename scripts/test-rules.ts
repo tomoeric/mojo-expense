@@ -15,7 +15,7 @@
 process.env.SESSION_SECRET ||= "test-secret-for-sealing-credentials";
 
 import {
-  applies, evaluate, fires, explain, opLabel, problems, summarise, test,
+  applies, comparableTo, evaluate, fires, explain, opLabel, problems, summarise, test,
   type RuleBody, type Subject,
 } from "../server/rules/engine.js";
 import type { Hit } from "../server/rules/store.js";
@@ -287,6 +287,18 @@ check("a group field in the WHEN is refused as circular",
   problems(rule({ when: [{ field: "dayCount", op: "lte", value: "3" }] }))
     .some((p) => /only be used in MUST/.test(p)));
 
+// A group figure is money, so it nearly slipped into the list of columns the
+// receipt total may be compared WITH — which the editor would then offer in a
+// WHEN row, where a group cannot be computed at all. The rule would look
+// written and match nothing, forever.
+check("a day total is never offered as something to compare against",
+  !comparableTo("receiptTotal").includes("dayTotal")
+    && !comparableTo("amount").includes("dayTotal")
+    && !comparableTo("amount").includes("dayCount"));
+check("and a rule that compares against one is refused",
+  problems(rule({ must: { field: "receiptTotal", op: "is", value: "", compare: "dayTotal" } }))
+    .some((p) => /cannot be compared/.test(p)));
+
 console.log("\nWhat a rule is not allowed to be");
 check("a rule needs a name", problems(rule({ name: "  " })).some((p) => /needs a name/.test(p)));
 check("a rule needs a condition", problems(rule({ when: [] })).some((p) => /at least one condition/.test(p)));
@@ -307,6 +319,16 @@ check("a field cannot be tested with an operator that makes no sense for it",
   problems(rule({ when: [{ field: "amount", op: "contains", value: "5" }] }))
     .some((p) => /cannot be tested/.test(p)));
 check("the example rule itself is valid", problems(rule()).length === 0);
+
+// Two rows on screen look alike, so a complaint that does not say which one it
+// means sends you hunting. This is the exact shape that had a rule stuck
+// unsaveable: an empty expectation row nobody could place.
+check("a complaint says which row it is about",
+  problems(rule({ must: { field: "category", op: "is", value: "" } }))
+    .some((p) => p.startsWith("MUST: ") && /needs a value/.test(p)));
+check("and a WHEN complaint says WHEN",
+  problems(rule({ when: [{ field: "note", op: "contains", value: "" }] }))
+    .some((p) => p.startsWith("WHEN: ")));
 
 console.log("\nHow a rule reads back");
 check("an expectation rule reads as one",

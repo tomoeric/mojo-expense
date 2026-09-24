@@ -84,9 +84,15 @@ const tolerance = (a: number, b: number): number =>
  */
 export function comparableTo(field: Field): Field[] {
   // A group figure against another column is not a question anybody asks, and
-  // offering it would invite a rule that can never mean anything.
+  // offering it would invite a rule that can never mean anything. That holds
+  // in both directions: a group figure is no good as the TARGET either, because
+  // the only place a group can be judged at all is MUST, and a WHEN row that
+  // compares against one would quietly match nothing.
   if (field === "receipt" || isGroupField(field)) return [];
-  return FIELDS.filter((f) => f !== field && f !== "receipt" && MONEY.has(f) === MONEY.has(field));
+  return FIELDS.filter(
+    (f) =>
+      f !== field && f !== "receipt" && !isGroupField(f) && MONEY.has(f) === MONEY.has(field),
+  );
 }
 
 /** Fields whose values come from a permanent list, so the UI offers a dropdown. */
@@ -386,27 +392,38 @@ export function problems(rule: RuleBody): string[] {
 
   const needsValue = (c: Condition) =>
     c.op !== "is_blank" && c.op !== "is_not_blank" && !c.compare;
-  for (const c of [...rule.when, ...(rule.must ? [rule.must] : [])]) {
+
+  // Each complaint says WHICH row it is about. A rule has two places a
+  // condition can sit and they look alike on screen; "“Category is” needs a
+  // value" with no location sends you hunting through the form for a row that
+  // is right there under MUST.
+  const rows: Array<{ c: Condition; where: "WHEN" | "MUST" }> = [
+    ...rule.when.map((c) => ({ c, where: "WHEN" as const })),
+    ...(rule.must ? [{ c: rule.must, where: "MUST" as const }] : []),
+  ];
+
+  for (const { c, where } of rows) {
+    const at = `${where}: `;
     if (needsValue(c) && !c.value.trim()) {
-      out.push(`“${FIELD_LABEL[c.field]} ${opLabel(c.field, c.op)}” needs a value.`);
+      out.push(`${at}“${FIELD_LABEL[c.field]} ${opLabel(c.field, c.op)}” needs a value — pick one, or remove the row with the ×.`);
     }
     if (c.field === "amount" && needsValue(c) && !Number.isFinite(Number(c.value))) {
-      out.push(`“${c.value}” is not an amount.`);
+      out.push(`${at}“${c.value}” is not an amount.`);
     }
     if (!opsFor(c.field).includes(c.op)) {
-      out.push(`${FIELD_LABEL[c.field]} cannot be tested with “${opLabel(c.field, c.op)}”.`);
+      out.push(`${at}${FIELD_LABEL[c.field]} cannot be tested with “${opLabel(c.field, c.op)}”.`);
     }
-    if (isGroupField(c.field) && rule.when.includes(c)) {
+    if (isGroupField(c.field) && where === "WHEN") {
       out.push(
-        `“${FIELD_LABEL[c.field]}” can only be used in MUST — it counts the expenses the WHEN picked, ` +
+        `${at}“${FIELD_LABEL[c.field]}” can only be used in MUST — it counts the expenses the WHEN picked, ` +
           `so putting it in the WHEN would be circular.`,
       );
     }
     if (c.compare) {
       if (c.op === "is_blank" || c.op === "is_not_blank") {
-        out.push(`“${opLabel(c.field, c.op)}” does not take another column to compare with.`);
+        out.push(`${at}“${opLabel(c.field, c.op)}” does not take another column to compare with.`);
       } else if (!comparableTo(c.field).includes(c.compare)) {
-        out.push(`${FIELD_LABEL[c.field]} cannot be compared with ${FIELD_LABEL[c.compare]}.`);
+        out.push(`${at}${FIELD_LABEL[c.field]} cannot be compared with ${FIELD_LABEL[c.compare]}.`);
       }
     }
   }
