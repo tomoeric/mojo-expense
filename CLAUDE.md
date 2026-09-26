@@ -238,11 +238,18 @@ the blocks.
 - **It tests the signed-in person's own login**, and everybody can press it —
   `requireAuth`, not `requireAdmin`. A verification code it raises goes to that
   person's own phone, so they are the one who can clear it.
-- **A MISSING ADMIN TAB IS NOT A SUCCESS.** The grid every decision searches is
-  Emburse's team-wide view, reached through the ADMIN tab, so an account
-  without admin rights there signs in perfectly and then has no grid — and it
-  surfaced three steps later as a grid problem. "Export works, approvals do
-  not, same selectors" means the account, not the markup.
+- **A MISSING TEAM TAB IS NOT A SUCCESS — but it may not be the account.** The
+  grid every decision searches is Emburse's team-wide view, reached through
+  that tab, so an account without the rights signs in perfectly and then has
+  no grid, surfacing three steps later as a grid problem. **Emburse names the
+  tab per tenant, though: ADMIN on some, MANAGER on this one.** The selector
+  matched only ADMIN, so every run on a MANAGER tenant reported "no ADMIN tab"
+  — harmless for the export, which reaches the grid by URL, but it told people
+  their account might lack a view that was on screen the whole time. It
+  matches either name now (`text=/^\s*(ADMIN|MANAGER)\s*$/i`), the mock renders
+  MANAGER so a regression is caught, and the failure names the selector it
+  tried rather than only blaming the account. "Export works, approvals do not,
+  same selectors" means the account — once you have ruled out the tab's name.
 - **Never report a missing grid as "the grid did not appear".** `whyNoGrid`
   separates the four causes that have four different fixes: bounced back to
   sign-in, genuinely no results, a selector matching only hidden elements, or

@@ -444,21 +444,26 @@ async function signInOnce(
   // exactly one place.
   if (!(await step("sign in", async () => signIn(page, sel as never, login, emburseUrl, onChallenge)))) return false;
 
-  if (!(await step("switch to ADMIN", async () => {
+  if (!(await step("switch to the team view", async () => {
     const tab = page.locator(sel.adminTab!).first();
     if (await tab.isVisible().catch(() => false)) {
       await tab.click();
-      return "clicked ADMIN";
+      return "clicked the team-wide tab";
     }
     if (await page.locator(sel.loggedIn!).first().isVisible().catch(() => false)) {
-      // NOT a success, and it used to read like one. The ADMIN tab is how an
-      // Emburse admin reaches the team-wide view, and the grid every decision
-      // searches IS that view. An account without the tab signs in perfectly
-      // well and then has no grid — which is reported as a grid problem three
-      // steps later, when it is really a permissions one.
-      return "NO ADMIN TAB — this account may not have Emburse's team view, which is where decisions look";
+      // NOT a success, and it used to read like one. The team-wide tab is how
+      // an Emburse admin reaches the view every decision searches. An account
+      // without it signs in perfectly well and then has no grid — reported as
+      // a grid problem three steps later, when it is really a permissions one.
+      //
+      // But name the selector too. Emburse calls this tab ADMIN on some
+      // tenants and MANAGER on others, and while it matched only ADMIN this
+      // line told people on a MANAGER tenant that their account might lack a
+      // view that was on screen the whole time.
+      return `no team-wide tab matched ${sel.adminTab} — either this account lacks Emburse's ` +
+        `team view, or the tab is named something else here and that selector needs correcting`;
     }
-    throw new Error(`no ADMIN tab and the app is not loaded — at ${safeUrl(page.url())}`);
+    throw new Error(`no team-wide tab and the app is not loaded — at ${safeUrl(page.url())}`);
   }))) return false;
 
   return true;

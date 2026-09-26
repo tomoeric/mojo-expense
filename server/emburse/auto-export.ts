@@ -110,7 +110,13 @@ export const DEFAULT_SELECTORS: Selectors = {
   // next run is a stranger again and somebody is reading codes every morning.
   mfaRemember: 'input[type="checkbox"]',
 
-  adminTab: 'text=ADMIN',
+  // ADMIN *or* MANAGER: Emburse names the team-wide tab per tenant, and this
+  // one calls it MANAGER. Matching only ADMIN meant every run reported "no
+  // ADMIN tab on this page" — harmless for the export, which reaches the grid
+  // by URL anyway, but it had decisions telling people their account might
+  // lack the team view when the tab was on screen the whole time, two
+  // characters from what the selector was looking for.
+  adminTab: 'text=/^\\s*(ADMIN|MANAGER)\\s*$/i',
   // Not just <table>: most data grids of this vintage are divs that announce
   // themselves through ARIA instead. Emburse's is one of them.
   grid: 'table, [role="grid"], [role="table"], [role="rowgroup"]',
@@ -164,7 +170,7 @@ export const STEP_SELECTORS: Record<string, SelectorKey[]> = {
   "open Emburse": [],
   "sign in": ["loginEmail", "loginPassword", "loginSubmit", "loggedIn",
               "mfaCode", "mfaSubmit", "mfaRemember"],
-  "switch to ADMIN": ["adminTab"],
+  "switch to the team view": ["adminTab"],
   "open the filtered grid": ["gridPath", "grid"],
   "read the item count": ["itemCount"],
   "open the export dialog": ["exportButton", "dialog"],
@@ -184,7 +190,7 @@ export const SELECTOR_HELP: Record<SelectorKey, string> = {
   mfaCode: "The box for the verification code, on the \u201cverify this device\u201d screen.",
   mfaSubmit: "The button that submits that code.",
   mfaRemember: "The \u201cremember this device\u201d tick box. Ticking it is what stops the code being asked for every run.",
-  adminTab: "The ADMIN tab, top left. PERSONAL would export one person's expenses.",
+  adminTab: "The team-wide tab, top left — ADMIN on some tenants, MANAGER on others. PERSONAL would export one person's own expenses.",
   grid: "The transactions table itself — used to tell the page has loaded. The item-count line is accepted instead, so this missing is not fatal.",
   itemCount: "The \u201cN items, $X\u201d line above the grid.",
   gridPath: "Path to the transactions grid. Filters are added as query parameters.",
@@ -1165,24 +1171,30 @@ async function runSteps(
 
   if (!(await step("sign in", async () => signIn(page, sel, login, url, opts.onChallenge)))) return false;
 
-  if (!(await step("switch to ADMIN", async () => {
-    // Emburse reopens on whichever of ADMIN / PERSONAL was last used, and
-    // PERSONAL holds only this account's own expenses.
+  if (!(await step("switch to the team view", async () => {
+    // Emburse reopens on whichever of the team tab / PERSONAL was last used,
+    // and PERSONAL holds only this account's own expenses. The tab is called
+    // ADMIN on some tenants and MANAGER on others.
     const tab = page.locator(sel.adminTab).first();
     // Same reasoning as sign-in: the app renders after load, so give the tab a
     // chance to exist before concluding it does not.
     await tab.waitFor({ state: "visible" }).catch(() => {});
     if (await tab.isVisible().catch(() => false)) {
       await tab.click();
-      return "clicked ADMIN";
+      return "clicked the team-wide tab";
     }
     // Absence is only acceptable if this is the app at all. Treating a missing
     // element as "fine" is how a failed sign-in got reported as three green
     // steps and then a thirty-second timeout on the one that could not skip.
+    // Tolerated here because the grid is reached by URL a step later, so the
+    // export does not depend on the click — which is also why this said "no
+    // ADMIN tab" on every run of a MANAGER tenant for weeks without anyone
+    // noticing the selector was simply wrong.
     if (await page.locator(sel.loggedIn).first().isVisible().catch(() => false)) {
-      return "no ADMIN tab on this page, but the app is loaded";
+      return `no tab matched ${sel.adminTab}, but the app is loaded — the grid is opened by URL next, ` +
+        `so this only matters if that comes back empty`;
     }
-    throw new Error(`no ADMIN tab and the app is not loaded — at ${page.url()}`);
+    throw new Error(`no team-wide tab and the app is not loaded — at ${page.url()}`);
   }))) return false;
 
   if (!(await step("open the filtered grid", async () => {

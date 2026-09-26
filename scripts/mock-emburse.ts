@@ -180,7 +180,11 @@ app.get("/", (_req, res) => {
     res.redirect("/identity");
     return;
   }
-  const nav = `<a href="/admin">ADMIN</a> <a href="/personal">PERSONAL</a>` +
+  // MANAGER, not ADMIN. Emburse names the team-wide tab per tenant and the
+  // real one this app runs against calls it MANAGER — which the shipped
+  // selector matched for weeks only because nothing depended on the click.
+  // A mock that renders ADMIN would let that selector regress unnoticed.
+  const nav = `<a href="/admin">MANAGER</a> <a href="/personal">PERSONAL</a>` +
     (state.showNavLabel ? ` <a href="/transactions">Transactions</a>` : ` <a href="/transactions">Spend</a>`);
 
   if (state.appPaintMs > 0) {

@@ -87,14 +87,27 @@ try {
     console.log("\nDATABASE_URL not set — skipping the remembered-device check.");
   }
 
-  console.log("\nAn account with no ADMIN tab");
+  console.log("\nAn account with no team-wide tab");
   await set("/__reset");
   const noAdmin = await testConnection({ ...sel, adminTab: "a.no-such-admin-tab" }, mock.url, login);
-  const adminStep = noAdmin.steps.find((s) => /ADMIN/i.test(s.name));
-  check("a missing ADMIN tab is called out, not passed over silently",
-    /NO ADMIN TAB/.test(adminStep?.detail ?? ""), adminStep?.detail);
+  const adminStep = noAdmin.steps.find((s) => /team view/i.test(s.name));
+  check("a missing team tab is called out, not passed over silently",
+    /no team-wide tab matched/.test(adminStep?.detail ?? ""), adminStep?.detail);
   check("…and it says what that means for deciding",
     /team view/i.test(adminStep?.detail ?? ""), adminStep?.detail);
+  // Emburse names this tab ADMIN on some tenants and MANAGER on others, and
+  // while the selector matched only ADMIN this step told a MANAGER tenant
+  // their account might lack a view that was on screen the whole time. So the
+  // message has to name the selector it tried, not only blame the account.
+  check("…and names the selector, since a wrong one looks exactly like this",
+    (adminStep?.detail ?? "").includes("a.no-such-admin-tab"), adminStep?.detail);
+
+  console.log("\nA tenant whose tab is MANAGER rather than ADMIN");
+  await set("/__reset");
+  const shipped = await testConnection(sel, mock.url, login);
+  const shippedStep = shipped.steps.find((s) => /team view/i.test(s.name));
+  check("the shipped selector matches whichever name this tenant uses",
+    !/no team-wide tab matched/.test(shippedStep?.detail ?? ""), shippedStep?.detail);
 
   console.log("\nA grid that does not appear");
   await set("/__reset");
