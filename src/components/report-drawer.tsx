@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { X, ReceiptText, AlertTriangle, ScanSearch, Loader2, Eye } from "lucide-react";
-import { auditReport, type AuditResult, type ExpenseLine, type ExpenseReport } from "@/lib/api";
+import { type AuditResult, type ExpenseLine, type ExpenseReport } from "@/lib/api";
+import { verdictFor } from "@/lib/receipt-verdict";
 import { moneyExact, shortDate } from "@/lib/format";
 import { useDecisions } from "@/lib/decisions";
 import { StatusPill } from "./ui";
@@ -37,9 +38,6 @@ export function ReportDrawer({
   // Only the lines in this drawer, and only those with a receipt: asking about
   // every expense to show a handful would be the whole queue per open.
   const items = useReceiptItems(report.lines.filter((l) => l.hasReceipt).map((l) => l.id));
-  const [audits, setAudits] = useState<Map<string, AuditResult>>(new Map());
-  const [checking, setChecking] = useState(false);
-  const [auditError, setAuditError] = useState("");
   const [decideError, setDecideError] = useState("");
 
   // Deciding from here rather than only from the queue: this is the window
@@ -70,21 +68,11 @@ export function ReportDrawer({
     if (!showDay) return [focused];
     return [focused, ...report.lines.filter((l) => l.id !== focused.id)];
   }, [report.lines, focused, showDay]);
+  /** The receipts the button will read: the ones currently listed. */
+  const toCheck = useMemo(() => ordered.filter((l) => l.hasReceipt), [ordered]);
   const lineIds = useMemo(() => report.lines.map((l) => l.id), [report.lines]);
   const { byExpense, canDecide, decide, cancel } = useDecisions(lineIds);
 
-  async function runCheck() {
-    setChecking(true);
-    setAuditError("");
-    try {
-      const results = await auditReport(report.id, days);
-      setAudits(new Map(results.map((r) => [r.lineId, r])));
-    } catch (err) {
-      setAuditError((err as Error).message);
-    } finally {
-      setChecking(false);
-    }
-  }
 
   // Escape closes the drawer — it covers the table behind it, so a reviewer
   // scanning the queue needs to dismiss it without reaching for the mouse.
@@ -215,31 +203,9 @@ export function ReportDrawer({
               <h3 className="text-xs font-bold tracking-wide text-muted-foreground uppercase">
                 Lines ({report.lines.length})
               </h3>
-              {receipted.length > 0 && (
-                <button
-                  type="button"
-                  onClick={runCheck}
-                  disabled={checking}
-                  title={
-                    auditConfigured
-                      ? `Read each receipt and compare its total to the claim (${receipted.length} receipts)`
-                      : "Receipt checking needs ANTHROPIC_API_KEY"
-                  }
-                  className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-semibold transition-colors hover:bg-muted disabled:opacity-60"
-                >
-                  {checking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ScanSearch className="h-3.5 w-3.5" />}
-                  {checking ? "Reading receipts…" : `Check ${receipted.length} receipt${receipted.length === 1 ? "" : "s"}`}
-                </button>
-              )}
             </div>
 
-            {auditError && (
-              <p className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                {auditError}
-              </p>
-            )}
-
-            {audits.size > 0 && (
+            {toCheck.length > 0 && (
               <p className="mb-2 text-xs text-muted-foreground">
                 A difference is a prompt to look, not proof of an error — split bills, later tips and
                 excluded personal items all show up here legitimately.
@@ -257,7 +223,7 @@ export function ReportDrawer({
                     line={l}
                     department={report.department}
                     flagged={flaggedLineIds.has(l.id)}
-                    audit={audits.get(l.id)}
+                    audit={verdictFor(l.amount, items.data?.byExpense?.[l.id]?.[0]?.total, l.id) ?? undefined}
                     items={items.data?.byExpense?.[l.id]}
                     itemsLoading={items.isLoading}
                     itemsEnabled={items.data?.enabled ?? false}

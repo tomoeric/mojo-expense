@@ -55,7 +55,21 @@ try {
   check("the model receipts use is materially cheaper than the one it replaced",
     haiku * 4 < opus, `haiku $${haiku.toFixed(2)} vs opus $${opus.toFixed(2)}`);
 
-  console.log("\nA model nobody has priced");
+  console.log("\nThe dated build the API actually answers with");
+// The request says "claude-haiku-4-5"; the response says
+// "claude-haiku-4-5-20251001", and that is what gets recorded. Filing the
+// dated name verbatim meant the cost page reported "no published price on
+// file" for the one model every call was using, and every total read as a
+// dash — a meter that measured nothing while looking like it worked.
+check("a dated build is priced as its family",
+  costOf("claude-haiku-4-5-20251001", { input: 1e6, output: 0, cacheRead: 0, cacheWrite: 0 }) === 1,
+  String(costOf("claude-haiku-4-5-20251001", { input: 1e6, output: 0, cacheRead: 0, cacheWrite: 0 })));
+check("…and the undated one still is",
+  costOf("claude-haiku-4-5", { input: 1e6, output: 0, cacheRead: 0, cacheWrite: 0 }) === 1);
+check("a dated build of an unknown family is still unpriced, not guessed at",
+  costOf("claude-mystery-9-20260101", { input: 1e6, output: 0, cacheRead: 0, cacheWrite: 0 }) === null);
+
+console.log("\nA model nobody has priced");
   check("has no price rather than a made-up one",
     costOf("claude-from-the-future", { input: 1e6, output: 0, cacheRead: 0, cacheWrite: 0 }) === null);
 

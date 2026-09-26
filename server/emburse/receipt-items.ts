@@ -125,6 +125,12 @@ ALTER TABLE receipt_items    ADD COLUMN IF NOT EXISTS alcohol  boolean NOT NULL 
 -- an order summary reading "1 Item $141.24" is perfectly readable and says
 -- nothing, and a rule over line items can conclude nothing from it either way.
 ALTER TABLE receipt_readings ADD COLUMN IF NOT EXISTS itemised boolean;
+-- How many times reading this image has been tried. A failed read leaves a
+-- row with an error set, which used to still count as unread, so it was
+-- retried every pass, for ever. When a bad request made every read fail, the
+-- reader spent hundreds of model calls re-failing on the same receipts with
+-- nothing being imported at all.
+ALTER TABLE receipt_readings ADD COLUMN IF NOT EXISTS attempts integer NOT NULL DEFAULT 0;
 `;
 
 let ready: Promise<void> | null = null;
@@ -226,6 +232,8 @@ export async function extractReceipt(
 
   let reading: ReceiptReading | null = null;
   let error: string | null = null;
+  /** True when trying again cannot possibly give a different answer. */
+  let permanent = false;
   try {
     reading = await readReceipt(blob.bytes, blob.content_type);
   } catch (err) {
@@ -234,6 +242,11 @@ export async function extractReceipt(
     // being shown a status code from a gateway they have never heard of.
     error = describeAiConfig(err)
       ?? (err instanceof Error ? err.message.slice(0, 500) : "The receipt could not be read.");
+    // A malformed request fails the same way every time, so retrying it is
+    // spending money to be told the same thing. Sending an unsupported
+    // parameter failed every read in the queue that way, three times each.
+    // A timeout or a rate limit is worth another go.
+    permanent = /\b400\b|invalid_request_error|does not support/i.test(error);
   }
 
   const client2 = await db().connect();
@@ -242,19 +255,31 @@ export async function extractReceipt(
     await client2.query(
       `INSERT INTO receipt_readings
          (sha256, extracted_at, model, legible, merchant, purchased_at, currency,
-          subtotal_cents, tax_cents, tip_cents, total_cents, notes, error, itemised)
-       VALUES ($1, now(), $2, $3, $4, NULLIF($5,'')::date, $6, $7, $8, $9, $10, $11, $12, $13)
+          subtotal_cents, tax_cents, tip_cents, total_cents, notes, error, itemised, attempts)
+       VALUES ($1, now(), $2, $3, $4, NULLIF($5,'')::date, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        ON CONFLICT (sha256) DO UPDATE SET
          extracted_at = now(), model = EXCLUDED.model, legible = EXCLUDED.legible,
          merchant = EXCLUDED.merchant, purchased_at = EXCLUDED.purchased_at,
          currency = EXCLUDED.currency, subtotal_cents = EXCLUDED.subtotal_cents,
          tax_cents = EXCLUDED.tax_cents, tip_cents = EXCLUDED.tip_cents,
          total_cents = EXCLUDED.total_cents, notes = EXCLUDED.notes, error = EXCLUDED.error,
-         itemised = EXCLUDED.itemised`,
+         itemised = EXCLUDED.itemised,
+         -- Counted on the row rather than passed in, so a retry increments
+         -- whatever is already there. A success resets it to zero: the next
+         -- time this image is re-read, for a new extracted field say, it
+         -- starts with a full allowance rather than an exhausted one.
+         -- Success resets the allowance. A failure the caller has already
+         -- marked as final (it arrives at the cap) stays there; anything else
+         -- increments what is stored, so a retry counts against the row
+         -- rather than starting over.
+         attempts = CASE WHEN EXCLUDED.error IS NULL THEN 0
+                         WHEN EXCLUDED.attempts >= ${MAX_ATTEMPTS} THEN EXCLUDED.attempts
+                         ELSE receipt_readings.attempts + 1 END`,
       [sha256, env.audit.model, reading?.legible ?? false, reading?.merchant ?? null,
        reading?.purchasedAt ?? "", reading?.currency ?? null,
        cents(reading?.subtotal), cents(reading?.tax), cents(reading?.tip), cents(reading?.total),
-       reading?.notes ?? "", error, reading ? reading.itemised === true : null],
+       reading?.notes ?? "", error, reading ? reading.itemised === true : null,
+       error === null ? 0 : permanent ? MAX_ATTEMPTS : 1],
     );
 
     // Replaced wholesale rather than merged: a re-read is a new opinion about
@@ -337,13 +362,40 @@ export async function detailsForExpenses(keys: string[]): Promise<Map<string, Re
 }
 
 /** Receipts we hold an image for but have never read. */
+/**
+ * How many times a failing image is retried before it is left alone.
+ *
+ * A transient failure — a timeout, a rate limit — deserves another go. A
+ * permanent one does not, and the loop could not tell them apart: any read
+ * that errored still looked unread, so it came round again on the next pass.
+ * The morning a bad request made EVERY read fail, that was several hundred
+ * model calls spent re-failing on the same receipts while nothing was being
+ * imported.
+ */
+const MAX_ATTEMPTS = 3;
+
+/** Receipts we hold an image for and have not yet read successfully. */
 export async function unreadReceipts(limit: number): Promise<string[]> {
   await ensure();
   const { rows } = await db().query<{ sha256: string }>(
     `SELECT b.sha256 FROM receipt_blobs b
-      WHERE NOT EXISTS (SELECT 1 FROM receipt_readings r WHERE r.sha256 = b.sha256 AND r.error IS NULL)
-      ORDER BY b.created_at DESC LIMIT $1`, [limit]);
+      WHERE NOT EXISTS (
+              SELECT 1 FROM receipt_readings r
+               WHERE r.sha256 = b.sha256
+                 -- Read, or tried enough times that trying again is just
+                 -- spending money to get the same answer.
+                 AND (r.error IS NULL OR r.attempts >= $2))
+      ORDER BY b.created_at DESC LIMIT $1`, [limit, MAX_ATTEMPTS]);
   return rows.map((r) => r.sha256);
+}
+
+/** Receipts given up on, which is a number somebody should be able to see. */
+export async function unreadableReceipts(): Promise<number> {
+  await ensure();
+  const { rows } = await db().query<{ n: string }>(
+    `SELECT count(*) AS n FROM receipt_readings
+      WHERE error IS NOT NULL AND attempts >= $1`, [MAX_ATTEMPTS]);
+  return Number(rows[0]?.n ?? 0);
 }
 
 export const canReadReceipts = (): boolean => isAuditConfigured() && isDbConfigured();

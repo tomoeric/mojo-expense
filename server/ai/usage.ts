@@ -94,11 +94,25 @@ export async function recordAiUsage(
 }
 
 /** Dollars for one row's worth of tokens, or null when the model has no price. */
+/**
+ * The model id a price is filed under.
+ *
+ * The API answers with a dated build — "claude-haiku-4-5-20251001" — while
+ * prices are published against the family, "claude-haiku-4-5". Filing the
+ * dated one verbatim meant the cost table said "no published price on file"
+ * for the model every single call was using, and every total read as a dash.
+ */
+export function priceKey(model: string): string {
+  if (PRICES[model]) return model;
+  const undated = model.replace(/-\d{8}$/, "");
+  return PRICES[undated] ? undated : model;
+}
+
 export function costOf(
   model: string,
   t: { input: number; output: number; cacheRead: number; cacheWrite: number },
 ): number | null {
-  const p = PRICES[model];
+  const p = PRICES[priceKey(model)];
   if (!p) return null;
   const M = 1_000_000;
   return (

@@ -554,6 +554,25 @@ before a person did. Add to it before adding to the runner.
   photograph is extraction, not reasoning. Opus was the default and cost about
   five times as much per receipt — the single biggest saving here, and larger
   than the difference between billing routes.
+- **A failed read is retried three times, then left alone.** A read that
+  errored wrote a row with `error` set, which still counted as unread — so it
+  came back every pass, for ever. The morning a bad request made every read
+  fail, that was several hundred model calls spent re-failing on the same
+  receipts with nothing being imported. A request-shape error (400,
+  invalid_request, "does not support") is marked final immediately: retrying
+  it buys the same answer at the same price. Success resets the count.
+- **Price by FAMILY, not by the build the API answers with.** Requests say
+  `claude-haiku-4-5`; responses say `claude-haiku-4-5-20251001`, and that is
+  what gets recorded. Filing the dated name verbatim made the cost page say
+  "no published price on file" for the only model in use, and every total
+  read as a dash — a meter measuring nothing while looking like it worked.
+- **There is no "check this receipt" button, and should not be.** The total
+  is read once when the receipt arrives and stored; the verdict is a
+  subtraction over data already present (`src/lib/receipt-verdict.ts`). The
+  old button re-fetched the image, re-asked the model for a total it already
+  had, kept the answer in memory until restart, and only ran when somebody
+  remembered to press it. A check you have to remember to run is a check that
+  does not happen.
 - **Not every model takes `effort`.** Haiku 4.5 rejects it with a 400, and
   moving receipt reading to Haiku for the cost saving broke every read until
   the parameter came out. `supportsEffort()` is an allow-list and an
