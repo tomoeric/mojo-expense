@@ -6,7 +6,7 @@ import { hasCredential, listCredentials } from "../emburse/credentials.js";
 import { listTaxonomy } from "../import/taxonomy.js";
 import {
   ACTIONS, FIELDS, FIELD_LABEL, FIELD_LIST, MONEY_TOLERANCE_ABS, MONEY_TOLERANCE_PCT,
-  OPS, OP_LABEL, comparableTo, isGroupField, opLabel, opsFor,
+  OPS, OP_LABEL, YES_NO, comparableTo, isGroupField, opLabel, opsFor,
   type Action, type Condition, type Field, type Op, type RuleBody,
 } from "./engine.js";
 import {
@@ -101,6 +101,9 @@ rulesRouter.get("/rules/options", requireAuth, async (_req: Request, res: Respon
         // offer them there — a rule that counted its own conditions would be
         // circular, and the server refuses it anyway.
         mustOnly: isGroupField(f),
+        // A fixed yes/no rather than a box to type in: "Yes"/"yes"/"y"/"true"
+        // are four ways to write a rule that silently matches nothing.
+        choices: YES_NO.has(f) ? ["yes", "no"] : null,
       })),
       lists: {
         category: categories.entries.map((e) => e.name),

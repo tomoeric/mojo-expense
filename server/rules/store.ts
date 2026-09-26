@@ -234,6 +234,7 @@ export async function subjects(
     category: string | null; location: string | null; department: string | null;
     method: string | null; amount_cents: string; receipts: string; items: string | null;
     in_inbox: boolean; expense_date: string | null; receipt_total_cents: string | null;
+    alcohol: boolean | null; readable: boolean | null;
   }>(
     `SELECT e.dedupe_key, e.employee, e.merchant, e.note, e.category, e.location,
             e.department, e.method, e.amount_cents, e.in_inbox,
@@ -251,7 +252,21 @@ export async function subjects(
                JOIN receipt_readings rr ON rr.sha256 = r.sha256
               WHERE r.dedupe_key = e.dedupe_key
                 AND rr.error IS NULL
-                AND rr.total_cents IS NOT NULL) AS receipt_total_cents
+                AND rr.total_cents IS NOT NULL) AS receipt_total_cents,
+            -- Alcohol on any line the reader saw. NULL when no reading with
+            -- usable lines exists, so "cannot say" stays distinct from "no".
+            (SELECT bool_or(i.alcohol)
+               FROM expense_receipts r
+               JOIN receipt_readings rr ON rr.sha256 = r.sha256 AND rr.error IS NULL
+               JOIN receipt_items i ON i.sha256 = r.sha256
+              WHERE r.dedupe_key = e.dedupe_key) AS alcohol,
+            -- Did the reader get anything usable at all: legible AND listing
+            -- items. An order summary reading "1 Item $141.24" is legible and
+            -- answers nothing, so it counts as not readable for rule purposes.
+            (SELECT bool_or(rr.legible AND coalesce(rr.itemised, false))
+               FROM expense_receipts r
+               JOIN receipt_readings rr ON rr.sha256 = r.sha256 AND rr.error IS NULL
+              WHERE r.dedupe_key = e.dedupe_key) AS readable
        FROM expenses e
       ${keys ? "WHERE e.dedupe_key = ANY($1::text[])" : ""}`,
     keys ? [keys] : [],
@@ -270,6 +285,8 @@ export async function subjects(
     hasReceipt: Number(r.receipts) > 0,
     receiptItems: r.items ?? "",
     receiptTotalCents: r.receipt_total_cents === null ? null : Number(r.receipt_total_cents),
+    receiptAlcohol: r.alcohol,
+    receiptReadable: r.readable,
     inInbox: r.in_inbox,
     date: r.expense_date,
   }));

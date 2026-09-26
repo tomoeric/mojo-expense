@@ -72,6 +72,8 @@ export type Options = {
     comparable: { value: Field; label: string }[];
     /** Computed from the WHEN, so only offered in MUST. */
     mustOnly: boolean;
+    /** A fixed set of values for this field (yes/no), or null for free text. */
+    choices: string[] | null;
   }[];
   lists: Record<"category" | "location" | "department", string[]>;
   maxDecisionsPerRun: number;

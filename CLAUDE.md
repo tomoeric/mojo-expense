@@ -190,6 +190,25 @@ the blocks.
   could re-add themselves. The panel says so rather than implying a security
   property it does not have. Do not remove that warning without setting
   `AUTH_ADMINS`.
+- **The reader judges alcohol per line, and it is three-state.** A keyword
+  list never catches MODELO ESP 12PK, CAB SAUV GLS or TITOS; the model knows
+  what those are, so `alcohol` is a boolean on each extracted line and the
+  prompt names both the traps — brands that do not say "beer", and ginger
+  beer / O'Doul's / mocktails that are not alcohol. **Null is "cannot say",
+  never "no".** A receipt nobody could read is not a receipt with no alcohol
+  on it, and `test()` returns null for an unknown yes/no rather than falling
+  through to the text path, where "" vs "yes" would come back false and make
+  exactly that claim.
+- **`receiptReadable` is legible AND itemised.** An order summary reading
+  "1 Item $141.24" is perfectly legible and answers nothing, so for rule
+  purposes it is not readable. It exists so the hole in alcohol detection is
+  itself flaggable: the reader cannot see into a bar tab printed as one
+  "FOOD & BEV" line, and a rule can catch that rather than passing it.
+- **A yes/no field offers a dropdown, not a text box.** "Yes"/"yes"/"y"/
+  "true" are four ways to write a rule that silently matches nothing.
+- **Only receipts read AFTER the change carry it.** Readings are cached by
+  image content hash and are not re-read, so a new extracted field arrives as
+  the queue turns over rather than all at once.
 - **Rules can test receipt line items**, so `ensureRules()` creates the
   receipt-items tables too. Without that, an app with no working Anthropic key
   has no `receipt_items` table and every import's rule run dies on the join.

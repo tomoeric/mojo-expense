@@ -31,7 +31,8 @@ const expense = (over: Partial<Subject> = {}): Subject => ({
   note: "Gas for truck", category: "Auto Fee & Fuel", location: "Richland",
   department: "Operations and Field", method: "Corporate card", amountCents: 4512,
   hasReceipt: true, receiptItems: "UNLEADED REGULAR | MONSTER ENERGY", inInbox: true,
-  receiptTotalCents: 4512, date: "2026-09-18", ...over,
+  receiptTotalCents: 4512, receiptAlcohol: false, receiptReadable: true,
+  date: "2026-09-18", ...over,
 });
 
 const rule = (over: Partial<RuleBody> = {}): RuleBody => ({
@@ -307,6 +308,32 @@ check("a day total is never offered as something to compare against",
 check("and a rule that compares against one is refused",
   problems(rule({ must: { field: "receiptTotal", op: "is", value: "", compare: "dayTotal" } }))
     .some((p) => /cannot be compared/.test(p)));
+
+console.log("\nAlcohol on the receipt");
+// The reader judges the product, not the word — a keyword list never catches
+// MODELO ESP 12PK. But the field it produces is three-state, and the third
+// state is the one that matters: a receipt nobody could read is NOT a receipt
+// with no alcohol on it, and must never pass as one.
+check("a receipt with alcohol on it is caught",
+  test(expense({ receiptAlcohol: true }), { field: "receiptAlcohol", op: "is", value: "yes" }) === true);
+check("one without is not",
+  test(expense({ receiptAlcohol: false }), { field: "receiptAlcohol", op: "is", value: "yes" }) === false);
+check("and one nobody could judge is UNKNOWN, not clean",
+  test(expense({ receiptAlcohol: null }), { field: "receiptAlcohol", op: "is", value: "yes" }) === null);
+check("…so an alcohol rule does not fire on an unread receipt",
+  !fires(
+    evaluate(expense({ receiptAlcohol: null }), {
+      ...rule(), when: [{ field: "receiptAlcohol", op: "is", value: "yes" }], must: null,
+    }),
+    "flag",
+  ));
+check("the unreadable ones are findable on purpose, which is how the gap gets seen",
+  test(expense({ receiptAlcohol: null }), { field: "receiptAlcohol", op: "is_blank", value: "" }) === true);
+check("a receipt that could not be read is its own flag",
+  test(expense({ receiptReadable: false }), { field: "receiptReadable", op: "is", value: "no" }) === true);
+check("and “could not be judged” reads as that, not as blank",
+  opLabel("receiptAlcohol", "is_blank") === "could not be judged",
+  opLabel("receiptAlcohol", "is_blank"));
 
 console.log("\nWhat a rule is not allowed to be");
 check("a rule needs a name", problems(rule({ name: "  " })).some((p) => /needs a name/.test(p)));

@@ -206,7 +206,11 @@ function ConditionRow({
   const offered = (options?.fields ?? []).filter((f) => allowGroupFields || !f.mustOnly);
   const field = options?.fields.find((f) => f.value === condition.field);
   const ops = field?.ops ?? [];
-  const list = field?.list ? options?.lists[field.list] : undefined;
+  // A fixed yes/no comes back on the field itself; a taxonomy list comes from
+  // the permanent lists. Both render as a dropdown, for the same reason: a
+  // rule written against a value that cannot occur matches nothing and looks
+  // broken rather than wrong.
+  const list = field?.choices ?? (field?.list ? options?.lists[field.list] : undefined);
   const comparable = field?.comparable ?? [];
   const takesOperand = condition.op !== "is_blank" && condition.op !== "is_not_blank";
   const comparing = Boolean(condition.compare);

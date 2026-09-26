@@ -24,6 +24,13 @@ import { callAnthropic, describeAiConfig, supportsEffort } from "../ai.js";
 
 const Item = z.object({
   description: z.string().describe("The line as printed, tidied of obvious OCR noise but not reworded."),
+  alcohol: z.boolean().describe(
+    "True when this line is an alcoholic drink. Judge the product, not the words: MODELO ESP 12PK, " +
+    "CAB SAUV GLS, TITOS, LAGUNITAS IPA and BUD LT are all alcohol even though none of them says so. " +
+    "Non-alcoholic drinks that sound alcoholic are not: ginger beer, root beer, O'Doul's, a mocktail, " +
+    "non-alcoholic wine. When a line is too faded to tell what the product is, say false and mention " +
+    "it in notes rather than guessing.",
+  ),
   quantity: z.number().nullable().describe("Units, when the line states one. Null otherwise."),
   unitPrice: z.number().nullable().describe("Price per unit when printed separately. Null otherwise."),
   amount: z.number().nullable().describe("What this line cost in total. Null if unreadable."),
@@ -31,6 +38,11 @@ const Item = z.object({
 
 const Reading = z.object({
   legible: z.boolean().describe("False when the image is too poor to read items from at all."),
+  itemised: z.boolean().describe(
+    "True when the receipt lists what was bought. False for an order summary or a bar tab that shows " +
+    "only a total — which is not the same as an unreadable image, and matters because nothing can be " +
+    "judged from the lines of a receipt that has none.",
+  ),
   merchant: z.string().nullable().describe("Merchant name as printed, or null."),
   purchasedAt: z.string().nullable().describe("Transaction date as YYYY-MM-DD, or null."),
   currency: z.string().nullable().describe("ISO code such as USD, or null."),
@@ -105,6 +117,14 @@ CREATE TABLE IF NOT EXISTS receipt_items (
   amount_cents bigint,
   PRIMARY KEY (sha256, line_no)
 );
+-- Whether this line is an alcoholic drink, as the reader judged it. On the
+-- LINE rather than the receipt so a reviewer can be shown which lines, and so
+-- "a $9 beer on a $200 team dinner" and "a $200 bar tab" are distinguishable.
+ALTER TABLE receipt_items    ADD COLUMN IF NOT EXISTS alcohol  boolean NOT NULL DEFAULT false;
+-- Whether the receipt lists what was bought at all. Not the same as legible:
+-- an order summary reading "1 Item $141.24" is perfectly readable and says
+-- nothing, and a rule over line items can conclude nothing from it either way.
+ALTER TABLE receipt_readings ADD COLUMN IF NOT EXISTS itemised boolean;
 `;
 
 let ready: Promise<void> | null = null;
@@ -222,18 +242,19 @@ export async function extractReceipt(
     await client2.query(
       `INSERT INTO receipt_readings
          (sha256, extracted_at, model, legible, merchant, purchased_at, currency,
-          subtotal_cents, tax_cents, tip_cents, total_cents, notes, error)
-       VALUES ($1, now(), $2, $3, $4, NULLIF($5,'')::date, $6, $7, $8, $9, $10, $11, $12)
+          subtotal_cents, tax_cents, tip_cents, total_cents, notes, error, itemised)
+       VALUES ($1, now(), $2, $3, $4, NULLIF($5,'')::date, $6, $7, $8, $9, $10, $11, $12, $13)
        ON CONFLICT (sha256) DO UPDATE SET
          extracted_at = now(), model = EXCLUDED.model, legible = EXCLUDED.legible,
          merchant = EXCLUDED.merchant, purchased_at = EXCLUDED.purchased_at,
          currency = EXCLUDED.currency, subtotal_cents = EXCLUDED.subtotal_cents,
          tax_cents = EXCLUDED.tax_cents, tip_cents = EXCLUDED.tip_cents,
-         total_cents = EXCLUDED.total_cents, notes = EXCLUDED.notes, error = EXCLUDED.error`,
+         total_cents = EXCLUDED.total_cents, notes = EXCLUDED.notes, error = EXCLUDED.error,
+         itemised = EXCLUDED.itemised`,
       [sha256, env.audit.model, reading?.legible ?? false, reading?.merchant ?? null,
        reading?.purchasedAt ?? "", reading?.currency ?? null,
        cents(reading?.subtotal), cents(reading?.tax), cents(reading?.tip), cents(reading?.total),
-       reading?.notes ?? "", error],
+       reading?.notes ?? "", error, reading ? reading.itemised === true : null],
     );
 
     // Replaced wholesale rather than merged: a re-read is a new opinion about
@@ -244,10 +265,10 @@ export async function extractReceipt(
     for (const item of reading?.items ?? []) {
       if (!item.description.trim()) continue;
       await client2.query(
-        `INSERT INTO receipt_items (sha256, line_no, description, quantity, unit_cents, amount_cents)
-         VALUES ($1,$2,$3,$4,$5,$6)`,
+        `INSERT INTO receipt_items (sha256, line_no, description, quantity, unit_cents, amount_cents, alcohol)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
         [sha256, ++n, item.description.trim().slice(0, 300), item.quantity,
-         cents(item.unitPrice), cents(item.amount)],
+         cents(item.unitPrice), cents(item.amount), item.alcohol === true],
       );
     }
     await client2.query("COMMIT");

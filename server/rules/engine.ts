@@ -26,6 +26,7 @@
 export const FIELDS = [
   "note", "merchant", "category", "location", "department", "employee",
   "amount", "method", "receipt", "receiptItems", "receiptTotal",
+  "receiptAlcohol", "receiptReadable",
   "dayCount", "dayTotal",
 ] as const;
 export type Field = (typeof FIELDS)[number];
@@ -41,6 +42,8 @@ export const FIELD_LABEL: Record<Field, string> = {
   method: "Payment method",
   receipt: "Receipt",
   receiptItems: "Receipt line items",
+  receiptAlcohol: "Receipt shows alcohol",
+  receiptReadable: "Receipt could be read",
   receiptTotal: "Receipt total (read off the image)",
   dayCount: "Matching expenses that day",
   dayTotal: "Matching total that day",
@@ -96,6 +99,9 @@ export function comparableTo(field: Field): Field[] {
 }
 
 /** Fields whose values come from a permanent list, so the UI offers a dropdown. */
+/** Fields whose values are a fixed yes/no, so the UI offers exactly those. */
+export const YES_NO: ReadonlySet<Field> = new Set<Field>(["receiptAlcohol", "receiptReadable"]);
+
 export const FIELD_LIST: Partial<Record<Field, "category" | "location" | "department">> = {
   category: "category",
   location: "location",
@@ -133,6 +139,10 @@ export const OP_LABEL: Record<Op, string> = {
  * editor's so the rule reads the same everywhere it is printed.
  */
 export function opLabel(field: Field, op: Op): string {
+  if (YES_NO.has(field)) {
+    if (op === "is_blank") return "could not be judged";
+    if (op === "is_not_blank") return "was judged";
+  }
   if (MONEY.has(field)) {
     if (op === "is") return "equals";
     if (op === "is_not") return "does not equal";
@@ -150,6 +160,12 @@ export function opsFor(field: Field): Op[] {
   // or may have been unreadable. "is blank" is how you find those.
   if (field === "receiptTotal") return ["is", "is_not", "gt", "lt", "is_blank", "is_not_blank"];
   if (field === "receipt") return ["is_blank", "is_not_blank"];
+  // Yes/no, plus a way to find the ones nobody could answer for. "is blank"
+  // on these means the reader never got far enough to say — an unread
+  // receipt, an unreadable one, or one with no line items on it.
+  if (field === "receiptAlcohol" || field === "receiptReadable") {
+    return ["is", "is_not", "is_blank", "is_not_blank"];
+  }
   return ["contains", "not_contains", "is", "is_not", "starts_with", "is_blank", "is_not_blank"];
 }
 
@@ -198,6 +214,21 @@ export type Subject = {
   /** Every line item read off the attached receipts, joined. */
   receiptItems: string;
   /**
+   * Whether any line the reader saw is an alcoholic drink.
+   *
+   * Null when nothing has been read — no receipt, an unread one, or a
+   * receipt that lists no items at all. Null is "cannot say", never "no
+   * alcohol": treating an unreadable bar tab as clean is the exact mistake
+   * this field exists to avoid.
+   */
+  receiptAlcohol: boolean | null;
+  /**
+   * Whether the reader got anything usable off the image — legible AND
+   * itemised. False is the honest answer to "is there alcohol on this?" being
+   * unanswerable, and is worth a human look in its own right.
+   */
+  receiptReadable: boolean | null;
+  /**
    * The total read off the receipt image, in cents — null when no receipt has
    * been read, which is NOT the same as zero and must never be treated as a
    * mismatch.
@@ -235,6 +266,12 @@ function textOf(subject: Subject, field: Field): string {
     case "method": return subject.method;
     case "receiptItems": return subject.receiptItems;
     case "receipt": return subject.hasReceipt ? "receipt" : "";
+    // Rendered as yes/no so a rule reads "Receipt shows alcohol is yes".
+    // Null stays empty, which no comparison matches — an unknown never fires.
+    case "receiptAlcohol":
+      return subject.receiptAlcohol === null ? "" : subject.receiptAlcohol ? "yes" : "no";
+    case "receiptReadable":
+      return subject.receiptReadable === null ? "" : subject.receiptReadable ? "yes" : "no";
     case "amount": return (subject.amountCents / 100).toFixed(2);
     case "receiptTotal":
       return subject.receiptTotalCents === null ? "" : (subject.receiptTotalCents / 100).toFixed(2);
@@ -290,6 +327,17 @@ export function test(subject: Subject, c: Condition, group?: Group): boolean | n
       case "is_not": return Math.abs(got - want) > slack;
       default: return false;
     }
+  }
+
+  // A yes/no the reader could not answer is UNKNOWN, not "no". Falling
+  // through to the text path would compare "" against "yes" and return false,
+  // which reads as "there is no alcohol on this receipt" — the exact claim
+  // this field must never make about a receipt nobody could read.
+  if (YES_NO.has(c.field)) {
+    const known = textOf(subject, c.field) !== "";
+    if (c.op === "is_blank") return !known;
+    if (c.op === "is_not_blank") return known;
+    if (!known) return null;
   }
 
   const got = norm(textOf(subject, c.field));
