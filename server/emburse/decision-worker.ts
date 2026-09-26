@@ -4,6 +4,7 @@ import { credentialForUser } from "./credentials.js";
 import { runDecisions, type BatchItem } from "./decide.js";
 import { waitForCode } from "./challenge.js";
 import { pendingDecisions, settleDecision } from "./decisions.js";
+import { getFlag } from "../flags.js";
 
 /**
  * Apply queued decisions, in batches, on one browser session.
@@ -76,6 +77,10 @@ async function tick(): Promise<void> {
         onChallenge: (ctx) => waitForCode({ ...ctx, owner: decider }),
       });
 
+      // Read once per batch, not per decision: it is the same answer for all
+      // of them and this runs while a browser is held open.
+      const tracing = await getFlag("traceDecisions").catch(() => false);
+
       for (const item of items) {
         const run = results.get(item.id);
         if (!run) continue; // never attempted; stays pending for the next pass
@@ -84,6 +89,7 @@ async function tick(): Promise<void> {
           run.ok
             ? { ok: true, matchedRow: run.matchedRow }
             : { ok: false, error: run.steps.find((s) => !s.ok)?.detail ?? "The decision did not go through." },
+          tracing ? run.steps : null,
         );
       }
       const applied = [...results.values()].filter((r) => r.ok).length;

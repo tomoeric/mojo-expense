@@ -17,6 +17,9 @@ import type { Decision, Target } from "./decide.js";
 
 export type DecisionState = "pending" | "applied" | "failed" | "cancelled";
 
+/** One stage of the browser run, as the export log already reports them. */
+export type DecisionStep = { name: string; ok: boolean; detail: string; ms: number };
+
 export type QueuedDecision = {
   id: number;
   dedupeKey: string;
@@ -32,6 +35,11 @@ export type QueuedDecision = {
   error: string | null;
   /** What the expense looked like when it was decided, for the record. */
   target: Target;
+  /**
+   * Every stage of the run, when tracing is on. Null when it is off, which is
+   * the default — so a missing trace means "not recorded", never "no steps".
+   */
+  steps: DecisionStep[] | null;
 };
 
 const SCHEMA = `
@@ -68,6 +76,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS expense_decisions_one_pending
 -- than left in place: with it, purging an expense silently takes the record of
 -- its decision along too.
 ALTER TABLE expense_decisions DROP CONSTRAINT IF EXISTS expense_decisions_dedupe_key_fkey;
+-- The step-by-step trace of the browser run, kept only when the trace flag is
+-- on. Before this, a failure was one line of text and the question "where did
+-- it stop" could only be answered by approving a real expense and watching.
+ALTER TABLE expense_decisions ADD COLUMN IF NOT EXISTS steps jsonb;
 `;
 
 let ready: Promise<void> | null = null;
@@ -80,6 +92,7 @@ type Row = {
   id: string; dedupe_key: string; decision: Decision; reason: string | null;
   decided_by: string; decided_at: Date; state: DecisionState; attempts: number;
   applied_at: Date | null; matched_row: string | null; error: string | null; target: Target;
+  steps: DecisionStep[] | null;
 };
 
 const shape = (r: Row): QueuedDecision => ({
@@ -95,10 +108,11 @@ const shape = (r: Row): QueuedDecision => ({
   matchedRow: r.matched_row,
   error: r.error,
   target: r.target,
+  steps: r.steps ?? null,
 });
 
 const COLUMNS = `id, dedupe_key, decision, reason, decided_by, decided_at, state,
-                 attempts, applied_at, matched_row, error, target`;
+                 attempts, applied_at, matched_row, error, target, steps`;
 
 /**
  * Record a decision, to be applied on the next pass.
@@ -191,6 +205,12 @@ export async function cancelDecision(id: number, by: string): Promise<boolean> {
 export async function settleDecision(
   id: number,
   outcome: { ok: true; matchedRow: string | null } | { ok: false; error: string },
+  /**
+   * The browser run, step by step. Stored only when the trace flag is on, and
+   * on a SUCCESS as well as a failure — "it worked, here is how" is what makes
+   * a later failure readable by comparison.
+   */
+  steps?: DecisionStep[] | null,
 ): Promise<void> {
   await ensure();
   await db().query(
@@ -199,13 +219,15 @@ export async function settleDecision(
             attempts   = attempts + 1,
             applied_at = CASE WHEN $2 = 'applied' THEN now() ELSE applied_at END,
             matched_row = COALESCE($3, matched_row),
-            error      = $4
+            error      = $4,
+            steps      = COALESCE($5::jsonb, steps)
       WHERE id = $1`,
     [
       id,
       outcome.ok ? "applied" : "failed",
       outcome.ok ? outcome.matchedRow : null,
       outcome.ok ? null : outcome.error.slice(0, 1000),
+      steps && steps.length > 0 ? JSON.stringify(steps) : null,
     ],
   );
 }

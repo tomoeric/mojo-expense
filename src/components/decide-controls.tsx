@@ -122,8 +122,41 @@ function FailedBadge({ decision, word }: { decision: QueuedDecision; word: strin
           {decision.attempts > 1 && (
             <span className="mt-1 block opacity-70">Tried {decision.attempts} times.</span>
           )}
+          <DecisionSteps steps={decision.steps} />
         </span>
       )}
+    </span>
+  );
+}
+
+/**
+ * The browser run, stage by stage — where it got to and what stopped it.
+ *
+ * A failed decision used to be one sentence, so "it did not go through" and
+ * "it signed in, found the row, and the Approve button was not where we
+ * looked" were the same message. The steps are the difference between a
+ * wrong password, a device check, an account without the team view, and a
+ * renamed button — four causes with four different fixes.
+ *
+ * Only present when the trace is switched on in Configuration, so nothing
+ * here should imply the run had no steps when it is absent.
+ */
+function DecisionSteps({ steps }: { steps: QueuedDecision["steps"] }) {
+  if (!steps || steps.length === 0) return null;
+  return (
+    <span className="mt-2 block border-t border-amber-500/30 pt-1.5">
+      {steps.map((st, i) => (
+        <span key={i} className="flex items-start gap-1.5 py-0.5">
+          <span className={st.ok ? "text-emerald-600" : "text-red-600"}>{st.ok ? "\u2713" : "\u2717"}</span>
+          <span className="min-w-0">
+            <strong className="font-semibold">{st.name}</strong>
+            {st.detail && <span className="block opacity-80">{st.detail}</span>}
+          </span>
+          <span className="ml-auto shrink-0 tabular-nums opacity-60">
+            {(st.ms / 1000).toFixed(1)}s
+          </span>
+        </span>
+      ))}
     </span>
   );
 }

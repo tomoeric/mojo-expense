@@ -59,6 +59,16 @@ the blocks.
   name one expense and describe another.
 - **A denial needs a reason**, enforced in `queueDecision` rather than only in
   the dialog.
+- **The step-by-step trace is a switch in Configuration**, off by default
+  (`app_flags.traceDecisions`). The browser run already produced the steps and
+  threw all but the first failing line away, so "it did not go through"
+  covered a wrong password, a device check, an account with no team view and
+  a renamed button — four causes, four fixes, one message. With it on, each
+  decision keeps every stage with its timing, successes included, because
+  "it worked, and here is how" is what makes the next failure readable.
+  `settleDecision` COALESCEs the column, so a retry cannot erase a trace that
+  was already captured. A null trace means NOT RECORDED and must never be
+  shown as "no steps".
 - **A failed decision must be re-doable, and must say why it failed.** A
   failure leaves the expense UNDECIDED in Emburse, so a badge with no action
   strands the row — which is exactly what happened the first time a reviewer

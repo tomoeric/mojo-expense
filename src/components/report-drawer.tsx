@@ -57,11 +57,19 @@ export function ReportDrawer({
   const showing = receipted.find((l) => l.id === showingId) ?? receipted[0] ?? null;
 
   const focused = report.lines.find((l) => l.id === focusId) ?? null;
+  // Only the clicked expense, unless the rest is asked for. One receipt
+  // against one claim is the review; the others from that person's day are
+  // occasionally useful context and never the subject, and listing them made
+  // the drawer read as a bundle no matter what the header said. A day rule
+  // needs the whole set, but the queue has a better place for that — the
+  // flag count filters to the group.
+  const [showDay, setShowDay] = useState(false);
   // The clicked expense first, the rest of that person's day after it.
-  const ordered = useMemo(
-    () => (focused ? [focused, ...report.lines.filter((l) => l.id !== focused.id)] : report.lines),
-    [report.lines, focused],
-  );
+  const ordered = useMemo(() => {
+    if (!focused) return report.lines;
+    if (!showDay) return [focused];
+    return [focused, ...report.lines.filter((l) => l.id !== focused.id)];
+  }, [report.lines, focused, showDay]);
   const lineIds = useMemo(() => report.lines.map((l) => l.id), [report.lines]);
   const { byExpense, canDecide, decide, cancel } = useDecisions(lineIds);
 
@@ -128,11 +136,15 @@ export function ReportDrawer({
                 .join(" · ")}
             </p>
             {focused && report.lines.length > 1 && (
-              // Said plainly rather than implied by a count in the heading:
-              // the other expenses are context for this one, not the subject.
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                {report.lines.length - 1} more from {report.employeeName} that day, below.
-              </p>
+              <button
+                type="button"
+                onClick={() => setShowDay((v) => !v)}
+                className="mt-0.5 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+              >
+                {showDay
+                  ? `Hide the other ${report.lines.length - 1} from ${report.employeeName} that day`
+                  : `${report.lines.length - 1} more from ${report.employeeName} that day — show`}
+              </button>
             )}
           </div>
           <button
@@ -154,7 +166,10 @@ export function ReportDrawer({
 
         <div className="min-w-0 flex-1 space-y-5 overflow-y-auto px-5 py-5">
           <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Fact label="Total" value={moneyExact(report.total)} />
+            <Fact
+              label="Total"
+              value={moneyExact(focused && !showDay ? focused.amount : report.total)}
+            />
             <Fact label="Reimbursable" value={moneyExact(report.reimbursableTotal)} />
             <Fact label="Submitted" value={shortDate(report.submittedDate)} />
             <Fact label="Approved" value={shortDate(report.approvedDate)} />

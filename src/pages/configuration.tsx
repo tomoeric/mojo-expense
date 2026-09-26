@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Loader2, Tags, MapPin, Building2, ChevronRight, Sparkles, CheckCircle2, AlertTriangle,
+  Loader2, Tags, MapPin, Building2, ChevronRight, Sparkles, CheckCircle2, AlertTriangle, ListChecks,
   type LucideIcon,
 } from "lucide-react";
 import { Empty } from "@/components/ui";
@@ -185,6 +185,8 @@ export function ConfigurationPage({ onOpen, isAdmin }: { onOpen: (key: ConfigPag
 
       <AiConnection isAdmin={isAdmin} />
 
+      <DecisionTrace isAdmin={isAdmin} />
+
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {ENTRIES.map(({ key, kind, label, Icon, blurb }) => {
           const n = counts.data?.counts[kind];
@@ -319,6 +321,76 @@ function Fig({ label, value, sub }: { label: string; value: string; sub: string 
       <p className="text-lg font-bold tnum">{value}</p>
       <p className="text-xs text-muted-foreground">
         {label} · {sub}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * The small admin switches.
+ *
+ * Only one so far, and it earns its place: before it, the only way to learn
+ * WHERE an approval failed was to approve a real expense and read a
+ * one-sentence error that could mean a wrong password, a device check, an
+ * account without the team view, or a renamed button — four causes, four
+ * different fixes, one message.
+ *
+ * Off by default, and said plainly rather than left to be discovered: it
+ * attaches a browser transcript to every decision, which a working queue has
+ * no use for.
+ */
+function DecisionTrace({ isAdmin }: { isAdmin: boolean }) {
+  const qc = useQueryClient();
+  const { data } = useQuery<Record<string, boolean>>({
+    queryKey: ["flags"],
+    enabled: isAdmin,
+    queryFn: async () => {
+      const res = await fetch("/api/flags");
+      if (!res.ok) throw new Error("Could not read the settings");
+      return (await res.json()) as Record<string, boolean>;
+    },
+  });
+  const [busy, setBusy] = useState(false);
+  if (!isAdmin || !data) return null;
+  const on = Boolean(data.traceDecisions);
+
+  const toggle = async () => {
+    setBusy(true);
+    try {
+      await fetch("/api/flags/traceDecisions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled: !on }),
+      });
+      await qc.invalidateQueries({ queryKey: ["flags"] });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-border p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <ListChecks className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <p className="text-sm font-semibold">Record every step of an approve or deny</p>
+        <button
+          type="button"
+          onClick={toggle}
+          disabled={busy}
+          className={`ml-auto rounded-lg border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50 ${
+            on
+              ? "border-emerald-600/40 bg-emerald-600/10 text-emerald-700"
+              : "border-border hover:bg-muted"
+          }`}
+        >
+          {busy ? "Saving…" : on ? "On" : "Off"}
+        </button>
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">
+        With this on, each decision keeps the browser run stage by stage — signing in, switching to
+        the team view, finding the row, verifying it, clicking. Open a failed decision to read it.
+        Turn it on to work out <em>where</em> something fails; turn it off once it works, because a
+        healthy queue has no use for a transcript on every row.
       </p>
     </div>
   );

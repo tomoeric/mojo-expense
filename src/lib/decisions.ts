@@ -24,6 +24,12 @@ export type QueuedDecision = {
   appliedAt: string | null;
   matchedRow: string | null;
   error: string | null;
+  /**
+   * The browser run stage by stage, when the trace is switched on in
+   * Configuration. Null means it was not recorded — never that there were
+   * no steps.
+   */
+  steps: { name: string; ok: boolean; detail: string; ms: number }[] | null;
 };
 
 export type Challenge = {

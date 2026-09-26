@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { allFlags, setFlag, FLAGS, type FlagKey } from "./flags.js";
 import { aiSpend } from "./ai/usage.js";
 import { env, isAuditConfigured, isEmburseConfigured } from "./env.js";
 import { TtlCache } from "./cache.js";
@@ -125,6 +126,33 @@ api.post("/ai-check", requireAuth, requireAdmin, async (_req, res) => {
 api.get("/ai-usage", requireAuth, requireAdmin, async (_req, res) => {
   try {
     res.json(await aiSpend());
+  } catch (err) {
+    res.status(500).json({ error: describe(err) });
+  }
+});
+
+/**
+ * The small admin switches. Reading them is open to any signed-in user,
+ * because the queue needs to know whether to offer a trace; setting them is
+ * admin, because they change what the server records.
+ */
+api.get("/flags", requireAuth, async (_req, res) => {
+  try {
+    res.json(await allFlags());
+  } catch (err) {
+    res.status(500).json({ error: describe(err) });
+  }
+});
+
+api.post("/flags/:key", requireAuth, requireAdmin, async (req, res) => {
+  const key = String(req.params.key);
+  if (!(key in FLAGS)) {
+    res.status(404).json({ error: `There is no “${key}” setting.` });
+    return;
+  }
+  try {
+    await setFlag(key as FlagKey, Boolean((req.body as { enabled?: unknown })?.enabled), req.user?.email ?? "unknown");
+    res.json(await allFlags());
   } catch (err) {
     res.status(500).json({ error: describe(err) });
   }
