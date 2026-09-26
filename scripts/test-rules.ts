@@ -15,7 +15,7 @@
 process.env.SESSION_SECRET ||= "test-secret-for-sealing-credentials";
 
 import {
-  applies, comparableTo, evaluate, fires, explain, opLabel, problems, summarise, test,
+  applies, comparableTo, evaluate, fires, explain, nameKey, opLabel, problems, summarise, test,
   type RuleBody, type Subject,
 } from "../server/rules/engine.js";
 import type { Hit } from "../server/rules/store.js";
@@ -32,6 +32,7 @@ const expense = (over: Partial<Subject> = {}): Subject => ({
   department: "Operations and Field", method: "Corporate card", amountCents: 4512,
   hasReceipt: true, receiptItems: "UNLEADED REGULAR | MONSTER ENERGY", inInbox: true,
   receiptTotalCents: 4512, receiptAlcohol: false, receiptReadable: true,
+  receiptDate: "2026-09-18", receiptMerchant: "RaceTrac",
   date: "2026-09-18", ...over,
 });
 
@@ -334,6 +335,47 @@ check("a receipt that could not be read is its own flag",
 check("and “could not be judged” reads as that, not as blank",
   opLabel("receiptAlcohol", "is_blank") === "could not be judged",
   opLabel("receiptAlcohol", "is_blank"));
+
+console.log("\nWhat the receipt says it is, against what was claimed");
+check("a receipt dated the same day passes",
+  test(expense(), { field: "receiptDate", op: "is", value: "", compare: "date" }) === true);
+check("one dated differently is caught",
+  test(expense({ receiptDate: "2026-08-02" }),
+    { field: "receiptDate", op: "is", value: "", compare: "date" }) === false);
+check("a date is ordered, not searched — before and after work",
+  test(expense({ receiptDate: "2026-08-02" }),
+    { field: "receiptDate", op: "lt", value: "", compare: "date" }) === true);
+check("an unread receipt has no date, and that is UNKNOWN rather than a mismatch",
+  test(expense({ receiptDate: null }),
+    { field: "receiptDate", op: "is", value: "", compare: "date" }) === null);
+check("dates only compare with dates",
+  comparableTo("receiptDate").includes("date") && !comparableTo("receiptDate").includes("merchant"),
+  comparableTo("receiptDate").join(", "));
+
+// The reason a name comparison needs its own path. Emburse doubles the name
+// and appends the legal form; the receipt prints the trading name. Compared
+// as strings these are "different" and the rule marks the entire queue.
+console.log("\nBusiness names, which never match exactly");
+check("Emburse's doubled name reduces to the receipt's",
+  nameKey("KENT ELECTRICAL SUPPLYKENT ELECTRICAL SUPPLY, LLC") === nameKey("Kent Electrical Supply"),
+  `${nameKey("KENT ELECTRICAL SUPPLYKENT ELECTRICAL SUPPLY, LLC")} vs ${nameKey("Kent Electrical Supply")}`);
+check("a store number does not make it a different business",
+  nameKey("HOME DEPOT 4410") === nameKey("The Home Depot"),
+  `${nameKey("HOME DEPOT 4410")} vs ${nameKey("The Home Depot")}`);
+check("two names that agree pass",
+  test(expense({ merchant: "RW6708RACETRAC INC", receiptMerchant: "RaceTrac" }),
+    { field: "receiptMerchant", op: "is", value: "", compare: "merchant" }) === true);
+check("and a receipt from somewhere else entirely is caught",
+  test(expense({ merchant: "HOME DEPOT 4410", receiptMerchant: "Chipotle Mexican Grill" }),
+    { field: "receiptMerchant", op: "is", value: "", compare: "merchant" }) === false);
+check("an unread receipt is UNKNOWN, not a different business",
+  test(expense({ receiptMerchant: "" }),
+    { field: "receiptMerchant", op: "is", value: "", compare: "merchant" }) === null);
+// Loose only between two NAME fields. A hand-typed value stays exact, or
+// "Merchant is Walmart" would quietly match Walmart Pharmacy and Walmart Fuel.
+check("a typed value is still matched exactly",
+  test(expense({ merchant: "WALMART SUPERCENTER" }),
+    { field: "merchant", op: "is", value: "Walmart" }) === false);
 
 console.log("\nWhat a rule is not allowed to be");
 check("a rule needs a name", problems(rule({ name: "  " })).some((p) => /needs a name/.test(p)));

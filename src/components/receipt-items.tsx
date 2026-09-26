@@ -107,6 +107,25 @@ export function ReceiptItems({
         On the receipt
       </h4>
 
+      {/* What the receipt says it is and when, beside what was claimed. The
+          reader has always pulled these; they were stored and never shown, so
+          a receipt dated three weeks before the transaction, or printed by a
+          different business entirely, looked like every other receipt. */}
+      {(detail.merchant || detail.purchasedAt) && (
+        <p className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+          {detail.merchant && (
+            <span>
+              Printed by <strong className="text-foreground">{detail.merchant}</strong>
+            </span>
+          )}
+          {detail.purchasedAt && (
+            <span>
+              dated <strong className="text-foreground">{detail.purchasedAt}</strong>
+            </span>
+          )}
+        </p>
+      )}
+
       <ul className="divide-y divide-border rounded-lg border border-border text-sm">
         {detail.items.map((i) => (
           <li key={i.lineNo} className="flex items-baseline justify-between gap-3 px-2.5 py-1.5">

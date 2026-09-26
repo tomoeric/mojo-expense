@@ -26,7 +26,7 @@
 export const FIELDS = [
   "note", "merchant", "category", "location", "department", "employee",
   "amount", "method", "receipt", "receiptItems", "receiptTotal",
-  "receiptAlcohol", "receiptReadable",
+  "receiptAlcohol", "receiptReadable", "date", "receiptDate", "receiptMerchant",
   "dayCount", "dayTotal",
 ] as const;
 export type Field = (typeof FIELDS)[number];
@@ -44,6 +44,9 @@ export const FIELD_LABEL: Record<Field, string> = {
   receiptItems: "Receipt line items",
   receiptAlcohol: "Receipt shows alcohol",
   receiptReadable: "Receipt could be read",
+  date: "Transaction date",
+  receiptDate: "Date on the receipt",
+  receiptMerchant: "Business name on the receipt",
   receiptTotal: "Receipt total (read off the image)",
   dayCount: "Matching expenses that day",
   dayTotal: "Matching total that day",
@@ -72,6 +75,22 @@ export type Group = { count: number; totalCents: number };
  */
 const MONEY: ReadonlySet<Field> = new Set<Field>(["amount", "receiptTotal", "dayTotal"]);
 
+/**
+ * Fields holding a date. Their own kind, so "Date on the receipt is the
+ * Transaction date" is offered and "Date on the receipt is the Merchant" is
+ * not — a comparison that can never be true is worse than no comparison,
+ * because somebody will write it and believe it.
+ */
+const DATES: ReadonlySet<Field> = new Set<Field>(["date", "receiptDate"]);
+
+/**
+ * Business names, which never match exactly and must not be compared as if
+ * they did. Emburse prints "KENT ELECTRICAL SUPPLYKENT ELECTRICAL SUPPLY,
+ * LLC" where the receipt says "Kent Electrical Supply" — an exact comparison
+ * flags every expense in the queue and teaches everyone to ignore the rule.
+ */
+const NAMES: ReadonlySet<Field> = new Set<Field>(["merchant", "receiptMerchant"]);
+
 /** Absolute and proportional slack before two amounts count as different. */
 export const MONEY_TOLERANCE_ABS = 0.02;
 export const MONEY_TOLERANCE_PCT = 0.01;
@@ -85,6 +104,10 @@ const tolerance = (a: number, b: number): number =>
  * Same kind only. "Merchant is more than Amount" is not a question, and an
  * editor that offers it invites a rule that can never be true.
  */
+/** Which of the three kinds a field belongs to; only like compares with like. */
+const kindOf = (f: Field): string =>
+  MONEY.has(f) ? "money" : DATES.has(f) ? "date" : NAMES.has(f) ? "name" : "text";
+
 export function comparableTo(field: Field): Field[] {
   // A group figure against another column is not a question anybody asks, and
   // offering it would invite a rule that can never mean anything. That holds
@@ -92,9 +115,11 @@ export function comparableTo(field: Field): Field[] {
   // the only place a group can be judged at all is MUST, and a WHEN row that
   // compares against one would quietly match nothing.
   if (field === "receipt" || isGroupField(field)) return [];
+  if (YES_NO.has(field)) return [];
   return FIELDS.filter(
     (f) =>
-      f !== field && f !== "receipt" && !isGroupField(f) && MONEY.has(f) === MONEY.has(field),
+      f !== field && f !== "receipt" && !isGroupField(f) && !YES_NO.has(f) &&
+      kindOf(f) === kindOf(field),
   );
 }
 
@@ -166,6 +191,9 @@ export function opsFor(field: Field): Op[] {
   if (field === "receiptAlcohol" || field === "receiptReadable") {
     return ["is", "is_not", "is_blank", "is_not_blank"];
   }
+  // A date is not a string to search inside. ISO dates sort lexically, so
+  // before/after fall out of the same comparison as equality.
+  if (DATES.has(field)) return ["is", "is_not", "gt", "lt", "is_blank", "is_not_blank"];
   return ["contains", "not_contains", "is", "is_not", "starts_with", "is_blank", "is_not_blank"];
 }
 
@@ -228,6 +256,10 @@ export type Subject = {
    * unanswerable, and is worth a human look in its own right.
    */
   receiptReadable: boolean | null;
+  /** The date printed on the receipt, YYYY-MM-DD, or null when unread. */
+  receiptDate: string | null;
+  /** The business name printed on the receipt, or "" when unread. */
+  receiptMerchant: string;
   /**
    * The total read off the receipt image, in cents — null when no receipt has
    * been read, which is NOT the same as zero and must never be treated as a
@@ -235,14 +267,35 @@ export type Subject = {
    */
   receiptTotalCents: number | null;
   inInbox: boolean;
-  /**
-   * Not a field a rule can test — carried so a decision the rule queues can
-   * describe its target without a second query per expense.
-   */
+  /** The expense's own date, and what a receipt's date is checked against. */
   date: string | null;
 };
 
 const norm = (s: string): string => s.trim().toLowerCase();
+
+/**
+ * A business name reduced to something two printings of it can agree on.
+ *
+ * Emburse doubles the name and appends the legal form; a receipt prints the
+ * trading name with a store number. Punctuation, the suffix, digits and
+ * repetition all go, and a doubled string collapses back to one copy — so
+ * "KENT ELECTRICAL SUPPLYKENT ELECTRICAL SUPPLY, LLC" and "Kent Electrical
+ * Supply" end up the same.
+ */
+export function nameKey(raw: string): string {
+  let t = raw.toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\b(llc|inc|incorporated|corp|corporation|co|ltd|limited|lp|llp|plc|the)\b/g, " ")
+    .replace(/\b\d+\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  // Emburse's doubled name: exactly the same text twice, back to back.
+  const half = t.length / 2;
+  if (t.length > 6 && t.length % 2 === 0 && t.slice(0, half) === t.slice(half)) t = t.slice(0, half);
+  const doubled = t.match(/^(.+?) \1$/);
+  if (doubled) t = doubled[1]!;
+  return t;
+}
 
 /** Null when there is no figure — an unread receipt, or a group not yet counted. */
 function numberOf(subject: Subject, field: Field, group?: Group): number | null {
@@ -272,6 +325,9 @@ function textOf(subject: Subject, field: Field): string {
       return subject.receiptAlcohol === null ? "" : subject.receiptAlcohol ? "yes" : "no";
     case "receiptReadable":
       return subject.receiptReadable === null ? "" : subject.receiptReadable ? "yes" : "no";
+    case "date": return subject.date ?? "";
+    case "receiptDate": return subject.receiptDate ?? "";
+    case "receiptMerchant": return subject.receiptMerchant;
     case "amount": return (subject.amountCents / 100).toFixed(2);
     case "receiptTotal":
       return subject.receiptTotalCents === null ? "" : (subject.receiptTotalCents / 100).toFixed(2);
@@ -327,6 +383,40 @@ export function test(subject: Subject, c: Condition, group?: Group): boolean | n
       case "is_not": return Math.abs(got - want) > slack;
       default: return false;
     }
+  }
+
+  // Dates: ISO strings order correctly as text, so before/after and equality
+  // are one comparison. Handled apart from the text path so "contains" and
+  // friends never reach a date, and so a missing one is UNKNOWN rather than
+  // an empty string that compares unequal to everything.
+  if (DATES.has(c.field)) {
+    const mine = textOf(subject, c.field);
+    if (c.op === "is_blank") return mine === "";
+    if (c.op === "is_not_blank") return mine !== "";
+    if (mine === "") return null;
+    const other = rightHandSide(subject, c).text.trim();
+    if (other === "") return c.compare ? null : false;
+    switch (c.op) {
+      case "is": return mine === other;
+      case "is_not": return mine !== other;
+      case "gt": return mine > other;
+      case "lt": return mine < other;
+      default: return false;
+    }
+  }
+
+  // Business names never match exactly. Emburse prints "KENT ELECTRICAL
+  // SUPPLYKENT ELECTRICAL SUPPLY, LLC" where the receipt says "Kent
+  // Electrical Supply", so comparing two name fields as strings marks the
+  // whole queue as mismatched. Compared loosely only when BOTH sides are
+  // names — "Merchant is 'Walmart'" typed by hand stays exact.
+  if (c.compare && NAMES.has(c.field) && NAMES.has(c.compare)) {
+    const mine = nameKey(textOf(subject, c.field));
+    const other = nameKey(textOf(subject, c.compare));
+    if (!mine || !other) return null;
+    const same = mine === other || mine.includes(other) || other.includes(mine);
+    if (c.op === "is") return same;
+    if (c.op === "is_not") return !same;
   }
 
   // A yes/no the reader could not answer is UNKNOWN, not "no". Falling

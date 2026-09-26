@@ -199,6 +199,26 @@ the blocks.
   on it, and `test()` returns null for an unknown yes/no rather than falling
   through to the text path, where "" vs "yes" would come back false and make
   exactly that claim.
+- **What the receipt says it is, against what was claimed.** The reader
+  always pulled the merchant and the date off the image and they were stored
+  and never shown; they are now on the receipt detail and testable as
+  `receiptDate` / `receiptMerchant` against `date` / `merchant`. A receipt
+  dated three weeks before the transaction, or printed by a different
+  business, used to look like every other receipt.
+- **Comparison is by KIND: money, date, name, text.** Only like compares with
+  like, so "Date on the receipt is the Transaction date" is offered and
+  "…is the Merchant" is not. A comparison that can never be true is worse
+  than none, because somebody writes it and believes it.
+- **Business names are matched loosely, and only name-against-name.** Emburse
+  prints "KENT ELECTRICAL SUPPLYKENT ELECTRICAL SUPPLY, LLC" where the
+  receipt says "Kent Electrical Supply"; compared as strings that is a
+  mismatch on nearly every row. `nameKey()` drops punctuation, legal suffixes
+  and store numbers and collapses Emburse's doubled name. A hand-typed value
+  stays EXACT — otherwise "Merchant is Walmart" quietly swallows Walmart
+  Pharmacy and Walmart Fuel.
+- **Dates are ordered, not searched.** ISO strings compare correctly as text,
+  so before/after and equality are one path — and `contains` never reaches a
+  date. A missing receipt date is UNKNOWN, never a mismatch.
 - **`receiptReadable` is legible AND itemised.** An order summary reading
   "1 Item $141.24" is perfectly legible and answers nothing, so for rule
   purposes it is not readable. It exists so the hole in alcohol detection is

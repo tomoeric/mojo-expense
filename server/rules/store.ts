@@ -235,6 +235,7 @@ export async function subjects(
     method: string | null; amount_cents: string; receipts: string; items: string | null;
     in_inbox: boolean; expense_date: string | null; receipt_total_cents: string | null;
     alcohol: boolean | null; readable: boolean | null;
+    receipt_date: string | null; receipt_merchant: string | null;
   }>(
     `SELECT e.dedupe_key, e.employee, e.merchant, e.note, e.category, e.location,
             e.department, e.method, e.amount_cents, e.in_inbox,
@@ -266,7 +267,21 @@ export async function subjects(
             (SELECT bool_or(rr.legible AND coalesce(rr.itemised, false))
                FROM expense_receipts r
                JOIN receipt_readings rr ON rr.sha256 = r.sha256 AND rr.error IS NULL
-              WHERE r.dedupe_key = e.dedupe_key) AS readable
+              WHERE r.dedupe_key = e.dedupe_key) AS readable,
+            -- What the receipt itself says, for checking against what was
+            -- claimed. min() picks one deterministically when an expense
+            -- carries several receipts, rather than whichever the planner
+            -- happened to reach first.
+            (SELECT min(to_char(rr.purchased_at, 'YYYY-MM-DD'))
+               FROM expense_receipts r
+               JOIN receipt_readings rr ON rr.sha256 = r.sha256 AND rr.error IS NULL
+              WHERE r.dedupe_key = e.dedupe_key
+                AND rr.purchased_at IS NOT NULL) AS receipt_date,
+            (SELECT min(rr.merchant)
+               FROM expense_receipts r
+               JOIN receipt_readings rr ON rr.sha256 = r.sha256 AND rr.error IS NULL
+              WHERE r.dedupe_key = e.dedupe_key
+                AND rr.merchant IS NOT NULL AND rr.merchant <> '') AS receipt_merchant
        FROM expenses e
       ${keys ? "WHERE e.dedupe_key = ANY($1::text[])" : ""}`,
     keys ? [keys] : [],
@@ -287,6 +302,8 @@ export async function subjects(
     receiptTotalCents: r.receipt_total_cents === null ? null : Number(r.receipt_total_cents),
     receiptAlcohol: r.alcohol,
     receiptReadable: r.readable,
+    receiptDate: r.receipt_date,
+    receiptMerchant: r.receipt_merchant ?? "",
     inInbox: r.in_inbox,
     date: r.expense_date,
   }));
