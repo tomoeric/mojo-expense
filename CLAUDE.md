@@ -384,6 +384,19 @@ Three things follow, and all three are easy to break:
   passes one owned by the decider — who clicked Approve moments ago, so there
   is somebody to ask — and the prompt appears on the QUEUE, not only on the
   admin Import page where the export's copy lives.
+- **The FIRST navigation is not a step and must not share a step's budget.**
+  It is a cold container's first outbound TLS plus Emburse's OAuth redirect
+  chain, before a byte of the app arrives. A warm manual run spends 15s of a
+  step's 30s on it, so the 6am scheduled run timed out at 30s three mornings
+  running while every manual run looked healthy. `EMBURSE_OPEN_TIMEOUT_MS`
+  (90s) is its own, and it retries once.
+- **A catch-all step must not name a failure it did not witness.** Everything
+  thrown out of `runSteps` was pushed as **"start browser"**, so a run whose
+  navigation timed out was headlined *Stopped at "start browser"* — and the
+  browser had started perfectly. It is only called that when no step ran at
+  all. The failure screenshot is on a 5s leash and can never throw, for the
+  same reason: a dead page timed the screenshot out too and added a second red
+  step saying `page.screenshot: Timeout` on top of the real cause.
 - **Absence is never success.** A selector that matches nothing must fail, not
   be read as "already done". That mistake shipped four times: a failed login
   reported as three green steps, an exports link silently not clicked, section

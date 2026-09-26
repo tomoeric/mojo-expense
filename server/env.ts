@@ -199,6 +199,17 @@ export const env = {
     password: str("EMBURSE_LOGIN_PASSWORD"),
     /** Per-step patience. Emburse's grid re-renders are not instant. */
     stepTimeoutMs: int("EMBURSE_STEP_TIMEOUT_MS", 30_000),
+    /**
+     * The FIRST navigation gets its own, longer budget.
+     *
+     * It is the slowest thing in a run and nothing like a step: a cold
+     * container's first outbound TLS handshake, then Emburse's OAuth redirect
+     * chain, before a byte of the app arrives. A manual run at a warm moment
+     * takes 15s of the 30s a step is given, so the scheduled 6am one — first
+     * thing the container does all night — timed out at 30s morning after
+     * morning while every manual run looked fine.
+     */
+    openTimeoutMs: int("EMBURSE_OPEN_TIMEOUT_MS", 90_000),
     /** How long to keep polling for the queued export to finish. */
     exportWaitMs: int("EMBURSE_EXPORT_WAIT_MS", 15 * 60_000),
     /**

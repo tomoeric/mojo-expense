@@ -402,18 +402,37 @@ export async function runAutoExport(
       await rememberCookies(opened.context);
     }
 
-    const screenshot = ok ? null : (await page.screenshot({ fullPage: false })).toString("base64");
+    // Short leash, and never fatal. A page that has already timed out times
+    // its screenshot out too, and an exception here would throw the whole run
+    // into the catch below — turning a diagnosed step failure into an
+    // undiagnosed one at the very moment the diagnosis matters.
+    const screenshot = ok
+      ? null
+      : await page
+          .screenshot({ fullPage: false, timeout: 5_000 })
+          .then((b) => b.toString("base64"))
+          .catch(() => null);
     return { ok, signInFailed: signInBroke(steps), credentialFault, steps, screenshot, pdf, itemLine };
   } catch (err) {
+    // Only call this "start browser" when the browser is genuinely what
+    // failed. Everything thrown out of runSteps landed here under that name,
+    // so a run whose first navigation timed out was headlined "Stopped at
+    // start browser" — and the browser had started perfectly. The steps
+    // already recorded the real failure; this line must not overwrite the
+    // story it tells.
+    const started = steps.length > 0;
     steps.push({
-      name: "start browser",
+      name: started ? "the run stopped" : "start browser",
       ok: false,
       detail: explainLaunch(err),
       ms: 0,
     });
     let screenshot: string | null = null;
     try {
-      if (page) screenshot = (await page.screenshot()).toString("base64");
+      // Short leash. A page that has already timed out times the screenshot
+      // out too, which used to add another 30s and a second red step saying
+      // "page.screenshot: Timeout" — noise on top of the real cause.
+      if (page) screenshot = (await page.screenshot({ timeout: 5_000 })).toString("base64");
     } catch {
       /* A dead page cannot be photographed; the step detail is what matters. */
     }
@@ -1116,7 +1135,29 @@ async function runSteps(
   const url = settings.emburseUrl || env.emburseLogin.url;
 
   if (!(await step("open Emburse", async () => {
-    await page.goto(url, { waitUntil: "domcontentloaded" });
+    // Its own timeout, and one retry. This is the first thing the container
+    // does after a night idle — cold TLS, then Emburse's OAuth redirect chain
+    // — and on the shared 30s step budget the 6am run timed out every morning
+    // while manual runs (warm, 15s) looked perfectly healthy. A retry costs a
+    // minute on the one morning it is needed and nothing on the others.
+    const open = () =>
+      page.goto(url, { waitUntil: "domcontentloaded", timeout: env.emburseLogin.openTimeoutMs });
+    try {
+      await open();
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err);
+      await page.goto("about:blank").catch(() => {});
+      await open().catch(() => {
+        // The second failure is the one worth reporting, but the first said
+        // how long it waited, so both go in.
+        throw new Error(
+          `${safeUrl(url)} did not load within ` +
+            `${Math.round(env.emburseLogin.openTimeoutMs / 1000)}s, twice. First attempt: ` +
+            `${why.split("\n")[0]}. This is the network out of the container, not a selector — ` +
+            `nothing on the page has been looked at yet.`,
+        );
+      });
+    }
     // Redacted: Emburse's sign-in redirect carries a session_token and the
     // whole OAuth query string, and this detail is stored and displayed.
     return `loaded ${safeUrl(page.url())}`;
