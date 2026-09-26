@@ -27,6 +27,15 @@ export type PolicyFlagCode =
 export type PolicyFlag = {
   code: PolicyFlagCode;
   label: string;
+  /**
+   * What to bucket this flag under on screen.
+   *
+   * For a rule it is the rule's name, so the queue can separate "Meal Count
+   * > 3" from "Gas Category" rather than lumping every rule together. Parsing
+   * it back out of `label` would work until a rule name contained the
+   * separator, which is the kind of bug that surfaces months later.
+   */
+  group?: string;
   severity: "info" | "warn";
   /** Line ids the flag points at; empty when the flag is report-level. */
   lineIds: string[];

@@ -312,6 +312,16 @@ the blocks.
   threaded through as `focusId`: it leads the header, opens the receipt pane,
   and sorts first, with the rest of that day named underneath as context.
   One receipt against one claim is the unit of review; the day is background.
+- **The queue splits Flagged / Unflagged, and flagged splits by rule.** A
+  queue of 126 with 16 flagged reads as 126 things to do; the tabs say what
+  needs a human and what is waiting for a click. Inside flagged, one rule at
+  a time — "the category is wrong" and "that is a fourth meal today" are
+  different jobs judged differently. Counts sit on the tabs rather than being
+  discovered by opening an empty one.
+- **A flag carries `group` — the rule's name — rather than it being parsed
+  back out of `label`.** The label is `"<rule> — <detail>"`, and splitting on
+  the separator works until a rule name contains one, which is the kind of
+  bug that surfaces months later against real data.
 - **A day rule flags a SET, so the flag count is a way into it.** "More than
   three meals" marks every expense in the day, because the problem is the
   group — read one row at a time it looks like an $11 McDonald's nobody could

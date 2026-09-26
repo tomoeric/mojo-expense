@@ -32,6 +32,8 @@ export type Row = {
   department: string;
   /** Warn-level flags naming this specific line. */
   flags: string[];
+  /** What to bucket those flags under — a rule's name, or the kind of check. */
+  flagGroups: string[];
   ageDays: number | null;
   /** The decision on this expense, when there is one. */
   decision?: { state: string } | undefined;
@@ -265,17 +267,116 @@ export function buildRows(data: ReportsResponse, reports?: ExpenseReport[]): Row
     // A flag either names specific lines or applies to the whole report; both
     // have to reach the line, or a report-level duplicate warning disappears.
     const warn = report.flags.filter((f) => f.severity === "warn");
-    return report.lines.map((line) => ({
+    return report.lines.map((line) => {
+      const mine = warn.filter((f) => f.lineIds.length === 0 || f.lineIds.includes(line.id));
+      return {
       line,
       report,
       employee: report.employeeName,
       department: report.department,
-      flags: warn
-        .filter((f) => f.lineIds.length === 0 || f.lineIds.includes(line.id))
-        .map((f) => f.label),
+      flags: mine.map((f) => f.label),
+      flagGroups: [...new Set(mine.map((f) => f.group ?? BUILT_IN_GROUP[f.code] ?? f.code))],
       ageDays: daysAgo(report.submittedDate),
-    }));
+      };
+    });
   });
+}
+
+/** Readable names for the checks that are not rules. */
+const BUILT_IN_GROUP: Record<string, string> = {
+  "missing-receipt": "No receipt",
+  "large-line": "Large amount",
+  "weekend-spend": "Weekend",
+  "possible-duplicate": "Possible duplicate",
+  ageing: "Waiting too long",
+};
+
+/**
+ * Flagged, unflagged, and which rule did the flagging.
+ *
+ * A queue of 126 with 16 flagged reads as 126 things to do. The split says
+ * what actually needs a human and what is only waiting for a click — and
+ * inside flagged, one rule at a time, because "the category is wrong" and
+ * "that is a fourth meal today" are different jobs judged differently.
+ *
+ * Counts are on the tabs rather than discovered by clicking: an empty tab you
+ * have to open to find empty is worse than a zero.
+ */
+function FlagTabs({
+  rows,
+  tab,
+  onTab,
+  flagGroup,
+  onFlagGroup,
+}: {
+  rows: Row[];
+  tab: "all" | "flagged" | "clean";
+  onTab: (t: "all" | "flagged" | "clean") => void;
+  flagGroup: string | null;
+  onFlagGroup: (g: string | null) => void;
+}) {
+  const flagged = rows.filter((r) => r.flags.length > 0);
+  const groups = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const r of flagged) for (const g of r.flagGroups) counts.set(g, (counts.get(g) ?? 0) + 1);
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  }, [flagged]);
+
+  const tabs = [
+    { key: "all" as const, label: "All", n: rows.length },
+    { key: "flagged" as const, label: "Flagged", n: flagged.length },
+    { key: "clean" as const, label: "Unflagged", n: rows.length - flagged.length },
+  ];
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-1 rounded-lg bg-muted p-1">
+        {tabs.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => onTab(t.key)}
+            className={`rounded-md px-3 py-1.5 text-sm font-semibold transition-colors ${
+              tab === t.key ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {t.label}
+            <span className="ml-1.5 tabular-nums opacity-60">{t.n.toLocaleString()}</span>
+          </button>
+        ))}
+      </div>
+
+      {tab === "flagged" && groups.length > 1 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => onFlagGroup(null)}
+            className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${
+              flagGroup === null ? "border-foreground" : "border-border text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Every flag
+          </button>
+          {groups.map(([name, n]) => (
+            <button
+              key={name}
+              type="button"
+              onClick={() => onFlagGroup(flagGroup === name ? null : name)}
+              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs ${
+                flagGroup === name
+                  ? "border-amber-500 bg-amber-500/10 font-semibold text-amber-800"
+                  : "border-border text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
+              {name}
+              <span className="tabular-nums opacity-60">{n}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function ExpenseTable({
@@ -293,6 +394,9 @@ export function ExpenseTable({
   const [query, setQuery] = useState("");
   // One person, one date: the unit a day rule is about.
   const [group, setGroup] = useState<{ employee: string; date: string } | null>(null);
+  // Flagged / unflagged, and which rule's catches within flagged.
+  const [tab, setTab] = useState<"all" | "flagged" | "clean">("all");
+  const [flagGroup, setFlagGroup] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
 
   const byKey = useMemo(() => new Map(COLUMNS.map((c) => [c.key, c] as const)), []);
@@ -315,9 +419,15 @@ export function ExpenseTable({
     // The group narrows first: it is an explicit "show me this set", and a
     // leftover search term silently hiding half of it would misrepresent the
     // very thing the rule is complaining about.
-    const base = group
+    let base = group
       ? rows.filter((r) => r.employee === group.employee && r.line.date === group.date)
       : rows;
+    if (tab === "flagged") base = base.filter((r) => r.flags.length > 0);
+    if (tab === "clean") base = base.filter((r) => r.flags.length === 0);
+    // Within flagged, one rule at a time. Every rule's catches in one list is
+    // the pile the tabs exist to break up: "Gas Category" and "Meal Count > 3"
+    // are different jobs and get judged differently.
+    if (flagGroup) base = base.filter((r) => r.flagGroups.includes(flagGroup));
     const q = query.trim().toLowerCase();
     if (!q) return base;
     // Person-first, but merchant and note are searched too: reviewers arrive
@@ -326,7 +436,7 @@ export function ExpenseTable({
       [r.employee, r.line.merchant, r.department, r.line.category, r.line.note, r.line.location]
         .some((v) => (v ?? "").toLowerCase().includes(q)),
     );
-  }, [rows, query, group]);
+  }, [rows, query, group, tab, flagGroup]);
 
   const sorted = useMemo(() => {
     const col = byKey.get(sort.key);
@@ -371,6 +481,19 @@ export function ExpenseTable({
           </button>
         </div>
       )}
+      <FlagTabs
+        rows={group ? rows.filter((r) => r.employee === group.employee && r.line.date === group.date) : rows}
+        tab={tab}
+        onTab={(t) => {
+          setTab(t);
+          // A rule filter left behind on the unflagged tab shows nothing and
+          // reads as an empty queue.
+          if (t !== "flagged") setFlagGroup(null);
+        }}
+        flagGroup={flagGroup}
+        onFlagGroup={setFlagGroup}
+      />
+
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative min-w-56 flex-1">
           <Search className="absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2 text-muted-foreground" />

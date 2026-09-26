@@ -3,8 +3,12 @@ import { useQuery } from "@tanstack/react-query";
 export type ReportStatus = "draft" | "submitted" | "approved" | "processed" | "rejected";
 
 export type PolicyFlag = {
-  code: "missing-receipt" | "large-line" | "weekend-spend" | "possible-duplicate" | "ageing";
+  code:
+    | "missing-receipt" | "large-line" | "weekend-spend" | "possible-duplicate"
+    | "ageing" | "rule-mismatch";
   label: string;
+  /** What to bucket it under on the queue — a rule's name, for a rule flag. */
+  group?: string;
   severity: "info" | "warn";
   lineIds: string[];
 };

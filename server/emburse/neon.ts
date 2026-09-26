@@ -138,6 +138,9 @@ function toReport(key: string, group: Row[], hits: Map<string, Hit[]>): ExpenseR
     ruleFlags.push({
       code: "rule-mismatch",
       label: `${name}${label ? ` — ${label}` : ""}`,
+      // The rule's name on its own, so the queue can separate one rule's
+      // catches from another's without splitting the label back apart.
+      group: name,
       severity: "warn",
       lineIds,
     });
