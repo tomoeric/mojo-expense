@@ -22,7 +22,7 @@ const check = (label: string, ok: boolean, detail = "") => {
 };
 
 const want = {
-  sections: ["Needs Review", "Needs Manager Review"],
+  sections: ["Needs Review", "Pending Other's Review"],
   receiptsOnly: true,
 } as ExportSettings;
 
@@ -54,6 +54,44 @@ check("…and an unconfigured one is too",
 console.log("\n5. No header at all");
 w = checkAgainstSettings(null, want, { sectionsVerified: true });
 check("says the scope could not be read", w.length === 1, w.join(" | "));
+
+// A stored section this Emburse does not have cannot match a chip, so it can
+// only ever stop the run — and it stops EVERY run, for good, with no way to
+// know from the failure that the cure is two clicks in Export settings.
+// "Needs Manager Review" was exactly that: shipped in the defaults, stored in
+// the database, absent from the tenant, and the 6am export dead every morning.
+console.log("\n6. A stored section name this Emburse does not have");
+if (process.env.DATABASE_URL) {
+  const { readSettings, writeSettings, ALL_SECTIONS } =
+    await import("../server/import/settings.js");
+  const { db } = await import("../server/db.js");
+  const before = await readSettings();
+  try {
+    // Straight into the row, because writeSettings correctly refuses to store
+    // one — which is why only databases written before the rename carry it.
+    await db().query(
+      "UPDATE export_settings SET sections = $1 WHERE id",
+      [["Needs Review", "Needs Manager Review"]],
+    );
+    const healed = await readSettings();
+    check("the name that cannot exist is dropped",
+      !healed.sections.includes("Needs Manager Review"), healed.sections.join(", "));
+    check("…and the ones that can are kept",
+      healed.sections.includes("Needs Review"), healed.sections.join(", "));
+
+    await db().query("UPDATE export_settings SET sections = $1 WHERE id", [["Not A Section"]]);
+    const empty = await readSettings();
+    check("dropping every name falls back to the default rather than exporting nothing",
+      empty.sections.length > 0 && empty.sections.every((s) => (ALL_SECTIONS as readonly string[]).includes(s)),
+      empty.sections.join(", "));
+  } finally {
+    await writeSettings(before.sections, before.receiptsOnly, before.schedule,
+      before.selectors, before.emburseUrl, "test-settings-check");
+    await db().end();
+  }
+} else {
+  console.log("  DATABASE_URL not set — skipping the stored-settings half.");
+}
 
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}\n`);
 process.exit(failures === 0 ? 0 : 1);

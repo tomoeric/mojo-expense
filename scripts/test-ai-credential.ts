@@ -237,6 +237,31 @@ try {
   check("an unattached integration reports the fix, not a status code",
     !unconfigured.ok && /Setup → Integrations/.test(unconfigured.error ?? ""), unconfigured.error);
 
+  // Pressing it TWICE, which is what a person does — and what every check
+  // above skipped by calling resetAiClient() first, which is how this shipped.
+  //
+  // The gateway used to be disowned on the first failure whether or not there
+  // was a direct key to fall back to. With none, aiVia() then returned null
+  // for the life of the process: the second press said "No Anthropic
+  // credential is set" — flatly untrue, the secrets are right there — and the
+  // sidecar was never tried again. So attaching the integration afterwards
+  // appeared to do nothing, which is the loop the fallback existed to prevent.
+  console.log("\nPressing the button twice, and then fixing the thing");
+  const second = await ai.checkAi("claude-opus-5");
+  check("the second press says the same as the first",
+    !second.ok && /Setup → Integrations/.test(second.error ?? ""), second.error);
+  check("…and does not claim the credential vanished",
+    !/No Anthropic credential/.test(second.error ?? ""), second.error);
+  check("…and still knows it is on the gateway", second.via === "replit", String(second.via));
+
+  // The payoff: attach the integration and press again. No restart.
+  process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL = `${base}/direct`;
+  const fixed = await ai.checkAi("claude-opus-5");
+  check("attaching the integration works on the next press, with no restart",
+    fixed.ok && fixed.via === "replit", JSON.stringify(fixed));
+
+  process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL = `${base}/gw`;
+
   delete process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY;
   delete process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL;
   ai.resetAiClient();

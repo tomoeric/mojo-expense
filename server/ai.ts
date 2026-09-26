@@ -90,10 +90,17 @@ export function anthropic(): Anthropic {
 export function retryOnDirectKey(err: unknown): boolean {
   if (gatewayDisowned || via !== "replit") return false;
   if (!isGatewayUnconfigured(err)) return false;
+  // Nowhere to go: leave the gateway alone. Disowning it is only ever useful
+  // as "switch to the direct key", and doing it with no key to switch to just
+  // blinds the app — `aiVia()` then returns null, every later call reports
+  // "No Anthropic credential is set" (which is false, the secrets are right
+  // there), and the sidecar is never tried again for the life of the process.
+  // So attaching the integration afterwards changed nothing until a restart,
+  // which is exactly the loop this was supposed to get people out of.
+  if (!direct()) return false;
   gatewayDisowned = true;
   client = null;
   via = null;
-  if (!direct()) return false;
   console.warn(
     "ai: the Replit Anthropic integration answered 'not configured' — falling back to ANTHROPIC_API_KEY.",
   );
@@ -238,6 +245,13 @@ export type AiCheck = {
  * front of it, and a gateway can serve `/v1/models` while refusing the model.
  */
 export async function checkAi(model = env.audit.model): Promise<AiCheck> {
+  // Start clean every time. Somebody pressing this has just changed something
+  // — attached the integration, pasted a new key — and is asking whether it
+  // worked now. Answering from a client chosen minutes ago, or from a gateway
+  // disowned by an earlier failure, makes the button report the past and look
+  // broken. It is one four-token call; rebuilding the client costs nothing.
+  resetAiClient();
+
   const base: AiCheck = { ok: false, via: aiVia(), gatewayUrl: gateway().url, model };
 
   if (!aiVia()) {

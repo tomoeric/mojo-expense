@@ -50,7 +50,17 @@ function AiConnection({ isAdmin }: { isAdmin: boolean }) {
     setBusy(true);
     setResult(null);
     try {
-      const res = await fetch("/api/ai-check", { method: "POST" });
+      // The server keeps a few seconds between checks so nobody can hold this
+      // down at a fraction of a cent a time. That is a fact about the button,
+      // not about the credential — and rendering it in the same amber box as a
+      // real diagnosis made a double-click look like the answer, on a panel
+      // whose whole job is answering one question. So it waits and goes again
+      // rather than reporting back.
+      let res = await fetch("/api/ai-check", { method: "POST" });
+      if (res.status === 429) {
+        await new Promise((r) => setTimeout(r, 3200));
+        res = await fetch("/api/ai-check", { method: "POST" });
+      }
       const body = (await res.json()) as AiCheck & { error?: string };
       setResult(res.ok ? body : { ok: false, via: null, gatewayUrl: "", model: "", error: body.error });
     } catch (err) {

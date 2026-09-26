@@ -186,8 +186,24 @@ the blocks.
   nothing, and the only symptom is `404 Replit AI Integrations is not
   configured` at the first call.
 - **One client, in `server/ai.ts`.** The sidecar gets one chance: if it 404s or
-  is not listening, and `ANTHROPIC_API_KEY` is set, the client rebuilds on the
-  direct key and stays there for the process. Tried once, not once per receipt.
+  is not listening, **and `ANTHROPIC_API_KEY` is set**, the client rebuilds on
+  the direct key and stays there for the process. Tried once, not once per
+  receipt.
+- **Never disown the gateway with nowhere to go.** `retryOnDirectKey` used to
+  set `gatewayDisowned` before checking whether a direct key existed. With
+  none, `aiVia()` then returned null for the rest of the process: every later
+  call reported "No Anthropic credential is set" — flatly untrue, the secrets
+  were right there — and the sidecar was never tried again, so attaching the
+  integration appeared to change nothing until a restart. Exactly the loop the
+  fallback exists to prevent.
+- **`checkAi()` resets the client first.** Somebody pressing "Test the
+  connection" has just changed something and is asking whether it worked NOW.
+  Answering from a client chosen minutes ago, or a gateway disowned by an
+  earlier failure, makes the button report the past.
+- **A 429 from the test button is not a result.** The endpoint keeps a few
+  seconds between calls; the page waits and retries rather than rendering
+  "Give it a moment" in the same amber box as a real diagnosis, where a
+  double-click read as the answer.
 - Never report an AI failure as a status code. `describeAiConfig()` turns the
   configuration ones into the fix.
 - **A 401 must name the key it used, and must not claim where it went.** A
@@ -304,6 +320,13 @@ the blocks.
   sections" — correctly, since the alternative is exporting the wrong rows.
   The failure now lists the chips the dialog does offer, so the next wrong name
   is a tick box rather than a selector hunt.
+- **And `readSettings` drops a stored name that is not in `ALL_SECTIONS`.**
+  Correcting the constant fixed new databases and did nothing for the row
+  already written, so the export went on failing every morning and the cure
+  was two clicks nobody could know to make. A name that cannot match a chip
+  can only ever stop the run, so it is dropped on read, falling back to the
+  default if that empties the list. `writeSettings` already filtered against
+  `ALL_SECTIONS`, which is why only pre-rename rows carry one.
 - **Nothing on a settings page may look saved when it is not.** The export
   settings page is long and its Save button sat at the bottom; unchecking a
   section looked like it took effect and was silently lost on refresh. A

@@ -111,6 +111,29 @@ const ensure = (): Promise<void> =>
     await db().query(SCHEMA);
   }));
 
+/**
+ * Drop stored section names this Emburse does not have.
+ *
+ * A name that is not one of `ALL_SECTIONS` cannot match a chip in the export
+ * dialog, so it cannot do anything except stop the run — correctly, since the
+ * alternative is exporting the wrong rows. But it stops EVERY run, for good,
+ * and the only way out was to know to go and untick it.
+ *
+ * "Needs Manager Review" was such a name: shipped in the defaults, stored in
+ * this database, and absent from the tenant. The runner failed every morning
+ * at "set the sections", the fix was two clicks in Export settings, and
+ * nobody had any way to know that from the failure.
+ *
+ * So a name that cannot exist is dropped on read rather than left to break
+ * the export. Falls back to the default when that empties the list, because
+ * an export of no sections at all is not an improvement on the wrong ones.
+ */
+function usableSections(stored: string[] | null): string[] {
+  const known = new Set<string>(ALL_SECTIONS);
+  const kept = (stored ?? []).filter((s) => known.has(s));
+  return kept.length > 0 ? kept : DEFAULT_SECTIONS;
+}
+
 export async function readSettings(): Promise<ExportSettings> {
   await ensure();
   const { rows } = await db().query<{
@@ -133,7 +156,7 @@ export async function readSettings(): Promise<ExportSettings> {
     };
   }
   return {
-    sections: row.sections,
+    sections: usableSections(row.sections),
     receiptsOnly: row.receipts_only,
     // Column by column, so a row written before the schedule existed still
     // answers with sensible values rather than nulls.
