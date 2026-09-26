@@ -294,6 +294,42 @@ check("the count covers what the WHEN matched, not everything that day",
 check("no group means no verdict, rather than a wrong one",
   evaluate(meal(), mealRule) === "not-applicable");
 
+// The bug that made a $75 day limit flag a $10 breakfast.
+//
+// "$75.00" is what anybody types into a field labelled "Matching total that
+// day". Number() makes NaN of it, every comparison against NaN is false, and
+// a MUST that is always false flags everything the WHEN matched — 116 of
+// them, one of which was an $11 McDonald's. Nothing on screen was wrong: the
+// rule read correctly and the preview counted confidently.
+console.log("\nA figure as somebody actually types it");
+const dollars = (value: string) => ({ ...spendRule, must: { field: "dayTotal" as const, op: "lte" as const, value } });
+
+check("a dollar sign is read, not choked on",
+  evaluate(under[0]!, dollars("$75.00"), group(under)) === "pass"
+    && evaluate(over[0]!, dollars("$75.00"), group(over)) === "fail");
+check("…and so are commas and spaces",
+  evaluate(under[0]!, dollars(" $1,075.00 "), group(under)) === "pass");
+check("a plain number still works", evaluate(over[0]!, dollars("75"), group(over)) === "fail");
+check("the editor accepts the money people write",
+  problems(dollars("$75.00")).length === 0, problems(dollars("$75.00")).join(" "));
+
+// The two halves of the fence. Nonsense is refused where it can be fixed…
+check("a day total that is not a figure is refused at save time",
+  problems(dollars("seventy five")).some((p) => /not an amount/.test(p)),
+  problems(dollars("seventy five")).join(" "));
+check("…and a count that is not a figure says number, not amount",
+  problems({ ...mealRule, must: { field: "dayCount", op: "lte", value: "a few" } })
+    .some((p) => /is not a number/.test(p)));
+// …and if one ever reaches the runner it does NOTHING, which is the failure
+// worth having. Treating it as "did not meet the expectation" is what turned
+// one typo into a queue full of flags.
+check("a figure that cannot be read judges nothing rather than failing everything",
+  evaluate(over[0]!, dollars("seventy five"), group(over)) === "not-applicable"
+    && evaluate(under[0]!, dollars("seventy five"), group(under)) === "not-applicable");
+check("a blank value is still reported once, as missing rather than unreadable",
+  problems(dollars("")).filter((p) => /needs a value|not an amount/.test(p)).length === 1,
+  problems(dollars("")).join(" "));
+
 check("a group field in the WHEN is refused as circular",
   problems(rule({ when: [{ field: "dayCount", op: "lte", value: "3" }] }))
     .some((p) => /only be used in MUST/.test(p)));

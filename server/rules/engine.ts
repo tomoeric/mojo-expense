@@ -99,6 +99,33 @@ const tolerance = (a: number, b: number): number =>
   Math.max(MONEY_TOLERANCE_ABS, Math.abs(b || a) * MONEY_TOLERANCE_PCT);
 
 /**
+ * Fields holding a figure rather than words. The value typed against one of
+ * these has to parse as a number or the rule cannot mean anything.
+ */
+const NUMERIC: ReadonlySet<Field> = new Set<Field>([...MONEY, "dayCount"]);
+
+/**
+ * A number as somebody actually types it into a money field.
+ *
+ * `Number("$75.00")` is NaN, and a rule whose expectation is NaN fails every
+ * comparison it makes — so "flag a day totalling more than $75" flagged all
+ * 116 matching expenses, including a $10 breakfast, and the reason was
+ * invisible: the rule read correctly on screen and the preview counted
+ * confidently. A dollar sign is the obvious thing to type in a field labelled
+ * "Matching total that day"; the engine reads it rather than the person
+ * having to know not to write it. Commas and stray spaces go the same way.
+ *
+ * Null means it is not a number at all, which is caught at save time by
+ * `problems()` and treated as unjudgeable at run time — never as a failure.
+ */
+export function numberValue(text: string): number | null {
+  const cleaned = text.replace(/[$,\s]/g, "");
+  if (cleaned === "") return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
  * Which fields a given field can be compared against.
  *
  * Same kind only. "Merchant is more than Amount" is not a question, and an
@@ -344,8 +371,7 @@ function rightHandSide(subject: Subject, c: Condition): { text: string; number: 
   if (c.compare) {
     return { text: textOf(subject, c.compare), number: numberOf(subject, c.compare) };
   }
-  const n = Number(c.value);
-  return { text: c.value, number: Number.isFinite(n) && c.value.trim() !== "" ? n : null };
+  return { text: c.value, number: numberValue(c.value) };
 }
 
 /**
@@ -370,7 +396,11 @@ export function test(subject: Subject, c: Condition, group?: Group): boolean | n
     if (got === null) return null;
 
     const rhs = rightHandSide(subject, c);
-    if (rhs.number === null) return c.compare ? null : false;
+    // A right-hand side that is not a number cannot be compared with one.
+    // That is UNKNOWN, not "failed": returning false here meant a rule with a
+    // mistyped figure flagged every expense it matched, loudly and wrongly,
+    // rather than doing nothing while the editor complained.
+    if (rhs.number === null) return null;
     const want = rhs.number;
     const slack = MONEY.has(c.field) ? tolerance(got, want) : 0.005;
 
@@ -593,8 +623,14 @@ export function problems(rule: RuleBody): string[] {
     if (needsValue(c) && !c.value.trim()) {
       out.push(`${at}“${FIELD_LABEL[c.field]} ${opLabel(c.field, c.op)}” needs a value — pick one, or remove the row with the ×.`);
     }
-    if (c.field === "amount" && needsValue(c) && !Number.isFinite(Number(c.value))) {
-      out.push(`${at}“${c.value}” is not an amount.`);
+    // Every numeric field, not just Amount. Only Amount was checked, so
+    // "$75.00" saved against "Matching total that day" without a word and
+    // then matched nothing — which the engine turned into flagging
+    // everything. A dollar sign now parses; genuine nonsense is refused here,
+    // at the one moment somebody can fix it.
+    if (NUMERIC.has(c.field) && needsValue(c) && c.value.trim() !== "" &&
+        numberValue(c.value) === null) {
+      out.push(`${at}“${c.value}” is not ${MONEY.has(c.field) ? "an amount" : "a number"}.`);
     }
     if (!opsFor(c.field).includes(c.op)) {
       out.push(`${at}${FIELD_LABEL[c.field]} cannot be tested with “${opLabel(c.field, c.op)}”.`);
