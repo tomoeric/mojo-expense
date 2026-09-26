@@ -368,7 +368,39 @@ export function explain(subject: Subject, rule: RuleBody, group?: Group): string
     `${rule.must.value ? `“${rule.must.value}”` : ""} was expected — found “${got}”.`;
 }
 
-/** Human-readable one-liner for the rule itself, used in the list and the log. */
+/**
+ * The opposite of each operator, for saying what a rule CATCHES.
+ *
+ * `starts_with` has no inverse in the set, so it is worded rather than mapped.
+ */
+const NEGATE: Partial<Record<Op, Op>> = {
+  contains: "not_contains", not_contains: "contains",
+  is: "is_not", is_not: "is",
+  gt: "lte", lte: "gt", lt: "gte", gte: "lt",
+  is_blank: "is_not_blank", is_not_blank: "is_blank",
+};
+
+/** How a condition reads when it FAILS, which is what an action acts on. */
+function failLabel(field: Field, op: Op): string {
+  if (op === "starts_with") return "does not start with";
+  const opposite = NEGATE[op];
+  return opposite ? opLabel(field, opposite) : `is not ${opLabel(field, op)}`;
+}
+
+/**
+ * One line saying what a rule does, phrased as what it CATCHES.
+ *
+ * Not as what it requires. The old wording — "Matching total that day is more
+ * than 75 — otherwise flag it" — reads to any normal person as "flag anything
+ * over 75", when it means the exact opposite: flag everything at or under.
+ * Two real rules were written backwards that way and between them caught 204
+ * expenses out of a queue of 126, because the summary agreed with the
+ * mistaken reading instead of contradicting it.
+ *
+ * Said as the catch, a correct rule reads plainly ("flags meals where the
+ * day's total is more than 75") and an inverted one reads absurd — which is
+ * the point. The sentence has to disagree with you when you are wrong.
+ */
 export function summarise(rule: RuleBody): string {
   const cond = (c: Condition) =>
     c.op === "is_blank" || c.op === "is_not_blank"
@@ -376,12 +408,28 @@ export function summarise(rule: RuleBody): string {
       : c.compare
         ? `${FIELD_LABEL[c.field]} ${opLabel(c.field, c.op)} ${FIELD_LABEL[c.compare]}`
         : `${FIELD_LABEL[c.field]} ${opLabel(c.field, c.op)} “${c.value}”`;
+
+  /** The MUST as a reviewer meets it: the thing that went wrong. */
+  const failed = (c: Condition) =>
+    c.op === "is_blank" || c.op === "is_not_blank"
+      ? `${FIELD_LABEL[c.field]} ${failLabel(c.field, c.op)}`
+      : c.compare
+        ? `${FIELD_LABEL[c.field]} ${failLabel(c.field, c.op)} ${FIELD_LABEL[c.compare]}`
+        : `${FIELD_LABEL[c.field]} ${failLabel(c.field, c.op)} “${c.value}”`;
+
   const when = rule.when.map(cond).join(rule.match === "any" ? " or " : " and ");
-  const then = rule.action === "flag" ? "flag it" : rule.action === "deny" ? "deny it" : "approve it";
-  if (!rule.must) return `When ${when} — ${then}.`;
-  return rule.action === "approve"
-    ? `When ${when} and ${cond(rule.must)} — approve it.`
-    : `When ${when}, ${cond(rule.must)} — otherwise ${then}.`;
+
+  // Approve acts on the ones that PASS, so it is the one action that reads
+  // correctly as a requirement rather than as a catch.
+  if (rule.action === "approve") {
+    return rule.must
+      ? `Approves an expense where ${when} and ${cond(rule.must)}.`
+      : `Approves every expense where ${when}.`;
+  }
+  const verb = rule.action === "deny" ? "Denies" : "Flags";
+  return rule.must
+    ? `${verb} an expense where ${when}, and ${failed(rule.must)}.`
+    : `${verb} every expense where ${when}.`;
 }
 
 /** Everything wrong with a rule, in sentences. Empty means it is usable. */

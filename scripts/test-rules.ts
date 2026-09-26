@@ -113,9 +113,9 @@ const matchRule = rule({
 
 check("the example rule is valid", problems(matchRule).length === 0,
   problems(matchRule).join(" "));
-check("it reads as the sentence it is",
+check("it reads as what it catches, not as what it requires",
   summarise(matchRule) ===
-    "When Receipt is not blank, Receipt total (read off the image) equals Amount — otherwise flag it.",
+    "Flags an expense where Receipt is not blank, and Receipt total (read off the image) does not equal Amount.",
   summarise(matchRule));
 // "is" is fine for a category and ambiguous for money — nobody asks whether one
 // amount "is" another. The wording is per-field, and it is the server's answer
@@ -240,9 +240,18 @@ const spendRule = rule({
 
 check("both rules are valid", problems(mealRule).length === 0 && problems(spendRule).length === 0,
   [...problems(mealRule), ...problems(spendRule)].join(" "));
-check("the count rule reads as a limit, not an off-by-one",
-  summarise(mealRule) === "When Category contains “meals”, Matching expenses that day is at most “3” — otherwise flag it.",
+check("the count rule reads as the thing it catches",
+  summarise(mealRule) === "Flags an expense where Category contains “meals”, and Matching expenses that day is more than “3”.",
   summarise(mealRule));
+// The wording that let two real rules ship backwards. Written as a
+// requirement, "day total is more than 75 — otherwise flag it" reads as
+// "flag anything over 75" and means the opposite; between them those two
+// rules caught 204 expenses out of a queue of 126. Said as a catch, the
+// mistake is on the page.
+check("an INVERTED rule reads absurd rather than plausible",
+  summarise({ ...mealRule, must: { field: "dayTotal", op: "gt", value: "75" } })
+    === "Flags an expense where Category contains “meals”, and Matching total that day is at most “75”.",
+  summarise({ ...mealRule, must: { field: "dayTotal", op: "gt", value: "75" } }));
 
 const meal = (over: Partial<Subject> = {}) =>
   expense({ category: "Meals & Entertainment", note: "lunch", ...over });
@@ -331,15 +340,17 @@ check("and a WHEN complaint says WHEN",
     .some((p) => p.startsWith("WHEN: ")));
 
 console.log("\nHow a rule reads back");
-check("an expectation rule reads as one",
-  summarise(rule()) === "When Note contains “gas”, Category is “Auto Fee & Fuel” — otherwise flag it.",
+check("a flag rule names the failure it acts on",
+  summarise(rule()) === "Flags an expense where Note contains “gas”, and Category is not “Auto Fee & Fuel”.",
   summarise(rule()));
-check("an approve rule reads as a reward, not a punishment",
+// Approve is the one action that acts on the PASSES, so it is the one that
+// still reads correctly as a requirement.
+check("an approve rule reads as a requirement, because that is what it is",
   summarise(rule({ action: "approve" }))
-    === "When Note contains “gas” and Category is “Auto Fee & Fuel” — approve it.",
+    === "Approves an expense where Note contains “gas” and Category is “Auto Fee & Fuel”.",
   summarise(rule({ action: "approve" })));
-check("a rule with no expectation reads plainly",
-  summarise(rule({ must: null, action: "deny" })) === "When Note contains “gas” — deny it.",
+check("a rule with no expectation says it acts on everything it matches",
+  summarise(rule({ must: null, action: "deny" })) === "Denies every expense where Note contains “gas”.",
   summarise(rule({ must: null, action: "deny" })));
 
 if (!process.env.DATABASE_URL) {

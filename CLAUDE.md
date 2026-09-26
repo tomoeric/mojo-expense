@@ -156,6 +156,14 @@ the blocks.
 - **Rules run after the import COMMITS**, never inside its transaction: a
   decision must not exist for an expense whose import rolled back. A failure
   there is a warning on the import, not a failed import.
+- **A rule reads as what it CATCHES, not what it requires** (`summarise`). The
+  old wording — "Matching total that day is more than 75 — otherwise flag it"
+  — reads to anybody as "flag anything over 75" and means the opposite. Two
+  real rules shipped backwards that way and caught 204 expenses out of a queue
+  of 126, because the sentence agreed with the mistaken reading. Phrased as
+  the catch, a correct rule reads plainly and an inverted one reads absurd.
+  Approve is the exception and stays a requirement, because it acts on the
+  passes.
 - **Editing a rule deletes its hits.** Verdicts reached under the old
   definition are not evidence of anything, and an expense the edited rule no
   longer matches would otherwise keep a flag from a rule that has stopped
