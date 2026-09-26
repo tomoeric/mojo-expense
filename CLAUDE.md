@@ -480,6 +480,14 @@ before a person did. Add to it before adding to the runner.
   photograph is extraction, not reasoning. Opus was the default and cost about
   five times as much per receipt — the single biggest saving here, and larger
   than the difference between billing routes.
+- **Not every model takes `effort`.** Haiku 4.5 rejects it with a 400, and
+  moving receipt reading to Haiku for the cost saving broke every read until
+  the parameter came out. `supportsEffort()` is an allow-list and an
+  unrecognised model is assumed NOT to support it: sending it where it is
+  refused fails the whole call, omitting it only loses a tuning knob. Spread
+  it into `output_config` rather than building that object in a helper —
+  `messages.parse` infers the parsed shape from `format`, and a helper's
+  return type erases it.
 - **Estimating this by hand does not work.** Every figure quoted before the
   meter existed was wrong, once by a factor of fifty, because it rested on
   assumed token counts. Quote the meter or say you do not know.

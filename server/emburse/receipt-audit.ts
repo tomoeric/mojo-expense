@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod/v4";
 import { env, isAuditConfigured, isEmburseConfigured } from "../env.js";
-import { callAnthropic, describeAiConfig } from "../ai.js";
+import { callAnthropic, describeAiConfig, supportsEffort } from "../ai.js";
 import { fetchReceipt, ReceiptError } from "./receipts.js";
 import type { ExpenseLine } from "./types.js";
 
@@ -197,7 +197,10 @@ async function read(contentType: string, body: Buffer): Promise<ReceiptReading> 
     system: SYSTEM,
     // Low effort: this is short-form extraction, not reasoning, and the whole
     // point is that it stays cheap enough to run across a report.
-    output_config: { effort: "low", format: zodOutputFormat(ReceiptReading) },
+    output_config: {
+      ...(supportsEffort(env.audit.model) ? { effort: "low" as const } : {}),
+      format: zodOutputFormat(ReceiptReading),
+    },
     messages: [
       {
         role: "user",

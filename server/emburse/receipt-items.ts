@@ -2,7 +2,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod/v4";
 import { db, ensureSchema, isDbConfigured } from "../db.js";
 import { env, isAuditConfigured } from "../env.js";
-import { callAnthropic, describeAiConfig } from "../ai.js";
+import { callAnthropic, describeAiConfig, supportsEffort } from "../ai.js";
 
 /**
  * What was actually bought, read off the receipt itself.
@@ -150,7 +150,14 @@ export async function readReceipt(image: Buffer, contentType = "image/jpeg"): Pr
     // Medium rather than low: this is a long transcription off a poor
     // photograph, not a single number, and an item list that quietly drops
     // half the lines looks exactly like a short receipt.
-    output_config: { effort: env.audit.itemsEffort, format: zodOutputFormat(Reading) },
+    // Effort is spread in only where the model accepts it — Haiku rejects it
+    // outright with a 400. Spread rather than a helper returning the whole
+    // object, because `parse` infers the parsed shape from `format` and a
+    // helper's return type erases that.
+    output_config: {
+      ...(supportsEffort(env.audit.model) ? { effort: env.audit.itemsEffort } : {}),
+      format: zodOutputFormat(Reading),
+    },
     messages: [
       {
         role: "user",

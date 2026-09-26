@@ -322,3 +322,19 @@ export function logAiCredential(): void {
     console.log(`ai: using a direct ANTHROPIC_API_KEY${directUrl() ? ` via ${directUrl()}` : ""}.`);
   }
 }
+
+/**
+ * Whether a model accepts `output_config.effort`.
+ *
+ * An allow-list, and unknown models are treated as NOT supporting it. Sending
+ * the parameter to a model that rejects it is a hard 400 that fails the whole
+ * call; omitting it merely loses a tuning knob. So the safe default when in
+ * doubt is to leave it off.
+ *
+ * This was found the hard way: switching receipt reading to Haiku 4.5 for the
+ * cost saving sent `effort` straight into "This model does not support the
+ * effort parameter", and every receipt read failed until it came back out.
+ */
+export function supportsEffort(model: string): boolean {
+  return /^claude-(opus-(4-6|4-7|4-8|5|5-5)|sonnet-(4-6|5)|fable-5|mythos-5)/.test(model);
+}

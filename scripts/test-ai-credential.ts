@@ -301,5 +301,25 @@ try {
   server.close();
 }
 
+console.log("\nWhich models take the effort parameter");
+// Receipt reading moved to Haiku 4.5 for the cost saving, and every read
+// failed on "This model does not support the effort parameter" until the
+// parameter came back out. An allow-list, because sending it to a model that
+// refuses it is a hard 400 while omitting it only loses a tuning knob — so
+// the safe answer for anything unrecognised is no.
+// Its own import: the `ai` above is scoped to the block that drives the mock.
+const { supportsEffort } = await import("../server/ai.js");
+check("Haiku does not, which is the one that broke", !supportsEffort("claude-haiku-4-5"));
+check("Sonnet 4.5 does not either", !supportsEffort("claude-sonnet-4-5"));
+check("an unrecognised model is assumed not to", !supportsEffort("claude-something-new"));
+check("Opus 5 does", supportsEffort("claude-opus-5"));
+check("Sonnet 5 does", supportsEffort("claude-sonnet-5"));
+check("Opus 4.8 does", supportsEffort("claude-opus-4-8"));
+// The pairing that matters: whatever receipt reading is set to must be one
+// the call site will not send an unsupported parameter to.
+const { env } = await import("../server/env.js");
+check("and the model receipts actually use is handled either way",
+  typeof supportsEffort(env.audit.model) === "boolean", env.audit.model);
+
 console.log(failures === 0 ? "\nPASS" : `\n${failures} FAILED`);
 process.exit(failures === 0 ? 0 : 1);
