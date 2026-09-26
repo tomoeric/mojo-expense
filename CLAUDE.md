@@ -455,3 +455,31 @@ See `docs/TESTING.md`. The mock (`scripts/mock-emburse.ts`) is the only thing
 that exercises the failure paths — sign-in rejected, a second factor, a device
 check, a code typed in wrong — and every one of those was a real bug it caught
 before a person did. Add to it before adding to the runner.
+
+## What the AI costs
+
+- **Tokens are stored; money is worked out at display time** (`server/ai/usage.ts`).
+  Published prices change, and a row holding dollars would freeze whatever the
+  table said that day. Correcting a price is a one-line edit, not a backfill.
+- **The meter lives in `callAnthropic`**, the one place every AI call passes
+  through, so nothing added later can spend money without being counted. It is
+  best-effort and never awaited into the call path: a receipt that was read
+  successfully must not fail because the meter did.
+- **An unpriced model makes the total UNKNOWN, never lower.** Silently adding
+  zero for a model with no published rate on file gives a figure that looks
+  precise and is too small. The summary returns null and names the model.
+- **Receipt reading runs on Haiku 4.5, not Opus.** Reading line items off a
+  photograph is extraction, not reasoning. Opus was the default and cost about
+  five times as much per receipt — the single biggest saving here, and larger
+  than the difference between billing routes.
+- **Estimating this by hand does not work.** Every figure quoted before the
+  meter existed was wrong, once by a factor of fifty, because it rested on
+  assumed token counts. Quote the meter or say you do not know.
+
+## Testing your own Emburse connection
+
+- **It lives on "Your Emburse login", under the user icon** — the page where
+  the credential is entered is where "does it work" belongs. It tests the
+  signed-in person's own login and nobody else's, so Brian testing it tests
+  Brian's. It used to sit on the review queue, which is neither where the
+  login is set nor a place a reviewer wants an admin-shaped panel.

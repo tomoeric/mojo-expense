@@ -268,7 +268,10 @@ export const env = {
      * misread receipt costs a reviewer more than the tokens save. Override to
      * trade accuracy for cost.
      */
-    model: str("RECEIPT_AUDIT_MODEL", "claude-opus-5"),
+    // Haiku: reading line items off a photograph is extraction, not reasoning.
+    // Opus was the default and cost roughly five times as much per receipt for
+    // work this model does well — the single biggest saving available here.
+    model: str("RECEIPT_AUDIT_MODEL", "claude-haiku-4-5"),
     /**
      * Effort for reading line items off a receipt.
      *

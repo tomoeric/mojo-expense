@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { aiSpend } from "./ai/usage.js";
 import { env, isAuditConfigured, isEmburseConfigured } from "./env.js";
 import { TtlCache } from "./cache.js";
 import { HttpError } from "./http.js";
@@ -110,6 +111,20 @@ api.post("/ai-check", requireAuth, requireAdmin, async (_req, res) => {
   lastAiCheck = Date.now();
   try {
     res.json(await checkAi());
+  } catch (err) {
+    res.status(500).json({ error: describe(err) });
+  }
+});
+
+/**
+ * What the AI has cost. Admin-only: it is a spend figure, not queue data.
+ *
+ * Read from stored token counts and priced at display time, so a corrected
+ * price needs no backfill.
+ */
+api.get("/ai-usage", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    res.json(await aiSpend());
   } catch (err) {
     res.status(500).json({ error: describe(err) });
   }

@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { env } from "./env.js";
+import { recordAiUsage, type Usage } from "./ai/usage.js";
 
 /**
  * The one Anthropic client, and what to say when it will not work.
@@ -127,13 +128,34 @@ function isGatewayUnconfigured(err: unknown): boolean {
   return false;
 }
 
-/** Run an Anthropic call, retrying once on a direct key if the gateway disowns us. */
-export async function callAnthropic<T>(fn: (c: Anthropic) => Promise<T>): Promise<T> {
+/**
+ * Run an Anthropic call, retrying once on a direct key if the gateway disowns
+ * us — and metering whatever it cost.
+ *
+ * The meter lives here rather than at each call site because this is the one
+ * place every AI call in the app passes through, so nothing can be added later
+ * that spends money without being counted. It reads the usage block off the
+ * response and records it without waiting: a meter must never add latency to
+ * the thing it measures, and must never fail it either.
+ */
+export async function callAnthropic<T>(fn: (c: Anthropic) => Promise<T>, purpose = "receipt"): Promise<T> {
+  const meter = (out: T): T => {
+    const r = out as { model?: unknown; usage?: unknown } | null;
+    if (r && typeof r === "object" && r.usage) {
+      void recordAiUsage(
+        typeof r.model === "string" ? r.model : env.audit.model,
+        r.usage as Usage,
+        purpose,
+      );
+    }
+    return out;
+  };
+
   try {
-    return await fn(anthropic());
+    return meter(await fn(anthropic()));
   } catch (err) {
     if (!retryOnDirectKey(err)) throw err;
-    return await fn(anthropic());
+    return meter(await fn(anthropic()));
   }
 }
 

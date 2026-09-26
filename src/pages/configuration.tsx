@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   Loader2, Tags, MapPin, Building2, ChevronRight, Sparkles, CheckCircle2, AlertTriangle,
   type LucideIcon,
@@ -128,6 +129,8 @@ function AiConnection({ isAdmin }: { isAdmin: boolean }) {
           </div>
         </div>
       )}
+
+      <AiSpend isAdmin={isAdmin} />
     </div>
   );
 }
@@ -214,6 +217,109 @@ export function ConfigurationPage({ onOpen, isAdmin }: { onOpen: (key: ConfigPag
           );
         })}
       </div>
+    </div>
+  );
+}
+
+type Window = { calls: number; tokens: number; cost: number | null };
+type PerModel = {
+  model: string; calls: number; input: number; output: number;
+  cacheRead: number; cacheWrite: number; cost: number | null;
+};
+type Spend = {
+  today: Window; month: Window; total: Window;
+  byModel: PerModel[]; unpriced: string[]; perReceipt: number | null;
+};
+
+const dollars = (n: number | null): string =>
+  n === null ? "—" : n < 0.01 && n > 0 ? "<$0.01" : `$${n.toFixed(2)}`;
+
+/**
+ * What the AI has actually cost.
+ *
+ * Every estimate of this made before it existed was wrong, once by a factor of
+ * fifty, because it rested on assumed token counts. These are the counts the
+ * API reported, priced at render time — so the figure moves when the published
+ * price does, without anything needing a backfill.
+ */
+function AiSpend({ isAdmin }: { isAdmin: boolean }) {
+  const { data } = useQuery<Spend>({
+    queryKey: ["ai-usage"],
+    enabled: isAdmin,
+    queryFn: async () => {
+      const res = await fetch("/api/ai-usage");
+      if (!res.ok) throw new Error("Could not read AI usage");
+      return (await res.json()) as Spend;
+    },
+  });
+
+  if (!isAdmin || !data) return null;
+  // Nothing spent yet says more as one quiet line than as an empty table.
+  if (data.total.calls === 0) {
+    return (
+      <p className="mt-3 text-xs text-muted-foreground">
+        No AI calls yet, so nothing has been spent.
+      </p>
+    );
+  }
+
+  return (
+    <div className="mt-3 rounded-lg border border-border bg-muted/30 p-3">
+      <div className="flex flex-wrap items-baseline gap-x-6 gap-y-2">
+        <Fig label="today" value={dollars(data.today.cost)} sub={`${data.today.calls} calls`} />
+        <Fig label="this month" value={dollars(data.month.cost)} sub={`${data.month.calls} calls`} />
+        <Fig label="all time" value={dollars(data.total.cost)} sub={`${data.total.calls} calls`} />
+        <Fig
+          label="per receipt"
+          value={data.perReceipt === null ? "—" : `$${data.perReceipt.toFixed(4)}`}
+          sub="average"
+        />
+      </div>
+
+      <table className="mt-3 w-full text-xs">
+        <thead className="text-left text-muted-foreground">
+          <tr>
+            <th className="font-medium">Model</th>
+            <th className="text-right font-medium">Calls</th>
+            <th className="text-right font-medium">In</th>
+            <th className="text-right font-medium">Out</th>
+            <th className="text-right font-medium">Cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.byModel.map((m) => (
+            <tr key={m.model} className="border-t border-border/60">
+              <td className="py-1 font-medium">{m.model}</td>
+              <td className="tnum py-1 text-right">{m.calls.toLocaleString()}</td>
+              <td className="tnum py-1 text-right">{m.input.toLocaleString()}</td>
+              <td className="tnum py-1 text-right">{m.output.toLocaleString()}</td>
+              <td className="tnum py-1 text-right">{dollars(m.cost)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {data.unpriced.length > 0 && (
+        <p className="mt-2 text-xs text-amber-700">
+          No published price on file for {data.unpriced.join(", ")}, so any total including it reads
+          as —. The tokens are still counted.
+        </p>
+      )}
+      <p className="mt-2 text-xs text-muted-foreground">
+        Priced from published rates held in the app, so treat it as close rather than exact. Usage
+        billed through a Replit AI integration appears on the Replit bill instead.
+      </p>
+    </div>
+  );
+}
+
+function Fig({ label, value, sub }: { label: string; value: string; sub: string }) {
+  return (
+    <div>
+      <p className="text-lg font-bold tnum">{value}</p>
+      <p className="text-xs text-muted-foreground">
+        {label} · {sub}
+      </p>
     </div>
   );
 }

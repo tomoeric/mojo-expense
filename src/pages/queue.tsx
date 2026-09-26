@@ -5,7 +5,6 @@ import { ExpenseTable, buildRows, type Row } from "@/components/expense-table";
 import { DecideButtons, TestDecision } from "@/components/decide-controls";
 import { useDecisions } from "@/lib/decisions";
 import { CodePrompt } from "@/components/code-prompt";
-import { EmburseCheck } from "@/components/emburse-check";
 
 /**
  * The reviewer's landing page: one line per expense still awaiting a decision.
@@ -74,8 +73,6 @@ export function QueuePage({
       {error && (
         <p className="rounded-lg border border-red-500/30 bg-red-500/10 p-2.5 text-sm">{error}</p>
       )}
-
-      <EmburseCheck canDecide={canDecide} />
 
       {/* Above everything: a decision is held until this is answered, and the
           person who can answer it is the one reading this. */}

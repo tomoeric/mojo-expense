@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, KeyRound, Check, Trash2, ShieldAlert, Info } from "lucide-react";
+import { EmburseCheck } from "@/components/emburse-check";
 
 type Credential = {
   userEmail: string;
@@ -202,6 +203,14 @@ export function MyEmburseLoginPage() {
           )}
         </div>
       </div>
+
+      {/* Tested here rather than on the queue. Approving a real expense used to
+          be the only way to find out whether a login worked, so a new
+          reviewer's first lesson was that a real expense "did not go through".
+          This is the page where the login is entered, so it is where "does it
+          work" belongs — and it tests the signed-in person's own credentials,
+          never anybody else's. */}
+      <EmburseCheck canDecide={Boolean(credential)} />
 
       <p className="flex items-start gap-2 rounded-lg border border-border bg-muted/50 p-3 text-xs text-muted-foreground">
         <Info className="mt-0.5 h-4 w-4 shrink-0" />
