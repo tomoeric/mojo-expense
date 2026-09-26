@@ -136,7 +136,13 @@ function useHashRoute(): { route: RailKey; setRoute: (k: RailKey) => void } {
 
 export function App() {
   const { route, setRoute } = useHashRoute();
-  const [open, setOpen] = useState<ExpenseReport | null>(null);
+  // Which expense was clicked, alongside the day it belongs to. The drawer
+  // used to be handed the day alone, so clicking one receipt opened
+  // "3 expenses" and showed whichever receipt happened to be first — the row
+  // you picked was somewhere in a list. The line id is what makes the drawer
+  // open on the thing you actually clicked.
+  const [open, setOpen] = useState<{ report: ExpenseReport; lineId?: string } | null>(null);
+  const openOne = (report: ExpenseReport, lineId?: string) => setOpen({ report, lineId });
 
   const queryClient = useQueryClient();
   const auth = useAuth();
@@ -170,7 +176,7 @@ export function App() {
   }
 
   // A refetch can replace the open report; keep the drawer showing live data.
-  const openReport = open ? (data?.reports.find((r) => r.id === open.id) ?? open) : null;
+  const openReport = open ? (data?.reports.find((r) => r.id === open.report.id) ?? open.report) : null;
 
   return (
     <div className="min-h-screen">
@@ -314,9 +320,9 @@ export function App() {
           )}
 
           {data && route === "queue" && (
-            <QueuePage data={data} onOpen={setOpen} />
+            <QueuePage data={data} onOpen={openOne} />
           )}
-          {data && route === "reports" && <ReportsPage data={data} config={config.data} onOpen={setOpen} />}
+          {data && route === "reports" && <ReportsPage data={data} config={config.data} onOpen={openOne} />}
           {data && route === "analytics" && <AnalyticsPage data={data} />}
           {route === "import" && <ImportPage />}
           {route === "configuration" && (
@@ -332,6 +338,7 @@ export function App() {
       {openReport && (
         <ReportDrawer
           report={openReport}
+          focusId={open?.lineId}
           onClose={() => setOpen(null)}
           days={WINDOW_DAYS}
           auditConfigured={config.data?.auditConfigured ?? false}

@@ -294,6 +294,21 @@ the blocks.
   actually read the receipt, which is the moment the decision is made — going
   back to the table to click Approve puts a step between looking and saying so.
   It uses the same `useDecisions` hook as the queue, so both stay in step.
+- **The drawer opens on the expense that was clicked**, not on its day.
+  Reports are grouped one per person per day, and the queue used to hand the
+  drawer the day alone — so clicking one receipt gave a heading reading
+  "3 expenses", the day's totals, and whichever receipt sorted first in the
+  pane. The row you picked was somewhere in the list. The clicked line id is
+  threaded through as `focusId`: it leads the header, opens the receipt pane,
+  and sorts first, with the rest of that day named underneath as context.
+  One receipt against one claim is the unit of review; the day is background.
+- **A day rule flags a SET, so the flag count is a way into it.** "More than
+  three meals" marks every expense in the day, because the problem is the
+  group — read one row at a time it looks like an $11 McDonald's nobody could
+  object to. Clicking the amber chip narrows the queue to that person on that
+  date, with a pill saying so and a way back. Individual by default, grouped
+  when you ask, which is the way round that earlier flattening decision
+  already settled.
 - **A line is a card, not a table row**, because the row could not carry the
   note, the site, what it was paid with, the receipt and the decision. With no
   stored Emburse login the decide footer is dropped entirely rather than

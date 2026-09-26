@@ -23,7 +23,7 @@ export function QueuePage({
   onOpen,
 }: {
   data: ReportsResponse;
-  onOpen: (r: ExpenseReport) => void;
+  onOpen: (r: ExpenseReport, lineId: string) => void;
 }) {
   const waiting = useMemo(
     () => buildRows(data, data.reports.filter((r) => r.status === "submitted")),
@@ -124,7 +124,7 @@ export function QueuePage({
 
       <ExpenseTable
         rows={rows}
-        onOpen={(r) => onOpen(r.report)}
+        onOpen={(r) => onOpen(r.report, r.line.id)}
         emptyMessage="Nothing waiting on a decision."
       />
     </div>

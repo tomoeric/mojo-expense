@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import {
   ArrowDown, ArrowUp, ChevronsUpDown, Search, Receipt, AlertTriangle,
   Columns3, ChevronLeft, ChevronRight, RotateCcw, X, Sparkles, Plus,
@@ -6,6 +6,15 @@ import {
 import type { ExpenseReport, ExpenseLine, ReportsResponse } from "@/lib/api";
 import { money, shortDate, daysAgo } from "@/lib/format";
 import { Empty } from "@/components/ui";
+
+/**
+ * Set by the table so a flag chip can filter to the set it belongs to.
+ *
+ * COLUMNS is a module-level array and its render functions take only a row,
+ * which is what keeps the column definitions readable. A context reaches the
+ * one cell that needs a handler without making every column a factory.
+ */
+const GroupFilter = createContext<((employee: string, date: string) => void) | null>(null);
 
 /**
  * One row per expense, which is one row per receipt.
@@ -102,10 +111,7 @@ const COLUMNS: Column[] = [
         // A count, not the label: flag text runs to "Waiting 9 days for
         // review", which truncates to "Wait" in a column this narrow and reads
         // as a status rather than a warning. Hover has the words.
-        <span title={r.flags.join("\n")} className="inline-flex items-center gap-1 text-xs font-semibold text-amber-600">
-          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-          {r.flags.length}
-        </span>
+        <FlagChip row={r} />
       ) },
   { key: "amount", label: "Amount", pct: 7, numeric: true,
     value: (r) => r.line.amount,
@@ -116,6 +122,48 @@ const COLUMNS: Column[] = [
     value: (r) => r.decision?.state ?? "",
     render: (r) => r.decide ?? <span className="text-xs text-muted-foreground">—</span> },
 ];
+
+/**
+ * The flag count, and a way into the group behind it.
+ *
+ * A day rule — "more than three meals" — flags every expense in the day,
+ * because the problem is the set rather than any one receipt. Read one row at
+ * a time that looks like an $11 McDonald's nobody could object to. Clicking
+ * the chip narrows the table to that person on that date, which is the only
+ * view in which the flag makes sense.
+ *
+ * It stops the click reaching the row, which would open the drawer over the
+ * table it just filtered.
+ */
+function FlagChip({ row }: { row: Row }) {
+  const onGroup = useContext(GroupFilter);
+  const label = row.flags.join("\n");
+  // Bound before the guard: narrowing a property does not survive into the
+  // click handler's closure.
+  const date = row.line.date;
+  if (!onGroup || !date) {
+    return (
+      <span title={label} className="inline-flex items-center gap-1 text-xs font-semibold text-amber-600">
+        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+        {row.flags.length}
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      title={`${label}\n\nClick to see everything flagged for ${row.employee} that day.`}
+      onClick={(e) => {
+        e.stopPropagation();
+        onGroup(row.employee, date);
+      }}
+      className="inline-flex items-center gap-1 rounded px-1 text-xs font-semibold text-amber-600 hover:bg-amber-500/15"
+    >
+      <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+      {row.flags.length}
+    </button>
+  );
+}
 
 const DEFAULT_ORDER: ColumnKey[] = COLUMNS.map((c) => c.key);
 const DEFAULT_HIDDEN: ColumnKey[] = ["location"];
@@ -243,6 +291,8 @@ export function ExpenseTable({
   const { visible, hidden, move, hide, show, reset } = useColumns();
   const [sort, setSort] = useState<{ key: ColumnKey; dir: 1 | -1 }>({ key: "date", dir: -1 });
   const [query, setQuery] = useState("");
+  // One person, one date: the unit a day rule is about.
+  const [group, setGroup] = useState<{ employee: string; date: string } | null>(null);
   const [editing, setEditing] = useState(false);
 
   const byKey = useMemo(() => new Map(COLUMNS.map((c) => [c.key, c] as const)), []);
@@ -262,15 +312,21 @@ export function ExpenseTable({
   }, [visible, sort.key]);
 
   const filtered = useMemo(() => {
+    // The group narrows first: it is an explicit "show me this set", and a
+    // leftover search term silently hiding half of it would misrepresent the
+    // very thing the rule is complaining about.
+    const base = group
+      ? rows.filter((r) => r.employee === group.employee && r.line.date === group.date)
+      : rows;
     const q = query.trim().toLowerCase();
-    if (!q) return rows;
+    if (!q) return base;
     // Person-first, but merchant and note are searched too: reviewers arrive
     // with "who was this" as often as with a name.
-    return rows.filter((r) =>
+    return base.filter((r) =>
       [r.employee, r.line.merchant, r.department, r.line.category, r.line.note, r.line.location]
         .some((v) => (v ?? "").toLowerCase().includes(q)),
     );
-  }, [rows, query]);
+  }, [rows, query, group]);
 
   const sorted = useMemo(() => {
     const col = byKey.get(sort.key);
@@ -291,8 +347,30 @@ export function ExpenseTable({
   const toggle = (key: ColumnKey) =>
     setSort((s) => (s.key === key ? { key, dir: s.dir === 1 ? -1 : 1 } : { key, dir: key === "amount" || key === "date" || key === "age" ? -1 : 1 }));
 
+  const groupTotal = group ? filtered.reduce((a, r) => a + r.line.amount, 0) : 0;
+
   return (
+    <GroupFilter.Provider value={(employee, date) => setGroup({ employee, date })}>
     <div className="space-y-3">
+      {group && (
+        // Says what is being shown and how to leave. A filter you cannot see
+        // is a table that is silently lying about how much work is left.
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>
+            Showing what was flagged for <strong>{group.employee}</strong> on{" "}
+            <strong>{group.date}</strong> — {filtered.length}{" "}
+            {filtered.length === 1 ? "expense" : "expenses"}, {money(groupTotal)}.
+          </span>
+          <button
+            type="button"
+            onClick={() => setGroup(null)}
+            className="ml-auto rounded-md border border-amber-300 px-2 py-1 text-xs font-semibold hover:bg-amber-100"
+          >
+            Show the whole queue
+          </button>
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative min-w-56 flex-1">
           <Search className="absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -445,6 +523,7 @@ export function ExpenseTable({
 
       {diff && <ChangeDialog row={diff} onClose={() => setDiff(null)} />}
     </div>
+    </GroupFilter.Provider>
   );
 }
 

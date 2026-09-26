@@ -15,11 +15,23 @@ export function ReportDrawer({
   onClose,
   days,
   auditConfigured,
+  focusId,
 }: {
   report: ExpenseReport;
   onClose: () => void;
   days: number;
   auditConfigured: boolean;
+  /**
+   * The expense that was clicked.
+   *
+   * Reports are grouped one per person per day, so opening a row used to hand
+   * over the whole day: a heading reading "3 expenses", totals for the day,
+   * and whichever receipt happened to sort first in the pane. The receipt you
+   * clicked was in there somewhere. With the line id the drawer opens on that
+   * expense and the rest of the day follows underneath, which is the right
+   * way round — one receipt against one claim is the unit of review.
+   */
+  focusId?: string;
 }) {
   const [viewing, setViewing] = useState<ExpenseLine | null>(null);
   // Only the lines in this drawer, and only those with a receipt: asking about
@@ -37,9 +49,19 @@ export function ReportDrawer({
   // The receipt in the left pane. Defaults to the first one there is, which
   // for a single-line report — nearly all of them — means it is simply open.
   const receipted = useMemo(() => report.lines.filter((l) => l.hasReceipt), [report.lines]);
-  const [showingId, setShowingId] = useState<string | null>(null);
+  const [showingId, setShowingId] = useState<string | null>(focusId ?? null);
+  // Reopening on a different row must move the pane, or the drawer shows the
+  // previous receipt against the new expense — the one mix-up here that could
+  // get the wrong thing approved.
+  useEffect(() => setShowingId(focusId ?? null), [focusId, report.id]);
   const showing = receipted.find((l) => l.id === showingId) ?? receipted[0] ?? null;
 
+  const focused = report.lines.find((l) => l.id === focusId) ?? null;
+  // The clicked expense first, the rest of that person's day after it.
+  const ordered = useMemo(
+    () => (focused ? [focused, ...report.lines.filter((l) => l.id !== focused.id)] : report.lines),
+    [report.lines, focused],
+  );
   const lineIds = useMemo(() => report.lines.map((l) => l.id), [report.lines]);
   const { byExpense, canDecide, decide, cancel } = useDecisions(lineIds);
 
@@ -87,12 +109,31 @@ export function ReportDrawer({
         <header className="flex shrink-0 items-start justify-between gap-4 border-b border-border bg-card px-5 py-4">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="truncate text-lg font-bold">{report.name}</h2>
+              <h2 className="truncate text-lg font-bold">
+                {focused ? focused.merchant : report.name}
+              </h2>
               <StatusPill status={report.status} />
             </div>
             <p className="mt-0.5 truncate text-sm text-muted-foreground">
-              {[report.employeeName, report.department, report.reference].filter(Boolean).join(" · ")}
+              {(focused
+                ? [
+                    moneyExact(focused.amount),
+                    shortDate(focused.date),
+                    report.employeeName,
+                    focused.category,
+                  ]
+                : [report.employeeName, report.department, report.reference]
+              )
+                .filter(Boolean)
+                .join(" · ")}
             </p>
+            {focused && report.lines.length > 1 && (
+              // Said plainly rather than implied by a count in the heading:
+              // the other expenses are context for this one, not the subject.
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {report.lines.length - 1} more from {report.employeeName} that day, below.
+              </p>
+            )}
           </div>
           <button
             type="button"
@@ -195,7 +236,7 @@ export function ReportDrawer({
               </p>
             ) : (
               <ul className="space-y-3">
-                {report.lines.map((l) => (
+                {ordered.map((l) => (
                   <LineCard
                     key={l.id}
                     line={l}
