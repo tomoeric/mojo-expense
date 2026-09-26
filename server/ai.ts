@@ -131,6 +131,38 @@ export async function callAnthropic<T>(fn: (c: Anthropic) => Promise<T>): Promis
 }
 
 /**
+ * Enough of a key to recognise, never enough to use.
+ *
+ * A rejected key is almost always a damaged copy rather than a wrong one, and
+ * every way it gets damaged is invisible in a Secrets box: a trailing newline
+ * from a paste, surrounding quotes typed in by hand, a truncation from a
+ * half-selected copy. Reading the length and both ends back tells you which
+ * of those happened in one glance, and matches what console.anthropic.com
+ * shows beside each key.
+ *
+ * `direct()` has already trimmed, so the whitespace and quote notes describe
+ * the RAW secret — the whole point is to surface what trimming hid.
+ */
+function fingerprint(key: string): string {
+  const raw = process.env.ANTHROPIC_API_KEY ?? "";
+  if (!key) return "empty";
+  const notes: string[] = [];
+  if (raw !== key) notes.push("has whitespace around it");
+  // Stripped before the prefix check, so a quoted key is reported as quoted
+  // rather than as two separate faults — the quote IS why it does not start
+  // sk-ant-, and saying both reads as two problems to chase.
+  const bare = key.replace(/^["']|["']$/g, "");
+  if (bare !== key) notes.push("is wrapped in quotes, which become part of the key");
+  else if (!bare.startsWith("sk-ant-")) notes.push("does not start sk-ant-");
+  if (/\s/.test(bare)) notes.push("has a space or newline inside it");
+
+  const shape = `${key.slice(0, 14)}…${key.slice(-4)}, ${key.length} characters`;
+  if (notes.length === 0) return shape;
+  const last = notes.pop()!;
+  return `${shape} — and it ${notes.length > 0 ? `${notes.join("; ")}; and ${last}` : last}`;
+}
+
+/**
  * A sentence a reviewer can act on, for the failures that are configuration
  * rather than a bad receipt. Returns null for everything else, so callers keep
  * their own wording for real errors.
@@ -150,12 +182,27 @@ export function describeAiConfig(err: unknown): string | null {
     // "ANTHROPIC_API_KEY was rejected" named the one that may not even be in
     // use. A 401 also rules out the configuration faults above: something
     // received the call and turned it down.
-    return aiVia() === "replit"
-      ? "Replit's AI sidecar rejected the call (401). The integration is attached but is not accepting it — " +
-        "re-connect Anthropic under Setup → Integrations, check it is enabled for the deployment, and republish."
-      : "The direct ANTHROPIC_API_KEY was rejected (401). The key reached Anthropic and was turned down, so it is " +
-        "wrong rather than missing: check the secret for a stray space, quote or truncation, that it starts " +
-        "sk-ant-, and that it has not been revoked at console.anthropic.com.";
+    if (aiVia() === "replit") {
+      return "Replit's AI sidecar rejected the call (401). The integration is attached but is not accepting it — " +
+        "re-connect Anthropic under Setup → Integrations, check it is enabled for the deployment, and republish.";
+    }
+    // "It reached Anthropic" is only true when nothing sits in front of
+    // api.anthropic.com. With ANTHROPIC_BASE_URL set — a leftover from
+    // another project, or a sidecar address copied across — the 401 came from
+    // whatever is at that URL instead, and sending somebody off to rotate a
+    // perfectly good key is the wrong answer entirely.
+    const where = directUrl();
+    return (
+      (where
+        ? `The direct ANTHROPIC_API_KEY was rejected (401) by ${where} — ANTHROPIC_BASE_URL is set, so the call ` +
+          `went there rather than to api.anthropic.com. Either that proxy does not accept this key, or the ` +
+          `variable is a leftover and should be unset. `
+        : "The direct ANTHROPIC_API_KEY was rejected (401). The key reached Anthropic and was turned down, so it " +
+          "is wrong rather than missing. ") +
+      `The key in use is ${fingerprint(direct())} — check that against console.anthropic.com for a stray space, ` +
+      "quote or truncation, and that it has not been revoked. Note an admin key (sk-ant-admin…) also starts " +
+      "sk-ant- and is rejected here: this needs an ordinary API key."
+    );
   }
   if (err instanceof Anthropic.PermissionDeniedError) {
     return aiVia() === "replit"

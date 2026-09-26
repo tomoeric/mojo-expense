@@ -190,6 +190,15 @@ the blocks.
   direct key and stays there for the process. Tried once, not once per receipt.
 - Never report an AI failure as a status code. `describeAiConfig()` turns the
   configuration ones into the fix.
+- **A 401 must name the key it used, and must not claim where it went.** A
+  rejected key is nearly always a DAMAGED copy rather than a wrong one, and
+  every way it gets damaged — a trailing newline from a paste, hand-typed
+  quotes, a half-selected copy — is invisible in a Secrets box. So the message
+  carries a `fingerprint()`: both ends, the length, and what is wrong with the
+  shape, never the middle. And it only says "the key reached Anthropic" when
+  `ANTHROPIC_BASE_URL` is unset — with a proxy or a copied sidecar address in
+  there the 401 came from that URL, and sending somebody off to rotate a
+  perfectly good key is the wrong answer entirely.
 - **Configuration is testable where it is set.** `POST /api/ai-check` makes one
   four-token call and reports which credential answered, surfaced as "Test the
   connection" on the Configuration page. Before it existed the only way to find

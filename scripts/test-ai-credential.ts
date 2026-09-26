@@ -161,6 +161,50 @@ try {
   check("…and does not send you to Integrations for a key problem",
     !/Setup → Integrations/.test(direct401));
 
+  // A rejected key is almost always a DAMAGED copy rather than a wrong one,
+  // and every way it gets damaged is invisible in a Secrets box. The message
+  // has to describe the key well enough to spot that — and not so well that
+  // it hands the key to anybody who can read an error.
+  console.log("\nWhat a rejected key says about itself");
+  const savedKey = process.env.ANTHROPIC_API_KEY;
+  const savedUrl = process.env.ANTHROPIC_BASE_URL;
+
+  process.env.ANTHROPIC_API_KEY = "sk-ant-api03-REALSECRETMATERIAL0123456789abcdefXYZ";
+  delete process.env.ANTHROPIC_BASE_URL;
+  const shaped = await reject();
+  check("it gives the length, so a truncated paste is obvious",
+    /50 characters/.test(shaped), shaped);
+  check("…and both ends, so it can be matched against the console",
+    /sk-ant-api03-R/.test(shaped) && /fXYZ/.test(shaped));
+  check("…but never the middle of the key",
+    !shaped.includes("REALSECRETMATERIAL"), "the secret must not appear in an error");
+
+  process.env.ANTHROPIC_API_KEY = '  "sk-ant-api03-quoted-and-padded-key"  ';
+  const damaged = await reject();
+  check("whitespace around the secret is called out",
+    /whitespace around it/.test(damaged), damaged);
+  check("…and so are quotes typed in by hand",
+    /wrapped in quotes/.test(damaged));
+  // A quoted key obviously does not start sk-ant- — but the quote is the one
+  // thing to fix, and listing both reads as two problems to chase.
+  check("…without also reporting the prefix it broke",
+    !/does not start/.test(damaged), damaged);
+
+  // The one claim the old message made without checking. With a base URL set
+  // the 401 came from that proxy, and "the key reached Anthropic" is false —
+  // sending somebody off to rotate a good key is the wrong answer entirely.
+  process.env.ANTHROPIC_API_KEY = "sk-ant-api03-fine";
+  process.env.ANTHROPIC_BASE_URL = `${base}/direct`;
+  const proxied = await reject();
+  check("a base URL is named rather than assuming Anthropic answered",
+    /ANTHROPIC_BASE_URL is set/.test(proxied) && proxied.includes(`${base}/direct`), proxied);
+  check("…and it does not claim the key reached Anthropic",
+    !/reached Anthropic/.test(proxied));
+
+  process.env.ANTHROPIC_API_KEY = savedKey;
+  if (savedUrl === undefined) delete process.env.ANTHROPIC_BASE_URL;
+  else process.env.ANTHROPIC_BASE_URL = savedUrl;
+
   // The sidecar turned it down. Same HTTP status, completely different fix —
   // and the old wording blamed ANTHROPIC_API_KEY for both.
   process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY = "_DUMMY_API_KEY_";
