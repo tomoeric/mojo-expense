@@ -229,7 +229,7 @@ export async function runDecisions(
         let matchedRow: string | null = null;
         const ok = await applyOne(
           page, it.decision, it.target, it.reason ?? "", sel, emburseUrl, step, opts,
-          (t) => (matchedRow = t),
+          (t) => (matchedRow = t), login.email,
         );
         results.set(it.id, {
           ok,
@@ -266,7 +266,7 @@ export async function runDecisions(
  * matched nothing. Those have four different fixes, and the page itself
  * distinguishes them.
  */
-async function whyNoGrid(page: Page, sel: Record<string, string>): Promise<string> {
+async function whyNoGrid(page: Page, sel: Record<string, string>, asEmail?: string): Promise<string> {
   const where = safeUrl(page.url());
   const text = (await page.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ").trim();
 
@@ -285,11 +285,14 @@ async function whyNoGrid(page: Page, sel: Record<string, string>): Promise<strin
     return `the grid selector matched ${present} element(s) at ${where}, but none of them ever became ` +
       `visible — “${sel.grid}” is probably matching a hidden measuring table rather than the real grid.`;
   }
-  return `no grid at ${where}. Nothing matched “${sel.grid}”. If the export works but this does not, ` +
-    `the selector is fine and this account is the difference: “${sel.gridPath}” is Emburse's team-wide ` +
-    `view, and an account without admin rights there signs in normally and simply has no grid. ` +
-    `Otherwise that selector or gridPath is wrong. The page says: ` +
-    `${text.slice(0, 160) || "(nothing readable)"}`;
+  const who = asEmail ? `signed in as ${asEmail}` : "signed in";
+  return `no grid at ${where}, ${who}. Nothing matched “${sel.grid}”. The export signs in as ` +
+    `whichever login last worked, a decision signs in as the person who made it, so those are often ` +
+    `different accounts: if the export works and this does not, the selector is fine and the account ` +
+    `is the difference — “${sel.gridPath}” is Emburse's team-wide view, and an account without ` +
+    `admin or manager rights there signs in normally and simply has no grid. Check that ${asEmail ?? "this login"} ` +
+    `can open ${sel.gridPath} in Emburse by hand. Otherwise that selector or gridPath is wrong. ` +
+    `The page says: ${text.slice(0, 160) || "(nothing readable)"}`;
 }
 
 /**
@@ -339,7 +342,7 @@ export async function testConnection(
             waitUntil: "domcontentloaded",
           });
           if (!(await firstVisible(sheet, sel.grid!, env.emburseLogin.stepTimeoutMs))) {
-            throw new Error(await whyNoGrid(sheet, sel));
+            throw new Error(await whyNoGrid(sheet, sel, login.email));
           }
           const rows = await sheet.locator(sel.resultRow!).count().catch(() => 0);
           return `the grid is there with ${rows} row(s) — a decision could find its expense here`;
@@ -391,7 +394,7 @@ async function drive(
   setRow: (text: string) => void,
 ): Promise<boolean> {
   if (!(await signInOnce(page, sel, emburseUrl, login, step, opts.onChallenge))) return false;
-  return applyOne(page, decision, target, reason, sel, emburseUrl, step, opts, setRow);
+  return applyOne(page, decision, target, reason, sel, emburseUrl, step, opts, setRow, login.email);
 }
 
 /**
@@ -485,6 +488,7 @@ async function applyOne(
   step: (name: string, fn: () => Promise<string>) => Promise<boolean>,
   opts: { dryRun?: boolean },
   setRow: (text: string) => void,
+  asEmail?: string,
 ): Promise<boolean> {
   let row: ReturnType<Page["locator"]> | null = null;
 
@@ -499,7 +503,7 @@ async function applyOne(
     // Any visible match, not element number one: a grid's hidden measuring
     // rows come first in the DOM and never become visible.
     if (!(await firstVisible(page, sel.grid!, env.emburseLogin.stepTimeoutMs))) {
-      throw new Error(await whyNoGrid(page, sel));
+      throw new Error(await whyNoGrid(page, sel, asEmail));
     }
 
     const rows = page.locator(sel.resultRow!);

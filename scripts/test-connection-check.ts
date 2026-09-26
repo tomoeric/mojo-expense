@@ -120,7 +120,13 @@ try {
     /nothing-matches-this/.test(why), why.slice(0, 160));
   check("…and quotes what the page actually said", /The page says/.test(why), why.slice(0, 200));
   check("…and names the account as a likely cause when the export works but this does not",
-    /this account is the difference/.test(why), why.slice(0, 120));
+    /the account is the difference/.test(why), why.slice(0, 120));
+  // "This account is the difference" is only actionable if it says WHICH
+  // account. The export signs in as whichever login last worked and a
+  // decision signs in as the person who made it, so the two are routinely
+  // different — and the message used to leave the reader to work that out.
+  check("…and says which login it was, since the export uses a different one",
+    why.includes(login.email), why.slice(0, 200));
   check("…with a screenshot of where it stopped", Boolean(blind.screenshot));
 } finally {
   await mock.close();

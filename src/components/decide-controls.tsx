@@ -318,7 +318,8 @@ function DenyDialog({
 export function TestDecision({ id }: { id: number }) {
   const [state, setState] = useState<
     { phase: "idle" } | { phase: "running" } |
-    { phase: "done"; ok: boolean; matchedRow: string | null; detail: string }
+    { phase: "done"; ok: boolean; matchedRow: string | null; detail: string;
+      steps: QueuedDecision["steps"] }
   >({ phase: "idle" });
 
   async function run() {
@@ -330,9 +331,13 @@ export function TestDecision({ id }: { id: number }) {
         ok: r.ok,
         matchedRow: r.matchedRow,
         detail: r.steps.find((s) => !s.ok)?.detail ?? r.steps.at(-1)?.detail ?? "",
+        steps: r.steps,
       });
     } catch (err) {
-      setState({ phase: "done", ok: false, matchedRow: null, detail: (err as Error).message });
+      setState({
+        phase: "done", ok: false, matchedRow: null,
+        detail: (err as Error).message, steps: [],
+      });
     }
   }
 
@@ -359,10 +364,16 @@ export function TestDecision({ id }: { id: number }) {
       )}
 
       {state.phase === "done" && (
-        <span className={state.ok ? "text-emerald-600" : "text-amber-600"}>
-          {state.ok
-            ? `Found it: ${state.matchedRow?.slice(0, 80) ?? "the row matched"}`
-            : state.detail.slice(0, 160)}
+        <span className="block w-full">
+          <span className={state.ok ? "text-emerald-600" : "text-amber-600"}>
+            {state.ok
+              ? `Found it: ${state.matchedRow ?? "the row matched"}`
+              : state.detail}
+          </span>
+          {/* Every stage, not just the one that threw. A step can succeed and
+              still carry the answer — "signed in, but no team-wide tab matched"
+              is the cause of a failure reported three steps later. */}
+          <DecisionSteps steps={state.steps} />
         </span>
       )}
     </span>
