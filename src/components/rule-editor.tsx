@@ -410,11 +410,28 @@ function PreviewPanel({ preview: p, checking, action }: { preview: Preview | nul
           </tbody>
         </table>
       )}
-      {p.sample.length > rows.length && (
-        <p className="px-3 py-1.5 text-xs text-muted-foreground">
-          …and {(p.matched - rows.length).toLocaleString()} more.
-        </p>
-      )}
+      {/* Counted against the right total. This said "…and 108 more" directly
+          under "it would flag 16", because it subtracted the rows on screen
+          from everything MATCHED rather than from what the rule would act on.
+          Read together it announced 116 flags. The sample is failures first,
+          so the two lines are split. */}
+      {(() => {
+        const failsShown = rows.filter((r) => r.verdict === "fail").length;
+        const failsLeft = Math.max(0, p.failing - failsShown);
+        const passesLeft = Math.max(0, p.passing - (rows.length - failsShown));
+        if (failsLeft === 0 && passesLeft === 0) return null;
+        return (
+          <p className="px-3 py-1.5 text-xs text-muted-foreground">
+            {failsLeft > 0 && (
+              <>…and <strong>{failsLeft.toLocaleString()}</strong> more it would {verb}</>
+            )}
+            {failsLeft > 0 && passesLeft > 0 && ", plus "}
+            {failsLeft === 0 && passesLeft > 0 && "…and "}
+            {passesLeft > 0 && `${passesLeft.toLocaleString()} more that pass`}
+            .
+          </p>
+        );
+      })()}
     </div>
   );
 }
