@@ -264,7 +264,12 @@ export function App() {
           {!isStandalone(route) && <LiveStrip
             label={
               data
-                ? `${data.demo ? "Demo data" : "Live"} — ${data.reports.reduce((a, r) => a + r.lines.length, 0).toLocaleString()} expenses · updated ${timeOfDay(data.fetchedAt)}`
+                // "572 expenses" over a queue showing 126 reads as a backlog
+                // nobody can find. Say what the number counts.
+                ? `${data.demo ? "Demo data" : "Live"} — ${data.reports
+                    .filter((r) => r.status === "submitted")
+                    .reduce((a, r) => a + r.lines.length, 0)
+                    .toLocaleString()} expenses awaiting a decision · updated ${timeOfDay(data.fetchedAt)}`
                 : "Loading…"
             }
             onRefresh={() => queryClient.invalidateQueries({ queryKey: ["reports"] })}

@@ -32,12 +32,12 @@ console.log(`missing amount: ${parsed.expenses.filter((e) => !e.amountCents).len
 await ensureSchema();
 const first = await ingestExport(buf, path, "verify-script");
 console.log(`\nimport 1: inserted=${first.inserted} updated=${first.updated} unchanged=${first.unchanged} ` +
-  `leftInbox=${first.leftInbox} receipts=${first.receiptsAdded}`);
+  `purged=${first.purged} receipts=${first.receiptsAdded}`);
 first.warnings.forEach((w) => console.log("  ! " + w));
 
 const second = await ingestExport(buf, path, "verify-script", { force: true });
 console.log(`import 2: inserted=${second.inserted} updated=${second.updated} unchanged=${second.unchanged} ` +
-  `leftInbox=${second.leftInbox} receipts=${second.receiptsAdded}`);
+  `purged=${second.purged} receipts=${second.receiptsAdded}`);
 console.log(second.inserted === 0 && second.receiptsAdded === 0
   ? "\nIDEMPOTENT — re-importing the same file changed nothing."
   : "\n*** NOT IDEMPOTENT — the second import wrote rows. ***");

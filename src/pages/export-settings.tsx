@@ -32,7 +32,7 @@ const ZONES = [
 /** What the section means for the people whose expenses are in it. */
 const WHY: Record<string, string> = {
   "Needs Review": "The reviewer's queue — the reason this app exists.",
-  "Needs Manager Review": "With a manager, still in flight. Worth watching.",
+  "Pending Other's Review": "With somebody else, still in flight. Not yours to decide.",
   "Pending Submission": "Not submitted yet. The employee's to finish, not yours.",
   Denied: "Sent back. These tend to return, so they are rarely finished.",
   Completed: "Done. Its absence from the export is how a row leaves the queue.",

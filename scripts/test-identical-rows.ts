@@ -107,15 +107,16 @@ try {
   // to have left. Which of the two "left" is not a meaningful question.
   const oneLeft = keysFor(rows(1));
   await db().query(
-    `UPDATE expenses SET in_inbox = false, left_inbox_at = now()
-      WHERE employee = $1 AND dedupe_key <> ALL($2::text[])`,
+    "DELETE FROM expenses WHERE employee = $1 AND dedupe_key <> ALL($2::text[])",
     [`${TAG} Person`, oneLeft]);
   const waiting = Number((await db().query<{ n: string }>(
     "SELECT count(*) AS n FROM expenses WHERE employee = $1 AND in_inbox", [`${TAG} Person`]))
     .rows[0]!.n);
   check("one still waits", waiting === 1, String(waiting));
-  check("the other left the queue rather than being deleted",
-    (await stored()) === 2, String(await stored()));
+  // Not kept behind a flag any more. The export is the queue, and a row it no
+  // longer carries is not waiting on anybody here.
+  check("the other is deleted rather than kept forever",
+    (await stored()) === 1, String(await stored()));
 
   console.log("\n4. An edit in Emburse moves the row, it does not add one");
   // The note is deliberately NOT in the key, so editing it updates in place.

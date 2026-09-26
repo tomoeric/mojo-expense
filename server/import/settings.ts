@@ -64,13 +64,19 @@ export type Schedule = {
 /** Every section Emburse offers, in the order the dialog shows them. */
 export const ALL_SECTIONS = [
   "Needs Review",
-  "Needs Manager Review",
+  "Pending Other's Review",
   "Pending Submission",
   "Denied",
   "Completed",
 ] as const;
 
-const DEFAULT_SECTIONS = ["Needs Review", "Needs Manager Review"];
+// Only the reviewer's own queue. The second entry above used to read "Needs
+// Manager Review", a chip this tenant does not have — so rather than export
+// the wrong sections, every run stopped dead at "set the sections". Anything
+// past Needs Review is also an expense nobody here can act on, and with the
+// purge on import the queue is exactly what the export carries: a wider
+// export is a longer queue, not more information.
+const DEFAULT_SECTIONS = ["Needs Review"];
 
 /** Env still supplies the starting point, so a fresh database is not blank. */
 function envSchedule(): Schedule {

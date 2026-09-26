@@ -37,7 +37,11 @@ export type QueuedDecision = {
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS expense_decisions (
   id          bigserial PRIMARY KEY,
-  dedupe_key  text        NOT NULL REFERENCES expenses (dedupe_key) ON DELETE CASCADE,
+  -- No foreign key, on purpose. An import deletes every expense the newest
+  -- export no longer carries, and the record of who approved or denied one has
+  -- to outlive that: it is the only audit trail on this side of the wire, and
+  -- the target column below froze everything it needs to stand on its own.
+  dedupe_key  text        NOT NULL,
   decision    text        NOT NULL CHECK (decision IN ('approve','deny')),
   reason      text,
   decided_by  text        NOT NULL,
@@ -60,6 +64,10 @@ CREATE INDEX IF NOT EXISTS expense_decisions_key_idx   ON expense_decisions (ded
 -- nothing and report a failure that was never real.
 CREATE UNIQUE INDEX IF NOT EXISTS expense_decisions_one_pending
   ON expense_decisions (dedupe_key) WHERE state = 'pending';
+-- Databases created before the purge have the cascade above. Dropped rather
+-- than left in place: with it, purging an expense silently takes the record of
+-- its decision along too.
+ALTER TABLE expense_decisions DROP CONSTRAINT IF EXISTS expense_decisions_dedupe_key_fkey;
 `;
 
 let ready: Promise<void> | null = null;
@@ -205,19 +213,18 @@ export async function settleDecision(
 /**
  * Expenses approved here whose approval Emburse has since confirmed.
  *
- * "Confirmed" means the expense has left the inbox — it stopped appearing in
- * the export, which only happens once the approval really took. That is the
- * moment a receipt image is safe to delete: before it, a failed approval would
- * lose a picture that can never be fetched again, because an expense out of
- * the inbox is out of every future export too.
+ * "Confirmed" means the expense stopped appearing in the export, which only
+ * happens once the approval really took — and with the purge, that is also
+ * the moment its row is deleted. So the confirmed ones are exactly the
+ * decisions with no expense left to join to.
  */
 export async function confirmedApprovals(): Promise<string[]> {
   await ensure();
   const { rows } = await db().query<{ dedupe_key: string }>(
     `SELECT d.dedupe_key
        FROM expense_decisions d
-       JOIN expenses e ON e.dedupe_key = d.dedupe_key
-      WHERE d.decision = 'approve' AND d.state = 'applied' AND e.in_inbox = false`,
+      WHERE d.decision = 'approve' AND d.state = 'applied'
+        AND NOT EXISTS (SELECT 1 FROM expenses e WHERE e.dedupe_key = d.dedupe_key)`,
   );
   return rows.map((r) => r.dedupe_key);
 }

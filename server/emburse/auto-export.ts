@@ -147,7 +147,7 @@ export const DEFAULT_SELECTORS: Selectors = {
 
 /** Every chip the export dialog offers, in the order it shows them. */
 const ALL_CHIPS = [
-  "Needs Review", "Needs Manager Review", "Pending Submission", "Denied", "Completed",
+  "Needs Review", "Pending Other's Review", "Pending Submission", "Denied", "Completed",
 ] as const;
 
 /** A stored credential, or the env fallback for a deployment without one. */
@@ -1226,12 +1226,20 @@ async function runSteps(
         // invisible downstream — the PDF is valid, parses, and reconciles
         // against its own total. Only the sections are wrong.
         const names = [...want].join(", ");
+        // Which chips ARE there. A name from another tenant's vocabulary reads
+        // as perfectly plausible in Export settings, and "Needs Manager
+        // Review" — a chip this tenant does not have — stopped the export
+        // every morning while the message sent people hunting for a selector.
+        const offered = pass === 0 ? await offeredChips(page, sel) : [];
         throw new Error(
           pass === 0
             ? `could not find the section chip${want.size === 1 ? "" : "s"} for ${names} in the ` +
-              `export dialog, so the export would have covered the wrong sections. Looked inside ` +
-              `${sel.dialogRoot} and across the whole page. It reads: ` +
-              `"${snippet(await dialogText(page, sel))}"`
+              `export dialog, so the export would have covered the wrong sections. ` +
+              (offered.length > 0
+                ? `The sections this dialog offers are: ${offered.join(", ")} — tick those in Export ` +
+                  `settings instead. `
+                : `No section chip could be read at all, inside ${sel.dialogRoot} or across the page. `) +
+              `It reads: "${snippet(await dialogText(page, sel))}"`
             : `the section chips did not come back after ${changed.join(" ")}. The dialog reads: ` +
               `"${snippet(await dialogText(page, sel))}"`,
         );
@@ -1461,15 +1469,47 @@ async function runSteps(
  * finds only the chips that are already off — which looks exactly like a run
  * that had nothing to change, and quietly exports the wrong sections. Matching
  * on a regex anchored at both ends tolerates the tick while still refusing to
- * confuse "Needs Review" with "Needs Manager Review"; the anchoring also rules
- * out ancestors, whose text contains the label plus everything around it.
+ * confuse "Needs Review" with "Pending Other's Review"; the anchoring also
+ * rules out ancestors, whose text contains the label plus everything around it.
+ *
+ * Apostrophes are matched either way round. "Pending Other's Review" is the
+ * one chip whose name contains one, and whether Emburse renders it straight or
+ * curly is a rendering detail nobody should have to discover from a failed
+ * export at 6am.
  */
 function chipLocator(root: Locator, name: string) {
-  const label = new RegExp(`^[\\s\u2713\u2714\u2705*]*${escapeRe(name)}[\\s]*$`, "i");
+  const label = new RegExp(
+    `^[\\s\u2713\u2714\u2705*]*${escapeRe(name).replace(/['\u2018\u2019]/g, "['\u2018\u2019]")}[\\s]*$`,
+    "i",
+  );
   return root
     .locator('a, button, [role="button"], [role="checkbox"], label, span, div')
     .filter({ hasText: label })
     .first();
+}
+
+/**
+ * The section chips this dialog actually offers.
+ *
+ * A run that stops on a chip it cannot find is almost always a chip that is
+ * not there \u2014 Emburse names its sections per tenant, and a name typed into
+ * Export settings from another tenant's vocabulary looks perfectly plausible.
+ * Saying "these are the ones on screen" turns that from a selector hunt into
+ * a tick box. Best effort: nothing here may throw on the way to an error.
+ */
+async function offeredChips(page: Page, sel: Selectors): Promise<string[]> {
+  const roots = [await firstVisible(page, sel.dialogRoot, 0), page.locator("body")];
+  const found: string[] = [];
+  for (const name of ALL_CHIPS) {
+    for (const root of roots) {
+      if (!root) continue;
+      if (await chipLocator(root, name).isVisible().catch(() => false)) {
+        found.push(name);
+        break;
+      }
+    }
+  }
+  return found;
 }
 
 /**

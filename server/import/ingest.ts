@@ -17,9 +17,9 @@ import { runRules } from "../rules/run.js";
  *
  *   1. An expense already known by its dedupe key is UPDATED, never inserted
  *      again — that is what keeps duplicates out.
- *   2. An expense previously in the inbox but absent from today's file has
- *      been processed upstream. It is marked `in_inbox = false`, never
- *      deleted; the record and its receipts are kept.
+ *   2. An expense absent from today's file has been processed upstream. It is
+ *      DELETED, along with its receipts, changes and rule hits. The export is
+ *      the queue; a row that has left it is not waiting on anybody here.
  *   3. Receipt images are stored once by content hash. The same receipt
  *      arrives every day and may belong to several rows (a purchase split
  *      across sites), so bytes are written only the first time they are seen.
@@ -36,14 +36,15 @@ export type ImportResult = {
   inserted: number;
   updated: number;
   unchanged: number;
-  leftInbox: number;
+  /** Expenses deleted because this export no longer carries them. */
+  purged: number;
   receiptsAdded: number;
   receiptsSkipped: number;
   /** Category / location / department names this import put on the list for the first time. */
   newNames: NewNames;
   /** What the rules said about the expenses this import touched. */
   rules: { failed: number; approved: number; denied: number } | null;
-  /** Receipt images let go of because their expense has left the queue. */
+  /** Receipt images reclaimed because the expenses holding them were purged. */
   receiptsReleased: { images: number; bytes: number };
   totalCents: number;
   statedTotalCents: number | null;
@@ -108,7 +109,7 @@ export async function ingestExport(
 
   const base: ImportResult = {
     importId: null, filename, pageCount: parsed.pageCount, parsedRows: parsed.expenses.length,
-    inserted: 0, updated: 0, unchanged: 0, leftInbox: 0, receiptsAdded: 0, receiptsSkipped: 0,
+    inserted: 0, updated: 0, unchanged: 0, purged: 0, receiptsAdded: 0, receiptsSkipped: 0,
     newNames: { category: [], location: [], department: [] },
     rules: null,
     receiptsReleased: { images: 0, bytes: 0 },
@@ -202,6 +203,45 @@ export async function ingestExport(
       );
     }
 
+    // A truncated export is now a destructive event, not just a thin day.
+    // Everything absent from the file is deleted outright, and a receipt image
+    // deleted here can never be fetched again — an expense out of the inbox is
+    // out of every future export too. A file holding 5 rows where yesterday
+    // held 137 reconciles against its own TOTAL line and is not stale, so
+    // nothing else catches it.
+    //
+    // Measured against what is WAITING, not the whole table: the first import
+    // after this change clears a long backlog of already-processed rows, which
+    // is the point rather than a symptom.
+    const inbox = await client.query<{ n: string; live: string }>(
+      `SELECT count(*) AS n,
+              count(*) FILTER (WHERE dedupe_key = ANY($1::text[])) AS live
+         FROM expenses WHERE in_inbox = true`,
+      [[...keys.keys()]],
+    );
+    const held = Number(inbox.rows[0]?.n ?? 0);
+    const losing = held - Number(inbox.rows[0]?.live ?? 0);
+    if (!opts.force && held >= 25 && losing > held * 0.8) {
+      await client.query("ROLLBACK");
+      return {
+        ...base,
+        warnings: [
+          ...warnings,
+          `This export carries ${parsed.expenses.length} expenses and would delete ${losing} of the ` +
+            `${held} currently waiting — more than four in five. That is what a truncated export ` +
+            `looks like, and the receipts it would take cannot be fetched again, so it was not ` +
+            `imported. Re-run the export, or force it if the queue really did clear.`,
+        ],
+      };
+    }
+    if (!opts.force && held >= 25 && losing > held * 0.5) {
+      warnings.push(
+        `${losing} of the ${held} waiting expenses are absent from this export and were deleted. ` +
+          `That is a large share for one day — worth a look at the export's filters if it was ` +
+          `unexpected.`,
+      );
+    }
+
     // Classify before writing. Postgres cannot expose the pre-update row in
     // RETURNING (EXCLUDED is only valid inside SET), so read the existing
     // rows once and diff in code — clearer than contorting the statement.
@@ -273,23 +313,17 @@ export async function ingestExport(
       );
     }
 
-    // Anything that was in the inbox and is not in this file has moved on.
-    const gone = await client.query(
-      `UPDATE expenses SET in_inbox = false, left_inbox_at = now()
-       WHERE in_inbox = true AND dedupe_key <> ALL($1::text[])`,
-      [[...keys.keys()]]);
-    const leftInbox = gone.rowCount ?? 0;
-
     // Every name this file carried goes on the permanent lists. Inside the
     // transaction, so names never outlive the rows they came from.
     const newNames = await recordTaxonomy(client, parsed.expenses);
 
     const receipts = await storeReceipts(client, file, parsed.receipts, keys, warnings);
 
-    // Now that this export has confirmed which expenses are still in the
-    // queue, every picture belonging to one that is not can go. The newest
-    // export is the truth about what is under review.
-    const freed = await releaseFinishedReceipts(client);
+    // Now that this export has said which expenses are still in the queue,
+    // everything absent from it goes — row, receipt and all. The newest export
+    // is the truth about what is under review.
+    const freed = await purgeFinished(client, [...keys.keys()]);
+    const purged = freed.expenses;
 
     // Last, because storeReceipts appends to `warnings` too.
     await client.query("UPDATE expense_imports SET warnings = $2 WHERE id = $1", [importId, warnings]);
@@ -297,11 +331,11 @@ export async function ingestExport(
     await client.query(
       `UPDATE expense_imports SET inserted_count=$2, updated_count=$3, unchanged_count=$4,
               left_inbox_count=$5, receipts_added=$6 WHERE id=$1`,
-      [importId, inserted, updated, unchanged, leftInbox, receipts.added]);
-    if (freed.images > 0) {
+      [importId, inserted, updated, unchanged, purged, receipts.added]);
+    if (purged > 0) {
       console.log(
-        `import: released ${freed.images} receipt image(s) (${(freed.bytes / 1e6).toFixed(1)} MB) ` +
-        `for ${freed.expenses} expense(s) that have left the queue`,
+        `import: purged ${purged} expense(s) the export no longer carries, reclaiming ` +
+        `${freed.images} receipt image(s) (${(freed.bytes / 1e6).toFixed(1)} MB)`,
       );
     }
 
@@ -336,7 +370,7 @@ export async function ingestExport(
     // would fail as a unit on one bad receipt.
     if (receipts.added > 0) nudgeReceiptReader();
 
-    return { ...base, importId, inserted, updated, unchanged, leftInbox,
+    return { ...base, importId, inserted, updated, unchanged, purged,
       receiptsAdded: receipts.added, receiptsSkipped: receipts.skipped, newNames, rules,
       receiptsReleased: { images: freed.images, bytes: freed.bytes }, warnings };
   } catch (err) {
@@ -612,35 +646,54 @@ export function staleExportReason(
 }
 
 /**
- * Let go of the receipts for expenses this app approved and Emburse confirmed.
+ * Delete everything the export no longer carries.
  *
- * "Confirmed" is the important word. An approval is only known to have taken
- * once the expense stops appearing in the export, and by then the image cannot
- * be fetched again — an expense out of the inbox is out of every future export
- * too. Deleting on the click instead would mean a failed approval loses the
- * receipt for an expense still sitting in the queue. This costs at most one
- * day of storage and cannot lose anything.
+ * The export IS the queue. An expense that stops appearing in it has been
+ * approved or denied upstream and will never appear again, so the review is
+ * over. Keeping the row only makes the app disagree with Emburse about how
+ * much work is waiting: rows used to be kept forever behind an
+ * `in_inbox = false` flag, and within a few weeks the app was carrying 572
+ * expenses against Emburse's 137.
  *
- * Two deletions, in order, and the order is the point. Images are shared by
- * content hash — one purchase split across sites points several expenses at
- * the same picture — so the link goes first and the image only when nothing
- * references it any more. Dropping the image because one of its owners was
- * approved would blank the receipt on the others.
+ * So the newest export is the truth and everything absent from it goes — the
+ * expense, its receipt links, its change history and its rule hits, then any
+ * image and reading nothing points at any more.
+ *
+ * Two things deliberately survive:
+ *
+ *   - `expense_decisions`, the record of what this app approved or denied and
+ *     who did it. Each row froze its own copy of the expense (`target`), so it
+ *     stands up once the expense is gone. It is the only audit trail on this
+ *     side of the wire, and it is a few hundred bytes.
+ *   - `expense_imports`, the log of the files themselves.
+ *
+ * Order matters at the end. Images are shared by content hash — one purchase
+ * split across sites points several expenses at the same picture — so an image
+ * goes only once nothing references it, never because one of its owners left.
+ *
+ * Exported so the test can drive this function rather than a copy of its SQL.
+ * A test that reimplements the statements is how `compare` was silently
+ * dropped from a rule once while every check stayed green.
  */
-async function releaseFinishedReceipts(
+export async function purgeFinished(
   client: pg.PoolClient,
+  live: string[],
 ): Promise<{ expenses: number; images: number; bytes: number }> {
-  // Everything that has left the inbox, not only what this app approved.
-  // Approved, denied, and decided directly in Emburse all end the same way:
-  // the expense is no longer in the queue, so its picture is no longer being
-  // reviewed. The old rule kept an image for every expense that left without
-  // this app deciding it — which, before anybody was approving here, was all
-  // of them, and 300+ receipts a day were accumulating for nothing.
-  const links = await client.query(
-    `DELETE FROM expense_receipts er
-      USING expenses e
-      WHERE er.dedupe_key = e.dedupe_key
-        AND e.in_inbox = false`,
+  // The decision record outlives its expense, so a pending one has to be
+  // closed out here rather than cascaded away. It could never be applied: an
+  // expense only falls out of the export once it has left Emburse's queue.
+  await client.query(
+    `UPDATE expense_decisions
+        SET state = 'cancelled',
+            error = 'The expense left the Emburse queue before this was applied.'
+      WHERE state = 'pending' AND dedupe_key <> ALL($1::text[])`,
+    [live],
+  );
+
+  // Cascades to expense_receipts, expense_changes and expense_rule_hits.
+  const gone = await client.query(
+    `DELETE FROM expenses WHERE dedupe_key <> ALL($1::text[])`,
+    [live],
   );
 
   // Measured before deleting, so the import can say what it reclaimed.
@@ -654,13 +707,17 @@ async function releaseFinishedReceipts(
       WHERE NOT EXISTS (SELECT 1 FROM expense_receipts er WHERE er.sha256 = b.sha256)`,
   );
 
-  // What the receipt said is NOT deleted with the picture. `receipt_readings`
-  // and `receipt_items` have no foreign key to the blob precisely so the line
-  // items outlive it: they are a few hundred bytes of text and they are the
-  // record of what was actually bought on an expense somebody approved. The
-  // megabytes are the image, and the image is what goes.
+  // What the receipt said used to outlive the picture on purpose, back when
+  // the expense stayed behind too. With the expense itself gone there is
+  // nothing left to read it against, so it goes with everything else rather
+  // than accumulating as rows nothing can reach.
+  await client.query(
+    `DELETE FROM receipt_readings r
+      WHERE NOT EXISTS (SELECT 1 FROM receipt_blobs b WHERE b.sha256 = r.sha256)`,
+  );
+
   return {
-    expenses: links.rowCount ?? 0,
+    expenses: gone.rowCount ?? 0,
     images: blobs.rowCount ?? 0,
     bytes: Number(rows[0]?.bytes ?? 0),
   };

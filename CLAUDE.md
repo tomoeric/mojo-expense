@@ -65,21 +65,20 @@ the blocks.
   hit one. `failed` therefore shows the badge AND the Approve/Deny buttons, and
   the reason is on screen rather than in a `title` tooltip nobody hovers.
   `decisionsFor` returns the newest attempt, so a retry supersedes the failure.
-- **An import keeps the receipt images of expenses still in the inbox, and
-  releases every other one.** The newest export is the truth about what is
-  under review: approved, denied, and decided directly in Emburse all end the
-  same way. The old rule released only what THIS APP had approved, which —
-  before anybody was approving here — was nothing, while 300 images a day
-  accumulated for expenses long gone.
-- **Still never before the expense leaves.** An expense in the inbox is still
-  being reviewed, and by the time one leaves the image can never be fetched
-  again. Links go first, images only when nothing references them — they are
-  shared by content hash, so one purchase split across sites points several
-  expenses at the same picture.
-- **What the receipt SAID outlives the picture.** `receipt_readings` and
-  `receipt_items` have no foreign key to the blob for exactly this reason: the
-  megabytes are the image, the line items are a few hundred bytes of text, and
-  they are the record of what was bought on an expense somebody approved.
+- **An import deletes everything the newest export no longer carries**
+  (`purgeFinished`) — the expense, its receipt links, its changes, its rule
+  hits, and any image and reading nothing points at any more. Approved, denied
+  and decided directly in Emburse all end the same way: the review is over.
+- **Never before the expense leaves.** An expense in the inbox is still being
+  reviewed, and by the time one leaves the image can never be fetched again.
+  Links go first, images only when nothing references them — they are shared by
+  content hash, so one purchase split across sites points several expenses at
+  the same picture.
+- **`expense_decisions` outlives the expense, and has no foreign key for that
+  reason.** It is the only audit trail on this side of the wire, and `target`
+  froze what the reviewer was looking at, so the row stands on its own once the
+  expense is gone. A decision still `pending` when its expense is purged is
+  cancelled, not left for the worker to retry against a row that is not there.
 
 ## Receipts
 
@@ -90,12 +89,12 @@ the blocks.
 - `RENDER_VERSION` must be bumped whenever rendering changes, or re-imports
   will not replace the older images.
 - **Line items are read once per image and stored** (`receipt-items.ts`), keyed
-  on the same content hash as the picture — so a shared receipt is read once,
-  and the items survive the image being released after an approval. That
-  survival is the point: an approved expense's receipt can never be fetched
-  again, so anything unread when it goes is unread forever. The reader
-  (`receipt-reader.ts`) runs shortly after each import for that reason, not on
-  a daily schedule.
+  on the same content hash as the picture, so an image belonging to several
+  expenses is read once rather than once per expense. A reading goes when its
+  image does, because the expense it described has gone too. An expense out of
+  the inbox can never be exported again, so anything unread when it leaves is
+  unread forever — which is why the reader (`receipt-reader.ts`) runs shortly
+  after each import rather than on a daily schedule.
 
 ## Rules
 
@@ -271,9 +270,24 @@ the blocks.
   before, so no existing expense is re-identified.
 - **Re-importing changes nothing.** The keys are deterministic and the upsert
   is `ON CONFLICT (dedupe_key)`, so the same export twice is a no-op.
-- **Anything missing from the newest export leaves the queue** — `in_inbox =
-  false, left_inbox_at = now()`. Flagged, never deleted: it was processed, not
-  forgotten, and its history is worth keeping.
+- **Anything missing from the newest export is DELETED.** The export is the
+  queue; a row it no longer carries has been decided upstream and is not
+  waiting on anybody here. Rows used to be kept behind `in_inbox = false`, and
+  within weeks the app showed 572 expenses against Emburse's 137.
+- **Which makes a truncated export destructive, and nothing else catches one.**
+  A file holding 5 rows where yesterday held 137 reconciles against its own
+  TOTAL line, is not a duplicate and is not stale. So an import is refused when
+  it would take more than four in five of the WAITING expenses (and warns above
+  half), unless it is forced. Measured against what is waiting rather than the
+  whole table, so a first import after a long backlog is not blocked by the
+  backlog it exists to clear.
+- **Section names are per tenant, and a wrong one stops the export dead.**
+  This tenant's chips are Needs Review · Pending Other's Review · Pending
+  Submission · Denied · Completed. "Needs Manager Review" was in `ALL_SECTIONS`
+  and in the defaults, matched nothing, and failed every run at "set the
+  sections" — correctly, since the alternative is exporting the wrong rows.
+  The failure now lists the chips the dialog does offer, so the next wrong name
+  is a tick box rather than a selector hunt.
 - **Nothing on a settings page may look saved when it is not.** The export
   settings page is long and its Save button sat at the bottom; unchecking a
   section looked like it took effect and was silently lost on refresh. A
