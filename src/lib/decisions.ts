@@ -54,6 +54,8 @@ export type DecisionsResponse = {
   browser: { holder: { label: string; since: number } | null; waiting: string[] };
   /** Whether the stage-by-stage trace is switched on in Configuration. */
   trace?: boolean;
+  /** Waiting expenses this app has already approved or denied. */
+  applied?: number;
   /** Set when a decision is parked waiting for a device-verification code. */
   challenge: Challenge | null;
 };
@@ -152,6 +154,8 @@ export function useDecisions(keys: string[]) {
     canDecide: q.data?.canDecide ?? false,
     /** Whether the stage-by-stage trace is switched on in Configuration. */
     trace: q.data?.trace ?? false,
+    /** Already actioned and only waiting for the next sync to disappear. */
+    applied: q.data?.applied ?? 0,
     byExpense: q.data?.byExpense ?? {},
     pending: q.data?.pending ?? [],
     recent: q.data?.recent ?? [],

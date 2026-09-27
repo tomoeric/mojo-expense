@@ -46,7 +46,7 @@ export type Row = {
   dayGroups: { rule: string; day: string }[];
   ageDays: number | null;
   /** The decision on this expense, when there is one. */
-  decision?: { state: string } | undefined;
+  decision?: { state: string; decision?: string } | undefined;
   /** The control for deciding it, supplied by whoever renders the table. */
   decide?: React.ReactNode;
 };
@@ -421,6 +421,23 @@ function BandRows({
   );
 }
 
+export type Tab = "all" | "flagged" | "clean" | "approved" | "denied";
+
+/**
+ * Finished with, as far as this app is concerned.
+ *
+ * An expense Emburse has confirmed is approved or denied is not work any
+ * more, and leaving it in the queue means the queue stops describing the
+ * work. It moves the INSTANT the decision reads as applied rather than
+ * waiting for the next sync to delete it — the sync is minutes away at
+ * best, and a row marked Approved sitting in the list of things to
+ * approve is the kind of thing people stop trusting a screen over.
+ *
+ * Pending and failed decisions stay put: a pending one may yet fail, and a
+ * failed one needs somebody.
+ */
+const isDone = (r: Row): boolean => r.decision?.state === "applied";
+
 /** Readable names for the checks that are not rules. */
 const BUILT_IN_GROUP: Record<string, string> = {
   "missing-receipt": "No receipt",
@@ -449,12 +466,18 @@ function FlagTabs({
   onFlagGroup,
 }: {
   rows: Row[];
-  tab: "all" | "flagged" | "clean";
-  onTab: (t: "all" | "flagged" | "clean") => void;
+  tab: Tab;
+  onTab: (t: Tab) => void;
   flagGroup: string | null;
   onFlagGroup: (g: string | null) => void;
 }) {
-  const flagged = rows.filter((r) => r.flags.length > 0);
+  // Decided expenses are not part of the work any more, so they are not
+  // part of the counts either. A queue of 212 where 200 are already
+  // approved reads as 212 things to do.
+  const waiting = rows.filter((r) => !isDone(r));
+  const approved = rows.filter((r) => r.decision?.state === "applied" && r.decision.decision !== "deny");
+  const denied = rows.filter((r) => r.decision?.state === "applied" && r.decision.decision === "deny");
+  const flagged = waiting.filter((r) => r.flags.length > 0);
   const groups = useMemo(() => {
     const counts = new Map<string, number>();
     for (const r of flagged) for (const g of r.flagGroups) counts.set(g, (counts.get(g) ?? 0) + 1);
@@ -462,9 +485,13 @@ function FlagTabs({
   }, [flagged]);
 
   const tabs = [
-    { key: "all" as const, label: "All", n: rows.length },
+    { key: "all" as const, label: "All", n: waiting.length },
     { key: "flagged" as const, label: "Flagged", n: flagged.length },
-    { key: "clean" as const, label: "Unflagged", n: rows.length - flagged.length },
+    { key: "clean" as const, label: "Unflagged", n: waiting.length - flagged.length },
+    { key: "approved" as const, label: "Approved", n: approved.length },
+    // Only when there are any. An always-empty tab is a permanent
+    // reminder of something nobody did.
+    ...(denied.length > 0 ? [{ key: "denied" as const, label: "Denied", n: denied.length }] : []),
   ];
 
   return (
@@ -534,7 +561,7 @@ export function ExpenseTable({
   // One person, one date: the unit a day rule is about.
   const [group, setGroup] = useState<{ employee: string; date: string } | null>(null);
   // Flagged / unflagged, and which rule's catches within flagged.
-  const [tab, setTab] = useState<"all" | "flagged" | "clean">("all");
+  const [tab, setTab] = useState<Tab>("all");
   const [flagGroup, setFlagGroup] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
 
@@ -561,8 +588,16 @@ export function ExpenseTable({
     let base = group
       ? rows.filter((r) => r.employee === group.employee && r.line.date === group.date)
       : rows;
-    if (tab === "flagged") base = base.filter((r) => r.flags.length > 0);
-    if (tab === "clean") base = base.filter((r) => r.flags.length === 0);
+    // Decided expenses live in their own tabs and nowhere else.
+    if (tab === "approved") {
+      base = base.filter((r) => isDone(r) && r.decision?.decision !== "deny");
+    } else if (tab === "denied") {
+      base = base.filter((r) => isDone(r) && r.decision?.decision === "deny");
+    } else {
+      base = base.filter((r) => !isDone(r));
+      if (tab === "flagged") base = base.filter((r) => r.flags.length > 0);
+      if (tab === "clean") base = base.filter((r) => r.flags.length === 0);
+    }
     // Within flagged, one rule at a time. Every rule's catches in one list is
     // the pile the tabs exist to break up: "Gas Category" and "Meal Count > 3"
     // are different jobs and get judged differently.

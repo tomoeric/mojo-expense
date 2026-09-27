@@ -239,6 +239,18 @@ export async function noteAttemptFailed(ids: number[], error: string): Promise<v
   );
 }
 
+/** How many expenses still held locally have already been actioned. */
+export async function appliedCount(): Promise<number> {
+  await ensure();
+  const { rows } = await db().query<{ n: string }>(
+    `SELECT count(*) AS n
+       FROM expense_decisions d
+       JOIN expenses e ON e.dedupe_key = d.dedupe_key
+      WHERE d.state = 'applied' AND e.in_inbox = true`,
+  );
+  return Number(rows[0]?.n ?? 0);
+}
+
 export async function settleDecision(
   id: number,
   outcome: { ok: true; matchedRow: string | null } | { ok: false; error: string },

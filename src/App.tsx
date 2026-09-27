@@ -5,6 +5,7 @@ import {
   SlidersHorizontal, ChevronRight, ChevronDown, type LucideIcon,
 } from "lucide-react";
 import { useAuth, useConfig, useReports, type ExpenseReport } from "@/lib/api";
+import { useDecisions } from "@/lib/decisions";
 import { SectionTitle, LiveStrip, SegmentedControl, Empty } from "@/components/ui";
 import { NotConnected } from "@/components/not-connected";
 import { SignIn } from "@/components/sign-in";
@@ -158,6 +159,9 @@ export function App() {
   // otherwise every anonymous page load fires a request that 401s.
   const signedIn = Boolean(auth.data?.user) || auth.data?.authConfigured === false;
   const reports = useReports(WINDOW_DAYS, signedIn);
+  // Only for the headline count. An empty key list asks for no per-expense
+  // detail, so this is the cheapest read of "how many are already done".
+  const { applied } = useDecisions([]);
 
   useEffect(() => {
     // The drawer belongs to the list behind it; leaving it open over another
@@ -278,10 +282,12 @@ export function App() {
               data
                 // "572 expenses" over a queue showing 126 reads as a backlog
                 // nobody can find. Say what the number counts.
-                ? `${data.demo ? "Demo data" : "Live"} — ${data.reports
-                    .filter((r) => r.status === "submitted")
-                    .reduce((a, r) => a + r.lines.length, 0)
-                    .toLocaleString()} expenses awaiting a decision · updated ${timeOfDay(data.fetchedAt)}`
+                ? `${data.demo ? "Demo data" : "Live"} — ${Math.max(
+                    0,
+                    data.reports
+                      .filter((r) => r.status === "submitted")
+                      .reduce((a, r) => a + r.lines.length, 0) - applied,
+                  ).toLocaleString()} expenses awaiting a decision · updated ${timeOfDay(data.fetchedAt)}`
                 : "Loading…"
             }
             onRefresh={() => queryClient.invalidateQueries({ queryKey: ["reports"] })}

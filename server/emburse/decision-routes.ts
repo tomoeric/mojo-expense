@@ -7,7 +7,7 @@ import { browserQueue, whyWaiting } from "./browser-lock.js";
 import { credentialForUser, hasCredential, noteResult } from "./credentials.js";
 import { inspectEditForm, runDecision, testConnection, type Decision, type Target } from "./decide.js";
 import {
-  cancelDecision, decisionsFor, pendingDecisions, queueDecision, recentDecisions,
+  appliedCount, cancelDecision, decisionsFor, pendingDecisions, queueDecision, recentDecisions,
 } from "./decisions.js";
 import { decisionWorkerStarted, nudgeDecisionWorker } from "./decision-worker.js";
 import { getFlag } from "../flags.js";
@@ -200,6 +200,14 @@ decisionRouter.get("/decisions", requireAuth, async (req: Request, res: Response
     // request per row.
     byExpense: Object.fromEntries(await decisionsFor(keys)),
     browser: browserQueue(),
+    // Expenses still in the local table that this app has already approved
+    // or denied. The Live strip counts "awaiting a decision" off the
+    // reports payload, which knows nothing about decisions — so after a
+    // morning's approvals it said 212 while the queue showed twelve. They
+    // stay until the next sync deletes them, which is minutes away at
+    // best, and for that whole window the headline contradicted the list
+    // underneath it.
+    applied: await appliedCount(),
     // Whether to show the stage-by-stage trace at all. It rides on the poll
     // the queue already makes rather than getting a request of its own: it
     // is one boolean and the page is useless without this response anyway.
