@@ -56,8 +56,17 @@ export type DecisionSelectorKey =
   | "denyButton" | "denyReason" | "denyConfirm" | "decisionApplied";
 
 export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
-  // Scoped to the grid body so the header row is never a candidate.
-  resultRow: "table tbody tr",
+  // Both grid shapes, because Emburse uses the second one.
+  //
+  // Scoped to the body in each case so the header row is never a candidate.
+  // This was "table tbody tr" alone, which describes a grid built from a
+  // real <table> — and spend.emburse.com builds its transactions grid from
+  // divs with ARIA roles, so it matched nothing at all and every decision
+  // died at "the search returned no rows". Matching too widely is not a
+  // risk worth worrying about here: every candidate row still has to agree
+  // on employee, merchant, amount AND date, and two rows matching equally
+  // well is refused rather than guessed at.
+  resultRow: 'table tbody tr, [role="rowgroup"] [role="row"]',
   approveButton: 'button:has-text("APPROVE")',
   rowMenu: 'button[aria-label*="more" i], button:has-text("⋮")',
   denyButton: 'text=/^\\s*Deny\\s*$/i',
@@ -372,15 +381,23 @@ async function whyNoRows(
       `either. The page says: ${text.slice(0, 200) || "(nothing readable)"}`;
   }
 
-  // The text of one candidate row, so whoever sets the selector can see
-  // whether it is a row of the grid or a row of something else entirely.
-  const sample = (await page.locator(best[0]!.sel).first().innerText().catch(() => ""))
-    .replace(/\s+/g, " ").trim().slice(0, 160);
+  // Several samples, skipping blanks. Reporting only the FIRST said
+  // "(empty)" on a real tenant — a virtualised grid puts a spacer row ahead
+  // of the data — which reads as "that selector is wrong" about the
+  // selector that was in fact right.
+  const rows = page.locator(best[0]!.sel);
+  const samples: string[] = [];
+  for (let i = 0; i < Math.min(best[0]!.n, 8) && samples.length < 3; i++) {
+    const t = (await rows.nth(i).innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+    if (t) samples.push(t.slice(0, 120));
+  }
 
   return `the grid is on screen but nothing matched the row selector “${sel.resultRow}”. ` +
     `Row-shaped things that ARE here: ${best.map((c) => `${c.sel} ×${c.n}`).join(", ")}. ` +
-    `The first “${best[0]!.sel}” reads: “${sample || "(empty)"}”. ` +
-    `If that is a grid row, set the row selector in Settings to it — nothing is guessed here, ` +
+    (samples.length > 0
+      ? `“${best[0]!.sel}” reads: ${samples.map((t) => `“${t}”`).join(" / ")}. `
+      : `Every “${best[0]!.sel}” is empty, so those are spacers rather than data rows. `) +
+    `If those are grid rows, set the row selector in Settings to it — nothing is guessed here, ` +
     `because a selector matching the wrong container is how the wrong expense gets approved.`;
 }
 

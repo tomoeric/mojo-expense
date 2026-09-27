@@ -175,8 +175,13 @@ const grid = (search: string) => {
     return `<table style="display:none"><tbody><tr><td>sizing</td></tr></tbody></table>${realTable}`;
   }
   if (state.gridShape === "divs") {
+    // What spend.emburse.com actually serves: a grid of divs with ARIA
+    // roles, led by an EMPTY row. A virtualised grid puts a spacer ahead of
+    // the data, and reporting only the first row's text therefore said
+    // "(empty)" about the selector that was in fact the right one.
     return `<div role="grid">
-      <div role="rowgroup">${shown
+      <div role="row"><div role="columnheader">Date</div></div>
+      <div role="rowgroup"><div role="row"></div>${shown
         .map((r) => `<div role="row"><div role="cell">${cells(r).replace(/<\/?td>/g, "")}</div></div>`)
         .join("")}</div>
     </div>`;
@@ -576,6 +581,16 @@ const reset = () =>
   Object.assign(state, {
     signedIn: false, admin: false, receiptsFilter: false, rowsTicked: 0,
     pendingUser: "", loginOutcome: "ok", search: "", format: "CSV", requestedAt: null,
+    // The SHAPE of the page resets too. It did not, so a test that switched
+    // the grid to divs left every later test running against divs — and the
+    // one that then failed looked like a regression in whatever it was
+    // actually testing, rather than leftover state from three tests ago.
+    // The SHAPE of the page resets too. It did not, so a test that switched
+    // the grid to divs left every later test running against divs — and the
+    // one that then failed looked like a regression in whatever it was
+    // actually testing, rather than leftover state from three tests ago.
+    gridShape: "table", padRows: 0, formatControl: "links",
+    chipsUnmatchable: false, appPaintMs: 0, showNavLabel: true,
     sections: {
       "Needs Review": true, "Needs Manager Review": false,
       "Pending Submission": false, Denied: true, Completed: false,

@@ -90,7 +90,7 @@ process.env.EMBURSE_LOGIN_EMAIL ||= "bot@example.invalid";
 process.env.EMBURSE_LOGIN_PASSWORD ||= "not-a-real-password";
 process.env.EMBURSE_STEP_TIMEOUT_MS ||= "12000";
 
-const { runDecision } = await import("../server/emburse/decide.js");
+const { runDecision, DECISION_SELECTORS } = await import("../server/emburse/decide.js");
 
 const SEL = {
   loginEmail: 'input[name="username"]',
@@ -176,6 +176,31 @@ check("a hundred rows deep, it still finds the right one", found.ok,
   found.steps.find((s) => !s.ok)?.detail ?? "");
 check("…and it is the right row", /26\.40/.test(found.matchedRow ?? "") &&
   /Brianna/.test(found.matchedRow ?? ""), found.matchedRow ?? "");
+
+console.log("\n12. Emburse's real grid shape: divs with ARIA roles");
+// spend.emburse.com does not build its transactions grid from a <table>.
+// The shipped row selector was "table tbody tr" alone, so it matched
+// nothing and every decision died at "the search returned no rows" — on a
+// page that was fully loaded with the rows plainly on it.
+mock.reset();
+await fetch(`${mock.url}/__app?grid=divs`, { method: "POST" });
+const divSel = { ...SEL, grid: '[role="grid"]', resultRow: DECISION_SELECTORS.resultRow };
+const onDivs = await runDecision("approve", TARGET, "", divSel, mock.url, LOGIN, { dryRun: true });
+check("the shipped row selector finds the row in a div grid", onDivs.ok,
+  onDivs.steps.find((s) => !s.ok)?.detail ?? "");
+check("…and it is the right one, not the $126.40 near-miss",
+  /26\.40/.test(onDivs.matchedRow ?? "") && !/126\.40/.test(onDivs.matchedRow ?? ""),
+  onDivs.matchedRow ?? "");
+// The spacer row a virtualised grid puts in front of the data must not be
+// mistaken for a row that failed to match.
+check("…stepping over the empty spacer row rather than tripping on it",
+  /matched 1 of/.test(onDivs.steps.find((s) => /search/.test(s.name))?.detail ?? ""),
+  onDivs.steps.find((s) => /search/.test(s.name))?.detail ?? "");
+// And the old shape still works — plenty of tenants are real tables.
+mock.reset();
+const onTable = await decide(TARGET);
+check("a real <table> grid still works, so this is a widening not a swap",
+  onTable.ok, onTable.steps.find((s) => !s.ok)?.detail ?? "");
 
 await mock.close();
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}\n`);
