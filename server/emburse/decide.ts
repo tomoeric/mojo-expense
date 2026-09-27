@@ -168,9 +168,23 @@ export function rowMatches(rowText: string, t: Target): { ok: boolean; why: stri
     };
   }
 
+  // The cardholder column is truncated too: Emburse prints "CRAIG W
+  // DEMORA…" where the expense says Craig Demoranville, so demanding the
+  // whole surname refused a row that was plainly the right one. A stem
+  // counts only when the PAGE says it was cut — four or more letters
+  // immediately followed by an ellipsis, and a genuine prefix of the
+  // surname. Guessing at prefixes without that marker would let "Smith"
+  // match "Smithson".
   const surname = t.employee.trim().split(/\s+/).pop() ?? "";
-  if (surname && !lower.includes(surname.toLowerCase())) {
-    return { ok: false, why: `employee "${t.employee}" not in the row` };
+  if (surname) {
+    const want = surname.toLowerCase();
+    let found = lower.includes(want);
+    if (!found) {
+      for (const m of lower.matchAll(/([a-z]{4,})(?:\.\.\.|\u2026)/g)) {
+        if (want.startsWith(m[1]!)) { found = true; break; }
+      }
+    }
+    if (!found) return { ok: false, why: `employee "${t.employee}" not in the row` };
   }
 
   // The first word of the merchant: Emburse truncates long names with an
@@ -189,10 +203,17 @@ export function rowMatches(rowText: string, t: Target): { ok: boolean; why: stri
 
   if (t.date) {
     const [y, m, d] = t.date.split("-").map(Number) as [number, number, number];
+    const short = new Intl.DateTimeFormat("en-US", { month: "short" }).format(new Date(y, m - 1, d));
     const forms = [
       `${m}/${d}/${y}`,
       `${String(m).padStart(2, "0")}/${String(d).padStart(2, "0")}/${y}`,
-      new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(y, m - 1, d)),
+      `${short} ${d}`,
+      // Emburse pads the day: "Sep 07, 2026". "Sep 7" is not inside that,
+      // so every expense dated before the 10th of a month was refused with
+      // "date not in the row" about a date plainly in the row. Nobody had
+      // approved one yet — the three that worked were the 16th, 21st and
+      // 24th, where padding makes no difference.
+      `${short} ${String(d).padStart(2, "0")}`,
     ];
     if (!forms.some((f) => text.includes(f))) {
       return { ok: false, why: `date ${t.date} not in the row` };

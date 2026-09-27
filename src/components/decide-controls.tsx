@@ -141,7 +141,7 @@ function FailureDialog({
       onClick={(e) => { e.stopPropagation(); onClose(); }}
     >
       <div
-        className="w-full max-w-4xl rounded-xl border border-border bg-background p-4 shadow-xl"
+        className="w-full max-w-4xl overflow-hidden rounded-xl border border-border bg-background p-4 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start gap-2">
@@ -162,7 +162,7 @@ function FailureDialog({
           </button>
         </div>
 
-        <p className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs break-words text-amber-800 dark:text-amber-300">
+        <p className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs [overflow-wrap:anywhere] text-amber-800 dark:text-amber-300">
           {decision.error?.trim() || "Emburse gave no reason."}
         </p>
 
@@ -222,7 +222,7 @@ function DecisionSteps({ steps }: { steps: QueuedDecision["steps"] }) {
       {steps.map((st, i) => (
         <span key={i} className="flex items-start gap-1.5 py-0.5">
           <span className={st.ok ? "text-emerald-600" : "text-red-600"}>{st.ok ? "\u2713" : "\u2717"}</span>
-          <span className="min-w-0">
+          <span className="min-w-0 [overflow-wrap:anywhere]">
             <strong className="font-semibold">{st.name}</strong>
             {st.detail && <span className="block opacity-80">{st.detail}</span>}
           </span>

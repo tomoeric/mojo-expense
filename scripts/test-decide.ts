@@ -128,6 +128,40 @@ console.log("\n3c. Merchants Emburse chopped in half");
       who("Howard Schultz", "U-HAUL MOVING", -39.94)).ok);
 }
 
+console.log("\n3d. A single-digit day, and a chopped cardholder");
+// Three approvals went through and then one failed with "date 2026-09-07
+// not in the row" about a row reading "Sep 07, 2026". Emburse PADS the
+// day; the short form built here did not, so "Sep 7" was not inside
+// "Sep 07" — and every expense dated before the 10th of a month was
+// refused. Nobody had met one yet: the three that worked were the 16th,
+// 21st and 24th, where padding makes no difference.
+//
+// The same row showed the cardholder column is truncated too — "CRAIG W
+// DEMORA…" where the expense says Craig Demoranville.
+{
+  const craig = (date: string) =>
+    ({ employee: "Craig Demoranville", merchant: "Publix", amount: 78.61, date });
+  check("a day before the 10th matches its padded printing",
+    rowMatches("Sep 07, 2026 Publix $78.61 Paid back AMEX CRAIG DEMORANVILLE", craig("2026-09-07")).ok,
+    rowMatches("Sep 07, 2026 Publix $78.61 x CRAIG DEMORANVILLE", craig("2026-09-07")).why);
+  check("…and the slash form is unaffected",
+    rowMatches("9/7/2026 Publix $78.61 x CRAIG DEMORANVILLE", craig("2026-09-07")).ok);
+  check("…and a two-digit day still works",
+    rowMatches("Sep 21, 2026 Publix $78.61 x CRAIG DEMORANVILLE", craig("2026-09-21")).ok);
+  check("a surname Emburse chopped still identifies its owner",
+    rowMatches("Sep 07, 2026 Publix $78.61 x CRAIG W DEMORA...", craig("2026-09-07")).ok,
+    rowMatches("Sep 07, 2026 Publix $78.61 x CRAIG W DEMORA...", craig("2026-09-07")).why);
+  // The loosening must not start matching people it should not. A stem
+  // counts only when the page itself marks the truncation, and only as a
+  // real prefix of the surname.
+  check("…but somebody else's chopped surname does not",
+    !rowMatches("Sep 07, 2026 Publix $78.61 x JAMES LENIHA...", craig("2026-09-07")).ok);
+  check("…and the wrong day is still refused",
+    !rowMatches("Sep 08, 2026 Publix $78.61 x CRAIG DEMORANVILLE", craig("2026-09-07")).ok);
+  check("…and the wrong person is still refused",
+    !rowMatches("Sep 07, 2026 Publix $78.61 x JAMES LENIHAN", craig("2026-09-07")).ok);
+}
+
 console.log("\n4. Missing fields do not silently pass");
 refuses("no amount at all", "9/13/2026 DOORDASH INC. Brianna Ruth Meals");
 refuses("amount present but nothing else", "$26.40");
