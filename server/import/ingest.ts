@@ -221,22 +221,60 @@ export async function ingestExport(
     );
     const held = Number(inbox.rows[0]?.n ?? 0);
     const losing = held - Number(inbox.rows[0]?.live ?? 0);
-    if (!opts.force && held >= 25 && losing > held * 0.8) {
+
+    // How many of those we ACTIONED ourselves.
+    //
+    // The fence cannot otherwise tell a reviewer clearing the queue from a
+    // truncated export, and those look identical from here: both are a pile
+    // of waiting expenses absent from the new file. So a good review
+    // session — approve most of the queue, then sync — would trip the
+    // "more than four in five" refusal and block the very import meant to
+    // tidy up after it.
+    //
+    // An expense this app approved or denied, and confirmed left Needs
+    // Review, is EXPECTED to be gone. Only the unexplained disappearances
+    // are evidence of a bad file.
+    //
+    // Counted separately and tolerantly: the decisions table is created on
+    // first use, so an install that has never decided anything does not
+    // have one, and a missing table must not fail an import.
+    let actioned = 0;
+    try {
+      const mine = await client.query<{ n: string }>(
+        `SELECT count(*) AS n
+           FROM expenses e
+           JOIN expense_decisions d ON d.dedupe_key = e.dedupe_key AND d.state = 'applied'
+          WHERE e.in_inbox = true AND e.dedupe_key <> ALL($1::text[])`,
+        [[...keys.keys()]],
+      );
+      actioned = Number(mine.rows[0]?.n ?? 0);
+    } catch {
+      actioned = 0;
+    }
+    const unexplained = losing - actioned;
+
+    if (!opts.force && held >= 25 && unexplained > held * 0.8) {
       await client.query("ROLLBACK");
       return {
         ...base,
         warnings: [
           ...warnings,
           `This export carries ${parsed.expenses.length} expenses and would delete ${losing} of the ` +
-            `${held} currently waiting — more than four in five. That is what a truncated export ` +
-            `looks like, and the receipts it would take cannot be fetched again, so it was not ` +
-            `imported. Re-run the export, or force it if the queue really did clear.`,
+            `${held} currently waiting` +
+            (actioned > 0
+              ? ` — ${actioned} of them approved or denied here, which is expected, but ${unexplained} `
+                + `went missing for no reason this app knows of. `
+              : ` — more than four in five. `) +
+            `That is what a truncated export looks like, and the receipts it would take cannot be ` +
+            `fetched again, so it was not imported. Re-run the export, or force it if the queue ` +
+            `really did clear.`,
         ],
       };
     }
-    if (!opts.force && held >= 25 && losing > held * 0.5) {
+    if (!opts.force && held >= 25 && unexplained > held * 0.5) {
       warnings.push(
-        `${losing} of the ${held} waiting expenses are absent from this export and were deleted. ` +
+        `${unexplained} of the ${held} waiting expenses are absent from this export for no reason ` +
+        `this app knows of, and were deleted. ` +
           `That is a large share for one day — worth a look at the export's filters if it was ` +
           `unexpected.`,
       );

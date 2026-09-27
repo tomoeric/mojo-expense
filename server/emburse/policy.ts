@@ -39,6 +39,20 @@ export function flagsForReport(report: Omit<ExpenseReport, "flags">): PolicyFlag
   const flags: PolicyFlag[] = [];
   const { receiptRequiredOver, largeLineOver, ageingAfterDays } = env.policy;
 
+  // Built-in checks are INFO, not warnings, and the queue only counts
+  // warnings. So they no longer appear as flags or as filter chips.
+  //
+  // "Waiting too long" caught 190 of 212 expenses, which is not a flag —
+  // it is a description of the queue. Alongside three rules catching two,
+  // one and one, it made the flag row useless: everything was flagged, so
+  // nothing was. Rules are written, named and tuned by the people who have
+  // to act on them; these thresholds came from an env var nobody set.
+  //
+  // Kept rather than deleted, because the report drawer still shows info
+  // flags and the duplicate check in particular has no equivalent a rule
+  // can express yet — there is no "looks like another expense" field.
+  const severity = "info" as const;
+
   const missingReceipt = report.lines
     .filter((l) => !l.hasReceipt && l.amount >= receiptRequiredOver)
     .map((l) => l.id);
@@ -46,7 +60,7 @@ export function flagsForReport(report: Omit<ExpenseReport, "flags">): PolicyFlag
     flags.push({
       code: "missing-receipt",
       label: `${missingReceipt.length} line${missingReceipt.length === 1 ? "" : "s"} over $${receiptRequiredOver} without a receipt`,
-      severity: "warn",
+      severity,
       lineIds: missingReceipt,
     });
   }
@@ -76,7 +90,7 @@ export function flagsForReport(report: Omit<ExpenseReport, "flags">): PolicyFlag
     flags.push({
       code: "possible-duplicate",
       label: `${dupes.length} lines share a merchant, amount and date`,
-      severity: "warn",
+      severity,
       lineIds: dupes,
     });
   }
@@ -86,7 +100,7 @@ export function flagsForReport(report: Omit<ExpenseReport, "flags">): PolicyFlag
     flags.push({
       code: "ageing",
       label: `Waiting ${age} days for review`,
-      severity: "warn",
+      severity,
       lineIds: [],
     });
   }

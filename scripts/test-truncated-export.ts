@@ -36,6 +36,7 @@ await ensureSchema();
 
 const TAG = `zz-trunc-${Date.now()}`;
 const clean = async () => {
+  await db().query("DELETE FROM expense_decisions WHERE decided_by = $1", [`${TAG}@test`]);
   await db().query("DELETE FROM expenses WHERE employee LIKE $1", [`${TAG}%`]);
   await db().query("DELETE FROM expense_imports WHERE filename LIKE $1", [`${TAG}%`]);
 };
@@ -126,6 +127,49 @@ try {
     normal.warnings.join(" | ").slice(0, 120));
   check("the key of a row is unchanged by any of this",
     dedupeKey(expense(0)) === dedupeKey(expense(0)));
+
+  console.log("\n7. A reviewer clearing the queue is not a truncated export");
+  // The fence cannot otherwise tell the two apart: a good review session —
+  // approve most of the queue, then sync — leaves exactly the same evidence
+  // as a short file, a pile of waiting expenses absent from the new one. So
+  // the refusal fired on the very import meant to tidy up after the work,
+  // and the harder people worked the more certainly it blocked them.
+  //
+  // An expense this app approved, and confirmed left Needs Review, is
+  // EXPECTED to be gone. Only the unexplained disappearances are evidence.
+  await clean();
+  await db().query("DELETE FROM expense_decisions WHERE decided_by = $1", [`${TAG}@test`]);
+  await run(100);
+  const keys = (await db().query<{ dedupe_key: string }>(
+    "SELECT dedupe_key FROM expenses WHERE employee = $1 ORDER BY dedupe_key LIMIT 90",
+    [`${TAG} Person`])).rows.map((r) => r.dedupe_key);
+
+  const { queueDecision, settleDecision } = await import("../server/emburse/decisions.js");
+  for (const key of keys) {
+    const q = await queueDecision({
+      dedupeKey: key, decision: "approve", reason: "", decidedBy: `${TAG}@test`,
+      target: { employee: `${TAG} Person`, merchant: "M", amount: 10, date: "2026-09-20" },
+    });
+    if (q.ok) await settleDecision(q.queued.id, { ok: true, matchedRow: "row" });
+  }
+
+  // 90 of 100 gone — well past the four-in-five refusal — but all 90 were
+  // approved here.
+  const afterWork = await run(10);
+  check("an import following 90 approvals is NOT refused",
+    afterWork.purged === 90, `purged ${afterWork.purged}, warnings: ${afterWork.warnings.join(" | ").slice(0, 120)}`);
+  check("…and does not warn about a share it can account for",
+    !afterWork.warnings.some((w) => /no reason this app knows of/.test(w)),
+    afterWork.warnings.join(" | ").slice(0, 160));
+
+  // And the fence must still bite when the disappearances are unexplained.
+  await clean();
+  await db().query("DELETE FROM expense_decisions WHERE decided_by = $1", [`${TAG}@test`]);
+  await run(100);
+  const stillRefuses = await run(5);
+  check("a genuinely short file is still refused",
+    stillRefuses.inserted === 0 && stillRefuses.warnings.some((w) => /was not imported/.test(w)),
+    stillRefuses.warnings.join(" | ").slice(0, 140));
 } finally {
   await clean();
   await db().end();
