@@ -783,15 +783,25 @@ async function applyOne(
           `the row is right, but nothing inside it matched the row menu “${sel.rowMenu}” ` +
           `— denying needs that ⋮ menu, so it would fail here.`);
       }
-      await menu.first().click();
-      const item = page.locator(sel.denyButton!).first();
-      const there = await item.isVisible().catch(() => false);
+      // The visible one, for the same reason the real deny uses it: the
+      // first ⋮ in the DOM is routinely a hidden copy, and .first().click()
+      // waits out the whole timeout for it. Leaving that here would have
+      // made the dry run — the tool for diagnosing exactly this — hang for
+      // thirty seconds and report a Playwright timeout naming no cause.
+      await clickFirstVisible(row!, sel.rowMenu!, "⋮ row menu", env.emburseLogin.stepTimeoutMs);
+      const items = page.locator(sel.denyButton!);
+      let there = false;
+      const n = await items.count().catch(() => 0);
+      for (let i = 0; i < n && !there; i++) {
+        there = await items.nth(i).isVisible().catch(() => false);
+      }
       // Always close it, whatever was found. A menu left open over the grid
       // is the next run's problem.
       await page.keyboard.press("Escape").catch(() => undefined);
       if (!there) {
         throw new Error(
-          `opened the row's ⋮ menu, but nothing in it matched “${sel.denyButton}”. ` +
+          `opened the row's ⋮ menu, but ${n === 0 ? "nothing" : `none of the ${n} thing(s)`} ` +
+          `in it matched “${sel.denyButton}” visibly. ` +
           `Approving would still work; denying would fail at this point.`);
       }
       return "found the row, opened its ⋮ menu and found Deny; stopped without denying";
