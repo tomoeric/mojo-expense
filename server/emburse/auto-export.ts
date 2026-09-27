@@ -1031,8 +1031,23 @@ async function reachable(url: string): Promise<string> {
  * Returns the step detail, so both callers say the same thing.
  */
 export async function openEmburse(page: Page, url: string): Promise<string> {
-  const open = () =>
-    page.goto(url, { waitUntil: "domcontentloaded", timeout: env.emburseLogin.openTimeoutMs });
+  // How long each attempt cost, so a retry that SUCCEEDS still leaves a
+  // record. Without this the only evidence a navigation is chronically slow
+  // was a total failure — a first attempt that timed out and a second that
+  // got through looked exactly like a page that loaded first time, and the
+  // next timeout is diagnosed by guessing all over again.
+  const spent: string[] = [];
+  const open = async (): Promise<void> => {
+    const from = Date.now();
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: env.emburseLogin.openTimeoutMs });
+      spent.push(`${((Date.now() - from) / 1000).toFixed(1)}s`);
+    } catch (err) {
+      spent.push(`timed out after ${((Date.now() - from) / 1000).toFixed(1)}s`);
+      throw err;
+    }
+  };
+
   try {
     await open();
   } catch (err) {
@@ -1059,14 +1074,18 @@ export async function openEmburse(page: Page, url: string): Promise<string> {
         throw new Error(
           `${safeUrl(url)} did not load within ` +
             `${Math.round(env.emburseLogin.openTimeoutMs / 1000)}s, three times over about two ` +
-            `minutes. First attempt: ${why.split("\n")[0]}. ${reach}`,
+            `minutes (${spent.join(", ")}). First attempt: ${why.split("\n")[0]}. ${reach}`,
         );
       });
     }
   }
   // Redacted: Emburse's sign-in redirect carries a session_token and the
   // whole OAuth query string, and this detail is stored and displayed.
-  return `loaded ${safeUrl(page.url())}`;
+  //
+  // The attempts are named when there was more than one. A step that reads
+  // "loaded … (timed out after 90.0s, then 11.4s)" is the difference between
+  // a one-off and a host that is always on the edge of the budget.
+  return `loaded ${safeUrl(page.url())}${spent.length > 1 ? ` (${spent.join(", then ")})` : ""}`;
 }
 
 /** Exposed for the test that pins which of the two causes it names. */

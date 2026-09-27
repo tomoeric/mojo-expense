@@ -94,11 +94,17 @@ console.log("\n1. A slow first navigation is retried, not failed");
     // queued approval at the first navigation. A test that reimplements the
     // thing it is testing agrees with itself.
     let ok = false;
+    let detail = "";
     try {
-      await openEmburse(page, once.url);
+      detail = await openEmburse(page, once.url);
       ok = true;
     } catch { /* ok stays false */ }
     check("the second attempt gets through", ok);
+    // A retry that SUCCEEDS has to leave a record, or a host chronically on
+    // the edge of the budget is indistinguishable from one that loads first
+    // time — and the next timeout gets diagnosed by guessing again.
+    check("…and the step says the first one timed out, with what each cost",
+      /timed out after \d+\.\ds, then \d+\.\ds/.test(detail), detail);
     check("…and it really did take two", once.hits() >= 2, `${once.hits()} requests`);
   } finally {
     await once.close();
