@@ -128,6 +128,55 @@ console.log("\n9. A person whose expense it is not");
 run = await decide({ ...TARGET, employee: "Nobody Here" });
 check("refused rather than taking the same-amount row", !run.ok);
 
+console.log("\n10. A row selector that does not describe this tenant's grid");
+// The failure a reviewer actually hit, after the grid gate was fixed: signed
+// in, team view, grid on screen — "the search returned no rows". Which is
+// true, and tells nobody what to do. The rows were there; "table tbody tr"
+// simply did not describe them. So the message has to name what IS on the
+// page, in enough detail to set the selector by hand.
+mock.reset();
+const blindRows = await runDecision(
+  "approve", TARGET, "", { ...SEL, resultRow: "table tbody tr.no-such-class" },
+  mock.url, LOGIN, { dryRun: true });
+const why = blindRows.steps.find((s) => !s.ok)?.detail ?? "";
+check("refused rather than guessing at a container", !blindRows.ok);
+check("names the selector that found nothing", /no-such-class/.test(why), why.slice(0, 200));
+check("…and lists what IS row-shaped on the page",
+  /Row-shaped things that ARE here/.test(why) && /tr \u00d7/.test(why), why.slice(0, 300));
+// Without a sample the counts are still a guessing game — "tr ×4" could be a
+// nav bar. The text is what makes it identifiable as a grid row.
+check("…with the text of one, so it can be identified as a grid row",
+  /reads: /.test(why) && /DOORDASH/i.test(why), why.slice(0, 400));
+// This sits one step from clicking APPROVE. Falling back to a broader
+// selector is exactly how the wrong expense gets approved.
+check("…and says plainly that nothing is guessed", /nothing is guessed here/.test(why));
+
+console.log("\n11. A merchant search that returns a month of rows");
+// What "search by name brings up all receipts" costs. DOORDASH returns
+// everything anybody ordered; the target can be row 300. The read cap is
+// real and has to be — but it used to report "none of the 340 rows match"
+// after reading fifty, which is a false statement about the other 290, in
+// the one place it matters: an expense that IS there gets reported missing.
+mock.reset();
+await fetch(`${mock.url}/__app?pad=300`, { method: "POST" });
+const buried = await decide(TARGET);
+const deep = buried.steps.find((s) => !s.ok)?.detail ?? "";
+check("it does not claim to have checked rows it never read",
+  !buried.ok && !/none of the \d+ rows match/.test(deep), deep.slice(0, 200));
+check("…and says how many of how many it actually looked at",
+  /looked at the first \d+ of \d+ rows/.test(deep), deep.slice(0, 220));
+check("…naming the search that was too broad", /too broad/.test(deep) && /DOORDASH/i.test(deep),
+  deep.slice(0, 260));
+
+// And the cap is generous enough that an ordinary busy merchant still works.
+mock.reset();
+await fetch(`${mock.url}/__app?pad=100`, { method: "POST" });
+const found = await decide(TARGET);
+check("a hundred rows deep, it still finds the right one", found.ok,
+  found.steps.find((s) => !s.ok)?.detail ?? "");
+check("…and it is the right row", /26\.40/.test(found.matchedRow ?? "") &&
+  /Brianna/.test(found.matchedRow ?? ""), found.matchedRow ?? "");
+
 await mock.close();
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}\n`);
 process.exit(failures === 0 ? 0 : 1);

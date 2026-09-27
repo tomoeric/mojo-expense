@@ -54,6 +54,11 @@ type State = {
    */
   gridShape: "table" | "ghost" | "divs";
   /**
+   * Pad the grid with this many filler rows, for the case a broad merchant
+   * search returns a month of them and the target is past the read cap.
+   */
+  padRows: number;
+  /**
    * How the export dialog offers a format.
    *
    *   "links"  — a link that opens a page of choices.
@@ -121,6 +126,7 @@ const state: State = {
   appPaintMs: 0,
   showNavLabel: true,
   gridShape: "table",
+  padRows: 0,
   formatControl: "links",
   chipsUnmatchable: false,
   chipState: "aria",
@@ -146,7 +152,14 @@ const ROWS = [
 
 const grid = (search: string) => {
   const term = search.trim().toLowerCase();
-  const shown = term ? ROWS.filter((r) => r.merchant.toLowerCase().includes(term)) : ROWS;
+  const matching = term ? ROWS.filter((r) => r.merchant.toLowerCase().includes(term)) : ROWS;
+  // Filler goes IN FRONT, so the row being looked for is past the cap —
+  // which is the situation being reproduced, not merely a long list.
+  const filler = Array.from({ length: state.padRows }, (_, i) => ({
+    date: "9/01/2026", merchant: "DOORDASH INC.", who: `Filler Person${i}`,
+    amount: (1000 + i).toFixed(2),
+  }));
+  const shown = [...filler, ...matching];
   const cells = (r: (typeof ROWS)[number]) =>
     `${r.date}</td><td>${r.merchant}</td><td>${r.who}</td><td>$${r.amount}</td>
      <td><button>APPROVE</button> <button aria-label="more">&#8942;</button>`;
@@ -544,6 +557,7 @@ app.post("/__app", (req, res) => {
   if ("paintMs" in q) state.appPaintMs = Number(q["paintMs"]) || 0;
   if ("nav" in q) state.showNavLabel = q["nav"] !== "false";
   if ("grid" in q) state.gridShape = q["grid"] as State["gridShape"];
+  if ("pad" in q) state.padRows = Math.max(0, Math.min(500, Number(q["pad"]) || 0));
   if ("format" in q) state.formatControl = q["format"] as State["formatControl"];
   if ("chips" in q) state.chipsUnmatchable = q["chips"] === "unmatchable";
   if ("chipState" in q) state.chipState = q["chipState"] as State["chipState"];

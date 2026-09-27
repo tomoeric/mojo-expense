@@ -256,6 +256,17 @@ export async function runDecisions(
   });
 }
 
+/**
+ * How many result rows are read before giving up on finding the expense.
+ *
+ * Every row costs a round trip for its text, so this is not free — but it
+ * was 50, and a search for a merchant like DOORDASH returns a month of
+ * them. Past the cap the run reported "none of the 340 rows match", which
+ * it could not know, having read fifty. The number is generous now and the
+ * message is honest when it is reached.
+ */
+const ROWS_EXAMINED = 250;
+
 /** One queued decision, as the batch runner needs it. */
 /**
  * Why the grid is not there.
@@ -327,6 +338,50 @@ async function whyNoGrid(page: Page, sel: Record<string, string>, asEmail?: stri
       : `Nothing table-like is on the page at all, so either it had not finished ` +
         `rendering or “${sel.gridPath}” is not where this tenant keeps its transactions.`) +
     ` The page says: ${text.slice(0, 200) || "(nothing readable)"}`;
+}
+
+/**
+ * Why the search found nothing, in terms of what is on the page.
+ *
+ * Two quite different things produce no rows: Emburse really has no match
+ * for the search, or it has plenty and `resultRow` does not describe them.
+ * The second is far more likely on a tenant whose selectors have drifted —
+ * the shipped default is "table tbody tr", and a grid built from divs has no
+ * tbody and no tr at all. Guessing a replacement is not an option here: this
+ * function sits one step away from clicking APPROVE on somebody's expense,
+ * and a selector that matched the wrong container is precisely how the wrong
+ * row gets approved. So it reports, in enough detail to set the selector by
+ * hand, and refuses.
+ */
+async function whyNoRows(
+  page: Page, sel: Record<string, string>, term: string,
+): Promise<string> {
+  const text = (await page.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+  if (/no results|no expenses|no transactions|nothing to show|0 results/i.test(text)) {
+    return `Emburse says there are no results for “${term}”, so the expense is not in ` +
+      `this view — it may already have been actioned, or be in a different section.`;
+  }
+
+  const candidates = await countAll(page, [
+    sel.resultRow ?? "", "table tbody tr", "tbody tr", "tr",
+    '[role="rowgroup"] [role="row"]', '[role="row"]', "[data-row-id]", "li",
+  ]);
+  const best = candidates.filter((c) => c.n > 0 && c.sel !== sel.resultRow);
+  if (best.length === 0) {
+    return `no rows matched “${sel.resultRow}”, and nothing else row-shaped is on the page ` +
+      `either. The page says: ${text.slice(0, 200) || "(nothing readable)"}`;
+  }
+
+  // The text of one candidate row, so whoever sets the selector can see
+  // whether it is a row of the grid or a row of something else entirely.
+  const sample = (await page.locator(best[0]!.sel).first().innerText().catch(() => ""))
+    .replace(/\s+/g, " ").trim().slice(0, 160);
+
+  return `the grid is on screen but nothing matched the row selector “${sel.resultRow}”. ` +
+    `Row-shaped things that ARE here: ${best.map((c) => `${c.sel} ×${c.n}`).join(", ")}. ` +
+    `The first “${best[0]!.sel}” reads: “${sample || "(empty)"}”. ` +
+    `If that is a grid row, set the row selector in Settings to it — nothing is guessed here, ` +
+    `because a selector matching the wrong container is how the wrong expense gets approved.`;
 }
 
 /**
@@ -548,18 +603,40 @@ async function applyOne(
 
     const rows = page.locator(sel.resultRow!);
     const count = await rows.count();
-    if (count === 0) throw new Error("the search returned no rows");
+    // "the search returned no rows" is true and tells nobody what to do. The
+    // rows are almost always right there — it is the SELECTOR that does not
+    // describe them, and which selector would is readable off the page.
+    if (count === 0) throw new Error(await whyNoRows(page, sel, term));
 
     // Narrow by the full match rather than by position: whichever row Emburse
     // happens to put first is not evidence of anything.
+    //
+    // The search is deliberately WIDE — two words of the merchant — and the
+    // narrowing happens here, against employee, merchant, amount and date
+    // together. That is the safe direction: fetching too much costs a few
+    // seconds, while a filter that silently excluded the right row would
+    // report "not there" about an expense that is.
+    const examined = Math.min(count, ROWS_EXAMINED);
     const matches: number[] = [];
-    for (let i = 0; i < Math.min(count, 50); i++) {
+    for (let i = 0; i < examined; i++) {
       const text = await rows.nth(i).innerText().catch(() => "");
       if (rowMatches(text, target).ok) matches.push(i);
     }
 
     if (matches.length === 0) {
       const first = await rows.nth(0).innerText().catch(() => "");
+      // Never claim none of N matched when only the first few were read. A
+      // merchant like DOORDASH returns the whole month, and "none of the 340
+      // rows match" — said after looking at fifty — is a false statement
+      // about the other 290, in the one place a false statement means an
+      // expense gets reported as missing when it is sitting there.
+      if (examined < count) {
+        throw new Error(
+          `looked at the first ${examined} of ${count} rows and none match this expense. ` +
+          `The search for “${term}” is too broad to find it this way — narrow it in ` +
+          `Emburse, or the expense may genuinely not be in this view. ` +
+          `The first row reads differently: ${rowMatches(first, target).why}.`);
+      }
       throw new Error(
         `none of the ${count} rows match this expense — ${rowMatches(first, target).why}`,
       );
