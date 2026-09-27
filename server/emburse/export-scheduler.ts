@@ -359,9 +359,23 @@ export function startExportScheduler(): void {
     .then((n) => n > 0 && console.log(`export: closed ${n} run(s) interrupted by a restart`))
     .catch((err) => console.error("export: could not close interrupted runs:", err));
 
-  // A minute after boot, so a restart during a due window picks it up without
-  // waiting for the next tick.
-  setTimeout(() => void tick(), 60_000);
+  /**
+   * The catch-up after a restart, and why it is not a minute any more.
+   *
+   * It was 60s, so a VM that restarted inside a due window started driving a
+   * browser one minute into its life — before outbound networking and DNS
+   * are reliably up on this host. The 6:29am run failed at "open Emburse"
+   * with the page not loading in 90 seconds, twice, while a manual run
+   * hours later opened the same URL in under two. Nothing was wrong with
+   * the app; it was asked to reach the internet too early.
+   *
+   * The cost of that mistake is not a slow run, it is a SPENT ATTEMPT: the
+   * day allows two, so one boot inside the window burns half the budget and
+   * the export does not land. Waiting costs at most a few minutes, because
+   * the interval below would catch the same window anyway.
+   */
+  const BOOT_CATCHUP_MS = 4 * 60_000;
+  setTimeout(() => void tick(), BOOT_CATCHUP_MS);
   timer = setInterval(() => void tick(), 5 * 60_000);
   console.log("Export scheduler running (checks every 5 min)");
 }

@@ -982,6 +982,38 @@ async function clickVisible(
   await target.click();
 }
 
+/**
+ * Can this container reach the host at all, without a browser?
+ *
+ * Asked only when Chromium has failed to load a page three times. It is the
+ * one question that splits the two very different causes of that: a
+ * container with no route out, versus a browser that cannot use the route
+ * it has. They look identical from inside Playwright and have nothing in
+ * common as fixes, and until this existed the message guessed at the first
+ * one every time.
+ */
+async function reachable(url: string): Promise<string> {
+  const started = Date.now();
+  try {
+    const stop = AbortSignal.timeout(15_000);
+    const res = await fetch(new URL("/", url).toString(), {
+      method: "HEAD", redirect: "manual", signal: stop,
+    });
+    const ms = Date.now() - started;
+    return `A plain request from the container reached it in ${ms}ms (HTTP ${res.status}), so the ` +
+      `network is fine and the BROWSER is what could not load the page — look at Chromium: a ` +
+      `corrupt profile, a leftover process, or memory on this VM.`;
+  } catch (err) {
+    const ms = Date.now() - started;
+    return `A plain request from the container also failed after ${ms}ms ` +
+      `(${err instanceof Error ? err.message : String(err)}), so this container has no route to ` +
+      `Emburse right now — it is the network or DNS, not anything in this app.`;
+  }
+}
+
+/** Exposed for the test that pins which of the two causes it names. */
+export const reachableForTest = reachable;
+
 /** The page's words, flattened — what both the diagnosis and the prompt read. */
 const pageText = async (page: Page): Promise<string> =>
   ((await page.locator("body").innerText().catch(() => "")) || "").replace(/\s+/g, " ").trim();
@@ -1153,16 +1185,31 @@ async function runSteps(
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err);
       await page.goto("about:blank").catch(() => {});
-      await open().catch(() => {
-        // The second failure is the one worth reporting, but the first said
-        // how long it waited, so both go in.
-        throw new Error(
-          `${safeUrl(url)} did not load within ` +
-            `${Math.round(env.emburseLogin.openTimeoutMs / 1000)}s, twice. First attempt: ` +
-            `${why.split("\n")[0]}. This is the network out of the container, not a selector — ` +
-            `nothing on the page has been looked at yet.`,
-        );
-      });
+      try {
+        await open();
+      } catch {
+        // Two tries 110 seconds apart is really one try. Whatever stops a
+        // page loading for ninety seconds — a container whose network is
+        // not up yet after a restart, a DNS resolver still starting — is
+        // not over in the twenty seconds the old retry allowed, so the last
+        // attempt waits properly first. A minute on the one morning it is
+        // needed, nothing on the others.
+        await page.waitForTimeout(30_000);
+        await open().catch(async () => {
+          // The decisive question, and it has never been asked: can THIS
+          // CONTAINER reach Emburse at all? A plain fetch needs no browser,
+          // no profile and no rendering. If it works, the network is fine
+          // and Chromium is the problem — a corrupt profile, a leftover
+          // process, memory. If it fails too, the container genuinely has
+          // no route out, and no amount of selector work will help.
+          const reach = await reachable(url);
+          throw new Error(
+            `${safeUrl(url)} did not load within ` +
+              `${Math.round(env.emburseLogin.openTimeoutMs / 1000)}s, three times over about two ` +
+              `minutes. First attempt: ${why.split("\n")[0]}. ${reach}`,
+          );
+        });
+      }
     }
     // Redacted: Emburse's sign-in redirect carries a session_token and the
     // whole OAuth query string, and this detail is stored and displayed.
