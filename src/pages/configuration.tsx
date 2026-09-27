@@ -375,18 +375,68 @@ function Fig({ label, value, sub }: { label: string; value: string; sub: string 
 }
 
 /**
- * The small admin switches.
+ * Why nothing is being approved: every expense in the queue, in the bucket
+ * of the first reason it does not qualify.
  *
- * Only one so far, and it earns its place: before it, the only way to learn
- * WHERE an approval failed was to approve a real expense and read a
- * one-sentence error that could mean a wrong password, a device check, an
- * account without the team view, or a renamed button — four causes, four
- * different fixes, one message.
- *
- * Off by default, and said plainly rather than left to be discovered: it
- * attaches a browser transcript to every decision, which a working queue has
- * no use for.
+ * This is the whole point of the card. "On" with an unchanging queue is
+ * indistinguishable from a broken feature, and each of these counts has a
+ * different next step: flagged means go read the flags, waiting on the
+ * rules means run them, waiting on a receipt means the reader is behind,
+ * and ready with nothing queued means the pass has not run yet — which is
+ * what the button is for.
  */
+function WhyNothingMoved({ report }: { report: AutoReport }) {
+  const c = report.counts;
+  const parts: string[] = [];
+  if (c.flagged) parts.push(`${c.flagged} flagged by a rule`);
+  if (c.awaitingRules) parts.push(`${c.awaitingRules} waiting for the rules to run`);
+  if (c.awaitingReceipt) parts.push(`${c.awaitingReceipt} waiting for a receipt to be read`);
+  if (c.decided) parts.push(`${c.decided} already decided, queued, or failed`);
+
+  return (
+    <div className="mt-3 rounded-lg bg-muted/50 p-3 text-xs">
+      {c.inbox === 0 ? (
+        <p>Nothing is in the queue, so there is nothing to approve.</p>
+      ) : (
+        <>
+          <p>
+            <strong className="font-semibold tabular-nums">{c.eligible}</strong> of{" "}
+            <span className="tabular-nums">{c.inbox}</span> in the queue qualify right now.
+          </p>
+          {parts.length > 0 && (
+            <p className="mt-1 text-muted-foreground">The rest: {parts.join(" · ")}.</p>
+          )}
+          {c.eligible > 0 && !report.blocked && (
+            <p className="mt-1 text-muted-foreground">
+              Up to {report.perRun} go on the next pass. Press Run now rather than waiting for it.
+            </p>
+          )}
+        </>
+      )}
+      {report.blocked && <p className="mt-1 text-amber-700">Nothing will run: {report.blocked}.</p>}
+      {c.awaitingReceipt > 0 && (
+        <p className="mt-1 text-muted-foreground">
+          A receipt nobody has read is unflagged because nothing has been checked, not because
+          everything passed — so those are held back on purpose, not stuck.
+        </p>
+      )}
+    </div>
+  );
+}
+
+type AutoReport = {
+  on: boolean;
+  owner: string | null;
+  perRun: number;
+  rules: number;
+  receiptMatters: boolean;
+  blocked: string | null;
+  counts: {
+    inbox: number; flagged: number; decided: number;
+    awaitingRules: number; awaitingReceipt: number; eligible: number;
+  };
+};
+
 /**
  * Approving the expenses no rule had anything to say about, unattended.
  *
@@ -394,6 +444,13 @@ function Fig({ label, value, sub }: { label: string; value: string; sub: string 
  * in the plainest terms available and names whose login it will use. An
  * automation that approves spending should not be something somebody
  * turns on without noticing what they turned on.
+ *
+ * It also has to be answerable. Switching it on used to produce nothing
+ * visible until the next import — the automation ran on the back of an
+ * import or a receipt-reading pass, and a settled queue triggers neither —
+ * so "it is on and nothing is happening" had no explanation anywhere in the
+ * app. Hence the count of what qualifies and why, and a button that runs a
+ * pass now.
  */
 function AutoApprove({ isAdmin }: { isAdmin: boolean }) {
   const qc = useQueryClient();
@@ -406,13 +463,28 @@ function AutoApprove({ isAdmin }: { isAdmin: boolean }) {
       return (await res.json()) as Record<string, unknown>;
     },
   });
+  const report = useQuery<AutoReport>({
+    queryKey: ["auto-approve-report"],
+    enabled: isAdmin,
+    queryFn: async () => {
+      const res = await fetch("/api/flags/autoApprove/report");
+      if (!res.ok) throw new Error("Could not read what qualifies");
+      return (await res.json()) as AutoReport;
+    },
+  });
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState<string | null>(null);
+  const [ran, setRan] = useState<string | null>(null);
   if (!isAdmin || !data) return null;
 
   const on = Boolean(data.autoApprove);
   const perRun = Number(data.autoApprovePerRun ?? 10);
   const owner = typeof data.autoApproveOwner === "string" ? data.autoApproveOwner : null;
+
+  const refresh = async () => {
+    await qc.invalidateQueries({ queryKey: ["flags"] });
+    await qc.invalidateQueries({ queryKey: ["auto-approve-report"] });
+  };
 
   const save = async (body: Record<string, unknown>) => {
     setBusy(true);
@@ -422,7 +494,40 @@ function AutoApprove({ isAdmin }: { isAdmin: boolean }) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
       });
-      await qc.invalidateQueries({ queryKey: ["flags"] });
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * Run a pass now, and say what came of it in the same place.
+   *
+   * "Queued 0" on its own would be the same dead end as before, so a run
+   * that queues nothing reports the reason the server gave, and the counts
+   * underneath refresh so the reason is visible rather than asserted.
+   */
+  const runNow = async () => {
+    setBusy(true);
+    setRan(null);
+    try {
+      const res = await fetch("/api/flags/autoApprove/run", { method: "POST" });
+      const body = (await res.json().catch(() => null)) as
+        | { queued?: number; skipped?: string | null; error?: string }
+        | null;
+      if (!res.ok) {
+        setRan(body?.error ?? `The run failed (${res.status}).`);
+      } else if ((body?.queued ?? 0) > 0) {
+        setRan(
+          `Queued ${body?.queued} for approval as ${owner}. They are applied by the decision ` +
+            `worker within a minute or so — the queue shows each one as it lands.`,
+        );
+      } else if (body?.skipped) {
+        setRan(`Nothing was queued: ${body.skipped}.`);
+      } else {
+        setRan("Nothing qualified. The counts below say why.");
+      }
+      await refresh();
     } finally {
       setBusy(false);
     }
@@ -434,13 +539,22 @@ function AutoApprove({ isAdmin }: { isAdmin: boolean }) {
         <p className="text-sm font-semibold">Approve unflagged expenses automatically</p>
         <button
           type="button"
+          onClick={() => void runNow()}
+          disabled={busy || !on}
+          title={on ? "Run a pass now instead of waiting for the next one" : "Switch it on first"}
+          className="ml-auto rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold hover:bg-muted disabled:opacity-50"
+        >
+          Run now
+        </button>
+        <button
+          type="button"
           onClick={() => void save({ enabled: !on })}
           disabled={busy}
-          className={`ml-auto rounded-lg border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50 ${
+          className={`rounded-lg border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50 ${
             on ? "border-amber-600/50 bg-amber-500/10 text-amber-700" : "border-border hover:bg-muted"
           }`}
         >
-          {busy ? "Saving…" : on ? "On" : "Off"}
+          {busy ? "Working…" : on ? "On" : "Off"}
         </button>
       </div>
 
@@ -460,7 +574,7 @@ function AutoApprove({ isAdmin }: { isAdmin: boolean }) {
           }}
           className="w-20 rounded-md border border-border bg-background px-2 py-1 tabular-nums"
         />
-        <span>per import.</span>
+        <span>per pass.</span>
         {owner ? (
           <span className="text-muted-foreground">
             Made in Emburse as <strong className="font-semibold text-foreground">{owner}</strong>.
@@ -470,10 +584,14 @@ function AutoApprove({ isAdmin }: { isAdmin: boolean }) {
         )}
       </div>
 
+      {ran && <p className="mt-2 whitespace-normal text-xs text-foreground">{ran}</p>}
+      {report.data && <WhyNothingMoved report={report.data} />}
+
       <p className="mt-2 text-xs text-muted-foreground">
-        After each import, expenses that <em>no enabled rule flagged</em> are queued for approval
-        without anybody clicking. They are applied under the login of whoever switched this on, and
-        that person's name is what Emburse records against every one of them.
+        Expenses that <em>no enabled rule flagged</em> are queued for approval without anybody
+        clicking — every fifteen minutes, after each import, and whenever the receipt reader
+        finishes a batch. They are applied under the login of whoever switched this on, and that
+        person's name is what Emburse records against every one of them.
       </p>
       <p className="mt-1 text-xs text-muted-foreground">
         Two things it will not do. It never touches an expense a rule caught, one already decided,
@@ -483,13 +601,26 @@ function AutoApprove({ isAdmin }: { isAdmin: boolean }) {
         expenses would otherwise be the ones it approved most readily.
       </p>
       <p className="mt-1 text-xs text-muted-foreground">
-        With no rules enabled it does nothing at all, and says so on the import: &ldquo;no flags&rdquo;
+        With no rules enabled it does nothing at all, and says so above: &ldquo;no flags&rdquo;
         means nothing when nothing is looking.
       </p>
     </div>
   );
 }
 
+/**
+ * Keeping the step-by-step trace of each approve and deny.
+ *
+ * It earns its place: before it, the only way to learn WHERE an approval
+ * failed was to approve a real expense and read a one-sentence error that
+ * could mean a wrong password, a device check, an account without the team
+ * view, or a renamed button — four causes, four different fixes, one
+ * message.
+ *
+ * Off by default, and said plainly rather than left to be discovered: it
+ * attaches a browser transcript to every decision, which a working queue
+ * has no use for.
+ */
 function DecisionTrace({ isAdmin }: { isAdmin: boolean }) {
   const qc = useQueryClient();
   const { data } = useQuery<Record<string, boolean>>({

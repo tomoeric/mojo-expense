@@ -21,7 +21,7 @@ export {};
 process.env.SESSION_SECRET ||= "test-secret";
 
 const { db, ensureSchema } = await import("../server/db.js");
-const { autoQueueApprovals } = await import("../server/rules/auto-approve.js");
+const { autoQueueApprovals, autoApproveReport } = await import("../server/rules/auto-approve.js");
 const { setFlag, setLimit } = await import("../server/flags.js");
 const store = await import("../server/rules/store.js");
 const { runRules } = await import("../server/rules/run.js");
@@ -187,6 +187,51 @@ try {
   const bothRead = await autoQueueApprovals();
   check("…but once BOTH are read it goes through", bothRead.queued === 1,
     `${bothRead.queued} queued`);
+
+  console.log("\n8. Saying why nothing moved");
+  // The report is the answer to "it is on and nothing is happening", which
+  // before it existed had no answer anywhere in the app. It has to classify
+  // by the SAME tests the pass uses — a report naming a different reason than
+  // the one the pass acted on would be worse than no report at all.
+  const clean5 = await add(5, "Office Supplies");
+  const clean6 = await add(6, "Office Supplies");
+  for (const key of [clean5, clean6]) {
+    await db().query(
+      `INSERT INTO expense_receipts (dedupe_key, sha256) VALUES ($1,$2)
+       ON CONFLICT DO NOTHING`, [key, sha]);
+  }
+  await runRules({ decide: false });
+
+  const before = await autoApproveReport();
+  const c = before.counts;
+  check("every expense in the queue lands in exactly one bucket",
+    c.flagged + c.decided + c.awaitingRules + c.awaitingReceipt + c.eligible === c.inbox,
+    JSON.stringify(c));
+  check("the rule-flagged one is counted as flagged", c.flagged >= 1, String(c.flagged));
+  check("the ones already approved are counted as decided", c.decided >= 1, String(c.decided));
+  check("the one with a second, unread receipt is counted as waiting on it",
+    c.awaitingReceipt >= 1, String(c.awaitingReceipt));
+  check("and the two genuinely clean ones are what it calls eligible",
+    c.eligible === 2, String(c.eligible));
+
+  // The number on the card has to be the number the pass acts on. perRun is
+  // 2 here, so two eligible is exactly what a pass should take.
+  const took = await autoQueueApprovals();
+  check("…which is what a pass then queues", took.queued === 2, String(took.queued));
+  const after = await autoApproveReport();
+  check("…and they move from eligible to decided, not out of the count",
+    after.counts.eligible === 0 && after.counts.decided === c.decided + 2,
+    JSON.stringify(after.counts));
+  check("…with the total unchanged", after.counts.inbox === c.inbox);
+
+  console.log("\n9. The report explains a refusal too, without running one");
+  await setFlag("autoApprove", false, OWNER);
+  const offReport = await autoApproveReport();
+  check("says it is switched off rather than showing nothing",
+    /switched off/.test(offReport.blocked ?? ""), offReport.blocked ?? "(nothing)");
+  check("…and still counts what would qualify if it were on",
+    offReport.counts.inbox === c.inbox, `${offReport.counts.inbox} vs ${c.inbox}`);
+  await setFlag("autoApprove", true, OWNER);
 
 } finally {
   await db().query("DELETE FROM receipt_readings WHERE sha256 IN ($1,$2)",

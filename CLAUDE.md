@@ -233,6 +233,32 @@ the blocks.
   receipt-items tables too. Without that, an app with no working Anthropic key
   has no `receipt_items` table and every import's rule run dies on the join.
 
+## Automatic approvals
+
+- **An automation that only runs on the back of something else looks broken.**
+  `autoQueueApprovals()` originally ran in exactly two places — after an import,
+  and at the end of a receipt-reading pass that read something. Both are silent
+  on a settled queue (the reader returns early when nothing is unread, and no
+  import runs until the next schedule), so switching the setting on produced
+  nothing observable for hours. It now also sweeps on its own clock
+  (`startAutoApprove()`, every 15 minutes) and has a **Run now** button.
+  Anything unattended added later needs its own trigger for the same reason.
+- **"On, and nothing is happening" has to have an answer in the app.**
+  `autoApproveReport()` puts every queued expense in the bucket of the FIRST
+  reason it does not qualify — flagged / already decided / waiting for the rules
+  to run / waiting for a receipt to be read / eligible — and the buckets sum to
+  the queue total on purpose. It shares its SQL tests with the pass itself
+  (`TESTS` in `auto-approve.ts`); a report that classified by slightly
+  different rules would confidently name the wrong reason.
+- **Run now is restricted to the flag's owner, not to admins.** Every approval
+  it makes is recorded in Emburse against whoever switched the automation on, so
+  a second admin pressing it would put a colleague's name on approvals they
+  never made. Same rule as everywhere else: a decision is applied under the
+  decider's own login.
+- **The refusals are in one place.** `setup()` reads the switch, the owner, the
+  number and the enabled rules and returns the single reason a run would do
+  nothing, so the pass and the report cannot disagree about it.
+
 ## Anthropic credentials
 
 - **Replit's integration is not a key.** It injects

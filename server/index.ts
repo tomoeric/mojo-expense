@@ -12,6 +12,7 @@ import { decisionRouter } from "./emburse/decision-routes.js";
 import { startExportScheduler } from "./emburse/export-scheduler.js";
 import { startDecisionWorker } from "./emburse/decision-worker.js";
 import { startReceiptReader } from "./emburse/receipt-reader.js";
+import { startAutoApprove } from "./rules/auto-approve.js";
 import { runRules } from "./rules/run.js";
 import { ensureSchema, isDbConfigured } from "./db.js";
 import { rulesRouter } from "./rules/routes.js";
@@ -113,6 +114,10 @@ app.listen(env.port, "0.0.0.0", () => {
         startExportScheduler();
         startDecisionWorker();
         startReceiptReader();
+        // On a clock of its own: the import and the receipt reader are both
+        // quiet on a settled queue, and this used to run only on the back of
+        // one of them.
+        startAutoApprove();
         recheckRulesOnBoot();
       })
       .catch((err: unknown) => console.error("schema bootstrap failed:", err));

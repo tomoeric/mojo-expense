@@ -1,7 +1,9 @@
 import { Router } from "express";
 import { allFlags, flagOwner, getLimit, setFlag, setLimit, FLAGS, type FlagKey } from "./flags.js";
 import { aiSpend } from "./ai/usage.js";
-import { DEFAULT_PER_RUN, MOST_PER_RUN } from "./rules/auto-approve.js";
+import {
+  DEFAULT_PER_RUN, MOST_PER_RUN, autoApproveReport, autoQueueApprovals,
+} from "./rules/auto-approve.js";
 import { env, isAuditConfigured, isEmburseConfigured } from "./env.js";
 import { TtlCache } from "./cache.js";
 import { HttpError } from "./http.js";
@@ -155,6 +157,60 @@ const flagState = async () => ({
 api.get("/flags", requireAuth, async (_req, res) => {
   try {
     res.json(await flagState());
+  } catch (err) {
+    res.status(500).json({ error: describe(err) });
+  }
+});
+
+/**
+ * Why nothing is being approved automatically.
+ *
+ * Its own endpoint rather than part of the flag state, which every signed-in
+ * user reads on every page load: this counts the whole inbox, and only an
+ * admin has any use for the answer.
+ */
+api.get("/flags/autoApprove/report", requireAuth, requireAdmin, async (_req, res) => {
+  if (!isDbConfigured()) {
+    res.status(503).json({ error: "No database is configured." });
+    return;
+  }
+  try {
+    res.json(await autoApproveReport());
+  } catch (err) {
+    res.status(500).json({ error: describe(err) });
+  }
+});
+
+/**
+ * Run the automatic approvals now, instead of at the next sweep.
+ *
+ * This exists because there was no way to see whether the setting worked.
+ * It ran after an import and after a receipt-reading pass, both of which
+ * are quiet on a settled queue, so switching it on produced nothing
+ * observable for hours — identical, from the outside, to a broken feature.
+ *
+ * Restricted to the OWNER, not merely to admins. Every approval this makes
+ * is recorded in Emburse against whoever switched the automation on, so an
+ * admin pressing this would be putting a colleague's name on approvals
+ * they never made. Same rule as everywhere else in the app: a decision is
+ * applied under the decider's own login, never somebody else's.
+ */
+api.post("/flags/autoApprove/run", requireAuth, requireAdmin, async (req, res) => {
+  if (!isDbConfigured()) {
+    res.status(503).json({ error: "No database is configured." });
+    return;
+  }
+  try {
+    const owner = await flagOwner("autoApprove");
+    const who = req.user?.email ?? "";
+    if (owner && who.toLowerCase() !== owner.toLowerCase()) {
+      res.status(403).json({
+        error: `Automatic approvals are made under ${owner}'s Emburse login, so only ${owner} can run them by hand. Switch the setting off and on again to take it over.`,
+      });
+      return;
+    }
+    const result = await autoQueueApprovals();
+    res.json({ ...result, report: await autoApproveReport() });
   } catch (err) {
     res.status(500).json({ error: describe(err) });
   }
