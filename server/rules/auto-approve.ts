@@ -107,11 +107,26 @@ export async function autoQueueApprovals(): Promise<AutoApproveResult> {
         AND NOT EXISTS (
               SELECT 1 FROM expense_decisions d
                WHERE d.dedupe_key = e.dedupe_key AND d.state IN ('pending','applied','failed'))
-        -- And, when any rule reads receipts, one that was actually read.
-        AND ($2::boolean = false OR EXISTS (
-              SELECT 1 FROM expense_receipts er
-                JOIN receipt_readings rr ON rr.sha256 = er.sha256
-               WHERE er.dedupe_key = e.dedupe_key AND rr.error IS NULL))
+        -- And, when any rule reads receipts, EVERY receipt on this
+        -- expense has been read.
+        --
+        -- Not "at least one". An expense can carry several images, and a
+        -- rule about alcohol is answered by whichever one has the bar tab
+        -- on it. Passing on the strength of one readable receipt while
+        -- another sat unread would approve the expense on the evidence of
+        -- the page that happened to be legible.
+        --
+        -- A receipt the reader gave up on stays unread for this purpose,
+        -- deliberately: three failures is a reason for a person to look,
+        -- not a reason to wave it through.
+        AND ($2::boolean = false OR (
+              EXISTS (SELECT 1 FROM expense_receipts er WHERE er.dedupe_key = e.dedupe_key)
+              AND NOT EXISTS (
+                    SELECT 1 FROM expense_receipts er
+                     WHERE er.dedupe_key = e.dedupe_key
+                       AND NOT EXISTS (
+                             SELECT 1 FROM receipt_readings rr
+                              WHERE rr.sha256 = er.sha256 AND rr.error IS NULL))))
       ORDER BY e.expense_date NULLS LAST, e.dedupe_key
       LIMIT $1`,
     [perRun, receiptMatters],

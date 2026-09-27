@@ -53,6 +53,21 @@ async function tick(): Promise<void> {
     }
     console.log(`receipts: read ${read} of ${pending.length}`);
 
+    // Automatic approvals wait on these. Without this, an expense whose
+    // receipt is read at 09:15 could not be approved until the NEXT
+    // import — tomorrow — because that is the only other thing that runs
+    // the automation. The reader is what unblocks them, so the reader
+    // says so.
+    if (read > 0) {
+      try {
+        const { autoQueueApprovals } = await import("../rules/auto-approve.js");
+        const auto = await autoQueueApprovals();
+        if (auto.queued > 0) console.log(`receipts: that freed ${auto.queued} automatic approval(s)`);
+      } catch (err) {
+        console.error("receipts: automatic approvals could not run:", err);
+      }
+    }
+
     // More waiting: come back promptly rather than at the idle cadence.
     if ((await unreadReceipts(1)).length > 0) {
       clearTimeout(timer!);

@@ -154,7 +154,45 @@ try {
   check("…and it is that expense, not another",
     (await mine()).every((d) => d.dedupeKey === `${TAG}-1`),
     (await mine()).map((d) => d.dedupeKey).join(","));
+  console.log("\n7. One receipt read, another not");
+  // An expense can carry several images, and a rule about alcohol is
+  // answered by whichever one has the bar tab on it. Passing on the
+  // strength of one readable receipt while another sat unread would
+  // approve the expense on the evidence of the page that happened to be
+  // legible.
+  await db().query("DELETE FROM expense_decisions WHERE decided_by = $1", [OWNER]);
+  const otherSha = "b".repeat(64);
+  await db().query(
+    `INSERT INTO receipt_blobs (sha256, bytes, content_type, byte_size)
+     VALUES ($1, '\\x00'::bytea, 'image/png', 1) ON CONFLICT DO NOTHING`, [otherSha]);
+  await db().query(
+    `INSERT INTO expense_receipts (dedupe_key, sha256) VALUES ($1,$2)
+     ON CONFLICT DO NOTHING`, [`${TAG}-1`, otherSha]);
+  const halfRead = await autoQueueApprovals();
+  check("an expense with an unread SECOND receipt is left alone",
+    halfRead.queued === 0, `${halfRead.queued} queued`);
+
+  // A receipt the reader gave up on counts as unread, on purpose: three
+  // failures is a reason for a person to look, not to wave it through.
+  await db().query(
+    `INSERT INTO receipt_readings (sha256, model, legible, error, attempts)
+     VALUES ($1,'test',false,'could not read it',3)
+     ON CONFLICT (sha256) DO UPDATE SET error = 'could not read it', attempts = 3`, [otherSha]);
+  const gaveUp = await autoQueueApprovals();
+  check("…and one the reader gave up on still counts as unread",
+    gaveUp.queued === 0, `${gaveUp.queued} queued`);
+
+  // Read it properly and the expense qualifies.
+  await db().query("UPDATE receipt_readings SET error = NULL WHERE sha256 = $1", [otherSha]);
+  const bothRead = await autoQueueApprovals();
+  check("…but once BOTH are read it goes through", bothRead.queued === 1,
+    `${bothRead.queued} queued`);
+
 } finally {
+  await db().query("DELETE FROM receipt_readings WHERE sha256 IN ($1,$2)",
+    ["a".repeat(64), "b".repeat(64)]).catch(() => {});
+  await db().query("DELETE FROM receipt_blobs WHERE sha256 IN ($1,$2)",
+    ["a".repeat(64), "b".repeat(64)]).catch(() => {});
   await deleteCredential(OWNER).catch(() => {});
   await db().query("DELETE FROM expense_receipts WHERE dedupe_key LIKE $1", [`${TAG}%`]).catch(() => {});
   await clean();
