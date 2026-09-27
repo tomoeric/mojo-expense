@@ -66,10 +66,26 @@ function refusesUnauthenticated(): string | null {
 }
 
 /** What the UI needs to render its "connected / not connected" state. */
+/**
+ * When this server process started.
+ *
+ * A failed decision keeps the error from the attempt that failed, for ever
+ * — which is right, it is a record. But a fix ships, the app restarts, and
+ * the row still reads exactly as it did before, so the same stale sentence
+ * gets read as a fresh verdict. ("This approval error didn't go away": the
+ * cause had been fixed two deploys earlier and nothing had re-run it.)
+ *
+ * Comparing this with a decision's timestamp is all the queue needs to say
+ * "the app has been updated since this ran". A restart is not proof the
+ * cause is fixed, so the page says only what is true and offers the retry.
+ */
+const BOOTED_AT = new Date().toISOString();
+
 api.get("/config", (_req, res) => {
   const configured = isEmburseConfigured();
   res.json({
     configured,
+    bootedAt: BOOTED_AT,
     /**
      * What is actually behind the data. The old header keyed off the Emburse
      * API being configured, which now never happens — so a page full of

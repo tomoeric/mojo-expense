@@ -67,6 +67,24 @@ type State = {
   /** Render a hidden APPROVE ahead of the real one in each row. */
   ghostButtons: boolean;
   /**
+   * Render a hidden COPY of every data row ahead of the real grid.
+   *
+   * What spend.emburse.com actually leaves in the DOM: a four-row grid
+   * reports seven rows. A copy carries the same date, merchant, cardholder
+   * and amount, so it matches the expense being approved exactly as well as
+   * the real row does — and "2 rows match this expense equally well" is a
+   * refusal about one expense.
+   */
+  ghostRows: boolean;
+  /**
+   * Render a VISIBLE duplicate of every data row.
+   *
+   * A split purchase: two rows agreeing on date, merchant, cardholder and
+   * amount, both on screen. Nothing can tell them apart, so this must stay
+   * a refusal — it is the property the hidden-copy handling must not cost.
+   */
+  twinRows: boolean;
+  /**
    * How the export dialog offers a format.
    *
    *   "links"  — a link that opens a page of choices.
@@ -137,6 +155,8 @@ const state: State = {
   padRows: 0,
   actionsWork: true,
   ghostButtons: false,
+  ghostRows: false,
+  twinRows: false,
   formatControl: "links",
   chipsUnmatchable: false,
   chipState: "aria",
@@ -234,8 +254,19 @@ const grid = (search: string) => {
   const ghostBtn = state.ghostButtons
     ? `<button class="ap" style="display:none">APPROVE</button>`
     : "";
+  // Hidden copies of the DATA rows, which is what the real grid leaves
+  // behind: four rows on screen, seven in the DOM. A copy matches the
+  // expense exactly as well as the row it copies.
+  const ghostRows = state.ghostRows
+    ? shown.map((r) => `<tr style="display:none"><td>${cells(r)}</td></tr>`).join("")
+    : "";
+  // A visible duplicate, which is a different thing entirely: two rows a
+  // person can see and nothing can tell apart.
+  const twinRows = state.twinRows
+    ? shown.map((r) => `<tr><td>${ghostBtn}${cells(r)}</td></tr>`).join("")
+    : "";
   const realTable = `<table><thead><tr><th>Date</th><th>Merchant</th><th>Employee</th><th>Amount</th><th></th></tr></thead>
-    <tbody>${shown.map((r) => `<tr><td>${ghostBtn}${cells(r)}</td></tr>`).join("")}</tbody></table>`;
+    <tbody>${ghostRows}${twinRows}${shown.map((r) => `<tr><td>${ghostBtn}${cells(r)}</td></tr>`).join("")}</tbody></table>`;
 
   if (state.gridShape === "ghost") {
     // The measuring table a data grid renders to size its columns. It is a
@@ -654,6 +685,8 @@ app.post("/__app", (req, res) => {
   if ("pad" in q) state.padRows = Math.max(0, Math.min(500, Number(q["pad"]) || 0));
   if ("actions" in q) state.actionsWork = q["actions"] !== "dead";
   if ("ghostButtons" in q) state.ghostButtons = q["ghostButtons"] === "true";
+  if ("ghostRows" in q) state.ghostRows = q["ghostRows"] === "true";
+  if ("twinRows" in q) state.twinRows = q["twinRows"] === "true";
   if ("format" in q) state.formatControl = q["format"] as State["formatControl"];
   if ("chips" in q) state.chipsUnmatchable = q["chips"] === "unmatchable";
   if ("chipState" in q) state.chipState = q["chipState"] as State["chipState"];
@@ -680,7 +713,7 @@ const reset = () =>
     // the grid to divs left every later test running against divs — and the
     // one that then failed looked like a regression in whatever it was
     // actually testing, rather than leftover state from three tests ago.
-    gridShape: "table", padRows: 0, actionsWork: true, ghostButtons: false,
+    gridShape: "table", padRows: 0, actionsWork: true, ghostButtons: false, ghostRows: false, twinRows: false,
     formatControl: "links",
     chipsUnmatchable: false, appPaintMs: 0, showNavLabel: true,
     sections: {

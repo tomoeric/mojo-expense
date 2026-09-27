@@ -111,6 +111,8 @@ export type AuthResponse = { user: SessionUser | null; authConfigured: boolean; 
 
 export type ConfigResponse = {
   configured: boolean;
+  /** When the server process started — how the queue tells a stale failure. */
+  bootedAt?: string;
   source: "imported" | "demo" | string;
   authConfigured: boolean;
   auditConfigured: boolean;

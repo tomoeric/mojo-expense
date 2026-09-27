@@ -276,6 +276,60 @@ export async function queueApprovalFor(
   });
 }
 
+/**
+ * Re-queue every failure, as the person pressing the button.
+ *
+ * A whole batch can fail on one cause — a slow morning where the first
+ * navigation timed out, a session Emburse bounced — and then eighteen rows
+ * each need a click to try again. Pressing Approve eighteen times to
+ * recover from one outage is not a decision anybody is making; it is
+ * typing.
+ *
+ * The decision is recorded against whoever presses this, not against whoever
+ * decided originally. That is not a detail: Emburse records an approval
+ * against the login it is applied under, and this re-queues them to be
+ * applied under the presser's. Anyone who would not be willing to approve
+ * these under their own name should not press it.
+ *
+ * Only the newest decision per expense, and only when it is the failed one:
+ * an expense that failed and was then approved successfully is finished.
+ */
+export async function retryFailedDecisions(
+  by: string,
+): Promise<{ queued: number; refused: string[] }> {
+  await ensure();
+  // The newest decision per expense, then only the ones that failed. An
+  // expense that failed and was decided again successfully is finished, and
+  // re-queuing it would approve it twice.
+  const { rows } = await db().query<Row>(
+    `SELECT ${COLUMNS}
+       FROM (SELECT DISTINCT ON (dedupe_key) *
+               FROM expense_decisions
+              WHERE state <> 'cancelled'
+              ORDER BY dedupe_key, decided_at DESC) d
+      WHERE d.state = 'failed'
+        AND EXISTS (SELECT 1 FROM expenses e
+                     WHERE e.dedupe_key = d.dedupe_key AND e.in_inbox = true)
+      ORDER BY d.decided_at`,
+  );
+  const refused: string[] = [];
+  let queued = 0;
+  for (const r of rows) {
+    const d = shape(r);
+    const out = await queueDecision({
+      dedupeKey: d.dedupeKey,
+      decision: d.decision,
+      // A denial's reason is required and is what the employee reads.
+      reason: d.reason ?? "",
+      decidedBy: by,
+      target: d.target,
+    });
+    if (out.ok) queued++;
+    else refused.push(`${d.target.merchant} $${d.target.amount.toFixed(2)}: ${out.error}`);
+  }
+  return { queued, refused };
+}
+
 /** How many expenses still held locally have already been actioned. */
 export async function appliedCount(): Promise<number> {
   await ensure();

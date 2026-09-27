@@ -1,7 +1,8 @@
 import type { BrowserContext, Locator, Page } from "playwright";
 import { env } from "../env.js";
 import {
-  explainLaunch, firstVisible, gridLoaded, gridUrl, makeStepper, openBrowser, safeUrl, signIn,
+  explainLaunch, firstVisible, gridLoaded, gridUrl, makeStepper, openBrowser, openEmburse,
+  safeUrl, signIn,
   type ChallengeHook,
   type Login, type StepResult,
 } from "./auto-export.js";
@@ -421,6 +422,28 @@ const ROWS_EXAMINED = 250;
  * means the rows are not what this thinks they are, and clicking either
  * would be picking somebody's expense at random.
  */
+/**
+ * Of several rows that all match, the one a person can actually see.
+ *
+ * Emburse leaves hidden copies of its rows in the DOM — a four-row grid
+ * reports seven — and a copy carries the same date, merchant, cardholder
+ * and amount, so it matches the expense exactly as well as the real row.
+ * Without this, finding the right row TWICE is a refusal ("2 rows match
+ * this expense equally well") about an expense that appears once on screen.
+ *
+ * It does not weaken the check it exists beside. Two VISIBLE rows that
+ * agree on employee, merchant, amount and date are a real possibility — a
+ * split purchase — and there is nothing here that could tell them apart,
+ * so that still refuses. What is discarded is only what nobody can see.
+ */
+async function visibleOf(rows: Locator, indexes: number[]): Promise<number[]> {
+  const on: number[] = [];
+  for (const i of indexes) {
+    if (await rows.nth(i).isVisible().catch(() => false)) on.push(i);
+  }
+  return on;
+}
+
 async function controlForRow(
   page: Page,
   row: Locator,
@@ -712,10 +735,14 @@ export async function inspectEditForm(
         for (let i = 0; i < Math.min(count, ROWS_EXAMINED); i++) {
           if (rowMatches(await rows.nth(i).innerText().catch(() => ""), target).ok) hits.push(i);
         }
-        if (hits.length !== 1) {
-          throw new Error(`${hits.length} of ${count} rows match this expense; need exactly one to look at its edit form.`);
+        const only = hits.length > 1 ? await visibleOf(rows, hits) : hits;
+        if (only.length !== 1) {
+          throw new Error(
+            `${only.length} of ${count} rows match this expense${
+              hits.length !== only.length ? ` (${hits.length - only.length} hidden copies ignored)` : ""
+            }; need exactly one to look at its edit form.`);
         }
-        row = rows.nth(hits[0]!);
+        row = rows.nth(only[0]!);
         return `matched 1 of ${count} rows`;
       }))) return { ok: false, steps, matchedRow: null, screenshot: null };
 
@@ -920,10 +947,13 @@ async function signInOnce(
    */
   onChallenge?: ChallengeHook,
 ): Promise<boolean> {
-  if (!(await step("open Emburse", async () => {
-    await page.goto(emburseUrl, { waitUntil: "domcontentloaded" });
-    return `loaded ${safeUrl(page.url())}`;
-  }))) return false;
+  // The export's open, not a second copy of it. A bare goto on the 30s step
+  // budget is what made a whole batch of queued approvals fail at the first
+  // step with "page.goto: Timeout 30000ms exceeded" — against a screenshot
+  // of a sign-in page that had plainly finished rendering. Cold TLS plus
+  // Emburse's OAuth redirect chain does not fit in 30 seconds on this
+  // tenant, where signing in alone takes 27.
+  if (!(await step("open Emburse", () => openEmburse(page, emburseUrl)))) return false;
 
   // The same sign-in the export uses, not a second copy of it: the subtleties
   // (two-step identity page, absence not meaning success) are worth having in
@@ -1046,17 +1076,28 @@ async function applyOne(
         `none of the ${count} rows match this expense — ${rowMatches(first, target).why}.${spread}`,
       );
     }
-    if (matches.length > 1) {
-      // Two rows that agree on employee, merchant, amount AND date are a real
-      // possibility (a split purchase), and there is nothing here that could
-      // tell them apart. Guessing would approve an expense nobody chose.
+    // Hidden copies first: a grid that keeps them matches the same expense
+    // more than once, and none of the copies is the row on screen.
+    const chosen = matches.length > 1 ? await visibleOf(rows, matches) : matches;
+    if (chosen.length > 1) {
+      // Two VISIBLE rows that agree on employee, merchant, amount AND date
+      // are a real possibility (a split purchase), and there is nothing here
+      // that could tell them apart. Guessing would approve an expense nobody
+      // chose.
       throw new Error(
-        `${matches.length} rows match this expense equally well; refusing to guess which one to ${decision}`,
+        `${chosen.length} rows match this expense equally well; refusing to guess which one to ${decision}`,
+      );
+    }
+    if (chosen.length === 0) {
+      throw new Error(
+        `${matches.length} rows match this expense but none of them is visible — they are the ` +
+        `copies the grid keeps to measure itself, and the row itself is not on this page.`,
       );
     }
 
-    row = rows.nth(matches[0]!);
-    return `matched 1 of ${count} rows`;
+    row = rows.nth(chosen[0]!);
+    const ghosts = matches.length - chosen.length;
+    return `matched 1 of ${count} rows${ghosts > 0 ? ` (${ghosts} hidden ${ghosts === 1 ? "copy" : "copies"} ignored)` : ""}`;
   }))) return false;
 
   if (!(await step("verify it is the right row", async () => {
@@ -1179,7 +1220,15 @@ async function confirmActioned(
     let still = false;
     for (let j = 0; j < n; j++) {
       const text = await rows.nth(j).innerText().catch(() => "");
-      if (rowMatches(text, target).ok) { still = true; break; }
+      if (!rowMatches(text, target).ok) continue;
+      // Visible, or it is not evidence the expense is still there. The grid
+      // keeps hidden copies of its rows, and a copy of the row just
+      // approved outlives the row itself — so a click that worked perfectly
+      // reported "still in Needs Review six seconds later", which sends
+      // somebody to Emburse to check an approval that had already landed.
+      if (!(await rows.nth(j).isVisible().catch(() => false))) continue;
+      still = true;
+      break;
     }
     if (!still) return `${what} in Emburse — the row left Needs Review`;
   }

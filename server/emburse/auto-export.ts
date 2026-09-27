@@ -1011,6 +1011,64 @@ async function reachable(url: string): Promise<string> {
   }
 }
 
+/**
+ * Open Emburse, with its own budget and two real retries.
+ *
+ * This is the first thing the container does after sitting idle — cold TLS,
+ * then Emburse's OAuth redirect chain — and on the shared 30s step budget
+ * the 6am export timed out every morning while manual runs (warm, 15s)
+ * looked perfectly healthy.
+ *
+ * Shared with the DECISION path, which is how it should have started. The
+ * decisions had a bare `page.goto(url)` on the 30s step budget, so on a slow
+ * morning every queued approval failed at the first step with
+ * "page.goto: Timeout 30000ms exceeded" and a screenshot of a sign-in page
+ * that had plainly rendered. The export had already learned this lesson and
+ * the decisions did not inherit it — the same divergence that had the export
+ * accepting the item-count line as proof of a grid while decisions demanded
+ * the grid selector.
+ *
+ * Returns the step detail, so both callers say the same thing.
+ */
+export async function openEmburse(page: Page, url: string): Promise<string> {
+  const open = () =>
+    page.goto(url, { waitUntil: "domcontentloaded", timeout: env.emburseLogin.openTimeoutMs });
+  try {
+    await open();
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    await page.goto("about:blank").catch(() => {});
+    try {
+      await open();
+    } catch {
+      // Two tries 110 seconds apart is really one try. Whatever stops a page
+      // loading for ninety seconds — a container whose network is not up yet
+      // after a restart, a DNS resolver still starting — is not over in the
+      // twenty seconds the old retry allowed, so the last attempt waits
+      // properly first. A minute on the one morning it is needed, nothing on
+      // the others.
+      await page.waitForTimeout(30_000);
+      await open().catch(async () => {
+        // The decisive question, and it had never been asked: can THIS
+        // CONTAINER reach Emburse at all? A plain fetch needs no browser, no
+        // profile and no rendering. If it works, the network is fine and
+        // Chromium is the problem — a corrupt profile, a leftover process,
+        // memory. If it fails too, the container genuinely has no route out,
+        // and no amount of selector work will help.
+        const reach = await reachable(url);
+        throw new Error(
+          `${safeUrl(url)} did not load within ` +
+            `${Math.round(env.emburseLogin.openTimeoutMs / 1000)}s, three times over about two ` +
+            `minutes. First attempt: ${why.split("\n")[0]}. ${reach}`,
+        );
+      });
+    }
+  }
+  // Redacted: Emburse's sign-in redirect carries a session_token and the
+  // whole OAuth query string, and this detail is stored and displayed.
+  return `loaded ${safeUrl(page.url())}`;
+}
+
 /** Exposed for the test that pins which of the two causes it names. */
 export const reachableForTest = reachable;
 
@@ -1172,49 +1230,7 @@ async function runSteps(
   // From settings, so a wrong host can be corrected without a redeploy.
   const url = settings.emburseUrl || env.emburseLogin.url;
 
-  if (!(await step("open Emburse", async () => {
-    // Its own timeout, and one retry. This is the first thing the container
-    // does after a night idle — cold TLS, then Emburse's OAuth redirect chain
-    // — and on the shared 30s step budget the 6am run timed out every morning
-    // while manual runs (warm, 15s) looked perfectly healthy. A retry costs a
-    // minute on the one morning it is needed and nothing on the others.
-    const open = () =>
-      page.goto(url, { waitUntil: "domcontentloaded", timeout: env.emburseLogin.openTimeoutMs });
-    try {
-      await open();
-    } catch (err) {
-      const why = err instanceof Error ? err.message : String(err);
-      await page.goto("about:blank").catch(() => {});
-      try {
-        await open();
-      } catch {
-        // Two tries 110 seconds apart is really one try. Whatever stops a
-        // page loading for ninety seconds — a container whose network is
-        // not up yet after a restart, a DNS resolver still starting — is
-        // not over in the twenty seconds the old retry allowed, so the last
-        // attempt waits properly first. A minute on the one morning it is
-        // needed, nothing on the others.
-        await page.waitForTimeout(30_000);
-        await open().catch(async () => {
-          // The decisive question, and it has never been asked: can THIS
-          // CONTAINER reach Emburse at all? A plain fetch needs no browser,
-          // no profile and no rendering. If it works, the network is fine
-          // and Chromium is the problem — a corrupt profile, a leftover
-          // process, memory. If it fails too, the container genuinely has
-          // no route out, and no amount of selector work will help.
-          const reach = await reachable(url);
-          throw new Error(
-            `${safeUrl(url)} did not load within ` +
-              `${Math.round(env.emburseLogin.openTimeoutMs / 1000)}s, three times over about two ` +
-              `minutes. First attempt: ${why.split("\n")[0]}. ${reach}`,
-          );
-        });
-      }
-    }
-    // Redacted: Emburse's sign-in redirect carries a session_token and the
-    // whole OAuth query string, and this detail is stored and displayed.
-    return `loaded ${safeUrl(page.url())}`;
-  }))) return false;
+  if (!(await step("open Emburse", () => openEmburse(page, url)))) return false;
 
   if (!(await step("sign in", async () => signIn(page, sel, login, url, opts.onChallenge)))) return false;
 

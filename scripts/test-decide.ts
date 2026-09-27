@@ -404,6 +404,41 @@ check("…and still confirms the row left Needs Review",
   /left Needs Review/.test(ghosted.steps.at(-1)?.detail ?? ""),
   ghosted.steps.at(-1)?.detail ?? "");
 
+console.log("\n17b. A hidden COPY of the row it is looking for");
+// The grid on a real tenant reported SEVEN rows for a four-row page: it
+// keeps hidden copies of its data rows, and a copy carries the same date,
+// merchant, cardholder and amount. So the row is found twice, and finding
+// the right row twice used to be a refusal — "2 rows match this expense
+// equally well" — about an expense that appears once on screen.
+mock.reset();
+await fetch(`${mock.url}/__app?ghostRows=true`, { method: "POST" });
+const doubled = await runDecision("approve", TARGET, "", SEL, mock.url, LOGIN, {});
+check("the copy is ignored and the visible row is used", doubled.ok,
+  doubled.steps.find((s) => !s.ok)?.detail ?? "");
+check("…and it says a copy was ignored rather than silently picking one",
+  /hidden cop/.test(doubled.steps.find((s) => s.name === "search for the expense")?.detail ?? ""),
+  doubled.steps.find((s) => s.name === "search for the expense")?.detail ?? "");
+// And the confirmation has to survive the copy too. The click removes the
+// visible row; the hidden copy of it does not go anywhere, so a check that
+// counted every matching row said "still in Needs Review six seconds
+// later" about an approval that had already landed — and sent somebody to
+// Emburse to check work that was done.
+check("…and the approval is still confirmed, not reported as unconfirmed",
+  /left Needs Review/.test(doubled.steps.at(-1)?.detail ?? ""),
+  doubled.steps.at(-1)?.detail ?? "");
+
+// The safety property this sits beside must survive. Two rows that are
+// both VISIBLE and agree on employee, merchant, amount AND date are a
+// split purchase; nothing here can tell them apart, and approving either
+// would be picking somebody's expense at random.
+mock.reset();
+await fetch(`${mock.url}/__app?twinRows=true`, { method: "POST" });
+const twinned = await runDecision("approve", TARGET, "", SEL, mock.url, LOGIN, {});
+const twinWhy = twinned.steps.find((s) => !s.ok)?.detail ?? "";
+check("two rows a person CAN see are still refused", !twinned.ok, twinWhy.slice(0, 120));
+check("…saying it will not guess between them",
+  /equally well/.test(twinWhy), twinWhy.slice(0, 160));
+
 // And when EVERY match is hidden, it must say so rather than time out with
 // a Playwright message that names no cause.
 mock.reset();

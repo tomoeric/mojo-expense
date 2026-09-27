@@ -4,7 +4,7 @@ import { Loader2, Send } from "lucide-react";
 import type { ExpenseReport, ReportsResponse } from "@/lib/api";
 import { ExpenseTable, buildRows, type Row } from "@/components/expense-table";
 import { DecideButtons, InspectEditForm, TestDecision } from "@/components/decide-controls";
-import { approveMany } from "@/lib/decisions";
+import { approveMany, retryAllFailed } from "@/lib/decisions";
 import { useDecisions } from "@/lib/decisions";
 import { CodePrompt } from "@/components/code-prompt";
 
@@ -39,6 +39,8 @@ export function QueuePage({
   const [sendNote, setSendNote] = useState<string | null>(null);
   const [bulkNote, setBulkNote] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [retryBusy, setRetryBusy] = useState(false);
+  const [retryNote, setRetryNote] = useState<string | null>(null);
   const qc = useQueryClient();
   /**
    * The batch is OURS when the browser's holder is the decision run rather
@@ -201,6 +203,25 @@ export function QueuePage({
               })
               .catch((e: Error) => setError(e.message))
               .finally(() => setBulkBusy(false));
+          },
+        }}
+        retryFailed={{
+          busy: retryBusy,
+          note: retryNote,
+          onRun: () => {
+            setError("");
+            setRetryNote(null);
+            setRetryBusy(true);
+            retryAllFailed()
+              .then((r) => {
+                setRetryNote(
+                  `${r.queued.toLocaleString()} queued again — they go to Emburse together in one sign-in.` +
+                  (r.refused.length > 0 ? ` Not queued: ${r.refused.join("; ")}` : ""),
+                );
+                void qc.invalidateQueries({ queryKey: ["decisions"] });
+              })
+              .catch((e: Error) => setError(e.message))
+              .finally(() => setRetryBusy(false));
           },
         }}
       />

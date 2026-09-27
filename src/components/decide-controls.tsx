@@ -2,7 +2,9 @@ import { useState } from "react";
 import {
   Check, X, Loader2, Clock, AlertTriangle, Undo2, FlaskConical, ShieldCheck,
 } from "lucide-react";
-import { inspectEditForm, testDecision, type QueuedDecision } from "@/lib/decisions";
+import { useQueryClient } from "@tanstack/react-query";
+import { inspectEditForm, retryDecision, testDecision, type QueuedDecision } from "@/lib/decisions";
+import { useConfig } from "@/lib/api";
 import { money } from "@/lib/format";
 
 /**
@@ -131,10 +133,59 @@ function FailedBadge({ decision, word }: { decision: QueuedDecision; word: strin
   );
 }
 
+/**
+ * When it was decided, in words, plus the exact time.
+ *
+ * "Tried 2 times" said nothing about WHEN, and a failure keeps its error
+ * for ever, so a three-day-old sentence read exactly like a fresh one.
+ */
+function when(iso: string): { relative: string; exact: string; at: number } {
+  const at = new Date(iso).getTime();
+  const mins = Math.round((Date.now() - at) / 60_000);
+  const relative =
+    mins < 2 ? "just now"
+      : mins < 60 ? `${mins} minutes ago`
+        : mins < 60 * 36 ? `${Math.round(mins / 60)} hours ago`
+          : `${Math.round(mins / 1440)} days ago`;
+  return {
+    relative,
+    exact: new Date(iso).toLocaleString(undefined, {
+      day: "numeric", month: "short", hour: "numeric", minute: "2-digit",
+    }),
+    at,
+  };
+}
+
 /** The whole failure, with room to read it. */
 function FailureDialog({
   decision, word, onClose,
 }: { decision: QueuedDecision; word: string; onClose: () => void }) {
+  const qc = useQueryClient();
+  const config = useConfig();
+  const [retrying, setRetrying] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const tried = when(decision.decidedAt);
+
+  // The app has restarted since this ran, so the code that failed may not
+  // be the code that is running. Not proof of a fix — said as what it is,
+  // with the button that settles the question next to it.
+  const booted = config.data?.bootedAt ? new Date(config.data.bootedAt).getTime() : null;
+  const stale = booted !== null && booted > tried.at;
+
+  const again = async () => {
+    setRetrying(true);
+    setProblem(null);
+    try {
+      await retryDecision(decision);
+      void qc.invalidateQueries({ queryKey: ["decisions"] });
+      void qc.invalidateQueries({ queryKey: ["reports"] });
+      onClose();
+    } catch (err) {
+      setProblem(err instanceof Error ? err.message : "Could not queue it again.");
+      setRetrying(false);
+    }
+  };
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 whitespace-normal sm:p-8"
@@ -151,8 +202,18 @@ function FailureDialog({
             <p className="text-xs break-words text-muted-foreground">
               {decision.matchedRow ?? "no row was matched"}
               {decision.attempts > 1 && ` · tried ${decision.attempts} times`}
+              {` · last tried ${tried.relative}, ${tried.exact}`}
             </p>
           </div>
+          <button
+            type="button"
+            onClick={() => void again()}
+            disabled={retrying}
+            title="Queue the same decision again"
+            className="rounded-md border border-emerald-600/40 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-600/10 disabled:opacity-50 dark:text-emerald-400"
+          >
+            {retrying ? "Queueing…" : "Try again"}
+          </button>
           <button
             type="button"
             onClick={onClose}
@@ -162,9 +223,20 @@ function FailureDialog({
           </button>
         </div>
 
+        {stale && (
+          <p className="mt-3 rounded-lg border border-emerald-600/40 bg-emerald-500/5 px-3 py-2 text-xs text-emerald-800 dark:text-emerald-300">
+            This is a record of what happened {tried.relative}, not a live check. The app has been
+            restarted since — if the cause was fixed in that update, everything below is out of
+            date and Try again is all this needs.
+          </p>
+        )}
+
         <p className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs [overflow-wrap:anywhere] text-amber-800 dark:text-amber-300">
           {decision.error?.trim() || "Emburse gave no reason."}
         </p>
+        {problem && (
+          <p className="mt-2 text-xs [overflow-wrap:anywhere] text-red-700 dark:text-red-400">{problem}</p>
+        )}
 
         <div className="mt-3 text-xs">
           <DecisionSteps steps={decision.steps} />

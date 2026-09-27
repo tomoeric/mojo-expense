@@ -168,6 +168,43 @@ export function useDecisions(keys: string[]) {
   };
 }
 
+/**
+ * Run a failed decision again, exactly as it was decided.
+ *
+ * Re-deciding inserts a NEW row (the unique index only covers pending
+ * ones) and the queue shows the newest per expense, so this is the same
+ * thing as pressing Approve again — just reachable from the failure that
+ * prompts it, rather than requiring somebody to close the dialog and find
+ * the button behind it.
+ */
+export async function retryDecision(d: {
+  dedupeKey: string; decision: "approve" | "deny"; reason: string | null;
+}): Promise<void> {
+  const res = await fetch("/api/decisions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      dedupeKey: d.dedupeKey,
+      decision: d.decision,
+      // A denial's reason is required and is what the employee reads, so it
+      // has to be carried over rather than re-typed.
+      reason: d.reason ?? "",
+    }),
+  });
+  if (!res.ok) {
+    const body = await readJson<{ error?: string }>(res);
+    throw new Error(body.error ?? "Could not queue it again.");
+  }
+}
+
+/** Re-queue every decision that failed, as the signed-in user. */
+export async function retryAllFailed(): Promise<{ queued: number; refused: string[] }> {
+  const res = await fetch("/api/decisions/retry-failed", { method: "POST" });
+  const body = await readJson<{ queued?: number; refused?: string[]; error?: string }>(res);
+  if (!res.ok) throw new Error(body.error ?? "Could not queue them again.");
+  return { queued: body.queued ?? 0, refused: body.refused ?? [] };
+}
+
 /** Approve everything that was ticked, in one request. */
 export async function approveMany(dedupeKeys: string[]): Promise<{ queued: number; refused: string[] }> {
   const res = await fetch("/api/decisions/bulk", {

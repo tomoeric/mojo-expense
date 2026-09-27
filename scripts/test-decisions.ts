@@ -23,6 +23,7 @@ process.env.EMBURSE_SIGN_IN_WAIT_MS ||= "20000";
 
 const {
   queueDecision, pendingDecisions, cancelDecision, settleDecision, decisionsFor, recentDecisions,
+  retryFailedDecisions,
 } = await import("../server/emburse/decisions.js");
 const { saveCredential, deleteCredential, credentialForUser, hasCredential } =
   await import("../server/emburse/credentials.js");
@@ -288,6 +289,62 @@ const settledNow = (await decisionsFor([failedKey])).get(failedKey)!;
 check("an applied decision is untouched by a later note",
   settledNow.state === "applied" && settledNow.error === null,
   `${settledNow.state} / ${settledNow.error ?? "no error"}`);
+
+console.log("\n11. Running every failure again, in one go");
+// A whole batch fails on ONE cause — a navigation that timed out, a session
+// Emburse bounced — and eighteen rows then each need a click. That is not
+// eighteen decisions, it is typing, and the rows are scattered through a
+// queue of two hundred.
+{
+  await db().query("DELETE FROM expense_decisions WHERE dedupe_key LIKE 'test-%'");
+  const keys = ["test-rf-1", "test-rf-2", "test-rf-3"];
+  for (const k of keys) {
+    await db().query(
+      `INSERT INTO expenses (dedupe_key, employee, expense_date, merchant, amount_cents,
+                             category, department, location, note, method, in_inbox)
+       VALUES ($1,'Kevin Bray','2026-09-13','SQ *COFFEE',850,'Meals','Ops','Site','x','Corporate card',true)
+       ON CONFLICT (dedupe_key) DO UPDATE SET in_inbox = true`, [k]);
+    const q = await queueDecision({
+      dedupeKey: k, decision: "approve", reason: "",
+      decidedBy: "first@example.invalid",
+      target: { employee: "Kevin Bray", merchant: "SQ *COFFEE", amount: 8.5, date: "2026-09-13" },
+    });
+    if (!q.ok) throw new Error(q.error);
+    // Two of the three fail; the third lands.
+    if (k === "test-rf-3") await settleDecision(q.queued.id, { ok: true, matchedRow: "a row" });
+    else await settleDecision(q.queued.id, { ok: false, error: "page.goto: Timeout 30000ms exceeded" });
+  }
+
+  const again = await retryFailedDecisions("second@example.invalid");
+  check("every failure is queued again", again.queued === 2, `${again.queued} queued`);
+  check("…and none is refused", again.refused.length === 0, again.refused.join("; "));
+
+  const after = await decisionsFor(keys);
+  check("the failed ones are pending again",
+    after.get("test-rf-1")?.state === "pending" && after.get("test-rf-2")?.state === "pending",
+    `${after.get("test-rf-1")?.state} / ${after.get("test-rf-2")?.state}`);
+  // The one that worked must not be approved a second time. Re-queuing a
+  // settled approval would send it to Emburse twice.
+  check("the one that already landed is left alone",
+    after.get("test-rf-3")?.state === "applied", after.get("test-rf-3")?.state);
+  check("…and the retry is recorded against whoever pressed it, not the original decider",
+    after.get("test-rf-1")?.decidedBy === "second@example.invalid",
+    after.get("test-rf-1")?.decidedBy);
+
+  // Pressing it twice must not double-queue: the second press finds them
+  // pending, not failed.
+  const twiceOver = await retryFailedDecisions("second@example.invalid");
+  check("pressing it again queues nothing, rather than a second copy",
+    twiceOver.queued === 0, `${twiceOver.queued} queued`);
+
+  // A failure on an expense that has since left the queue is not re-run.
+  await db().query("UPDATE expenses SET in_inbox = false WHERE dedupe_key = 'test-rf-1'");
+  const d1 = after.get("test-rf-1")!;
+  await settleDecision(d1.id, { ok: false, error: "failed again" });
+  const gone = await retryFailedDecisions("second@example.invalid");
+  check("a failure on an expense no longer in the queue is left where it is",
+    gone.queued === 0, `${gone.queued} queued`);
+}
 
 await db().query("DELETE FROM expense_decisions WHERE dedupe_key LIKE 'test-%'");
 await db().query("DELETE FROM expenses WHERE dedupe_key LIKE 'test-%'");

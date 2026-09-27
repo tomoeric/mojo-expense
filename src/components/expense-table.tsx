@@ -569,11 +569,59 @@ function FlagTabs({
   );
 }
 
+/**
+ * "Eighteen did not go through" — and the one button that answers it.
+ *
+ * A batch of decisions usually fails for ONE reason: a navigation that
+ * timed out, a session Emburse bounced, a browser that would not start.
+ * Recovering from that used to mean pressing Approve on every row, which
+ * is not eighteen decisions, it is typing — and the rows are scattered
+ * across a queue of two hundred.
+ *
+ * It names whose Emburse login they will be applied under, because that is
+ * what changes: re-queuing records the decision against whoever presses
+ * this, and the approval carries their name in Emburse.
+ */
+function FailedStrip({
+  rows, retry,
+}: {
+  rows: Row[];
+  retry: { onRun: () => void; busy?: boolean; note?: string | null };
+}) {
+  const failed = rows.filter((r) => r.decision?.state === "failed");
+  if (failed.length === 0 && !retry.note) return null;
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs">
+      {failed.length > 0 && (
+        <span className="text-amber-800 dark:text-amber-300">
+          <strong className="font-semibold tabular-nums">{failed.length.toLocaleString()}</strong>{" "}
+          {failed.length === 1 ? "decision" : "decisions"} did not go through. Open one to see why,
+          or run them all again — they will be applied under your Emburse login.
+        </span>
+      )}
+      {retry.note && <span className="text-emerald-700">{retry.note}</span>}
+      {failed.length > 0 && (
+        <button
+          type="button"
+          disabled={retry.busy}
+          onClick={retry.onRun}
+          className="ml-auto inline-flex items-center gap-1 rounded-lg border border-amber-600/50 px-2.5 py-1 font-semibold text-amber-800 hover:bg-amber-500/10 disabled:opacity-50 dark:text-amber-300"
+        >
+          {retry.busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+          Try all {failed.length.toLocaleString()} again
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function ExpenseTable({
   rows,
   onOpen,
   emptyMessage = "Nothing here.",
   bulk,
+  retryFailed,
 }: {
   rows: Row[];
   onOpen: (r: Row) => void;
@@ -590,6 +638,18 @@ export function ExpenseTable({
   bulk?: {
     label: (n: number) => string;
     onRun: (keys: string[]) => void;
+    busy?: boolean;
+    note?: string | null;
+  };
+  /**
+   * Running every failed decision again, in one go.
+   *
+   * Separate from `bulk` because it is not a selection: a whole batch fails
+   * on one cause, and what somebody wants then is all of them, not the ones
+   * they can find and tick.
+   */
+  retryFailed?: {
+    onRun: () => void;
     busy?: boolean;
     note?: string | null;
   };
@@ -746,6 +806,8 @@ export function ExpenseTable({
         flagGroup={flagGroup}
         onFlagGroup={setFlagGroup}
       />
+
+      {retryFailed && <FailedStrip rows={rows} retry={retryFailed} />}
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative min-w-56 flex-1">

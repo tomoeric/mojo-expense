@@ -90,6 +90,37 @@ the blocks.
   expense is gone. A decision still `pending` when its expense is purged is
   cancelled, not left for the worker to retry against a row that is not there.
 
+## When a decision fails
+
+- **The export's hardening has to reach the decision path, every time.** Both
+  drive the same tenant through the same browser, and twice now the export
+  learned something the decisions did not inherit: the export accepted the
+  item-count line as proof the grid had arrived while decisions demanded the
+  grid selector, and the export opened Emburse with its own 90s budget and
+  three attempts while decisions used a bare `page.goto` on the 30s step
+  budget. The second one failed a whole batch of queued approvals at
+  "open Emburse" with `page.goto: Timeout 30000ms exceeded` — against a
+  screenshot of a sign-in page that had plainly finished rendering. Both now
+  call the SAME `openEmburse()` / `gridLoaded()`. Anything added to one path
+  belongs in the shared function, not copied.
+- **A failure is a recording, and the UI has to date it.** `expense_decisions`
+  keeps the error for ever, which is right, but an unchanged sentence reads as
+  a fresh verdict — "this approval error didn't go away" was a three-deploy-old
+  error nobody had re-run. The dialog now says when it was tried, notes when
+  the app has restarted since (`bootedAt` on `/api/config`), and carries
+  **Try again**.
+- **One cause fails a whole batch, so recovering from it is one button.**
+  `/api/decisions/retry-failed` re-queues every failure whose expense is still
+  in the queue, under the login of whoever presses it (never the original
+  decider's — Emburse records the approval against the login it is applied
+  under, and the strip says so).
+- **A hidden copy of a row is not a second expense.** The grid reports seven
+  rows for a four-row page: it keeps copies to measure itself, and a copy
+  carries the same date, merchant, cardholder and amount. Matching now narrows
+  to the VISIBLE matches before refusing. Two rows a person can SEE that agree
+  on everything are a split purchase and still refuse — that property is what
+  the narrowing must not cost, and there is a test for each.
+
 ## Receipts
 
 - **A receipt is a photo embedded in the export PDF.** Keep it at the camera's

@@ -68,7 +68,7 @@ function slowServer(stall: number) {
   });
 }
 
-const { openBrowser } = await import("../server/emburse/auto-export.js");
+const { openBrowser, openEmburse } = await import("../server/emburse/auto-export.js");
 const { env } = await import("../server/env.js");
 
 check("the first navigation has a longer budget than a step",
@@ -88,18 +88,16 @@ console.log("\n1. A slow first navigation is retried, not failed");
   page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
   const once = await slowServer(1);
   try {
-    // Exactly what the step does: its own timeout, one retry.
+    // The REAL routine, not a copy of it. This test used to reimplement the
+    // step's retry inline, which meant it went on passing while the
+    // DECISION path — a bare goto on the 30s step budget — failed every
+    // queued approval at the first navigation. A test that reimplements the
+    // thing it is testing agrees with itself.
     let ok = false;
-    const open = () =>
-      page.goto(once.url, { waitUntil: "domcontentloaded", timeout: env.emburseLogin.openTimeoutMs });
     try {
-      await open();
+      await openEmburse(page, once.url);
       ok = true;
-    } catch {
-      await page.goto("about:blank").catch(() => {});
-      await open();
-      ok = true;
-    }
+    } catch { /* ok stays false */ }
     check("the second attempt gets through", ok);
     check("…and it really did take two", once.hits() >= 2, `${once.hits()} requests`);
   } finally {
@@ -131,13 +129,50 @@ console.log("\n2. A run that stops mid-way is not reported as a browser failure"
       opening ? `${opening.name}: ${opening.detail.slice(0, 90)}` : "no such step");
     check("it went to the stalling server, not the real Emburse",
       /127\.0\.0\.1/.test(opening?.detail ?? ""), (opening?.detail ?? "").slice(0, 90));
+    // Which of the two it is, named. A plain fetch from the container
+    // settles whether the network is out or Chromium cannot use a network
+    // that is fine — they look identical from inside Playwright and have
+    // nothing in common as fixes.
     check("it says the network is the problem, not a selector",
       /did not load within/.test(opening?.detail ?? "") &&
-        /network out of the container/.test(opening?.detail ?? ""),
-      (opening?.detail ?? "").slice(0, 120));
+        /(no route to Emburse|network is fine and the BROWSER)/.test(opening?.detail ?? ""),
+      (opening?.detail ?? "").slice(-140));
     check("and nothing claims the browser failed to start",
       !run.steps.some((s) => s.name === "start browser"),
       run.steps.map((s) => s.name).join(" · "));
+  } finally {
+    await dead.close();
+  }
+}
+
+console.log("\n3. A decision gets the same treatment as an export");
+{
+  // The failure that prompted this: a whole batch of queued approvals died
+  // at "open Emburse" with "page.goto: Timeout 30000ms exceeded", against a
+  // screenshot of a sign-in page that had plainly finished rendering. The
+  // export had had its own budget and its retries for a long time; the
+  // decision path opened with a bare goto on the step budget. Same page,
+  // same tenant, two different answers.
+  const dead = await slowServer(99);
+  const { runDecision, DECISION_SELECTORS } = await import("../server/emburse/decide.js");
+  try {
+    const run = await runDecision(
+      "approve",
+      { employee: "Nobody", merchant: "NOWHERE", amount: 1, date: "2026-09-07" },
+      "", { ...DECISION_SELECTORS } as never, dead.url,
+      { userId: null, email: "x@example.invalid", password: "x" },
+      { dryRun: true },
+    );
+    const opening = run.steps.find((s) => s.name === "open Emburse");
+    check("the decision also fails at the navigation, named", Boolean(opening) && !opening!.ok,
+      opening ? opening.detail.slice(0, 80) : run.steps.map((s) => s.name).join(" · "));
+    check("…with its own budget, not the 3s step one",
+      /did not load within 4s/.test(opening?.detail ?? ""), (opening?.detail ?? "").slice(0, 100));
+    check("…having tried three times, like the export does",
+      /three times/.test(opening?.detail ?? "") && dead.hits() >= 3, `${dead.hits()} requests`);
+    check("…and saying which of network or browser it is",
+      /(no route to Emburse|network is fine and the BROWSER)/.test(opening?.detail ?? ""),
+      (opening?.detail ?? "").slice(-140));
   } finally {
     await dead.close();
   }

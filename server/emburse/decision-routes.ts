@@ -8,7 +8,7 @@ import { credentialForUser, hasCredential, noteResult } from "./credentials.js";
 import { inspectEditForm, runDecision, testConnection, type Decision, type Target } from "./decide.js";
 import {
   appliedCount, cancelDecision, decisionsFor, pendingDecisions, queueApprovalFor, queueDecision,
-  recentDecisions,
+  recentDecisions, retryFailedDecisions,
 } from "./decisions.js";
 import { decisionWorkerStarted, nudgeDecisionWorker } from "./decision-worker.js";
 import { getFlag } from "../flags.js";
@@ -238,6 +238,39 @@ decisionRouter.post("/decisions/bulk", requireAuth, async (req: Request, res: Re
     refused: [...new Set(refused)].slice(0, 10),
     waiting: whyWaiting(),
   });
+});
+
+/**
+ * Run every failed decision again.
+ *
+ * A whole batch can fail on one cause. That is what happened: a slow
+ * morning where the first navigation timed out on the 30-second step
+ * budget, and every queued approval failed at "open Emburse" against a
+ * sign-in page that had plainly rendered. Recovering from it meant
+ * pressing Approve on each row — eighteen clicks that are not eighteen
+ * decisions, just typing.
+ *
+ * Re-queued under the login of whoever presses it, like every other
+ * decision in this app, and the page says so before they do.
+ */
+decisionRouter.post("/decisions/retry-failed", requireAuth, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  const decider = req.user?.email ?? "";
+  if (!(await hasCredential(decider))) {
+    res.status(400).json({
+      error:
+        "Add your Emburse login first, under Your Emburse login in the user menu. " +
+        "Decisions are made in Emburse as you, so the approval carries your name and not somebody else's.",
+    });
+    return;
+  }
+  try {
+    const { queued, refused } = await retryFailedDecisions(decider);
+    if (queued > 0) nudgeDecisionWorker();
+    res.status(202).json({ queued, refused: refused.slice(0, 10), waiting: whyWaiting() });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 /** The queue, the history, and what the browser is busy with. */
