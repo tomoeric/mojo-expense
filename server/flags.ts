@@ -19,6 +19,12 @@ CREATE TABLE IF NOT EXISTS app_flags (
   updated_at timestamptz NOT NULL DEFAULT now(),
   updated_by text
 );
+-- Auto-approval needs a NUMBER as well as an on/off, and one number does
+-- not earn a table of its own.
+ALTER TABLE app_flags ADD COLUMN IF NOT EXISTS amount integer;
+-- Who turned it on. An automatic approval still reaches Emburse under a
+-- real person's login and carries their name, so there has to be one.
+ALTER TABLE app_flags ADD COLUMN IF NOT EXISTS owner text;
 `;
 
 let ready: Promise<void> | null = null;
@@ -36,6 +42,18 @@ export const FLAGS = {
    * by approving a real expense and reading a one-line error.
    */
   traceDecisions: false,
+
+  /**
+   * Queue approvals for expenses no rule flagged, without anybody clicking.
+   *
+   * Off, and not the kind of thing that should ever default otherwise.
+   * This is the only path in the app that approves somebody's spending
+   * with no human in the loop at all, so it carries a per-run ceiling, it
+   * only ever touches expenses with ZERO flags from enabled rules, and it
+   * runs as the person who switched it on — their name goes on every
+   * approval it makes.
+   */
+  autoApprove: false,
 } as const;
 
 export type FlagKey = keyof typeof FLAGS;
@@ -60,9 +78,38 @@ export async function allFlags(): Promise<Record<FlagKey, boolean>> {
 export async function setFlag(key: FlagKey, enabled: boolean, by: string): Promise<void> {
   await ensure();
   await db().query(
-    `INSERT INTO app_flags (key, enabled, updated_by) VALUES ($1,$2,$3)
+    `INSERT INTO app_flags (key, enabled, updated_by, owner) VALUES ($1,$2,$3,$3)
      ON CONFLICT (key) DO UPDATE
-       SET enabled = EXCLUDED.enabled, updated_at = now(), updated_by = EXCLUDED.updated_by`,
+       SET enabled = EXCLUDED.enabled, updated_at = now(), updated_by = EXCLUDED.updated_by,
+           -- Switching it on claims ownership; switching it off leaves the
+           -- last owner on the row, which is who the history belongs to.
+           owner = CASE WHEN EXCLUDED.enabled THEN EXCLUDED.owner ELSE app_flags.owner END`,
     [key, enabled, by],
   );
+}
+
+/** How many, for the flags that carry a number. Null when never set. */
+export async function getLimit(key: FlagKey): Promise<number | null> {
+  await ensure();
+  const { rows } = await db().query<{ amount: number | null }>(
+    "SELECT amount FROM app_flags WHERE key = $1", [key]);
+  return rows[0]?.amount ?? null;
+}
+
+export async function setLimit(key: FlagKey, amount: number, by: string): Promise<void> {
+  await ensure();
+  await db().query(
+    `INSERT INTO app_flags (key, enabled, amount, updated_by) VALUES ($1, false, $2, $3)
+     ON CONFLICT (key) DO UPDATE
+       SET amount = EXCLUDED.amount, updated_at = now(), updated_by = EXCLUDED.updated_by`,
+    [key, amount, by],
+  );
+}
+
+/** Whose Emburse login an automatic decision is made under. */
+export async function flagOwner(key: FlagKey): Promise<string | null> {
+  await ensure();
+  const { rows } = await db().query<{ owner: string | null }>(
+    "SELECT owner FROM app_flags WHERE key = $1", [key]);
+  return rows[0]?.owner ?? null;
 }

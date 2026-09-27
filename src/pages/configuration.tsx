@@ -185,6 +185,7 @@ export function ConfigurationPage({ onOpen, isAdmin }: { onOpen: (key: ConfigPag
 
       <AiConnection isAdmin={isAdmin} />
 
+      <AutoApprove isAdmin={isAdmin} />
       <DecisionTrace isAdmin={isAdmin} />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -386,6 +387,109 @@ function Fig({ label, value, sub }: { label: string; value: string; sub: string 
  * attaches a browser transcript to every decision, which a working queue has
  * no use for.
  */
+/**
+ * Approving the expenses no rule had anything to say about, unattended.
+ *
+ * The most consequential switch in the app, so the page says what it does
+ * in the plainest terms available and names whose login it will use. An
+ * automation that approves spending should not be something somebody
+ * turns on without noticing what they turned on.
+ */
+function AutoApprove({ isAdmin }: { isAdmin: boolean }) {
+  const qc = useQueryClient();
+  const { data } = useQuery<Record<string, unknown>>({
+    queryKey: ["flags"],
+    enabled: isAdmin,
+    queryFn: async () => {
+      const res = await fetch("/api/flags");
+      if (!res.ok) throw new Error("Could not read the settings");
+      return (await res.json()) as Record<string, unknown>;
+    },
+  });
+  const [busy, setBusy] = useState(false);
+  const [draft, setDraft] = useState<string | null>(null);
+  if (!isAdmin || !data) return null;
+
+  const on = Boolean(data.autoApprove);
+  const perRun = Number(data.autoApprovePerRun ?? 10);
+  const owner = typeof data.autoApproveOwner === "string" ? data.autoApproveOwner : null;
+
+  const save = async (body: Record<string, unknown>) => {
+    setBusy(true);
+    try {
+      await fetch("/api/flags/autoApprove", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      await qc.invalidateQueries({ queryKey: ["flags"] });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-border p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-sm font-semibold">Approve unflagged expenses automatically</p>
+        <button
+          type="button"
+          onClick={() => void save({ enabled: !on })}
+          disabled={busy}
+          className={`ml-auto rounded-lg border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50 ${
+            on ? "border-amber-600/50 bg-amber-500/10 text-amber-700" : "border-border hover:bg-muted"
+          }`}
+        >
+          {busy ? "Saving…" : on ? "On" : "Off"}
+        </button>
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+        <label htmlFor="auto-per-run">At most</label>
+        <input
+          id="auto-per-run"
+          type="number"
+          min={1}
+          max={100}
+          value={draft ?? String(perRun)}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={() => {
+            const n = Number(draft);
+            setDraft(null);
+            if (Number.isFinite(n) && n >= 1 && Math.round(n) !== perRun) void save({ amount: Math.round(n) });
+          }}
+          className="w-20 rounded-md border border-border bg-background px-2 py-1 tabular-nums"
+        />
+        <span>per import.</span>
+        {owner ? (
+          <span className="text-muted-foreground">
+            Made in Emburse as <strong className="font-semibold text-foreground">{owner}</strong>.
+          </span>
+        ) : (
+          <span className="text-amber-700">Nobody owns it yet — whoever switches it on does.</span>
+        )}
+      </div>
+
+      <p className="mt-2 text-xs text-muted-foreground">
+        After each import, expenses that <em>no enabled rule flagged</em> are queued for approval
+        without anybody clicking. They are applied under the login of whoever switched this on, and
+        that person's name is what Emburse records against every one of them.
+      </p>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Two things it will not do. It never touches an expense a rule caught, one already decided,
+        or one whose earlier decision failed and is waiting for somebody. And when any rule reads
+        receipts, it skips an expense whose receipt has not been read yet — an unread receipt is
+        unflagged because nothing has been checked, not because everything passed, so the newest
+        expenses would otherwise be the ones it approved most readily.
+      </p>
+      <p className="mt-1 text-xs text-muted-foreground">
+        With no rules enabled it does nothing at all, and says so on the import: &ldquo;no flags&rdquo;
+        means nothing when nothing is looking.
+      </p>
+    </div>
+  );
+}
+
 function DecisionTrace({ isAdmin }: { isAdmin: boolean }) {
   const qc = useQueryClient();
   const { data } = useQuery<Record<string, boolean>>({

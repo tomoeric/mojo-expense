@@ -8,6 +8,7 @@ import { nudgeReceiptReader } from "../emburse/receipt-reader.js";
 import { ensureTaxonomy, recordTaxonomy, type NewNames } from "./taxonomy.js";
 import { ensureRules } from "../rules/store.js";
 import { runRules } from "../rules/run.js";
+import { autoQueueApprovals } from "../rules/auto-approve.js";
 
 /**
  * Ingest one daily Emburse export.
@@ -385,6 +386,7 @@ export async function ingestExport(
     // has already succeeded and re-running it to retry the rules would be far
     // more dangerous than a missing flag.
     let rules: ImportResult["rules"] = null;
+    let ruleRunFailed = false;
     try {
       const ran = await runRules({ keys: [...keys.keys()] });
       rules = { failed: ran.failed, approved: ran.approved, denied: ran.denied };
@@ -401,6 +403,32 @@ export async function ingestExport(
     } catch (err) {
       console.error("import: rules failed to run:", err);
       warnings.push("The expense rules could not be run over this import, so nothing was flagged by them.");
+      // Deliberately NOT auto-approving after this. The automation trusts
+      // "no rule flagged it", and a run where the rules did not run at all
+      // makes that true of everything.
+      ruleRunFailed = true;
+    }
+
+    // Automatic approvals, last, and only when the rules actually ran —
+    // "nothing flagged this" is only meaningful once something looked.
+    if (!ruleRunFailed) {
+      try {
+        const auto = await autoQueueApprovals();
+        if (auto.queued > 0) {
+          rules = {
+            failed: rules?.failed ?? 0,
+            denied: rules?.denied ?? 0,
+            approved: (rules?.approved ?? 0) + auto.queued,
+          };
+          console.log(`import: automatic approvals queued ${auto.queued}`);
+        }
+        // A silent automation that is switched on and doing nothing is
+        // worse than one that is off, so say why on the import.
+        if (auto.skipped) warnings.push(`Automatic approvals did nothing: ${auto.skipped}.`);
+      } catch (err) {
+        console.error("import: automatic approvals failed:", err);
+        warnings.push("Automatic approvals could not run over this import.");
+      }
     }
 
     // New pictures to read. Prompt rather than wait: reading them is minutes

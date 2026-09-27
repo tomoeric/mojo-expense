@@ -1,6 +1,7 @@
 import { Router } from "express";
-import { allFlags, setFlag, FLAGS, type FlagKey } from "./flags.js";
+import { allFlags, flagOwner, getLimit, setFlag, setLimit, FLAGS, type FlagKey } from "./flags.js";
 import { aiSpend } from "./ai/usage.js";
+import { DEFAULT_PER_RUN, MOST_PER_RUN } from "./rules/auto-approve.js";
 import { env, isAuditConfigured, isEmburseConfigured } from "./env.js";
 import { TtlCache } from "./cache.js";
 import { HttpError } from "./http.js";
@@ -143,9 +144,17 @@ api.get("/ai-usage", requireAuth, requireAdmin, async (_req, res) => {
  * because the queue needs to know whether to offer a trace; setting them is
  * admin, because they change what the server records.
  */
+const flagState = async () => ({
+  ...(await allFlags()),
+  // The number and the person, alongside the switches. Automatic
+  // approvals are made under a real login and the page has to name whose.
+  autoApprovePerRun: (await getLimit("autoApprove")) ?? DEFAULT_PER_RUN,
+  autoApproveOwner: await flagOwner("autoApprove"),
+});
+
 api.get("/flags", requireAuth, async (_req, res) => {
   try {
-    res.json(await allFlags());
+    res.json(await flagState());
   } catch (err) {
     res.status(500).json({ error: describe(err) });
   }
@@ -158,8 +167,15 @@ api.post("/flags/:key", requireAuth, requireAdmin, async (req, res) => {
     return;
   }
   try {
-    await setFlag(key as FlagKey, Boolean((req.body as { enabled?: unknown })?.enabled), req.user?.email ?? "unknown");
-    res.json(await allFlags());
+    const body = req.body as { enabled?: unknown; amount?: unknown };
+    const who = req.user?.email ?? "unknown";
+    if (typeof body.amount === "number" && Number.isFinite(body.amount)) {
+      // Clamped here, not trusted from the page. This number is how many
+      // of somebody's expenses a single unattended pass may approve.
+      await setLimit(key as FlagKey, Math.min(Math.max(1, Math.round(body.amount)), MOST_PER_RUN), who);
+    }
+    if ("enabled" in body) await setFlag(key as FlagKey, Boolean(body.enabled), who);
+    res.json(await flagState());
   } catch (err) {
     res.status(500).json({ error: describe(err) });
   }
