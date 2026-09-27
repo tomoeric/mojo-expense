@@ -173,6 +173,30 @@ if (!process.env.DATABASE_URL) {
     // nobody was judged against.
     check("…and is NOT marked as a day rule",
       plainHits.every((h) => h.hit.dayGroup === false));
+
+    // The argument this cost. The queue reads STORED verdicts; the rule
+    // editor's preview computes them live. After a deploy that changes how a
+    // rule is judged, those two disagree — the preview said "16 failing"
+    // while the queue still showed a $10.53 day flagged, and both were
+    // telling the truth about different moments. Being told to press
+    // "Re-check all" is not a fix: it asks somebody to know the screen might
+    // be lying, and to remember the remedy, on every deploy. So a run must
+    // leave the stored verdicts agreeing with a fresh evaluation, and boot
+    // must perform one.
+    const { previewRule } = await import("../server/rules/run.js");
+    const dayRule = (await store.activeRules()).find((r) => r.name === `${TAG} day limit`)!;
+    const live = await previewRule(dayRule);
+    const storedFailing = ours(`${TAG} day limit`).length;
+    check("stored verdicts agree with a fresh evaluation, with nothing to press",
+      storedFailing === live.failing, `stored ${storedFailing} vs live ${live.failing}`);
+
+    // And the $10.53 case by name, because it is the one that was argued
+    // about: a small receipt on an under-limit day must not be flagged.
+    const brad = ours(`${TAG} day limit`).some((h) => h.key.endsWith("-4"));
+    check("a $20 day is not flagged by a $75 limit, stored or live", !brad);
+
+    check("a run records WHEN it ran, so a stale count can be seen as stale",
+      Boolean((await store.activeRules()).find((r) => r.name === `${TAG} day limit`)?.lastRunAt));
   } finally {
     await db().query("DELETE FROM expenses WHERE dedupe_key LIKE $1", [`${TAG}%`]);
     await db().query("DELETE FROM expense_rules WHERE name LIKE $1", [`${TAG}%`]);

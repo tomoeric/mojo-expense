@@ -23,6 +23,31 @@ const TONE: Record<Action, string> = {
   deny: "text-red-600",
 };
 
+/**
+ * When these counts were last worked out.
+ *
+ * The counts are STORED verdicts, not a live calculation — so after a deploy
+ * that changes how a rule is judged they can be the old answer, and nothing
+ * on screen used to say so. That cost a long, circular argument about a $75
+ * rule: the editor's live preview read 16 failing while this page still read
+ * 116, and both were telling the truth about different moments. Boot now
+ * re-checks automatically, and this line is the receipt for it.
+ */
+function LastChecked({ rules }: { rules: { lastRunAt: string | null }[] }) {
+  const times = rules.map((r) => r.lastRunAt).filter((t): t is string => Boolean(t));
+  if (times.length === 0) {
+    return <span className="text-xs text-amber-700">never checked — press Re-check all</span>;
+  }
+  const when = new Date(times.sort().at(-1)!);
+  const mins = Math.round((Date.now() - when.getTime()) / 60000);
+  return (
+    <span className="text-xs text-muted-foreground" title={when.toLocaleString()}>
+      counted {mins < 1 ? "just now" : mins < 60 ? `${mins} min ago`
+        : mins < 1440 ? `${Math.round(mins / 60)} h ago` : when.toLocaleDateString()}
+    </span>
+  );
+}
+
 export function RulesPage({ isAdmin }: { isAdmin: boolean }) {
   const { list, options, editors, setEditor, save, remove, toggle, runAll } = useRules();
   const [editing, setEditing] = useState<{ id?: number; body: RuleBody } | null>(null);
@@ -63,6 +88,7 @@ export function RulesPage({ isAdmin }: { isAdmin: boolean }) {
         <StatChip value={rules.length} label="rules" />
         <StatChip value={rules.filter((r) => r.enabled).length} label="enabled" tone="emerald" />
         <StatChip value={catching} label="expenses currently caught" tone="amber" />
+        <LastChecked rules={rules} />
         {deciding > 0 && <StatChip value={deciding} label="that approve or deny" tone="red" />}
         <div className="ml-auto flex items-center gap-2">
           {isAdmin && (

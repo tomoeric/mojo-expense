@@ -12,6 +12,7 @@ import { decisionRouter } from "./emburse/decision-routes.js";
 import { startExportScheduler } from "./emburse/export-scheduler.js";
 import { startDecisionWorker } from "./emburse/decision-worker.js";
 import { startReceiptReader } from "./emburse/receipt-reader.js";
+import { runRules } from "./rules/run.js";
 import { ensureSchema, isDbConfigured } from "./db.js";
 import { rulesRouter } from "./rules/routes.js";
 
@@ -64,6 +65,38 @@ if (env.isProd) {
   });
 }
 
+/**
+ * Re-evaluate every rule against every expense, once, on boot.
+ *
+ * Verdicts are STORED — that is what makes the queue fast and what lets
+ * "when did this start failing" be answerable. It also means a deploy that
+ * changes how a rule is judged leaves the queue showing the old answer,
+ * with nothing on screen admitting it.
+ *
+ * That gap cost real trust. A money rule was flagging everything because
+ * "$75.00" parsed as NaN; the fix shipped, the live preview immediately read
+ * 16 failing instead of 116 — and the queue still showed a $10.53 day
+ * flagged, because nothing had re-run the rules. The answer was "press
+ * Re-check all", which is a fine button and a terrible requirement: it asks
+ * somebody to know that the screen might be lying, and to remember the
+ * remedy, every single deploy.
+ *
+ * So it runs itself. Flags only — boot must never approve or deny anything,
+ * and `decide: false` is what guarantees that. Failure is logged and
+ * swallowed: a rule run is not a reason to refuse to serve.
+ */
+function recheckRulesOnBoot(): void {
+  // After the workers, and not in the way of the first request.
+  setTimeout(() => {
+    void runRules({ decide: false })
+      .then((r) =>
+        console.log(
+          `rules: re-checked ${r.expenses} expense(s) against ${r.rulesRun} rule(s) — ` +
+          `${r.failed} failing, ${r.passed} passing`))
+      .catch((err: unknown) => console.error("rules: boot re-check failed:", err));
+  }, 5_000);
+}
+
 // 0.0.0.0 so Replit's router can reach the process.
 app.listen(env.port, "0.0.0.0", () => {
   console.log(`MOJO Expense listening on :${env.port} (${env.isProd ? "production" : "development"})`);
@@ -80,6 +113,7 @@ app.listen(env.port, "0.0.0.0", () => {
         startExportScheduler();
         startDecisionWorker();
         startReceiptReader();
+        recheckRulesOnBoot();
       })
       .catch((err: unknown) => console.error("schema bootstrap failed:", err));
   } else {

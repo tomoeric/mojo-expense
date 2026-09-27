@@ -1,7 +1,7 @@
 import type { BrowserContext, Page } from "playwright";
 import { env } from "../env.js";
 import {
-  explainLaunch, firstVisible, gridUrl, makeStepper, openBrowser, safeUrl, signIn,
+  explainLaunch, firstVisible, gridLoaded, gridUrl, makeStepper, openBrowser, safeUrl, signIn,
   type ChallengeHook,
   type Login, type StepResult,
 } from "./auto-export.js";
@@ -266,6 +266,22 @@ export async function runDecisions(
  * matched nothing. Those have four different fixes, and the page itself
  * distinguishes them.
  */
+/** How many of each selector are on the page, ignoring the ones that throw. */
+async function countAll(
+  page: Page, selectors: string[],
+): Promise<{ sel: string; n: number }[]> {
+  const seen = new Set<string>();
+  const out: { sel: string; n: number }[] = [];
+  for (const sel of selectors) {
+    if (!sel.trim() || seen.has(sel)) continue;
+    seen.add(sel);
+    // An invalid selector is a possibility here — these come partly from
+    // settings somebody typed — and one bad one must not lose the rest.
+    out.push({ sel, n: await page.locator(sel).count().catch(() => 0) });
+  }
+  return out;
+}
+
 async function whyNoGrid(page: Page, sel: Record<string, string>, asEmail?: string): Promise<string> {
   const where = safeUrl(page.url());
   const text = (await page.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ").trim();
@@ -286,13 +302,31 @@ async function whyNoGrid(page: Page, sel: Record<string, string>, asEmail?: stri
       `visible — “${sel.grid}” is probably matching a hidden measuring table rather than the real grid.`;
   }
   const who = asEmail ? `signed in as ${asEmail}` : "signed in";
-  return `no grid at ${where}, ${who}. Nothing matched “${sel.grid}”. The export signs in as ` +
-    `whichever login last worked, a decision signs in as the person who made it, so those are often ` +
-    `different accounts: if the export works and this does not, the selector is fine and the account ` +
-    `is the difference — “${sel.gridPath}” is Emburse's team-wide view, and an account without ` +
-    `admin or manager rights there signs in normally and simply has no grid. Check that ${asEmail ?? "this login"} ` +
-    `can open ${sel.gridPath} in Emburse by hand. Otherwise that selector or gridPath is wrong. ` +
-    `The page says: ${text.slice(0, 160) || "(nothing readable)"}`;
+
+  // What IS on the page, rather than a theory about why it is not.
+  //
+  // This used to name the account as the likely cause — the export signs in
+  // as whichever login last worked, a decision as the person who made it, so
+  // blaming the difference between them sounded reasonable. It was wrong,
+  // and confidently so: the page text underneath showed the reviewer on the
+  // Transactions page, with EXPORT and "Needs Review 99+" right there. The
+  // grid was on screen. The SELECTOR was stale. A guess dressed as a
+  // diagnosis sends somebody to ask IT for permissions they already have.
+  const probes = await countAll(page, [
+    "table", "table tbody tr", '[role="grid"]', '[role="table"]',
+    '[role="rowgroup"]', '[role="row"]', sel.itemCount ?? "", sel.resultRow ?? "",
+  ]);
+  const found = probes.filter((p) => p.n > 0);
+
+  return `no grid at ${where}, ${who}. Nothing matched the grid selector “${sel.grid}” ` +
+    `or the item-count line “${sel.itemCount}”. ` +
+    (found.length > 0
+      ? `What IS on the page: ${found.map((p) => `${p.sel} ×${p.n}`).join(", ")} — ` +
+        `so the page loaded and one of those is the grid. Set the grid and row selectors in ` +
+        `Settings to match, rather than changing anything about the account.`
+      : `Nothing table-like is on the page at all, so either it had not finished ` +
+        `rendering or “${sel.gridPath}” is not where this tenant keeps its transactions.`) +
+    ` The page says: ${text.slice(0, 200) || "(nothing readable)"}`;
 }
 
 /**
@@ -341,7 +375,7 @@ export async function testConnection(
           await sheet.goto(gridUrl(emburseUrl, { query: "", path: sel.gridPath }), {
             waitUntil: "domcontentloaded",
           });
-          if (!(await firstVisible(sheet, sel.grid!, env.emburseLogin.stepTimeoutMs))) {
+          if (!(await gridLoaded(sheet, sel as never))) {
             throw new Error(await whyNoGrid(sheet, sel, login.email));
           }
           const rows = await sheet.locator(sel.resultRow!).count().catch(() => 0);
@@ -502,7 +536,13 @@ async function applyOne(
     });
     // Any visible match, not element number one: a grid's hidden measuring
     // rows come first in the DOM and never become visible.
-    if (!(await firstVisible(page, sel.grid!, env.emburseLogin.stepTimeoutMs))) {
+    // The same two signals the export accepts, not just the grid selector.
+    // The export has always taken the item-count line as proof the grid
+    // arrived — "34 items, $42,249.94" cannot be on screen unless the rows
+    // are — while this path demanded the grid element itself. So on a tenant
+    // whose grid selector is stale the export ran fine and every decision
+    // failed, and the difference looked like an account problem. It was not.
+    if (!(await gridLoaded(page, sel as never))) {
       throw new Error(await whyNoGrid(page, sel, asEmail));
     }
 

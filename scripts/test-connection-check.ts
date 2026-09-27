@@ -109,24 +109,41 @@ try {
   check("the shipped selector matches whichever name this tenant uses",
     !/no team-wide tab matched/.test(shippedStep?.detail ?? ""), shippedStep?.detail);
 
-  console.log("\nA grid that does not appear");
+  // The failure a reviewer actually hit, and what it turned out to be.
+  //
+  // Emburse's transactions page loaded fine — EXPORT, "Needs Review 99+",
+  // all of it — and the run still reported no grid, because the stored grid
+  // selector no longer matched. The export sailed through the same page,
+  // because the export accepts the item-count line as proof the grid is
+  // there. The decision path demanded the grid element itself. So one
+  // worked, one failed, and the difference looked like an account problem.
+  console.log("\nA stale grid selector, on a page that plainly loaded");
   await set("/__reset");
-  // The exact failure a reviewer just hit: signed in fine, no grid after it.
-  const blind = await testConnection({ ...sel, grid: "table.nothing-matches-this" }, mock.url, login);
-  check("it fails at the grid, not at sign-in",
+  const stale = await testConnection({ ...sel, grid: "table.nothing-matches-this" }, mock.url, login);
+  check("the run survives it, the way the export always has", stale.ok, names(stale));
+  check("…reaching the grid step rather than dying at it",
+    stale.steps.some((s) => /grid/i.test(s.name) && s.ok), names(stale));
+
+  console.log("\nA page with no sign of a grid at all");
+  await set("/__reset");
+  const blind = await testConnection(
+    { ...sel, grid: "table.nothing-matches-this", itemCount: ".no-such-count" }, mock.url, login);
+  check("only THEN does it fail, and at the grid rather than at sign-in",
     !blind.ok && blind.steps.some((s) => /sign in/i.test(s.name) && s.ok), names(blind));
   const why = blind.steps.find((s) => !s.ok)?.detail ?? "";
-  check("…and says which selector found nothing, rather than just “did not appear”",
-    /nothing-matches-this/.test(why), why.slice(0, 160));
-  check("…and quotes what the page actually said", /The page says/.test(why), why.slice(0, 200));
-  check("…and names the account as a likely cause when the export works but this does not",
-    /the account is the difference/.test(why), why.slice(0, 120));
-  // "This account is the difference" is only actionable if it says WHICH
-  // account. The export signs in as whichever login last worked and a
-  // decision signs in as the person who made it, so the two are routinely
-  // different — and the message used to leave the reader to work that out.
-  check("…and says which login it was, since the export uses a different one",
+  check("…naming both selectors it tried, not just one",
+    /nothing-matches-this/.test(why) && /no-such-count/.test(why), why.slice(0, 200));
+  check("…and quoting what the page actually said", /The page says/.test(why), why.slice(0, 260));
+  check("…and which login it was, so the reader is not left guessing",
     why.includes(login.email), why.slice(0, 200));
+  // It used to blame the ACCOUNT here, and that guess was wrong on the first
+  // real failure — it sends somebody to ask IT for permissions they already
+  // have. What the page contains is checkable; a theory about permissions is
+  // not.
+  check("…and does NOT blame the account when the page plainly loaded",
+    !/account is the difference/.test(why), why.slice(0, 200));
+  check("…but reports what IS on the page, so the right selector is visible",
+    /What IS on the page/.test(why) && /table/.test(why), why.slice(0, 340));
   check("…with a screenshot of where it stopped", Boolean(blind.screenshot));
 } finally {
   await mock.close();

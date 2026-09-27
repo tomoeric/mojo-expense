@@ -623,7 +623,7 @@ async function chooseFormatByRole(page: Page): Promise<string | null> {
  * Both signals are given the full budget rather than being tried in sequence,
  * since either arriving is the answer.
  */
-async function gridLoaded(page: Page, sel: Selectors): Promise<string | null> {
+export async function gridLoaded(page: Page, sel: Selectors): Promise<string | null> {
   const ms = env.emburseLogin.stepTimeoutMs;
   const [grid, count] = await Promise.all([
     firstVisible(page, sel.grid, ms).then((l) => (l ? "the grid is on screen" : null)),
