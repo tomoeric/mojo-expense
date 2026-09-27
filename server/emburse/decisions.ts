@@ -239,6 +239,43 @@ export async function noteAttemptFailed(ids: number[], error: string): Promise<v
   );
 }
 
+/**
+ * Queue one approval, with every check the single-expense path makes.
+ *
+ * Shared by the one-at-a-time route and the bulk one, on purpose. A batch
+ * is a convenience for the person, never a lighter standard for the
+ * decision — and the surest way for it to become one is two code paths
+ * that were the same on the day they were written. A test of the bulk
+ * path that reimplemented these checks would agree with itself while the
+ * route drifted.
+ */
+export async function queueApprovalFor(
+  dedupeKey: string,
+  decidedBy: string,
+): Promise<{ ok: true; queued: QueuedDecision } | { ok: false; error: string }> {
+  await ensure();
+  const { rows } = await db().query<{
+    employee: string; merchant: string; amount_cents: string; expense_date: Date | null;
+  }>(
+    `SELECT employee, merchant, amount_cents, expense_date FROM expenses WHERE dedupe_key = $1`,
+    [dedupeKey],
+  );
+  const r = rows[0];
+  if (!r) return { ok: false, error: "that expense is no longer in the queue" };
+  return queueDecision({
+    dedupeKey,
+    decision: "approve",
+    reason: "",
+    decidedBy,
+    target: {
+      employee: r.employee,
+      merchant: r.merchant,
+      amount: Number(r.amount_cents) / 100,
+      date: r.expense_date ? r.expense_date.toISOString().slice(0, 10) : null,
+    },
+  });
+}
+
 /** How many expenses still held locally have already been actioned. */
 export async function appliedCount(): Promise<number> {
   await ensure();

@@ -7,7 +7,8 @@ import { browserQueue, whyWaiting } from "./browser-lock.js";
 import { credentialForUser, hasCredential, noteResult } from "./credentials.js";
 import { inspectEditForm, runDecision, testConnection, type Decision, type Target } from "./decide.js";
 import {
-  appliedCount, cancelDecision, decisionsFor, pendingDecisions, queueDecision, recentDecisions,
+  appliedCount, cancelDecision, decisionsFor, pendingDecisions, queueApprovalFor, queueDecision,
+  recentDecisions,
 } from "./decisions.js";
 import { decisionWorkerStarted, nudgeDecisionWorker } from "./decision-worker.js";
 import { getFlag } from "../flags.js";
@@ -174,6 +175,69 @@ decisionRouter.post("/decisions", requireAuth, async (req: Request, res: Respons
 
   nudgeDecisionWorker();
   res.status(202).json({ queued: result.queued, waiting: whyWaiting() });
+});
+
+/**
+ * Approve a batch of expenses that were checked off together.
+ *
+ * One request rather than two hundred, because that is what a reviewer
+ * does after working down the unflagged list: tick the lot and send them.
+ * Two hundred separate posts would each nudge the worker and each race the
+ * others for the queue.
+ *
+ * Every expense still goes through the SAME checks as a single one — it
+ * exists, the decider has an Emburse login, nothing is already in flight
+ * for it. A batch is a convenience for the person, not a lighter standard
+ * for the decision. Whatever cannot be queued is named and the rest still
+ * go, rather than the whole batch failing over one.
+ *
+ * Approve only. Denying wants a reason per expense, and a single reason
+ * pasted across a hundred denials is worse than making somebody write
+ * them.
+ */
+decisionRouter.post("/decisions/bulk", requireAuth, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  const body = req.body as { dedupeKeys?: unknown };
+  const keys = Array.isArray(body.dedupeKeys)
+    ? [...new Set(body.dedupeKeys.filter((k): k is string => typeof k === "string" && k.length > 0))]
+    : [];
+  if (keys.length === 0) {
+    res.status(400).json({ error: "Nothing was selected." });
+    return;
+  }
+  // A ceiling, deliberately. Approving is the irreversible half of this
+  // app, and a runaway click that queued four thousand of them would be
+  // discovered by somebody in Emburse rather than here.
+  if (keys.length > 250) {
+    res.status(400).json({ error: `That is ${keys.length} expenses. Approve at most 250 at once.` });
+    return;
+  }
+
+  const decider = req.user?.email ?? "";
+  if (!(await hasCredential(decider))) {
+    res.status(400).json({
+      error:
+        "Add your Emburse login first, under Your Emburse login in the user menu. " +
+        "Decisions are made in Emburse as you, so the approval carries your name and not somebody else's.",
+    });
+    return;
+  }
+
+  let queued = 0;
+  const refused: string[] = [];
+  for (const dedupeKey of keys) {
+    const result = await queueApprovalFor(dedupeKey, decider);
+    if (result.ok) queued++;
+    else refused.push(result.error);
+  }
+
+  if (queued > 0) nudgeDecisionWorker();
+  res.status(202).json({
+    queued,
+    // Named, not counted. "3 could not be queued" sends somebody hunting.
+    refused: [...new Set(refused)].slice(0, 10),
+    waiting: whyWaiting(),
+  });
 });
 
 /** The queue, the history, and what the browser is busy with. */

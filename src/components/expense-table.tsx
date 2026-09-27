@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import {
   ArrowDown, ArrowUp, ChevronsUpDown, Search, Receipt, AlertTriangle,
-  Columns3, ChevronLeft, ChevronRight, RotateCcw, X, Sparkles, Plus,
+  Columns3, ChevronLeft, ChevronRight, RotateCcw, X, Sparkles, Plus, Check, Loader2,
 } from "lucide-react";
 import type { ExpenseReport, ExpenseLine, ReportsResponse } from "@/lib/api";
 import { money, shortDate, daysAgo } from "@/lib/format";
@@ -49,6 +49,12 @@ export type Row = {
   decision?: { state: string; decision?: string } | undefined;
   /** The control for deciding it, supplied by whoever renders the table. */
   decide?: React.ReactNode;
+  /**
+   * Set when this row may be ticked for a bulk action. Absent means it
+   * cannot — already decided, or the viewer cannot decide at all — and
+   * those rows show no box rather than a disabled one nobody can explain.
+   */
+  selectKey?: string;
 };
 
 type ColumnKey =
@@ -344,12 +350,15 @@ export function bandsFor(rows: Row[], rule: string): Band[] {
  * pretending the DOM has one.
  */
 function BandRows({
-  band, rule, banded, columns, onOpen, onDiff,
+  band, rule, banded, columns, onOpen, onDiff, picked, onPick,
 }: {
   band: Band;
   /** Which rule drew this band, named on it. */
   rule: string;
   banded: boolean;
+  /** Null when the table is not offering selection at all. */
+  picked: ReadonlySet<string> | null;
+  onPick: (key: string) => void;
   columns: Column[];
   onOpen: (r: Row) => void;
   onDiff: (r: Row) => void;
@@ -364,7 +373,7 @@ function BandRows({
     <>
       {banded && (
         <tr className="border-t-2 border-amber-400/70 bg-amber-50/80 dark:bg-amber-500/10">
-          <td colSpan={columns.length} className="px-2 py-1.5">
+          <td colSpan={columns.length + (picked ? 1 : 0)} className="px-2 py-1.5">
             <span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[11px]">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0 self-center text-amber-600" />
               <strong className="font-semibold">{band.employee}</strong>
@@ -398,8 +407,23 @@ function BandRows({
           }}
           className={`cursor-pointer border-t border-border hover:bg-muted/60 ${
             banded ? "bg-amber-50/35 dark:bg-amber-500/5" : ""
-          }`}
+          } ${picked && r.selectKey && picked.has(r.selectKey) ? "bg-sky-500/10" : ""}`}
         >
+          {picked && (
+            <td className="px-2 py-2" onClick={(e) => e.stopPropagation()}>
+              {/* No box at all on a row that cannot be ticked. A disabled
+                  one just poses a question nobody can answer. */}
+              {r.selectKey && (
+                <input
+                  type="checkbox"
+                  aria-label={`Select ${r.employee} ${r.line.merchant}`}
+                  checked={picked.has(r.selectKey)}
+                  onChange={() => onPick(r.selectKey!)}
+                  className="h-3.5 w-3.5 cursor-pointer align-middle"
+                />
+              )}
+            </td>
+          )}
           {columns.map((c, i) => (
             <td
               key={c.key}
@@ -549,11 +573,28 @@ export function ExpenseTable({
   rows,
   onOpen,
   emptyMessage = "Nothing here.",
+  bulk,
 }: {
   rows: Row[];
   onOpen: (r: Row) => void;
   emptyMessage?: string;
+  /**
+   * Ticking rows off for one action over many. Supplied by the queue; left
+   * out everywhere else, and then no boxes appear at all.
+   *
+   * `onRun` is handed exactly the keys that are ticked AND currently
+   * visible, which matters: select-all then narrow the search and the
+   * hidden ones must not come along. What somebody can see is what they
+   * agreed to.
+   */
+  bulk?: {
+    label: (n: number) => string;
+    onRun: (keys: string[]) => void;
+    busy?: boolean;
+    note?: string | null;
+  };
 }) {
+  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
   const [diff, setDiff] = useState<Row | null>(null);
   const { visible, hidden, move, hide, show, reset } = useColumns();
   const [sort, setSort] = useState<{ key: ColumnKey; dir: 1 | -1 }>({ key: "date", dir: -1 });
@@ -627,6 +668,30 @@ export function ExpenseTable({
   }, [filtered, sort, byKey]);
 
   const total = useMemo(() => sorted.reduce((a, r) => a + r.line.amount, 0), [sorted]);
+
+  // Only what is on screen and tickable. Select-all means "all of these",
+  // not "all of them" — a filter is a statement about what somebody is
+  // looking at, and approving rows they filtered away would be acting on
+  // something nobody saw.
+  const tickable = useMemo(
+    () => (bulk ? sorted.map((r) => r.selectKey).filter((k): k is string => Boolean(k)) : []),
+    [bulk, sorted],
+  );
+  const chosen = useMemo(() => tickable.filter((k) => picked.has(k)), [tickable, picked]);
+  const chosenTotal = useMemo(
+    () => sorted.filter((r) => r.selectKey && picked.has(r.selectKey))
+      .reduce((a, r) => a + r.line.amount, 0),
+    [sorted, picked],
+  );
+  const allTicked = tickable.length > 0 && chosen.length === tickable.length;
+
+  const toggleOne = (key: string) =>
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
 
   /**
    * Banded only while a DAY rule is the active filter.
@@ -770,6 +835,39 @@ export function ExpenseTable({
         </div>
       )}
 
+      {/* Only once something is ticked. A permanent bar saying "0 selected"
+          is a control shouting before it has anything to say. */}
+      {bulk && chosen.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-sky-500/30 bg-sky-500/5 p-2.5 text-xs">
+          <span className="font-semibold">
+            {chosen.length.toLocaleString()} selected · {money(chosenTotal)}
+          </span>
+          {bulk.note && <span className="text-emerald-700">{bulk.note}</span>}
+          <button
+            type="button"
+            onClick={() => setPicked(new Set())}
+            className="text-muted-foreground underline underline-offset-2 hover:text-foreground"
+          >
+            clear
+          </button>
+          <button
+            type="button"
+            disabled={bulk.busy}
+            onClick={() => {
+              // Handed only what is ticked AND shown, and cleared after,
+              // so a second click cannot send the same batch twice.
+              const keys = [...chosen];
+              setPicked(new Set());
+              bulk.onRun(keys);
+            }}
+            className="ml-auto inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
+          >
+            {bulk.busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+            {bulk.label(chosen.length)}
+          </button>
+        </div>
+      )}
+
       {sorted.length === 0 ? (
         <Empty>{rows.length === 0 ? emptyMessage : `Nothing matches “${query}”.`}</Empty>
       ) : (
@@ -777,6 +875,22 @@ export function ExpenseTable({
           <table className="w-full table-fixed text-xs">
             <thead className="bg-muted text-left text-[11px] text-muted-foreground">
               <tr>
+                {bulk && (
+                  <th className="w-8 px-2 py-2">
+                    <input
+                      type="checkbox"
+                      aria-label={allTicked ? "Clear the selection" : "Select everything shown"}
+                      title={`${allTicked ? "Clear" : "Select"} the ${tickable.length} shown`}
+                      disabled={tickable.length === 0}
+                      checked={allTicked}
+                      // Some but not all: neither ticked nor empty, which
+                      // is the only honest state for a half-made choice.
+                      ref={(el) => { if (el) el.indeterminate = chosen.length > 0 && !allTicked; }}
+                      onChange={() => setPicked(allTicked ? new Set() : new Set(tickable))}
+                      className="h-3.5 w-3.5 cursor-pointer align-middle"
+                    />
+                  </th>
+                )}
                 {columns.map((c) => {
                   const on = sort.key === c.key;
                   const Icon = !on ? ChevronsUpDown : sort.dir === 1 ? ArrowUp : ArrowDown;
@@ -807,6 +921,8 @@ export function ExpenseTable({
                   key={band.key}
                   band={band}
                   rule={flagGroup ?? ""}
+                  picked={bulk ? picked : null}
+                  onPick={toggleOne}
                   banded={bands !== null && band.key !== "\u0000loose"}
                   columns={columns}
                   onOpen={onOpen}

@@ -168,6 +168,18 @@ export function useDecisions(keys: string[]) {
   };
 }
 
+/** Approve everything that was ticked, in one request. */
+export async function approveMany(dedupeKeys: string[]): Promise<{ queued: number; refused: string[] }> {
+  const res = await fetch("/api/decisions/bulk", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ dedupeKeys }),
+  });
+  const body = await readJson<{ error?: string; queued: number; refused: string[] }>(res);
+  if (!res.ok) throw new Error(body.error ?? "Could not queue those approvals.");
+  return { queued: body.queued, refused: body.refused ?? [] };
+}
+
 /** Look at Emburse's edit form for a queued expense, changing nothing. */
 export async function inspectEditForm(id: number): Promise<{
   ok: boolean;

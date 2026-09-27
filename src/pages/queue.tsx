@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Loader2, Send } from "lucide-react";
 import type { ExpenseReport, ReportsResponse } from "@/lib/api";
 import { ExpenseTable, buildRows, type Row } from "@/components/expense-table";
 import { DecideButtons, InspectEditForm, TestDecision } from "@/components/decide-controls";
+import { approveMany } from "@/lib/decisions";
 import { useDecisions } from "@/lib/decisions";
 import { CodePrompt } from "@/components/code-prompt";
 
@@ -35,6 +37,9 @@ export function QueuePage({
     useDecisions(keys);
   const [error, setError] = useState("");
   const [sendNote, setSendNote] = useState<string | null>(null);
+  const [bulkNote, setBulkNote] = useState<string | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const qc = useQueryClient();
   /**
    * The batch is OURS when the browser's holder is the decision run rather
    * than the export. The export also holds it, and "applying 2 of 3" while
@@ -67,6 +72,11 @@ export function QueuePage({
         return {
           ...r,
           decision,
+          // Tickable only when this person could decide it one at a time.
+          // A bulk action must not be a way round a check the single path
+          // makes — and a row already decided or in flight is not a
+          // candidate for either.
+          selectKey: canDecide && !decision ? r.line.id : undefined,
           decide: (
             <DecideButtons
               canDecide={canDecide}
@@ -170,6 +180,29 @@ export function QueuePage({
         rows={rows}
         onOpen={(r) => onOpen(r.report, r.line.id)}
         emptyMessage="Nothing waiting on a decision."
+        bulk={{
+          label: (n) => `Approve ${n.toLocaleString()}`,
+          busy: bulkBusy,
+          note: bulkNote,
+          onRun: (keys) => {
+            setError("");
+            setBulkNote(null);
+            setBulkBusy(true);
+            approveMany(keys)
+              .then((r) => {
+                // What was queued and, by name, what was not. "3 could not
+                // be queued" sends somebody hunting through 200 rows.
+                setBulkNote(
+                  `${r.queued.toLocaleString()} queued\u2009—\u2009they go to Emburse together in one sign-in.` +
+                  (r.refused.length > 0 ? ` Not queued: ${r.refused.join("; ")}` : ""),
+                );
+                // The badges are what tell somebody it worked.
+                void qc.invalidateQueries({ queryKey: ["decisions"] });
+              })
+              .catch((e: Error) => setError(e.message))
+              .finally(() => setBulkBusy(false));
+          },
+        }}
       />
     </div>
   );
