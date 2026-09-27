@@ -286,6 +286,15 @@ the blocks.
   a second admin pressing it would put a colleague's name on approvals they
   never made. Same rule as everywhere else: a decision is applied under the
   decider's own login.
+- **An automatic approval is marked as one.** It is applied under the login of
+  whoever switched the automation on, so `decided_by` is a real person and the
+  badge reads exactly like a click. `expense_decisions.automatic` is what
+  separates them, the queue shows an **auto** chip beside the badge, and the
+  Approved tab says how many of the batch nobody looked at. A retry carries
+  the mark through — pressing "try again" re-attempts the applying, it is not
+  somebody reviewing the expense, and clearing it there would launder every
+  automatic approval into a reviewed one the first time a batch had to be
+  re-run.
 - **The refusals are in one place.** `setup()` reads the switch, the owner, the
   number and the enabled rules and returns the single reason a run would do
   nothing, so the pass and the report cannot disagree about it.

@@ -42,6 +42,16 @@ export type QueuedDecision = {
   steps: DecisionStep[] | null;
   /** A screenshot of the page where it failed, when tracing was on. */
   shot: string | null;
+  /**
+   * Whether a machine decided this, rather than a person.
+   *
+   * Both carry the same name — an automatic approval is applied under the
+   * login of whoever switched the automation on, so `decidedBy` cannot tell
+   * them apart. Without this, a queue of approvals gives no way to ask
+   * which ones a person actually looked at, which is the first question
+   * anybody asks of an automation that approves spending.
+   */
+  automatic: boolean;
 };
 
 const SCHEMA = `
@@ -91,6 +101,13 @@ ALTER TABLE expense_decisions ADD COLUMN IF NOT EXISTS steps jsonb;
 -- invisible in a step name. Kept only when the trace toggle is on, and only
 -- for failures.
 ALTER TABLE expense_decisions ADD COLUMN IF NOT EXISTS shot text;
+-- Decided by the automation rather than by a person. Both are applied under
+-- a real login and carry that person's name in Emburse, so decided_by does
+-- not distinguish them — and "which of these did anybody actually look at"
+-- is the question an automation that approves spending has to be able to
+-- answer. Defaults false: everything decided before this column existed was
+-- decided by somebody clicking.
+ALTER TABLE expense_decisions ADD COLUMN IF NOT EXISTS automatic boolean NOT NULL DEFAULT false;
 `;
 
 let ready: Promise<void> | null = null;
@@ -103,7 +120,7 @@ type Row = {
   id: string; dedupe_key: string; decision: Decision; reason: string | null;
   decided_by: string; decided_at: Date; state: DecisionState; attempts: number;
   applied_at: Date | null; matched_row: string | null; error: string | null; target: Target;
-  steps: DecisionStep[] | null; shot: string | null;
+  steps: DecisionStep[] | null; shot: string | null; automatic: boolean;
 };
 
 const shape = (r: Row): QueuedDecision => ({
@@ -121,10 +138,11 @@ const shape = (r: Row): QueuedDecision => ({
   target: r.target,
   steps: r.steps ?? null,
   shot: r.shot ?? null,
+  automatic: r.automatic ?? false,
 });
 
 const COLUMNS = `id, dedupe_key, decision, reason, decided_by, decided_at, state,
-                 attempts, applied_at, matched_row, error, target, steps, shot`;
+                 attempts, applied_at, matched_row, error, target, steps, shot, automatic`;
 
 /**
  * Record a decision, to be applied on the next pass.
@@ -140,6 +158,8 @@ export async function queueDecision(input: {
   reason: string;
   decidedBy: string;
   target: Target;
+  /** Set by the automation. Absent means a person clicked it. */
+  automatic?: boolean;
 }): Promise<{ ok: true; queued: QueuedDecision } | { ok: false; error: string }> {
   await ensure();
 
@@ -150,9 +170,10 @@ export async function queueDecision(input: {
 
   try {
     const { rows } = await db().query<Row>(
-      `INSERT INTO expense_decisions (dedupe_key, decision, reason, decided_by, target)
-       VALUES ($1, $2, $3, $4, $5) RETURNING ${COLUMNS}`,
-      [input.dedupeKey, input.decision, reason || null, input.decidedBy, JSON.stringify(input.target)],
+      `INSERT INTO expense_decisions (dedupe_key, decision, reason, decided_by, target, automatic)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING ${COLUMNS}`,
+      [input.dedupeKey, input.decision, reason || null, input.decidedBy,
+       JSON.stringify(input.target), input.automatic === true],
     );
     return { ok: true, queued: shape(rows[0]!) };
   } catch (err) {
@@ -252,6 +273,7 @@ export async function noteAttemptFailed(ids: number[], error: string): Promise<v
 export async function queueApprovalFor(
   dedupeKey: string,
   decidedBy: string,
+  opts: { automatic?: boolean } = {},
 ): Promise<{ ok: true; queued: QueuedDecision } | { ok: false; error: string }> {
   await ensure();
   const { rows } = await db().query<{
@@ -267,6 +289,7 @@ export async function queueApprovalFor(
     decision: "approve",
     reason: "",
     decidedBy,
+    automatic: opts.automatic === true,
     target: {
       employee: r.employee,
       merchant: r.merchant,
@@ -323,6 +346,11 @@ export async function retryFailedDecisions(
       reason: d.reason ?? "",
       decidedBy: by,
       target: d.target,
+      // Carried through, not cleared. Pressing "try again" re-attempts the
+      // APPLYING; it is not somebody reviewing the expense. Clearing it here
+      // would quietly launder every automatic approval into a reviewed one
+      // the first time a batch had to be re-run.
+      automatic: d.automatic,
     });
     if (out.ok) queued++;
     else refused.push(`${d.target.merchant} $${d.target.amount.toFixed(2)}: ${out.error}`);

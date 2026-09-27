@@ -60,6 +60,22 @@ export function QueuePage({
     else if (pending.length === 0) setSent(0);
   }, [browser?.holder?.label, pending.length]);
 
+  /**
+   * The most that has been queued at once during this run.
+   *
+   * `sent` is the size of the batch the worker picked up; `pending` is
+   * everything queued, which GROWS when the automation adds more mid-run.
+   * Counting one against the other produced "Applying -23 of 8 — 32 to go":
+   * eight in flight, thirty-two queued, and arithmetic that assumed the two
+   * were the same set. Landed-so-far is measured against the high-water
+   * mark instead, which cannot go backwards.
+   */
+  const [peak, setPeak] = useState(0);
+  useEffect(() => {
+    if (pending.length === 0) setPeak(0);
+    else setPeak((p) => Math.max(p, pending.length));
+  }, [pending.length]);
+
   const rows: Row[] = useMemo(
     () =>
       waiting.map((r) => {
@@ -138,7 +154,8 @@ export function QueuePage({
               along it is. */}
           <span className="font-semibold">
             {running
-              ? `Applying ${sent - pending.length + 1} of ${sent} — ${pending.length} to go`
+              ? `Applying ${Math.min(sent, pending.length).toLocaleString()} of ${pending.length.toLocaleString()} queued` +
+                (peak > pending.length ? ` — ${(peak - pending.length).toLocaleString()} landed so far` : "")
               : `${pending.length} decision${pending.length === 1 ? "" : "s"} waiting to reach Emburse`}
           </span>
           <span className="text-muted-foreground">

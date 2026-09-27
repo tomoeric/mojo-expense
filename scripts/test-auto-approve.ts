@@ -25,7 +25,7 @@ const { autoQueueApprovals, autoApproveReport } = await import("../server/rules/
 const { setFlag, setLimit } = await import("../server/flags.js");
 const store = await import("../server/rules/store.js");
 const { runRules } = await import("../server/rules/run.js");
-const { pendingDecisions } = await import("../server/emburse/decisions.js");
+const { pendingDecisions, queueDecision } = await import("../server/emburse/decisions.js");
 const { saveCredential, deleteCredential } = await import("../server/emburse/credentials.js");
 
 let failures = 0;
@@ -91,6 +91,13 @@ try {
     (await mine()).map((d) => d.dedupeKey.slice(-2)).join(","));
   check("…each recorded against the person who switched it on",
     (await mine()).every((d) => d.decidedBy === OWNER));
+  // The name on an automatic approval is a real person's — that is the whole
+  // design — so decidedBy cannot tell a machine's decision from a click.
+  // Without a mark of its own, a queue of green badges cannot answer "which
+  // of these did anybody actually look at".
+  check("…and marked as the machine's, not as somebody's click",
+    (await mine()).every((d) => d.automatic === true),
+    (await mine()).map((d) => String(d.automatic)).join(","));
 
   console.log("\n3. It does not decide the same expense twice");
   const second = await autoQueueApprovals();
@@ -187,6 +194,19 @@ try {
   const bothRead = await autoQueueApprovals();
   check("…but once BOTH are read it goes through", bothRead.queued === 1,
     `${bothRead.queued} queued`);
+
+  console.log("\n7b. A person's click is not marked automatic");
+  {
+    const byHand = await queueDecision({
+      dedupeKey: `${TAG}-4`, decision: "approve", reason: "",
+      decidedBy: OWNER,
+      target: { employee: `${TAG} Person`, merchant: "MERCHANT 4", amount: 10.04, date: "2026-09-20" },
+    });
+    check("a decision queued by a person carries no automatic mark",
+      byHand.ok && byHand.queued.automatic === false,
+      byHand.ok ? String(byHand.queued.automatic) : byHand.error);
+    if (byHand.ok) await db().query("DELETE FROM expense_decisions WHERE id = $1", [byHand.queued.id]);
+  }
 
   console.log("\n8. Saying why nothing moved");
   // The report is the answer to "it is on and nothing is happening", which

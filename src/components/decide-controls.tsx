@@ -1,6 +1,6 @@
 import { useState } from "react";
 import {
-  Check, X, Loader2, Clock, AlertTriangle, Undo2, FlaskConical, ShieldCheck,
+  Check, X, Loader2, Clock, AlertTriangle, Undo2, FlaskConical, ShieldCheck, Bot,
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { inspectEditForm, retryDecision, testDecision, type QueuedDecision } from "@/lib/decisions";
@@ -336,6 +336,7 @@ export function DecisionBadge({
           <Clock className="h-3 w-3" />
           {word} · {stuck ? `still waiting after ${decision.attempts} ${decision.attempts === 1 ? "try" : "tries"}` : "sending"}
         </span>
+        <AutoMark decision={decision} />
         {onCancel && (
           <button
             type="button"
@@ -368,19 +369,49 @@ export function DecisionBadge({
   }
 
   return (
+    <span className="inline-flex flex-wrap items-center gap-1">
+      <span
+        title={
+          [decision.reason, decision.matchedRow ? `Emburse row: ${decision.matchedRow}` : null]
+            .filter(Boolean).join("\n") || undefined
+        }
+        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${
+          decision.decision === "approve"
+            ? "border border-emerald-600/40 bg-emerald-600/10 text-emerald-700 dark:text-emerald-400"
+            : "border border-red-600/40 bg-red-600/10 text-red-700 dark:text-red-400"
+        }`}
+      >
+        <ShieldCheck className="h-3 w-3" />
+        {word}
+      </span>
+      <AutoMark decision={decision} />
+    </span>
+  );
+}
+
+/**
+ * Which approvals nobody looked at.
+ *
+ * An automatic approval is applied under the login of whoever switched the
+ * automation on, so it carries a real person's name in Emburse and reads on
+ * this page exactly like one they clicked. That is the point of the
+ * automation and also the risk in it: a queue of twenty-one green badges
+ * cannot answer "which of these did a person actually review", and that is
+ * the first thing anybody asks of a machine that approves spending.
+ *
+ * Deliberately not a colour. It is not a warning — an automatic approval is
+ * one the rules had nothing to say about, which is what it was switched on
+ * to do — it is a fact about provenance, so it reads as a quiet label.
+ */
+function AutoMark({ decision }: { decision: QueuedDecision }) {
+  if (!decision.automatic) return null;
+  return (
     <span
-      title={
-        [decision.reason, decision.matchedRow ? `Emburse row: ${decision.matchedRow}` : null]
-          .filter(Boolean).join("\n") || undefined
-      }
-      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${
-        decision.decision === "approve"
-          ? "border border-emerald-600/40 bg-emerald-600/10 text-emerald-700 dark:text-emerald-400"
-          : "border border-red-600/40 bg-red-600/10 text-red-700 dark:text-red-400"
-      }`}
+      title={`Approved automatically — no rule flagged it and nobody clicked. Applied in Emburse as ${decision.decidedBy}.`}
+      className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground"
     >
-      <ShieldCheck className="h-3 w-3" />
-      {word}
+      <Bot className="h-3 w-3" />
+      auto
     </span>
   );
 }

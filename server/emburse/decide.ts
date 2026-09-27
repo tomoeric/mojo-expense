@@ -1073,7 +1073,15 @@ async function applyOne(
           `The first row reads differently: ${rowMatches(first, target).why}.${spread}`);
       }
       throw new Error(
-        `none of the ${count} rows match this expense — ${rowMatches(first, target).why}.${spread}`,
+        `none of the ${count} rows match this expense — ${rowMatches(first, target).why}.${spread} ` +
+        // The other reading of "it is not there", and the one nobody thinks
+        // of: an expense that has ALREADY been approved or denied leaves
+        // Needs Review. So a decision that was applied and then reported as
+        // unconfirmed looks exactly like this on the retry — the row is
+        // gone because the work was done.
+        `An expense that has already been actioned leaves Needs Review, so this also looks ` +
+        `like a decision that went through and was reported as unconfirmed — check the ` +
+        `expense in Emburse before deciding it again.`,
       );
     }
     // Hidden copies first: a grid that keeps them matches the same expense

@@ -46,7 +46,7 @@ export type Row = {
   dayGroups: { rule: string; day: string }[];
   ageDays: number | null;
   /** The decision on this expense, when there is one. */
-  decision?: { state: string; decision?: string } | undefined;
+  decision?: { state: string; decision?: string; automatic?: boolean } | undefined;
   /** The control for deciding it, supplied by whoever renders the table. */
   decide?: React.ReactNode;
   /**
@@ -535,6 +535,24 @@ function FlagTabs({
           </button>
         ))}
       </div>
+
+      {/* Which of these nobody looked at.
+          An automatic approval carries a real person's name in Emburse and
+          reads on this page exactly like one they clicked, so a tab of
+          twenty-one green badges cannot answer "how many did anybody
+          actually review". Said once above the list rather than left to be
+          counted badge by badge. */}
+      {tab === "approved" && approved.length > 0 && (() => {
+        const auto = approved.filter((r) => r.decision?.automatic).length;
+        if (auto === 0) return null;
+        return (
+          <p className="text-xs text-muted-foreground">
+            <strong className="font-semibold tabular-nums text-foreground">{auto.toLocaleString()}</strong>
+            {" "}of these {approved.length.toLocaleString()} were approved automatically — no rule
+            flagged them and nobody clicked. The rest were decided by a person.
+          </p>
+        );
+      })()}
 
       {tab === "flagged" && groups.length > 1 && (
         <div className="flex flex-wrap items-center gap-1.5">

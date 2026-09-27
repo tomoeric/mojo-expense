@@ -191,7 +191,9 @@ export async function autoQueueApprovals(): Promise<AutoApproveResult> {
   for (const r of rows) {
     // Through the same function a person's click uses. A machine does not
     // get a shorter path to somebody else's money than a human does.
-    const result = await queueApprovalFor(r.dedupe_key, s.owner!);
+    // Marked as the machine's, so the queue can say which approvals nobody
+    // looked at. Same function a person's click uses, same checks.
+    const result = await queueApprovalFor(r.dedupe_key, s.owner!, { automatic: true });
     if (result.ok) queued++;
   }
   if (queued > 0) {

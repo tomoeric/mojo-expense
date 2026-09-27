@@ -331,6 +331,32 @@ console.log("\n11. Running every failure again, in one go");
     after.get("test-rf-1")?.decidedBy === "second@example.invalid",
     after.get("test-rf-1")?.decidedBy);
 
+  // Pressing "try again" re-attempts the APPLYING; it is not somebody
+  // reviewing the expense. Clearing the mark here would quietly launder
+  // every automatic approval into a reviewed one the first time a batch
+  // had to be re-run.
+  {
+    await db().query("DELETE FROM expense_decisions WHERE dedupe_key = 'test-rf-auto'");
+    await db().query(
+      `INSERT INTO expenses (dedupe_key, employee, expense_date, merchant, amount_cents,
+                             category, department, location, note, method, in_inbox)
+       VALUES ('test-rf-auto','Kevin Bray','2026-09-13','SQ *COFFEE',850,'Meals','Ops','Site','x','Corporate card',true)
+       ON CONFLICT (dedupe_key) DO UPDATE SET in_inbox = true`);
+    const machine = await queueDecision({
+      dedupeKey: "test-rf-auto", decision: "approve", reason: "", decidedBy: "first@example.invalid",
+      target: { employee: "Kevin Bray", merchant: "SQ *COFFEE", amount: 8.5, date: "2026-09-13" },
+      automatic: true,
+    });
+    if (!machine.ok) throw new Error(machine.error);
+    await settleDecision(machine.queued.id, { ok: false, error: "page.goto: Timeout" });
+    await retryFailedDecisions("second@example.invalid");
+    const kept = (await decisionsFor(["test-rf-auto"])).get("test-rf-auto");
+    check("an automatic decision stays automatic when it is run again",
+      kept?.automatic === true, String(kept?.automatic));
+    await db().query("DELETE FROM expense_decisions WHERE dedupe_key = 'test-rf-auto'");
+    await db().query("DELETE FROM expenses WHERE dedupe_key = 'test-rf-auto'");
+  }
+
   // Pressing it twice must not double-queue: the second press finds them
   // pending, not failed.
   const twiceOver = await retryFailedDecisions("second@example.invalid");
