@@ -533,6 +533,12 @@ Three things follow, and all three are easy to break:
   run verified the chips itself (`sectionsVerified`); files arriving any other
   way still get the check.
 
+`docs/EMBURSE.md` is the written-down version of all of this: how the grid
+URL is built, what the export run does step by step, and how an approve or
+deny finds its row and proves it hit the right one. Keep it current when any
+of that moves — the alternative is re-deriving it from the code every time,
+which is what this document exists to stop.
+
 See `docs/TESTING.md`. The mock (`scripts/mock-emburse.ts`) is the only thing
 that exercises the failure paths — sign-in rejected, a second factor, a device
 check, a code typed in wrong — and every one of those was a real bug it caught

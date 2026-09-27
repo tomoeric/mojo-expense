@@ -145,6 +145,10 @@ Emburse Spend's API is provisioning-only — members, team fields, receipt
 upload — with no endpoint for expenses at any tier. The data therefore comes
 from the **Expenses PDF export**, uploaded on the Import page.
 
+How the app drives Emburse to get that file — the browser, the grid URL, and
+how an approve or deny finds its row — is written up in
+[docs/EMBURSE.md](docs/EMBURSE.md).
+
 Point the app at a Neon connection string; the schema creates itself on boot
 (idempotent `CREATE … IF NOT EXISTS`, no migration step). With a database
 configured the app reads imported expenses and ignores the Emburse API
