@@ -58,6 +58,39 @@ refuses("26.40 must not match inside 1,226.40",
 accepts("…while the row it really belongs to still matches",
   "9/13/2026 DOORDASH INC. Brianna Ruth $1,226.40", { ...TARGET, amount: 1226.4 });
 
+console.log("\n3b. A credit is not a charge");
+// Emburse writes a refund in accounting style — "($47.56)" — with no minus
+// sign anywhere. Two bugs came out of that, and the second is the one that
+// matters: "(" and "$" are neither digits nor separators, so they sailed
+// through the boundary check and a $47.56 CHARGE matched a ($47.56) CREDIT.
+// A car-rental row on a real grid reads ($47.56) with $636.79 under it — a
+// charge sitting beside its own refund is ordinary, and this could have
+// approved the wrong one.
+{
+  const at = (amount: number) =>
+    ({ employee: "Brian Carroll", merchant: "NATIONAL CAR REN", amount, date: "2026-09-19" });
+  const credit = "Sep 19, 2026 NATIONAL CAR REN... ($47.56) Credit Brian Carroll";
+  const charge = "Sep 19, 2026 NATIONAL CAR REN... $47.56 rental Brian Carroll";
+  const minus = "Sep 19, 2026 NATIONAL CAR REN... -$47.56 Credit Brian Carroll";
+
+  check("a charge must NOT match the credit of the same size",
+    !rowMatches(credit, at(47.56)).ok, rowMatches(credit, at(47.56)).why);
+  check("…and says so, rather than 'not in the row' about a figure plainly there",
+    /wrong sign/.test(rowMatches(credit, at(47.56)).why), rowMatches(credit, at(47.56)).why);
+  check("a credit must NOT match the charge of the same size",
+    !rowMatches(charge, at(-47.56)).ok, rowMatches(charge, at(-47.56)).why);
+  // Before this, a refund could not be actioned at all: every approve or
+  // deny of one failed with "amount -47.56 not in the row".
+  check("a credit DOES match its own row, in brackets",
+    rowMatches(credit, at(-47.56)).ok, rowMatches(credit, at(-47.56)).why);
+  check("…and written with a minus sign instead",
+    rowMatches(minus, at(-47.56)).ok, rowMatches(minus, at(-47.56)).why);
+  check("an ordinary charge still matches its own row",
+    rowMatches(charge, at(47.56)).ok, rowMatches(charge, at(47.56)).why);
+  check("and a thousands separator is still read",
+    rowMatches("NATIONAL CAR REN... $1,247.56 Brian Carroll Sep 19, 2026", at(1247.56)).ok);
+}
+
 console.log("\n4. Missing fields do not silently pass");
 refuses("no amount at all", "9/13/2026 DOORDASH INC. Brianna Ruth Meals");
 refuses("amount present but nothing else", "$26.40");
@@ -220,7 +253,7 @@ const noMenu = await runDecision(
   "deny", TARGET, "x", { ...SEL, rowMenu: "button.no-such-menu" }, mock.url, LOGIN, { dryRun: true });
 check("a missing ⋮ menu is caught BEFORE anything is denied", !noMenu.ok);
 check("…and says approving would still work, so the two are not confused",
-  /Approving would still work|denying needs that/.test(noMenu.steps.find((s) => !s.ok)?.detail ?? ""),
+  /Approving would still work/.test(noMenu.steps.find((s) => !s.ok)?.detail ?? ""),
   noMenu.steps.find((s) => !s.ok)?.detail ?? "");
 
 console.log("\n14. A click that lands on nothing must not report success");
@@ -325,6 +358,49 @@ check("a dry run does not go green on a button that can never be clicked",
 check("…and says approving would time out",
   /would wait for one of them and time out/.test(dryHidden.steps.find((s) => !s.ok)?.detail ?? ""),
   dryHidden.steps.find((s) => !s.ok)?.detail ?? "");
+
+console.log("\n18. A PINNED Action column — the button is not inside the row");
+// The real failure, after everything else was fixed: five green steps, the
+// right row verified, then "no APPROVE button matched" on a page that
+// visibly had APPROVE on that very row. Emburse pins the Action column, so
+// it renders in its own container and the button is NOT a descendant of
+// the row — only aligned with it on screen. True, and useless.
+mock.reset();
+await fetch(`${mock.url}/__app?grid=pinned`, { method: "POST" });
+const pinnedSel = { ...SEL, grid: '[role="grid"]', resultRow: '[role="rowgroup"] [role="row"]' };
+const dryPinned = await runDecision("approve", TARGET, "", pinnedSel, mock.url, LOGIN, { dryRun: true });
+check("the dry run finds the button by the line it sits on", dryPinned.ok,
+  dryPinned.steps.find((s) => !s.ok)?.detail ?? "");
+
+mock.reset();
+await fetch(`${mock.url}/__app?grid=pinned`, { method: "POST" });
+const realPinned = await runDecision("approve", TARGET, "", pinnedSel, mock.url, LOGIN, {});
+check("and approving actually goes through on a pinned grid", realPinned.ok,
+  realPinned.steps.find((s) => !s.ok)?.detail ?? "");
+check("…confirmed by the row leaving, not assumed",
+  /left Needs Review/.test(realPinned.steps.at(-1)?.detail ?? ""),
+  realPinned.steps.at(-1)?.detail ?? "");
+check("…and it is the right row, not the $126.40 near-miss",
+  /26\.40/.test(realPinned.matchedRow ?? "") && !/126\.40/.test(realPinned.matchedRow ?? ""),
+  realPinned.matchedRow ?? "");
+
+mock.reset();
+await fetch(`${mock.url}/__app?grid=pinned`, { method: "POST" });
+const denyPinned = await runDecision("deny", TARGET, "over budget", pinnedSel, mock.url, LOGIN, {});
+check("denying works on a pinned grid too — the ⋮ is in the same column", denyPinned.ok,
+  denyPinned.steps.find((s) => !s.ok)?.detail ?? "");
+
+// The safety that must survive the new lookup: alignment is a heuristic,
+// and two controls on one line means the rows are not what this thinks
+// they are. Clicking either would pick somebody's expense at random.
+mock.reset();
+await fetch(`${mock.url}/__app?grid=pinned`, { method: "POST" });
+const ambiguous = await runDecision(
+  "approve", TARGET, "", { ...pinnedSel, approveButton: "button" }, mock.url, LOGIN, {});
+check("two controls on one line is refused, not guessed at", !ambiguous.ok);
+check("…saying which ones could not be told apart",
+  /line up with this row/.test(ambiguous.steps.find((s) => !s.ok)?.detail ?? ""),
+  ambiguous.steps.find((s) => !s.ok)?.detail ?? "");
 
 await mock.close();
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}\n`);

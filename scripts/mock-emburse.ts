@@ -52,7 +52,7 @@ type State = {
    *              `.first()`: element number one never becomes visible.
    *   "divs"   — no <table> at all, ARIA roles only, like Emburse's own.
    */
-  gridShape: "table" | "ghost" | "divs";
+  gridShape: "table" | "ghost" | "divs" | "pinned";
   /**
    * Pad the grid with this many filler rows, for the case a broad merchant
    * search returns a month of them and the target is past the read cap.
@@ -186,7 +186,22 @@ const grid = (search: string) => {
       document.addEventListener("click", function (e) {
         var b = e.target.closest("button"); if (!b) return;
         var row = b.closest("tr") || b.closest('[role="row"]');
-        if (b.classList.contains("ap")) { if (live && row) row.remove(); return; }
+        if (b.classList.contains("ap")) {
+          if (!live) return;
+          // In the pinned layout the button's own row holds no data, so
+          // removing it would leave the expense on screen. Take the body
+          // row on the same line too, which is what Emburse does.
+          if (row) {
+            var top = row.style.top;
+            if (top) {
+              var mates = document.querySelectorAll('[role="row"]');
+              for (var i = 0; i < mates.length; i++) {
+                if (mates[i].style && mates[i].style.top === top) mates[i].remove();
+              }
+            } else { row.remove(); }
+          }
+          return;
+        }
         if (b.classList.contains("mn")) { target = row; document.getElementById("menu").hidden = false; return; }
         if (b.classList.contains("dn")) {
           document.getElementById("menu").hidden = true;
@@ -194,7 +209,16 @@ const grid = (search: string) => {
         }
         if (b.classList.contains("dc")) {
           document.getElementById("dlg").hidden = true;
-          if (live && target) target.remove(); return;
+          if (live && target) {
+            var t = target.style ? target.style.top : "";
+            if (t) {
+              var all = document.querySelectorAll('[role="row"]');
+              for (var i = 0; i < all.length; i++) {
+                if (all[i].style && all[i].style.top === t) all[i].remove();
+              }
+            } else { target.remove(); }
+          }
+          return;
         }
       });
       document.addEventListener("keydown", function (e) {
@@ -219,6 +243,25 @@ const grid = (search: string) => {
     // first match sits on it until it times out, next to a grid that loaded
     // immediately.
     return `<table style="display:none"><tbody><tr><td>sizing</td></tr></tbody></table>${realTable}${behaviour}`;
+  }
+  if (state.gridShape === "pinned") {
+    // What spend.emburse.com actually renders: the Action column is PINNED,
+    // so it lives in its OWN container and the APPROVE button for a row is
+    // not a descendant of that row. It only lines up with it on screen.
+    // Absolute positioning gives each pair the same vertical band, which is
+    // the single fact that relates them.
+    const H = 40;
+    const bodyRows = shown
+      .map((r, i) => `<div role="row" style="position:absolute;top:${i * H}px;height:${H}px;left:0;width:600px">` +
+        `<div role="cell">${r.date} ${r.merchant} ${r.who} $${r.amount}</div></div>`).join("");
+    const pinnedRows = shown
+      .map((_, i) => `<div role="row" style="position:absolute;top:${i * H}px;height:${H}px;left:0;width:200px">` +
+        `<div role="cell"><button class="ap">APPROVE</button> ` +
+        `<button aria-label="more" class="mn">&#8942;</button></div></div>`).join("");
+    return `<div role="grid" style="position:relative;height:${shown.length * H}px">
+      <div role="rowgroup" style="position:absolute;top:0;left:0;height:${shown.length * H}px;width:600px">${bodyRows}</div>
+      <div role="rowgroup" style="position:absolute;top:0;left:600px;height:${shown.length * H}px;width:200px">${pinnedRows}</div>
+    </div>${behaviour}`;
   }
   if (state.gridShape === "divs") {
     // What spend.emburse.com actually serves: a grid of divs with ARIA

@@ -110,12 +110,52 @@ export function rowMatches(rowText: string, t: Target): { ok: boolean; why: stri
   // Bounded, not a substring. "6.40" occurs inside "$126.40", so a plain
   // includes() would let a six-dollar expense match a hundred-and-twenty-six
   // dollar one — the precise false positive this function exists to prevent.
-  const amount = money(t.amount);
-  const withCommas = Number(amount).toLocaleString("en-US", { minimumFractionDigits: 2 });
-  const bounded = (n: string) =>
-    new RegExp(`(?<![\\d.,])${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\d])`).test(text);
-  if (!bounded(amount) && !bounded(withCommas)) {
-    return { ok: false, why: `amount ${amount} not in the row` };
+  //
+  // And the SIGN has to agree, which it did not. Emburse writes a credit in
+  // accounting style — "($47.56)" — with no minus sign anywhere, so:
+  //
+  //   - a refund could never be actioned at all: "-47.56" is not in the row,
+  //     and every approve or deny of one failed with "amount not in the row";
+  //   - far worse, a $47.56 CHARGE matched a ($47.56) credit, because "(" and
+  //     "$" are neither digits nor separators and sailed through the
+  //     boundary check. One car-rental row on a real grid is "($47.56)" and
+  //     the one below it is "$636.79"; a charge and its refund sitting
+  //     together is ordinary, and this could have approved the wrong one.
+  //
+  // So the figure is compared unsigned, and each occurrence is then read for
+  // the sign the page gives it.
+  const abs = Math.abs(t.amount).toFixed(2);
+  const forms = [abs, Number(abs).toLocaleString("en-US", { minimumFractionDigits: 2 })];
+  const wantNegative = t.amount < 0;
+
+  /** Does the row show this figure with the sign we are looking for? */
+  const shownWithRightSign = (n: string): boolean => {
+    const esc = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`(?<![\\d.,])${esc}(?![\\d])`, "g");
+    for (let m = re.exec(text); m; m = re.exec(text)) {
+      // An opening bracket or a minus just before it — past an optional
+      // currency symbol — is how a negative is written either way.
+      const before = text.slice(Math.max(0, m.index - 3), m.index);
+      const negative = /[(\u2212-]\s*\$?\s*$/.test(before);
+      if (negative === wantNegative) return true;
+    }
+    return false;
+  };
+
+  if (!forms.some(shownWithRightSign)) {
+    const amount = money(t.amount);
+    // Say which of the two it is. "Not in the row" about a figure that is
+    // plainly in the row, with brackets round it, is the sort of message
+    // that sends somebody looking in the wrong place.
+    const unsignedThere = forms.some((n) =>
+      new RegExp(`(?<![\\d.,])${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\d])`).test(text));
+    return {
+      ok: false,
+      why: unsignedThere
+        ? `amount ${amount} is in the row but with the wrong sign — this row is ` +
+          `${wantNegative ? "a charge, and the expense is a credit" : "a credit, and the expense is a charge"}`
+        : `amount ${amount} not in the row`,
+    };
   }
 
   const surname = t.employee.trim().split(/\s+/).pop() ?? "";
@@ -321,6 +361,86 @@ const ROWS_EXAMINED = 250;
  * clickVisible in auto-export). The decision path simply never got the same
  * treatment, so it kept walking into the trap the export had already mapped.
  */
+/**
+ * The control belonging to this row, even when it is not inside it.
+ *
+ * Emburse PINS the Action column. A pinned column is rendered in its own
+ * container so it can stay put while the rest scrolls sideways — which
+ * means the APPROVE button for a row is NOT a descendant of that row. It is
+ * a descendant of the matching row in the pinned container, aligned to the
+ * pixel and unrelated in the DOM.
+ *
+ * So `row.locator(approveButton)` matched nothing on a page that visibly
+ * had an APPROVE button on the very row just verified, and reported "no
+ * APPROVE button matched" — true, and useless.
+ *
+ * Position is what actually relates the two: the button for a row sits on
+ * the same horizontal band as the row. So when nothing is inside, look
+ * page-wide for visible matches whose vertical centre falls within the
+ * row's box.
+ *
+ * It still refuses to guess. Exactly one aligned control is a match; two
+ * means the rows are not what this thinks they are, and clicking either
+ * would be picking somebody's expense at random.
+ */
+async function controlForRow(
+  page: Page,
+  row: Locator,
+  selector: string,
+  what: string,
+  timeoutMs: number,
+): Promise<Locator> {
+  const deadline = Date.now() + timeoutMs;
+
+  do {
+    // Inside the row first: the ordinary case, and the cheapest.
+    const inner = row.locator(selector);
+    const n = await inner.count().catch(() => 0);
+    for (let i = 0; i < n; i++) {
+      if (await inner.nth(i).isVisible().catch(() => false)) return inner.nth(i);
+    }
+
+    // Then by alignment, for a pinned column.
+    const box = await row.boundingBox().catch(() => null);
+    if (box && box.height > 0) {
+      const all = page.locator(selector);
+      const total = await all.count().catch(() => 0);
+      const aligned: Locator[] = [];
+      for (let i = 0; i < total; i++) {
+        const one = all.nth(i);
+        if (!(await one.isVisible().catch(() => false))) continue;
+        const b = await one.boundingBox().catch(() => null);
+        if (!b) continue;
+        const middle = b.y + b.height / 2;
+        if (middle >= box.y && middle <= box.y + box.height) aligned.push(one);
+      }
+      if (aligned.length === 1) return aligned[0]!;
+      if (aligned.length > 1) {
+        throw new Error(
+          `${aligned.length} ${what}s line up with this row, so which one belongs to it ` +
+          `cannot be told apart — refusing to pick one.`);
+      }
+    }
+
+    await new Promise((r) => setTimeout(r, 250));
+  } while (Date.now() < deadline);
+
+  const anywhere = await page.locator(selector).count().catch(() => 0);
+  const rowText = (await row.innerText().catch(() => "")).replace(/\s+/g, " ").trim().slice(0, 120);
+  // A missing ⋮ menu stops denying and nothing else. Saying so keeps
+  // somebody from concluding the whole row is unreachable when approving it
+  // would work perfectly.
+  const denyOnly = /menu/i.test(what)
+    ? " Approving would still work; only denying needs this."
+    : "";
+  throw new Error(
+    anywhere > 0
+      ? `the row is right, but none of the ${anywhere} thing(s) matching “${selector}” on the ` +
+        `page is both visible and on this row's line. The row reads: “${rowText}”${denyOnly}`
+      : `no ${what} matched “${selector}” anywhere on the page.${denyOnly}`,
+  );
+}
+
 async function clickFirstVisible(
   scope: Locator | Page,
   selector: string,
@@ -754,41 +874,20 @@ async function applyOne(
   // menu changes nothing; the confirm is never clicked, on any path.
   if (opts.dryRun) {
     return step("dry run", async () => {
+      // Exactly the lookup the real click uses — inside the row, then by
+      // alignment for a pinned column. A dry run that searched only inside
+      // the row would fail on a page where approving works, which is worse
+      // than not testing at all: it is a test that disagrees with the thing
+      // it tests.
+      const ms = env.emburseLogin.stepTimeoutMs;
       if (decision === "approve") {
-        const btn = row!.locator(sel.approveButton!);
-        const shown = await (async () => {
-          const n = await btn.count().catch(() => 0);
-          for (let i = 0; i < n; i++) if (await btn.nth(i).isVisible().catch(() => false)) return true;
-          return false;
-        })();
-        // Present but invisible is the failure this whole path walked into,
-        // so the dry run has to fail on it too — otherwise it goes green and
-        // the real click times out.
-        if ((await btn.count()) > 0 && !shown) {
-          throw new Error(
-            `the row has ${await btn.count()} thing(s) matching “${sel.approveButton}” but none ` +
-            `visible — approving would wait for one of them and time out.`);
-        }
-        if ((await btn.count()) === 0) {
-          throw new Error(
-            `the row is right, but nothing inside it matched the approve button ` +
-            `“${sel.approveButton}”. The row reads: “${(await row!.innerText()).replace(/\s+/g, " ").trim().slice(0, 140)}”`);
-        }
+        await controlForRow(page, row!, sel.approveButton!, "APPROVE button", ms);
         return "found the row and its APPROVE button; stopped without approving";
       }
 
-      const menu = row!.locator(sel.rowMenu!);
-      if ((await menu.count()) === 0) {
-        throw new Error(
-          `the row is right, but nothing inside it matched the row menu “${sel.rowMenu}” ` +
-          `— denying needs that ⋮ menu, so it would fail here.`);
-      }
-      // The visible one, for the same reason the real deny uses it: the
-      // first ⋮ in the DOM is routinely a hidden copy, and .first().click()
-      // waits out the whole timeout for it. Leaving that here would have
-      // made the dry run — the tool for diagnosing exactly this — hang for
-      // thirty seconds and report a Playwright timeout naming no cause.
-      await clickFirstVisible(row!, sel.rowMenu!, "⋮ row menu", env.emburseLogin.stepTimeoutMs);
+      const menu = await controlForRow(page, row!, sel.rowMenu!, "⋮ row menu", ms);
+      await menu.click();
+      await page.waitForTimeout(300);
       const items = page.locator(sel.denyButton!);
       let there = false;
       const n = await items.count().catch(() => 0);
@@ -812,13 +911,15 @@ async function applyOne(
 
   if (decision === "approve") {
     return step("approve", async () => {
-      await clickFirstVisible(row!, sel.approveButton!, "APPROVE button", ms);
+      await (await controlForRow(page, row!, sel.approveButton!, "APPROVE button", ms)).click();
+      await page.waitForTimeout(300);
       return await confirmActioned(page, sel, target, "approved");
     });
   }
 
   return step("deny", async () => {
-    await clickFirstVisible(row!, sel.rowMenu!, "⋮ row menu", ms);
+    await (await controlForRow(page, row!, sel.rowMenu!, "⋮ row menu", ms)).click();
+    await page.waitForTimeout(300);
     await clickFirstVisible(page, sel.denyButton!, "Deny item in the row menu", ms);
 
     // Emburse may or may not ask why. Fill it when it does — a denial with no
