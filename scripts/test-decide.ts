@@ -91,6 +91,43 @@ console.log("\n3b. A credit is not a charge");
     rowMatches("NATIONAL CAR REN... $1,247.56 Brian Carroll Sep 19, 2026", at(1247.56)).ok);
 }
 
+console.log("\n3c. Merchants Emburse chopped in half");
+// A real approval failed with "amount 39.94 not in the row" about a row
+// plainly showing $39.94. Emburse truncates long merchant names mid-word,
+// so the row read "… U-HAUL MOVING & STORAGE OU- $39.94" — and the trailing
+// hyphen of the truncation was read as a MINUS SIGN, turning a charge into
+// a credit. A hyphen inside a word is not a minus.
+//
+// The same row showed a second, older bug: punctuation was stripped from
+// the merchant being looked FOR but not from the row looked IN, so "U-HAUL"
+// became "UHAUL" and was hunted for in text containing "U-HAUL". No
+// expense from a merchant whose first word carries punctuation could ever
+// be matched — U-HAUL, 7-ELEVEN, McDonald's, any of them.
+{
+  const who = (employee: string, merchant: string, amount: number) =>
+    ({ employee, merchant, amount, date: null });
+  const truncated = "Sep 24, 2026 U-HAUL MOVING & STORAGE OU- $39.94 Palletizing SCHULTZ A HOWA";
+  check("a hyphen from a chopped merchant name is not a minus sign",
+    rowMatches(truncated, who("Howard Schultz", "U-HAUL MOVING & STORAGE", 39.94)).ok,
+    rowMatches(truncated, who("Howard Schultz", "U-HAUL MOVING & STORAGE", 39.94)).why);
+  check("…7-ELEVEN and friends are findable at all",
+    rowMatches("Sep 24, 2026 7-ELEVEN #1234 $12.10 Snacks Howard Schultz",
+      who("Howard Schultz", "7-ELEVEN #1234", 12.10)).ok);
+  check("…and an ellipsis truncation still works",
+    rowMatches("Sep 24, 2026 U-HAUL MOVING & ... $39.94 Palletizing SCHULTZ A HOWA",
+      who("Howard Schultz", "U-HAUL MOVING & STORAGE", 39.94)).ok);
+  // The point of the sign check must survive being loosened.
+  check("a minus hard against the figure is still a minus",
+    rowMatches("Sep 19, 2026 NATIONAL CAR REN -$47.56 Credit Brian Carroll",
+      who("Brian Carroll", "NATIONAL CAR RENTAL", -47.56)).ok);
+  check("…and one separated by a space",
+    rowMatches("Sep 19, 2026 NATIONAL CAR REN - $47.56 Credit Brian Carroll",
+      who("Brian Carroll", "NATIONAL CAR RENTAL", -47.56)).ok);
+  check("…and a charge still does not match its own refund",
+    !rowMatches("Sep 24, 2026 U-HAUL MOVING OU- $39.94 x SCHULTZ A HOWA",
+      who("Howard Schultz", "U-HAUL MOVING", -39.94)).ok);
+}
+
 console.log("\n4. Missing fields do not silently pass");
 refuses("no amount at all", "9/13/2026 DOORDASH INC. Brianna Ruth Meals");
 refuses("amount present but nothing else", "$26.40");
@@ -343,7 +380,7 @@ const allHidden = await runDecision(
 const hiddenWhy = allHidden.steps.find((s) => !s.ok)?.detail ?? "";
 check("all-hidden is explained, not reported as a bare timeout", !allHidden.ok);
 check("…naming them as the copies a grid renders to measure itself",
-  /none of them is visible/.test(hiddenWhy) && !/Timeout 30000ms/.test(hiddenWhy),
+  /none of them is visible/.test(hiddenWhy) && !/Timeout \d+ms/.test(hiddenWhy),
   hiddenWhy.slice(0, 200));
 
 // The dry run has to fail on it too, or it goes green and the real click
@@ -356,7 +393,7 @@ const dryHidden = await runDecision(
 check("a dry run does not go green on a button that can never be clicked",
   !dryHidden.ok, dryHidden.steps.at(-1)?.detail ?? "");
 check("…and says approving would time out",
-  /would wait for one of them and time out/.test(dryHidden.steps.find((s) => !s.ok)?.detail ?? ""),
+  /wait for it to appear and time out/.test(dryHidden.steps.find((s) => !s.ok)?.detail ?? ""),
   dryHidden.steps.find((s) => !s.ok)?.detail ?? "");
 
 console.log("\n18. A PINNED Action column — the button is not inside the row");

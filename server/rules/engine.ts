@@ -318,7 +318,19 @@ const norm = (s: string): string => s.trim().toLowerCase();
  */
 export function nameKey(raw: string): string {
   let t = raw.toLowerCase()
+    // Apostrophes VANISH rather than becoming a space. Turning "lowe's"
+    // into "lowe s" stopped it matching "lowes", and "weigel's" into
+    // "weigel s" against "weigels" — a rule comparing the receipt's
+    // business name to Emburse's flagged 56 of 163 expenses, and the
+    // apostrophe alone accounted for a good share of them.
+    .replace(/['\u2019\u02bc`]/g, "")
     .replace(/[^a-z0-9 ]+/g, " ")
+    // Digits glued to letters are two tokens, not one. Emburse writes
+    // "#1797LOWES COMPANIES" and "221LOWES", and the digit-stripping below
+    // only removes runs standing on their own — so "1797lowes" survived
+    // whole and matched nothing.
+    .replace(/(\d)([a-z])/g, "$1 $2")
+    .replace(/([a-z])(\d)/g, "$1 $2")
     .replace(/\b(llc|inc|incorporated|corp|corporation|co|ltd|limited|lp|llp|plc|the)\b/g, " ")
     .replace(/\b\d+\b/g, " ")
     .replace(/\s+/g, " ")
@@ -329,6 +341,37 @@ export function nameKey(raw: string): string {
   const doubled = t.match(/^(.+?) \1$/);
   if (doubled) t = doubled[1]!;
   return t;
+}
+
+/**
+ * Do two printings of a business name describe the same business?
+ *
+ * Equality and containment are not enough once BOTH sides carry words the
+ * other lacks: the receipt says "Lowe's Home Centers, LLC" and Emburse says
+ * "LOWES OF TEMPLE #221LOWES COMPANIES INC" — same shop, neither string
+ * inside the other. Likewise "McDonald's Restaurant #6218" against
+ * "MCDONALD'S- 6218FARIS PROPERTIES", where the franchisee's name is the
+ * only thing Emburse prints.
+ *
+ * So a shared distinctive word counts. Four characters or more, which keeps
+ * "of", "the" and stray initials out of it, and the corporate suffixes are
+ * already gone by the time this sees the tokens.
+ *
+ * This is deliberately generous, because the cost either way is not
+ * symmetric. Too strict and the rule flags a hundred and fifty expenses
+ * that are perfectly fine, which is how a flag gets ignored. Too loose and
+ * a mismatch goes unflagged — and the expense is still sitting in the queue
+ * in front of a person, which is where it was anyway.
+ */
+export function sameBusiness(a: string, b: string): boolean {
+  const x = nameKey(a);
+  const y = nameKey(b);
+  if (!x || !y) return true;
+  if (x === y || x.includes(y) || y.includes(x)) return true;
+  const words = (t: string) => new Set(t.split(" ").filter((w) => w.length >= 4));
+  const mine = words(x);
+  for (const w of words(y)) if (mine.has(w)) return true;
+  return false;
 }
 
 /** Null when there is no figure — an unread receipt, or a group not yet counted. */
@@ -448,10 +491,10 @@ export function test(subject: Subject, c: Condition, group?: Group): boolean | n
   // whole queue as mismatched. Compared loosely only when BOTH sides are
   // names — "Merchant is 'Walmart'" typed by hand stays exact.
   if (c.compare && NAMES.has(c.field) && NAMES.has(c.compare)) {
-    const mine = nameKey(textOf(subject, c.field));
-    const other = nameKey(textOf(subject, c.compare));
-    if (!mine || !other) return null;
-    const same = mine === other || mine.includes(other) || other.includes(mine);
+    const mineRaw = textOf(subject, c.field);
+    const otherRaw = textOf(subject, c.compare);
+    if (!nameKey(mineRaw) || !nameKey(otherRaw)) return null;
+    const same = sameBusiness(mineRaw, otherRaw);
     if (c.op === "is") return same;
     if (c.op === "is_not") return !same;
   }

@@ -135,8 +135,18 @@ export function rowMatches(rowText: string, t: Target): { ok: boolean; why: stri
     for (let m = re.exec(text); m; m = re.exec(text)) {
       // An opening bracket or a minus just before it — past an optional
       // currency symbol — is how a negative is written either way.
-      const before = text.slice(Math.max(0, m.index - 3), m.index);
-      const negative = /[(\u2212-]\s*\$?\s*$/.test(before);
+      //
+      // But a hyphen inside a WORD is not a minus sign, and Emburse truncates
+      // long merchant names mid-word: the row for U-HAUL MOVING & STORAGE
+      // reads "… OU- $39.94", and that trailing hyphen made a $39.94 charge
+      // look like a credit, so it matched nothing and the approval failed
+      // with "amount 39.94 not in the row" about a row plainly showing
+      // $39.94. So a minus only counts when a letter or digit is not sitting
+      // right against it.
+      const before = text.slice(Math.max(0, m.index - 4), m.index);
+      const sign = /([(\u2212-])\s*\$?\s*$/.exec(before);
+      const negative = sign !== null
+        && !(sign[1] !== "(" && /[A-Za-z0-9]$/.test(before.slice(0, sign.index)));
       if (negative === wantNegative) return true;
     }
     return false;
@@ -165,8 +175,15 @@ export function rowMatches(rowText: string, t: Target): { ok: boolean; why: stri
 
   // The first word of the merchant: Emburse truncates long names with an
   // ellipsis, so the whole string is often genuinely absent from the row.
+  //
+  // Punctuation is stripped from BOTH sides, which it was not. Stripping it
+  // from the target alone turned "U-HAUL" into "UHAUL" and then looked for
+  // that in a row containing "U-HAUL" — so no expense from a merchant whose
+  // first word carries punctuation could ever be matched. U-HAUL, 7-ELEVEN,
+  // McDonald's, any of them.
   const head = t.merchant.trim().split(/\s+/)[0]?.replace(/[^\w]/g, "") ?? "";
-  if (head.length >= 4 && !lower.includes(head.toLowerCase())) {
+  const flat = lower.replace(/[^a-z0-9]/g, "");
+  if (head.length >= 4 && !flat.includes(head.toLowerCase())) {
     return { ok: false, why: `merchant "${t.merchant}" not in the row` };
   }
 
@@ -425,7 +442,18 @@ async function controlForRow(
     await new Promise((r) => setTimeout(r, 250));
   } while (Date.now() < deadline);
 
-  const anywhere = await page.locator(selector).count().catch(() => 0);
+  const all = page.locator(selector);
+  const anywhere = await all.count().catch(() => 0);
+  // Present-but-invisible and visible-but-misaligned are different faults
+  // with different fixes — hidden copies a grid renders to measure itself,
+  // versus a control that belongs to some other row. Collapsing them into
+  // "none is both visible and on this row's line" lost the distinction the
+  // earlier message made, which is the third time this refactor has traded
+  // information for tidiness.
+  let visible = 0;
+  for (let i = 0; i < anywhere; i++) {
+    if (await all.nth(i).isVisible().catch(() => false)) visible++;
+  }
   const rowText = (await row.innerText().catch(() => "")).replace(/\s+/g, " ").trim().slice(0, 120);
   // A missing ⋮ menu stops denying and nothing else. Saying so keeps
   // somebody from concluding the whole row is unreachable when approving it
@@ -433,11 +461,17 @@ async function controlForRow(
   const denyOnly = /menu/i.test(what)
     ? " Approving would still work; only denying needs this."
     : "";
+  if (anywhere === 0) {
+    throw new Error(`no ${what} matched “${selector}” anywhere on the page.${denyOnly}`);
+  }
   throw new Error(
-    anywhere > 0
-      ? `the row is right, but none of the ${anywhere} thing(s) matching “${selector}” on the ` +
-        `page is both visible and on this row's line. The row reads: “${rowText}”${denyOnly}`
-      : `no ${what} matched “${selector}” anywhere on the page.${denyOnly}`,
+    visible === 0
+      ? `found ${anywhere} ${what}(s) matching “${selector}” but none of them is visible — they ` +
+        `are probably the hidden copies a grid renders to measure itself, not the real control. ` +
+        `Clicking one would wait for it to appear and time out.${denyOnly}`
+      : `the row is right, and ${visible} of the ${anywhere} ${what}(s) matching “${selector}” ` +
+        `are visible — but none of them sits on this row's line, so none belongs to it. ` +
+        `The row reads: “${rowText}”${denyOnly}`,
   );
 }
 
@@ -826,6 +860,17 @@ async function applyOne(
 
     if (matches.length === 0) {
       const first = await rows.nth(0).innerText().catch(() => "");
+      // Why EACH row was turned down, not just the first. "None of the 4
+      // rows match — amount 39.94 not in the row" was the first row's
+      // reason presented as all four, and the row that mattered had a
+      // different one. Distinct reasons only, since a grid of forty rows
+      // rejected for the same cause says it once.
+      const reasons: string[] = [];
+      for (let i = 0; i < examined && reasons.length < 4; i++) {
+        const why = rowMatches(await rows.nth(i).innerText().catch(() => ""), target).why;
+        if (!reasons.includes(why)) reasons.push(why);
+      }
+      const spread = reasons.length > 1 ? ` The rows were turned down for: ${reasons.join("; ")}.` : "";
       // Never claim none of N matched when only the first few were read. A
       // merchant like DOORDASH returns the whole month, and "none of the 340
       // rows match" — said after looking at fifty — is a false statement
@@ -836,10 +881,10 @@ async function applyOne(
           `looked at the first ${examined} of ${count} rows and none match this expense. ` +
           `The search for “${term}” is too broad to find it this way — narrow it in ` +
           `Emburse, or the expense may genuinely not be in this view. ` +
-          `The first row reads differently: ${rowMatches(first, target).why}.`);
+          `The first row reads differently: ${rowMatches(first, target).why}.${spread}`);
       }
       throw new Error(
-        `none of the ${count} rows match this expense — ${rowMatches(first, target).why}`,
+        `none of the ${count} rows match this expense — ${rowMatches(first, target).why}.${spread}`,
       );
     }
     if (matches.length > 1) {

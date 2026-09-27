@@ -15,7 +15,7 @@
 process.env.SESSION_SECRET ||= "test-secret-for-sealing-credentials";
 
 import {
-  applies, comparableTo, evaluate, fires, explain, nameKey, opLabel, problems, summarise, test,
+  applies, comparableTo, evaluate, fires, explain, nameKey, opLabel, problems, sameBusiness, summarise, test,
   type RuleBody, type Subject,
 } from "../server/rules/engine.js";
 import type { Hit } from "../server/rules/store.js";
@@ -412,6 +412,48 @@ check("an unread receipt is UNKNOWN, not a different business",
 check("a typed value is still matched exactly",
   test(expense({ merchant: "WALMART SUPERCENTER" }),
     { field: "merchant", op: "is", value: "Walmart" }) === false);
+
+console.log("\nTwo printings of the same shop");
+// A rule comparing the receipt's business name against Emburse's flagged
+// 56 of 163 expenses, and most of them were the same shop written twice.
+// Three separate faults, all in the normaliser:
+//
+//   - an apostrophe became a SPACE, so "lowe's" read as "lowe s" and did
+//     not match "lowes"; same for "weigel's" against "weigels"
+//   - digits glued to letters survived whole, because only standalone runs
+//     were stripped: "#1797LOWES" stayed "1797lowes" and matched nothing
+//   - containment is not enough once BOTH sides carry words the other
+//     lacks. "Lowe's Home Centers, LLC" and "LOWES OF TEMPLE #221LOWES
+//     COMPANIES INC" are one shop and neither string is inside the other.
+//
+// Every pair below is real, taken off the queue.
+{
+  const same: [string, string][] = [
+    ["LOWE'S", "LOWES PAINTSVLE #1797LOWES COMPANIES INC"],
+    ["Lowe's Home Centers, LLC", "LOWES OF TEMPLE #221LOWES COMPANIES INC"],
+    ["McDonald's Restaurant #6218", "MCDONALD'S- 6218FARIS PROPERTIES"],
+    ["Weigel's #1050", "WEIGELS 50"],
+    ["Kent Electrical Supply", "KENT ELECTRICAL SUPPLYKENT ELECTRICAL SUPPLY, LLC"],
+    ["Home Depot", "HOME DEPOT 4410"],
+  ];
+  for (const [a, b] of same) {
+    check(`same shop: ${a} = ${b.slice(0, 32)}`, sameBusiness(a, b), `${nameKey(a)} vs ${nameKey(b)}`);
+  }
+  // And the ones the rule exists to catch must still be caught. A
+  // normaliser loose enough to pass everything is not a normaliser.
+  const different: [string, string][] = [
+    ["DSG - SIOUX FALLS", "DAKOTA SUPPLY GROUP - SOUDAKOTA SUPPLY GROUP , INC."],
+    ["Mammoth Holdings", "MIMEO.COM- BIPMIMEOCOM INC"],
+    ["MIKEY'S QUICK STOP", "VALEROVALERO PAYMENT SERVICES CORPORATION"],
+    ["FREEDOM VALU CENTER", "CAT SALESMARATHON PETROLEUM CO"],
+    ["Walmart", "SHELL OIL"],
+  ];
+  for (const [a, b] of different) {
+    check(`caught: ${a} \u2260 ${b.slice(0, 30)}`, !sameBusiness(a, b), `${nameKey(a)} vs ${nameKey(b)}`);
+  }
+  // An unread receipt is not a mismatch, and never becomes one.
+  check("nothing on one side is not a disagreement", sameBusiness("", "SHELL OIL"));
+}
 
 console.log("\nWhat a rule is not allowed to be");
 // "Why can't I save this" has twice meant this exact thing: every new rule
