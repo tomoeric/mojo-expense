@@ -126,21 +126,29 @@ function toReport(key: string, group: Row[], hits: Map<string, Hit[]>): ExpenseR
   // reviewer already looks — one per rule, naming the rule, because "three
   // problems" tells nobody which three.
   const ruleFlags: PolicyFlag[] = [];
-  const byRule = new Map<string, { label: string; lineIds: string[] }>();
+  // Keyed by rule AND, for a day rule, by the day it judged. A rule that
+  // judges the whole day produces one flag per day rather than one overall,
+  // so each carries the date its verdict was about.
+  const byRule = new Map<string, {
+    name: string; label: string; lineIds: string[]; day: string | null;
+  }>();
   for (const line of lines) {
     for (const hit of hits.get(line.id) ?? []) {
-      const seen = byRule.get(hit.ruleName);
+      const day = hit.dayGroup ? line.date : null;
+      const key = day ? `${hit.ruleName}\u0000${day}` : hit.ruleName;
+      const seen = byRule.get(key);
       if (seen) seen.lineIds.push(line.id);
-      else byRule.set(hit.ruleName, { label: hit.detail, lineIds: [line.id] });
+      else byRule.set(key, { name: hit.ruleName, label: hit.detail, lineIds: [line.id], day });
     }
   }
-  for (const [name, { label, lineIds }] of byRule) {
+  for (const { name, label, lineIds, day } of byRule.values()) {
     ruleFlags.push({
       code: "rule-mismatch",
       label: `${name}${label ? ` — ${label}` : ""}`,
       // The rule's name on its own, so the queue can separate one rule's
       // catches from another's without splitting the label back apart.
       group: name,
+      ...(day ? { dayGroup: day } : {}),
       severity: "warn",
       lineIds,
     });

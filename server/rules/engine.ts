@@ -207,10 +207,17 @@ export function opLabel(field: Field, op: Op): string {
 /** Which operators make sense for a field — the UI offers only these. */
 export function opsFor(field: Field): Op[] {
   if (isGroupField(field)) return ["lte", "gte", "gt", "lt", "is", "is_not"];
-  if (field === "amount") return ["is", "is_not", "gt", "lt"];
+  // "at most" and "at least" as well as the strict pair. A group field
+  // already offered all four, so somebody who wrote "Matching total that day
+  // is at most $75" and then tried the same wording on Amount was told the
+  // field could not be tested that way — for no reason: the comparison is
+  // the same one, with the same money tolerance.
+  if (field === "amount") return ["is", "is_not", "gt", "lt", "gte", "lte"];
   // Unlike Amount, this one can be absent: the receipt may not have been read,
   // or may have been unreadable. "is blank" is how you find those.
-  if (field === "receiptTotal") return ["is", "is_not", "gt", "lt", "is_blank", "is_not_blank"];
+  if (field === "receiptTotal") {
+    return ["is", "is_not", "gt", "lt", "gte", "lte", "is_blank", "is_not_blank"];
+  }
   if (field === "receipt") return ["is_blank", "is_not_blank"];
   // Yes/no, plus a way to find the ones nobody could answer for. "is blank"
   // on these means the reader never got far enough to say — an unread

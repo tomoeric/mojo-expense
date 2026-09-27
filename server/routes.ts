@@ -124,7 +124,15 @@ api.post("/ai-check", requireAuth, requireAdmin, async (_req, res) => {
  */
 api.get("/ai-usage", requireAuth, requireAdmin, async (_req, res) => {
   try {
-    res.json(await aiSpend());
+    // The backlog rides along with the spend rather than getting its own
+    // endpoint: "why is this climbing" is a question about the number on this
+    // card, and the answer belongs beside it.
+    const { readingBacklog } = await import("./emburse/receipt-items.js");
+    const [spend, backlog] = await Promise.all([
+      aiSpend(),
+      readingBacklog().catch(() => null),
+    ]);
+    res.json({ ...spend, backlog });
   } catch (err) {
     res.status(500).json({ error: describe(err) });
   }

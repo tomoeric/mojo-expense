@@ -36,6 +36,16 @@ export type PolicyFlag = {
    * separator, which is the kind of bug that surfaces months later.
    */
   group?: string;
+  /**
+   * Set when the rule judged the person's whole DAY, not this one expense.
+   *
+   * The value is the day it judged (YYYY-MM-DD). Every expense in that
+   * person's day carries the same one, which is what lets the queue draw
+   * them as a group instead of as unrelated rows — an $11 breakfast flagged
+   * beside a $77 dinner reads as a broken rule until you can see they are
+   * the same $90 day.
+   */
+  dayGroup?: string;
   severity: "info" | "warn";
   /** Line ids the flag points at; empty when the flag is report-level. */
   lineIds: string[];

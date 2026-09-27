@@ -34,6 +34,16 @@ export type Row = {
   flags: string[];
   /** What to bucket those flags under — a rule's name, or the kind of check. */
   flagGroups: string[];
+  /**
+   * Flags on this row that judged the person's whole DAY, not this expense.
+   *
+   * "Matching total that day is more than $75" flags every meal on an
+   * over-limit day, so an $11 breakfast lands in the queue next to a $77
+   * dinner with nothing on screen connecting them — and the honest reading
+   * of that is that the rule is broken. It is not: the $11 is flagged for
+   * the $90 day it belongs to. This is what the table bands on.
+   */
+  dayGroups: { rule: string; day: string }[];
   ageDays: number | null;
   /** The decision on this expense, when there is one. */
   decision?: { state: string } | undefined;
@@ -276,10 +286,131 @@ export function buildRows(data: ReportsResponse, reports?: ExpenseReport[]): Row
       department: report.department,
       flags: mine.map((f) => f.label),
       flagGroups: [...new Set(mine.map((f) => f.group ?? BUILT_IN_GROUP[f.code] ?? f.code))],
+      dayGroups: mine
+        .filter((f) => f.dayGroup && f.group)
+        .map((f) => ({ rule: f.group!, day: f.dayGroup! })),
       ageDays: daysAgo(report.submittedDate),
       };
     });
   });
+}
+
+/**
+ * The rows of one person-day that a day rule judged together.
+ *
+ * A day rule flags every expense on an over-limit day, which in a flat list
+ * reads as a rule flagging $11 breakfasts. Banding puts the day back: the
+ * rows sit under one header giving the person, the date, how many receipts
+ * and the total that actually broke the limit. A day with a single receipt
+ * over the limit gets the same treatment rather than a special case — one
+ * shape to learn, and it stays honest about what was judged.
+ */
+export type Band = {
+  key: string;
+  employee: string;
+  day: string;
+  rows: Row[];
+  total: number;
+};
+
+export function bandsFor(rows: Row[], rule: string): Band[] {
+  const out = new Map<string, Band>();
+  const loose: Row[] = [];
+  for (const r of rows) {
+    const day = r.dayGroups.find((g) => g.rule === rule)?.day;
+    // A row the rule caught but with no day on it cannot be grouped, and
+    // dropping it would hide work. It goes in its own band, unheaded.
+    if (!day) { loose.push(r); continue; }
+    const key = `${r.employee}\u0000${day}`;
+    const band = out.get(key);
+    if (band) { band.rows.push(r); band.total += r.line.amount; }
+    else out.set(key, { key, employee: r.employee, day, rows: [r], total: r.line.amount });
+  }
+  const bands = [...out.values()];
+  if (loose.length > 0) {
+    bands.push({ key: "\u0000loose", employee: "", day: "", rows: loose,
+                 total: loose.reduce((a, r) => a + r.line.amount, 0) });
+  }
+  return bands;
+}
+
+/**
+ * One band: its header, then its rows.
+ *
+ * A `<tbody>` cannot nest, and a wrapper element inside one is invalid
+ * markup that browsers silently hoist out of the table — so the band is a
+ * fragment, and the visual enclosure comes from a left accent on every row
+ * plus a heavier rule above the header. That reads as a box without
+ * pretending the DOM has one.
+ */
+function BandRows({
+  band, banded, columns, onOpen, onDiff,
+}: {
+  band: Band;
+  banded: boolean;
+  columns: Column[];
+  onOpen: (r: Row) => void;
+  onDiff: (r: Row) => void;
+}) {
+  // The rule's own sentence for this day — it already names the figure that
+  // broke the limit ("found \u201c$90.00\u201d"), so repeating it here would be
+  // saying the same number twice in different words.
+  const detail = band.rows[0]?.flags.find((f) => f.includes("that day")) ?? "";
+  const said = detail.includes("\u2014") ? detail.slice(detail.indexOf("\u2014") + 1).trim() : "";
+
+  return (
+    <>
+      {banded && (
+        <tr className="border-t-2 border-amber-400/70 bg-amber-50/80 dark:bg-amber-500/10">
+          <td colSpan={columns.length} className="px-2 py-1.5">
+            <span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[11px]">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0 self-center text-amber-600" />
+              <strong className="font-semibold">{band.employee}</strong>
+              <span className="text-muted-foreground">{shortDate(band.day)}</span>
+              <span className="text-muted-foreground">\u00b7</span>
+              <span>
+                {band.rows.length} receipt{band.rows.length === 1 ? "" : "s"}
+              </span>
+              <span className="text-muted-foreground">\u00b7</span>
+              <strong className="tnum font-semibold">{money(band.total)}</strong>
+              {said && <span className="text-amber-700 dark:text-amber-400">{said}</span>}
+            </span>
+          </td>
+        </tr>
+      )}
+      {band.rows.map((r) => (
+        <tr
+          key={r.line.id}
+          onClick={(e) => {
+            // The Updated tag answers a different question from the row
+            // itself \u2014 "what moved" rather than "show me this expense" \u2014
+            // so it opens the diff instead of the drawer behind it.
+            if ((e.target as HTMLElement).closest("[data-changed]")) onDiff(r);
+            else onOpen(r);
+          }}
+          className={`cursor-pointer border-t border-border hover:bg-muted/60 ${
+            banded ? "bg-amber-50/35 dark:bg-amber-500/5" : ""
+          }`}
+        >
+          {columns.map((c, i) => (
+            <td
+              key={c.key}
+              className={`truncate px-2 py-2 ${c.numeric ? "tnum text-right" : ""} ${
+                // The accent runs down the first cell of every row in the
+                // band, which is what closes the box on the left.
+                banded && i === 0 ? "border-l-2 border-l-amber-400/70" : ""
+              }`}
+              // Everything truncates so eleven columns fit one line;
+              // hover gives back whatever the ellipsis ate.
+              title={c.render ? undefined : String(c.value(r))}
+            >
+              {c.render ? c.render(r) : (c.value(r) || "\u2014")}
+            </td>
+          ))}
+        </tr>
+      ))}
+    </>
+  );
 }
 
 /** Readable names for the checks that are not rules. */
@@ -454,6 +585,20 @@ export function ExpenseTable({
 
   const total = useMemo(() => sorted.reduce((a, r) => a + r.line.amount, 0), [sorted]);
 
+  /**
+   * Banded only while a DAY rule is the active filter.
+   *
+   * Grouping reorders rows, so it has to be something the reviewer asked
+   * for. Filtering to "Meal Amount Exceeds Day Limit" IS that ask — the
+   * question at that point is which days went over, not which receipts
+   * exist. Every other view stays a flat sortable list.
+   */
+  const bands = useMemo(() => {
+    if (!flagGroup) return null;
+    if (!sorted.some((r) => r.dayGroups.some((g) => g.rule === flagGroup))) return null;
+    return bandsFor(sorted, flagGroup);
+  }, [sorted, flagGroup]);
+
   const toggle = (key: ColumnKey) =>
     setSort((s) => (s.key === key ? { key, dir: s.dir === 1 ? -1 : 1 } : { key, dir: key === "amount" || key === "date" || key === "age" ? -1 : 1 }));
 
@@ -614,30 +759,15 @@ export function ExpenseTable({
               </tr>
             </thead>
             <tbody>
-              {sorted.map((r) => (
-                <tr
-                  key={r.line.id}
-                  onClick={(e) => {
-                    // The Updated tag answers a different question from the row
-                    // itself — "what moved" rather than "show me this expense" —
-                    // so it opens the diff instead of the drawer behind it.
-                    if ((e.target as HTMLElement).closest('[data-changed]')) setDiff(r);
-                    else onOpen(r);
-                  }}
-                  className="cursor-pointer border-t border-border hover:bg-muted/60"
-                >
-                  {columns.map((c) => (
-                    <td
-                      key={c.key}
-                      className={`truncate px-2 py-2 ${c.numeric ? "tnum text-right" : ""}`}
-                      // Everything truncates so eleven columns fit one line;
-                      // hover gives back whatever the ellipsis ate.
-                      title={c.render ? undefined : String(c.value(r))}
-                    >
-                      {c.render ? c.render(r) : (c.value(r) || "—")}
-                    </td>
-                  ))}
-                </tr>
+              {(bands ?? [{ key: "", employee: "", day: "", rows: sorted, total: 0 }]).map((band) => (
+                <BandRows
+                  key={band.key}
+                  band={band}
+                  banded={bands !== null && band.key !== "\u0000loose"}
+                  columns={columns}
+                  onOpen={onOpen}
+                  onDiff={setDiff}
+                />
               ))}
             </tbody>
           </table>

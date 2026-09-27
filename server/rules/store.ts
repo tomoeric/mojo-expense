@@ -2,7 +2,7 @@ import type pg from "pg";
 import { db, ensureSchema } from "../db.js";
 import { ensureReceiptItems } from "../emburse/receipt-items.js";
 import {
-  ACTIONS, FIELDS, OPS, comparableTo, opsFor, problems, summarise,
+  ACTIONS, FIELDS, OPS, comparableTo, isGroupField, opsFor, problems, summarise,
   type Action, type Condition, type Field, type Op, type RuleBody, type Subject,
 } from "./engine.js";
 
@@ -317,6 +317,18 @@ export type Hit = {
   verdict: "pass" | "fail";
   detail: string;
   firstSeen: string;
+  /**
+   * True when the rule judged the person's whole DAY rather than this one
+   * expense — "Matching total that day is more than $75".
+   *
+   * The queue needs this to show the flag honestly. Such a rule flags every
+   * meal on an over-limit day, so an $11 breakfast appears beside a $77
+   * dinner with no visible connection between them, and the obvious reading
+   * is that the rule is broken. It is not: the $11 is flagged for the $90
+   * day it belongs to. Knowing the verdict was about a group is what lets
+   * the table draw the group.
+   */
+  dayGroup: boolean;
 };
 
 /** Failing hits for the given expenses — what the queue turns into flags. */
@@ -327,9 +339,10 @@ export async function hitsFor(keys: string[]): Promise<Map<string, Hit[]>> {
 
   const { rows } = await db().query<{
     dedupe_key: string; rule_id: string; name: string; action: string;
-    verdict: string; detail: string; first_seen: Date;
+    verdict: string; detail: string; first_seen: Date; must_field: string | null;
   }>(
-    `SELECT h.dedupe_key, h.rule_id, r.name, r.action, h.verdict, h.detail, h.first_seen
+    `SELECT h.dedupe_key, h.rule_id, r.name, r.action, h.verdict, h.detail, h.first_seen,
+            r.must ->> 'field' AS must_field
        FROM expense_rule_hits h
        JOIN expense_rules r ON r.id = h.rule_id
       WHERE h.dedupe_key = ANY($1::text[]) AND h.verdict = 'fail' AND r.enabled
@@ -346,6 +359,7 @@ export async function hitsFor(keys: string[]): Promise<Map<string, Hit[]>> {
       verdict: "fail",
       detail: r.detail,
       firstSeen: r.first_seen.toISOString(),
+      dayGroup: r.must_field !== null && isGroupField(r.must_field as Field),
     };
     const bucket = out.get(r.dedupe_key);
     if (bucket) bucket.push(hit);

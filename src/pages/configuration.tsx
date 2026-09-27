@@ -231,6 +231,7 @@ type PerModel = {
 type Spend = {
   today: Window; month: Window; total: Window;
   byModel: PerModel[]; unpriced: string[]; perReceipt: number | null;
+  backlog: { waiting: number; gaveUp: number; commonError: string | null } | null;
 };
 
 const dollars = (n: number | null): string =>
@@ -244,6 +245,50 @@ const dollars = (n: number | null): string =>
  * API reported, priced at render time — so the figure moves when the published
  * price does, without anything needing a backfill.
  */
+/**
+ * Why the call count is still moving.
+ *
+ * The reader wakes every half hour whether or not anything was imported, and
+ * retries a failed receipt up to three times before giving up on it for good.
+ * So the count creeping up with nobody syncing is normal and finite — but
+ * from the cost figures alone it looks like money leaking, and the only way
+ * to tell the difference was to read the server log. This says which it is.
+ */
+function ReadingBacklog({ backlog }: { backlog: Spend["backlog"] }) {
+  if (!backlog) return null;
+  const { waiting, gaveUp, commonError } = backlog;
+  if (waiting === 0 && gaveUp === 0) {
+    return (
+      <p className="mt-2 text-xs text-muted-foreground">
+        Every receipt held has been read. The count above will not move again until new
+        receipts arrive.
+      </p>
+    );
+  }
+  return (
+    <p className="mt-2 text-xs text-muted-foreground">
+      {waiting > 0 ? (
+        <>
+          <strong className="font-semibold text-foreground">{waiting}</strong> receipt
+          {waiting === 1 ? "" : "s"} still to read — the reader wakes every 30 minutes and takes
+          up to 25 at a time, so expect that many more calls even with nothing syncing.{" "}
+        </>
+      ) : (
+        <>Nothing is waiting to be read.{" "}</>
+      )}
+      {gaveUp > 0 && (
+        <>
+          <strong className="font-semibold text-foreground">{gaveUp}</strong> given up on after
+          three tries — these cost nothing further.
+          {commonError && (
+            <span className="mt-1 block opacity-80">Most common reason: {commonError}</span>
+          )}
+        </>
+      )}
+    </p>
+  );
+}
+
 function AiSpend({ isAdmin }: { isAdmin: boolean }) {
   const { data } = useQuery<Spend>({
     queryKey: ["ai-usage"],
@@ -300,6 +345,8 @@ function AiSpend({ isAdmin }: { isAdmin: boolean }) {
           ))}
         </tbody>
       </table>
+
+      <ReadingBacklog backlog={data.backlog} />
 
       {data.unpriced.length > 0 && (
         <p className="mt-2 text-xs text-amber-700">

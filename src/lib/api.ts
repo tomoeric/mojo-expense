@@ -9,6 +9,12 @@ export type PolicyFlag = {
   label: string;
   /** What to bucket it under on the queue — a rule's name, for a rule flag. */
   group?: string;
+  /**
+   * The day (YYYY-MM-DD) this flag judged, when the rule judged a whole day
+   * rather than one expense. Every expense in that person's day carries the
+   * same value, which is how the queue draws them as one group.
+   */
+  dayGroup?: string;
   severity: "info" | "warn";
   lineIds: string[];
 };

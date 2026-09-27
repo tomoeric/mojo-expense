@@ -389,13 +389,48 @@ export async function unreadReceipts(limit: number): Promise<string[]> {
   return rows.map((r) => r.sha256);
 }
 
-/** Receipts given up on, which is a number somebody should be able to see. */
-export async function unreadableReceipts(): Promise<number> {
+/**
+ * What the reader still has in front of it.
+ *
+ * The one number that explains a call count going up while nobody is
+ * syncing. The reader wakes every half hour whether or not anything arrived,
+ * and a receipt that failed is tried again — up to three times, then never
+ * again. So a count that climbs by a few an hour and then stops is the retry
+ * budget draining; one that climbs forever means new images keep arriving.
+ * Without this on screen the only way to tell was to read the server log.
+ */
+export type ReadingBacklog = {
+  /** Images with no reading yet, and retries left. Each will cost a call. */
+  waiting: number;
+  /** Tried the full three times and failed. These cost nothing further. */
+  gaveUp: number;
+  /** The most common reason among those, so the cause is named not guessed. */
+  commonError: string | null;
+};
+
+export async function readingBacklog(): Promise<ReadingBacklog> {
   await ensure();
-  const { rows } = await db().query<{ n: string }>(
-    `SELECT count(*) AS n FROM receipt_readings
-      WHERE error IS NOT NULL AND attempts >= $1`, [MAX_ATTEMPTS]);
-  return Number(rows[0]?.n ?? 0);
+  const [waiting, gaveUp] = await Promise.all([
+    db().query<{ n: string }>(
+      `SELECT count(*) AS n FROM receipt_blobs b
+        WHERE NOT EXISTS (
+                SELECT 1 FROM receipt_readings r
+                 WHERE r.sha256 = b.sha256
+                   AND (r.error IS NULL OR r.attempts >= $1))`, [MAX_ATTEMPTS]),
+    db().query<{ error: string; n: string }>(
+      `SELECT error, count(*) AS n FROM receipt_readings
+        WHERE error IS NOT NULL AND attempts >= $1
+        GROUP BY error ORDER BY count(*) DESC LIMIT 1`, [MAX_ATTEMPTS]),
+  ]);
+  const top = gaveUp.rows[0];
+  const total = await db().query<{ n: string }>(
+    `SELECT count(*) AS n FROM receipt_readings WHERE error IS NOT NULL AND attempts >= $1`,
+    [MAX_ATTEMPTS]);
+  return {
+    waiting: Number(waiting.rows[0]?.n ?? 0),
+    gaveUp: Number(total.rows[0]?.n ?? 0),
+    commonError: top?.error ?? null,
+  };
 }
 
 export const canReadReceipts = (): boolean => isAuditConfigured() && isDbConfigured();
