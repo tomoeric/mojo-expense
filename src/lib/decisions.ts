@@ -50,6 +50,8 @@ export type DecisionsResponse = {
   recent: QueuedDecision[];
   byExpense: Record<string, QueuedDecision>;
   browser: { holder: { label: string; since: number } | null; waiting: string[] };
+  /** Whether the stage-by-stage trace is switched on in Configuration. */
+  trace?: boolean;
   /** Set when a decision is parked waiting for a device-verification code. */
   challenge: Challenge | null;
 };
@@ -131,9 +133,14 @@ export function useDecisions(keys: string[]) {
   });
 
   const applyNow = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (): Promise<string> => {
       const res = await fetch("/api/decisions/apply", { method: "POST" });
-      if (!res.ok) throw new Error((await readJson<{ error?: string }>(res)).error ?? "Could not start it.");
+      const body = await readJson<{ error?: string; message?: string }>(res);
+      if (!res.ok) throw new Error(body.error ?? "Could not start it.");
+      // The server says what it is actually about to do. Swallowing that was
+      // why the button looked broken: pressing it produced no visible change
+      // whatsoever, so the only reading available was "nothing happened".
+      return body.message ?? "Starting now.";
     },
     onSuccess: invalidate,
   });
@@ -141,6 +148,8 @@ export function useDecisions(keys: string[]) {
   return {
     data: q.data,
     canDecide: q.data?.canDecide ?? false,
+    /** Whether the stage-by-stage trace is switched on in Configuration. */
+    trace: q.data?.trace ?? false,
     byExpense: q.data?.byExpense ?? {},
     pending: q.data?.pending ?? [],
     recent: q.data?.recent ?? [],

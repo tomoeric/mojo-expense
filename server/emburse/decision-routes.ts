@@ -9,7 +9,8 @@ import { runDecision, testConnection, type Decision, type Target } from "./decid
 import {
   cancelDecision, decisionsFor, pendingDecisions, queueDecision, recentDecisions,
 } from "./decisions.js";
-import { nudgeDecisionWorker } from "./decision-worker.js";
+import { decisionWorkerStarted, nudgeDecisionWorker } from "./decision-worker.js";
+import { getFlag } from "../flags.js";
 
 export const decisionRouter = Router();
 
@@ -199,6 +200,10 @@ decisionRouter.get("/decisions", requireAuth, async (req: Request, res: Response
     // request per row.
     byExpense: Object.fromEntries(await decisionsFor(keys)),
     browser: browserQueue(),
+    // Whether to show the stage-by-stage trace at all. It rides on the poll
+    // the queue already makes rather than getting a request of its own: it
+    // is one boolean and the page is useless without this response anyway.
+    trace: await getFlag("traceDecisions").catch(() => false),
   });
 });
 
@@ -214,10 +219,38 @@ decisionRouter.delete("/decisions/:id", requireAuth, async (req: Request, res: R
 });
 
 /** Apply what is queued now, rather than waiting for the worker's next pass. */
+/**
+ * Send now, meaning now.
+ *
+ * This used to nudge the worker the same way queueing a decision does —
+ * through a twenty-second gather delay that every press RESET. So a button
+ * labelled Send now waited, and pressing it again because nothing had
+ * happened pushed the run further away. It also answered 202 whether or not
+ * the worker existed to be nudged: with no worker started the press did
+ * nothing at all, for ever, cheerfully.
+ */
 decisionRouter.post("/decisions/apply", requireAuth, (_req: Request, res: Response) => {
   if (!guard(res)) return;
-  nudgeDecisionWorker();
-  res.status(202).json({ ok: true, waiting: whyWaiting() });
+  if (!nudgeDecisionWorker({ immediate: true })) {
+    res.status(503).json({
+      error: decisionWorkerStarted()
+        ? "The decision worker could not be reached."
+        : "The decision worker is not running, so nothing would be sent. It starts with the " +
+          "server when a database is configured — check the server log for why it did not.",
+    });
+    return;
+  }
+  const busy = whyWaiting();
+  res.status(202).json({
+    ok: true,
+    waiting: busy,
+    // What actually happens next, in the words of what is true. "Sent" would
+    // be a lie: the browser may be held by the export, and this returns
+    // before a single page has loaded.
+    message: busy
+      ? `Starting as soon as the browser is free — ${busy}`
+      : "Starting now — signing in and applying takes a minute or two.",
+  });
 });
 
 /**

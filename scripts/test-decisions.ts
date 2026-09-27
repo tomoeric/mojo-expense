@@ -218,6 +218,36 @@ const twice = await queueDecision({
 check("but still only one in flight at a time",
   !twice.ok && /already waiting/.test(twice.ok ? "" : twice.error));
 
+console.log("\n9. A pass that could not even try");
+// "Click approve does not work, and nothing comes back to say why."
+//
+// The worker caught its own exceptions, logged them, and swallowed them. A
+// browser that would not launch, settings that would not load, a stored
+// password that would not decrypt — every decision stayed pending, the
+// queue kept saying "shortly", and the reason lived only in a server log
+// nobody was reading. Being unable to ATTEMPT is not the same as failing:
+// the decision is still good and must stay retryable. It just has to say
+// what is stopping it.
+const { noteAttemptFailed } = await import("../server/emburse/decisions.js");
+const stuckBefore = (await decisionsFor([failedKey])).get(failedKey)!;
+await noteAttemptFailed([stuckBefore.id], "Chromium would not start on this host.");
+const stuckAfter = (await decisionsFor([failedKey])).get(failedKey)!;
+check("the decision stays PENDING, because it is still perfectly good",
+  stuckAfter.state === "pending", stuckAfter.state);
+check("…but now carries the reason it has not moved",
+  stuckAfter.error === "Chromium would not start on this host.", stuckAfter.error ?? "(none)");
+check("…and counts the attempt, so the row can say “still waiting after 1 try”",
+  stuckAfter.attempts === stuckBefore.attempts + 1,
+  `${stuckBefore.attempts} → ${stuckAfter.attempts}`);
+
+// It must never reopen something already settled.
+await settleDecision(stuckAfter.id, { ok: true, matchedRow: "a row" });
+await noteAttemptFailed([stuckAfter.id], "should not appear");
+const settledNow = (await decisionsFor([failedKey])).get(failedKey)!;
+check("an applied decision is untouched by a later note",
+  settledNow.state === "applied" && settledNow.error === null,
+  `${settledNow.state} / ${settledNow.error ?? "no error"}`);
+
 await db().query("DELETE FROM expense_decisions WHERE dedupe_key LIKE 'test-%'");
 await db().query("DELETE FROM expenses WHERE dedupe_key LIKE 'test-%'");
 await mock.close();

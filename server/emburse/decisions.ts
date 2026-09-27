@@ -202,6 +202,31 @@ export async function cancelDecision(id: number, by: string): Promise<boolean> {
 }
 
 /** Record how applying one went. */
+/**
+ * Record that a pass tried and could not, WITHOUT settling the decision.
+ *
+ * The difference from settling matters. A decision that failed is finished
+ * and the reviewer has to decide again; one that could not be attempted —
+ * the browser would not launch, the settings would not load, the stored
+ * password would not decrypt — is still perfectly good and should be
+ * retried. It just must not sit there saying "shortly" for ever with the
+ * reason only in a server log nobody is reading.
+ *
+ * That was the whole failure mode: the worker's catch logged and swallowed,
+ * every decision stayed pending, and the queue answered "why did nothing
+ * happen" with silence.
+ */
+export async function noteAttemptFailed(ids: number[], error: string): Promise<void> {
+  if (ids.length === 0) return;
+  await ensure();
+  await db().query(
+    `UPDATE expense_decisions
+        SET attempts = attempts + 1, error = $2
+      WHERE id = ANY($1::bigint[]) AND state = 'pending'`,
+    [ids, error.slice(0, 1000)],
+  );
+}
+
 export async function settleDecision(
   id: number,
   outcome: { ok: true; matchedRow: string | null } | { ok: false; error: string },

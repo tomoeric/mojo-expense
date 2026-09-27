@@ -31,9 +31,10 @@ export function QueuePage({
   );
 
   const keys = useMemo(() => waiting.map((r) => r.line.id), [waiting]);
-  const { byExpense, pending, browser, canDecide, challenge, decide, cancel, applyNow, answerCode } =
+  const { byExpense, pending, browser, canDecide, challenge, decide, cancel, applyNow, answerCode, trace } =
     useDecisions(keys);
   const [error, setError] = useState("");
+  const [sendNote, setSendNote] = useState<string | null>(null);
 
   const rows: Row[] = useMemo(
     () =>
@@ -108,17 +109,32 @@ export function QueuePage({
               ? `${browser.holder.label} has the browser; these go next.`
               : "Sent together in one sign-in, shortly."}
           </span>
+          {/* Pressing it has to visibly do something. It used to produce no
+              change at all — no spinner, no word — while the run it started
+              was twenty seconds away, so the only reading available was
+              "the button is broken", and pressing again pushed the run
+              further out. */}
+          {sendNote && <span className="text-emerald-700">{sendNote}</span>}
           <button
             type="button"
-            onClick={() => applyNow.mutate(undefined, { onError: (e) => setError((e as Error).message) })}
-            className="ml-auto inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1 font-semibold hover:bg-muted"
+            disabled={applyNow.isPending}
+            onClick={() => {
+              setSendNote(null);
+              applyNow.mutate(undefined, {
+                onSuccess: (m) => setSendNote(m),
+                onError: (e) => setError((e as Error).message),
+              });
+            }}
+            className="ml-auto inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1 font-semibold hover:bg-muted disabled:opacity-40"
           >
-            <Send className="h-3.5 w-3.5" />
+            {applyNow.isPending
+              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              : <Send className="h-3.5 w-3.5" />}
             Send now
           </button>
           {/* One test is enough to trust the matching; offering it per row
               would invite twenty browser sessions. */}
-          <TestDecision id={pending[0]!.id} />
+          <TestDecision id={pending[0]!.id} trace={trace} />
         </div>
       )}
 

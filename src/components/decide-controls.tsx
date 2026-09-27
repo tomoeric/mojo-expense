@@ -171,14 +171,24 @@ export function DecisionBadge({
   const word = decision.decision === "approve" ? "Approved" : "Denied";
 
   if (decision.state === "pending") {
+    // A pending decision that has already been TRIED and could not be
+    // applied is not the same as one that is simply queued, and it used to
+    // look identical: "sending", for ever, while the reason sat in a server
+    // log. If something is stopping it, the row says so.
+    const stuck = decision.attempts > 0 ? decision.error?.trim() : "";
     return (
-      <span className="inline-flex items-center gap-1.5 text-xs">
+      <span className="inline-flex max-w-full flex-col items-start gap-1 text-xs">
+      <span className="inline-flex items-center gap-1.5">
         <span
           title={decision.reason ?? undefined}
-          className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-0.5 font-semibold text-muted-foreground"
+          className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-semibold ${
+            stuck
+              ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400"
+              : "border-border bg-muted text-muted-foreground"
+          }`}
         >
           <Clock className="h-3 w-3" />
-          {word} · sending
+          {word} · {stuck ? `still waiting after ${decision.attempts} ${decision.attempts === 1 ? "try" : "tries"}` : "sending"}
         </span>
         {onCancel && (
           <button
@@ -194,6 +204,12 @@ export function DecisionBadge({
             undo
           </button>
         )}
+      </span>
+      {stuck && (
+        <span className="block max-w-md rounded-lg border border-amber-500/40 bg-amber-500/5 px-2 py-1 break-words text-amber-800 dark:text-amber-300">
+          {stuck}
+        </span>
+      )}
       </span>
     );
   }
@@ -315,7 +331,7 @@ function DenyDialog({
  * rather than in a test file: the matching is the thing being trusted, and
  * seeing it name the row it found is what earns that.
  */
-export function TestDecision({ id }: { id: number }) {
+export function TestDecision({ id, trace }: { id: number; trace: boolean }) {
   const [state, setState] = useState<
     { phase: "idle" } | { phase: "running" } |
     { phase: "done"; ok: boolean; matchedRow: string | null; detail: string;
@@ -372,8 +388,16 @@ export function TestDecision({ id }: { id: number }) {
           </span>
           {/* Every stage, not just the one that threw. A step can succeed and
               still carry the answer — "signed in, but no team-wide tab matched"
-              is the cause of a failure reported three steps later. */}
-          <DecisionSteps steps={state.steps} />
+              is the cause of a failure reported three steps later.
+
+              Behind the same Configuration toggle that stores the trace on a
+              real decision, because that is what it is for: six stages with
+              timings answer "where does it break" while it is being set up,
+              and are clutter above a queue once it works. A FAILURE still
+               shows them whatever the setting — that is the moment they are
+              wanted, and needing to switch something on first, then
+              reproduce, is how a one-off failure gets lost. */}
+          {(trace || !state.ok) && <DecisionSteps steps={state.steps} />}
         </span>
       )}
     </span>

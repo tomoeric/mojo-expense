@@ -419,7 +419,7 @@ function DecisionTrace({ isAdmin }: { isAdmin: boolean }) {
     <div className="rounded-xl border border-border p-4">
       <div className="flex flex-wrap items-center gap-2">
         <ListChecks className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <p className="text-sm font-semibold">Record every step of an approve or deny</p>
+        <p className="text-sm font-semibold">Show every step of an approve or deny</p>
         <button
           type="button"
           onClick={toggle}
@@ -434,10 +434,15 @@ function DecisionTrace({ isAdmin }: { isAdmin: boolean }) {
         </button>
       </div>
       <p className="mt-1 text-xs text-muted-foreground">
-        With this on, each decision keeps the browser run stage by stage — signing in, switching to
-        the team view, finding the row, verifying it, clicking. Open a failed decision to read it.
-        Turn it on to work out <em>where</em> something fails; turn it off once it works, because a
-        healthy queue has no use for a transcript on every row.
+        With this on, the browser run is shown stage by stage — signing in, switching to the team
+        view, finding the row, verifying it, clicking — both under the <strong>Test</strong> button
+        on the queue and on each decision, where a failed one keeps its trace to open later.
+        Turn it on to work out <em>where</em> something breaks; turn it off once it works, because a
+        healthy queue has no use for a six-line transcript above it.
+      </p>
+      <p className="mt-1 text-xs text-muted-foreground">
+        A run that <em>fails</em> shows its steps either way. That is the moment they are wanted,
+        and having to switch this on and then reproduce the failure is how a one-off gets lost.
       </p>
     </div>
   );
