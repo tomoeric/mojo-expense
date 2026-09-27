@@ -96,37 +96,84 @@ export function DecideButtons({
   );
 }
 
-/** What became of a decision, and the one way back out of it. */
+/**
+ * What became of a decision, and the one way back out of it.
+ *
+ * The detail opens in a DIALOG rather than under the badge. It used to
+ * expand in place — inside the Decision column, which is about 180px wide,
+ * holding a six-stage trace, a Playwright error and a full screenshot of a
+ * transactions grid. Every line wrapped to two words and the picture was a
+ * thumbnail of a page. The information was all there and none of it was
+ * legible, which is the same as not having it.
+ */
 function FailedBadge({ decision, word }: { decision: QueuedDecision; word: string }) {
   const [open, setOpen] = useState(false);
   const why = decision.error?.trim();
 
   return (
-    <span className="inline-flex max-w-full flex-col items-start gap-1">
+    <>
       <button
         type="button"
         onClick={(e) => {
           e.stopPropagation();
-          setOpen((v) => !v);
+          setOpen(true);
         }}
-        title={why ? undefined : "No reason was recorded."}
+        title={why ? "Open the details" : "No reason was recorded."}
         className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-400"
       >
         <AlertTriangle className="h-3 w-3" />
         {word} · did not go through
-        {why && <span className="opacity-70">{open ? "▴" : "▾"}</span>}
       </button>
       {open && (
-        <span className="block max-w-md rounded-lg border border-amber-500/40 bg-amber-500/5 px-2 py-1.5 text-xs break-words text-amber-800 dark:text-amber-300">
-          {why || "Emburse gave no reason."}
-          {decision.attempts > 1 && (
-            <span className="mt-1 block opacity-70">Tried {decision.attempts} times.</span>
-          )}
-          <DecisionSteps steps={decision.steps} />
-          <FailureShot shot={decision.shot} />
-        </span>
+        <FailureDialog decision={decision} word={word} onClose={() => setOpen(false)} />
       )}
-    </span>
+    </>
+  );
+}
+
+/** The whole failure, with room to read it. */
+function FailureDialog({
+  decision, word, onClose,
+}: { decision: QueuedDecision; word: string; onClose: () => void }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:p-8"
+      onClick={(e) => { e.stopPropagation(); onClose(); }}
+    >
+      <div
+        className="w-full max-w-4xl rounded-xl border border-border bg-background p-4 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start gap-2">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold">{word} — did not go through</p>
+            <p className="text-xs break-words text-muted-foreground">
+              {decision.matchedRow ?? "no row was matched"}
+              {decision.attempts > 1 && ` · tried ${decision.attempts} times`}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-border px-2 py-1 text-xs font-semibold hover:bg-muted"
+          >
+            Close
+          </button>
+        </div>
+
+        <p className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs break-words text-amber-800 dark:text-amber-300">
+          {decision.error?.trim() || "Emburse gave no reason."}
+        </p>
+
+        <div className="mt-3 text-xs">
+          <DecisionSteps steps={decision.steps} />
+        </div>
+        <div className="mt-1 text-xs">
+          <FailureShot shot={decision.shot} />
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -155,25 +202,16 @@ function FailedBadge({ decision, word }: { decision: QueuedDecision; word: strin
  * explained by the sentence above it.
  */
 function FailureShot({ shot }: { shot?: string | null }) {
-  const [open, setOpen] = useState(false);
   if (!shot) return null;
   return (
-    <span className="mt-2 block border-t border-amber-500/30 pt-1.5">
-      <button
-        type="button"
-        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
-        className="underline underline-offset-2 hover:no-underline"
-      >
-        {open ? "Hide" : "Show"} the page where it stopped
-      </button>
-      {open && (
-        <img
-          src={`data:image/png;base64,${shot}`}
-          alt="The Emburse page at the moment the decision failed"
-          className="mt-1.5 block w-full rounded border border-amber-500/30"
-        />
-      )}
-    </span>
+    <div className="mt-2 border-t border-border pt-2">
+      <p className="mb-1 font-semibold">The page where it stopped</p>
+      <img
+        src={`data:image/png;base64,${shot}`}
+        alt="The Emburse page at the moment the decision failed"
+        className="block w-full rounded border border-border"
+      />
+    </div>
   );
 }
 

@@ -64,6 +64,8 @@ type State = {
    * reported as "approved in Emburse" all the same.
    */
   actionsWork: boolean;
+  /** Render a hidden APPROVE ahead of the real one in each row. */
+  ghostButtons: boolean;
   /**
    * How the export dialog offers a format.
    *
@@ -134,6 +136,7 @@ const state: State = {
   gridShape: "table",
   padRows: 0,
   actionsWork: true,
+  ghostButtons: false,
   formatControl: "links",
   chipsUnmatchable: false,
   chipState: "aria",
@@ -199,8 +202,16 @@ const grid = (search: string) => {
       });
     </script>`;
 
+  // A hidden APPROVE ahead of the real one, which is what a virtualised
+  // grid leaves in the DOM when it measures its rows. Clicking ".first()"
+  // picks this one and waits out the whole timeout for it to become
+  // visible — the exact "locator.click: Timeout 30000ms exceeded" a real
+  // tenant produced.
+  const ghostBtn = state.ghostButtons
+    ? `<button class="ap" style="display:none">APPROVE</button>`
+    : "";
   const realTable = `<table><thead><tr><th>Date</th><th>Merchant</th><th>Employee</th><th>Amount</th><th></th></tr></thead>
-    <tbody>${shown.map((r) => `<tr><td>${cells(r)}</td></tr>`).join("")}</tbody></table>`;
+    <tbody>${shown.map((r) => `<tr><td>${ghostBtn}${cells(r)}</td></tr>`).join("")}</tbody></table>`;
 
   if (state.gridShape === "ghost") {
     // The measuring table a data grid renders to size its columns. It is a
@@ -599,6 +610,7 @@ app.post("/__app", (req, res) => {
   if ("grid" in q) state.gridShape = q["grid"] as State["gridShape"];
   if ("pad" in q) state.padRows = Math.max(0, Math.min(500, Number(q["pad"]) || 0));
   if ("actions" in q) state.actionsWork = q["actions"] !== "dead";
+  if ("ghostButtons" in q) state.ghostButtons = q["ghostButtons"] === "true";
   if ("format" in q) state.formatControl = q["format"] as State["formatControl"];
   if ("chips" in q) state.chipsUnmatchable = q["chips"] === "unmatchable";
   if ("chipState" in q) state.chipState = q["chipState"] as State["chipState"];
@@ -625,7 +637,8 @@ const reset = () =>
     // the grid to divs left every later test running against divs — and the
     // one that then failed looked like a regression in whatever it was
     // actually testing, rather than leftover state from three tests ago.
-    gridShape: "table", padRows: 0, actionsWork: true, formatControl: "links",
+    gridShape: "table", padRows: 0, actionsWork: true, ghostButtons: false,
+    formatControl: "links",
     chipsUnmatchable: false, appPaintMs: 0, showNavLabel: true,
     sections: {
       "Needs Review": true, "Needs Manager Review": false,

@@ -284,6 +284,48 @@ check("a decision that fails does not stop the ones after it",
 check("…and each result is the same one the batch returns",
   asItLands.every((r) => out.get(r.id)?.ok === r.ok));
 
+console.log("\n17. A hidden APPROVE ahead of the real one");
+// What a real tenant produced: five green steps, then "approve —
+// locator.click: Timeout 30000ms exceeded". A virtualised grid keeps hidden
+// copies of its rows to measure them, so the FIRST APPROVE in the DOM is
+// one that never becomes visible, and .first().click() waits out the whole
+// timeout for it. The export has used a visible-only click for a long time;
+// the decision path simply never got the same treatment.
+mock.reset();
+await fetch(`${mock.url}/__app?ghostButtons=true`, { method: "POST" });
+const ghosted = await runDecision("approve", TARGET, "", SEL, mock.url, LOGIN, {});
+check("it clicks the visible APPROVE, not the hidden one in front of it", ghosted.ok,
+  ghosted.steps.find((s) => !s.ok)?.detail ?? "");
+check("…and still confirms the row left Needs Review",
+  /left Needs Review/.test(ghosted.steps.at(-1)?.detail ?? ""),
+  ghosted.steps.at(-1)?.detail ?? "");
+
+// And when EVERY match is hidden, it must say so rather than time out with
+// a Playwright message that names no cause.
+mock.reset();
+await fetch(`${mock.url}/__app?ghostButtons=true`, { method: "POST" });
+const allHidden = await runDecision(
+  "approve", TARGET, "", { ...SEL, approveButton: 'button.ap[style*="none"]' },
+  mock.url, LOGIN, {});
+const hiddenWhy = allHidden.steps.find((s) => !s.ok)?.detail ?? "";
+check("all-hidden is explained, not reported as a bare timeout", !allHidden.ok);
+check("…naming them as the copies a grid renders to measure itself",
+  /none of them is visible/.test(hiddenWhy) && !/Timeout 30000ms/.test(hiddenWhy),
+  hiddenWhy.slice(0, 200));
+
+// The dry run has to fail on it too, or it goes green and the real click
+// times out — which is exactly how this shipped.
+mock.reset();
+await fetch(`${mock.url}/__app?ghostButtons=true`, { method: "POST" });
+const dryHidden = await runDecision(
+  "approve", TARGET, "", { ...SEL, approveButton: 'button.ap[style*="none"]' },
+  mock.url, LOGIN, { dryRun: true });
+check("a dry run does not go green on a button that can never be clicked",
+  !dryHidden.ok, dryHidden.steps.at(-1)?.detail ?? "");
+check("…and says approving would time out",
+  /would wait for one of them and time out/.test(dryHidden.steps.find((s) => !s.ok)?.detail ?? ""),
+  dryHidden.steps.find((s) => !s.ok)?.detail ?? "");
+
 await mock.close();
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}\n`);
 process.exit(failures === 0 ? 0 : 1);

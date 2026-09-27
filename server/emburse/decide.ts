@@ -1,4 +1,4 @@
-import type { BrowserContext, Page } from "playwright";
+import type { BrowserContext, Locator, Page } from "playwright";
 import { env } from "../env.js";
 import {
   explainLaunch, firstVisible, gridLoaded, gridUrl, makeStepper, openBrowser, safeUrl, signIn,
@@ -307,6 +307,49 @@ const ROWS_EXAMINED = 250;
  * matched nothing. Those have four different fixes, and the page itself
  * distinguishes them.
  */
+/**
+ * Click the first VISIBLE match inside a locator, or say why nothing was.
+ *
+ * `row.locator(sel).first().click()` is what this replaces, and it is how
+ * approving spent thirty seconds doing nothing and then reported
+ * "locator.click: Timeout 30000ms exceeded". A virtualised grid renders
+ * hidden copies of its rows to measure them, so the FIRST APPROVE button in
+ * the DOM is routinely one that will never be visible — and Playwright
+ * waits out the whole timeout for it to become clickable.
+ *
+ * The export has done it this way for a long time (firstVisible /
+ * clickVisible in auto-export). The decision path simply never got the same
+ * treatment, so it kept walking into the trap the export had already mapped.
+ */
+async function clickFirstVisible(
+  scope: Locator | Page,
+  selector: string,
+  what: string,
+  timeoutMs: number,
+): Promise<void> {
+  const all = scope.locator(selector);
+  const deadline = Date.now() + timeoutMs;
+  do {
+    const n = await all.count().catch(() => 0);
+    for (let i = 0; i < n; i++) {
+      const one = all.nth(i);
+      if (await one.isVisible().catch(() => false)) {
+        await one.click();
+        return;
+      }
+    }
+    await new Promise((r) => setTimeout(r, 250));
+  } while (Date.now() < deadline);
+
+  const n = await all.count().catch(() => 0);
+  throw new Error(
+    n > 0
+      ? `found ${n} ${what} matching “${selector}” but none of them is visible — they are ` +
+        `probably the hidden copies a grid renders to measure itself, not the real control.`
+      : `no ${what} matched “${selector}”.`,
+  );
+}
+
 /** How many of each selector are on the page, ignoring the ones that throw. */
 async function countAll(
   page: Page, selectors: string[],
@@ -713,6 +756,19 @@ async function applyOne(
     return step("dry run", async () => {
       if (decision === "approve") {
         const btn = row!.locator(sel.approveButton!);
+        const shown = await (async () => {
+          const n = await btn.count().catch(() => 0);
+          for (let i = 0; i < n; i++) if (await btn.nth(i).isVisible().catch(() => false)) return true;
+          return false;
+        })();
+        // Present but invisible is the failure this whole path walked into,
+        // so the dry run has to fail on it too — otherwise it goes green and
+        // the real click times out.
+        if ((await btn.count()) > 0 && !shown) {
+          throw new Error(
+            `the row has ${await btn.count()} thing(s) matching “${sel.approveButton}” but none ` +
+            `visible — approving would wait for one of them and time out.`);
+        }
         if ((await btn.count()) === 0) {
           throw new Error(
             `the row is right, but nothing inside it matched the approve button ` +
@@ -742,23 +798,32 @@ async function applyOne(
     });
   }
 
+  const ms = env.emburseLogin.stepTimeoutMs;
+
   if (decision === "approve") {
     return step("approve", async () => {
-      await row!.locator(sel.approveButton!).first().click();
+      await clickFirstVisible(row!, sel.approveButton!, "APPROVE button", ms);
       return await confirmActioned(page, sel, target, "approved");
     });
   }
 
   return step("deny", async () => {
-    await row!.locator(sel.rowMenu!).first().click();
-    await page.locator(sel.denyButton!).first().click();
+    await clickFirstVisible(row!, sel.rowMenu!, "⋮ row menu", ms);
+    await clickFirstVisible(page, sel.denyButton!, "Deny item in the row menu", ms);
 
     // Emburse may or may not ask why. Fill it when it does — a denial with no
     // stated reason is a support ticket waiting to happen for the employee.
-    const box = page.locator(sel.denyReason!).first();
-    if (await box.isVisible().catch(() => false)) await box.fill(reason);
+    const box = await (async () => {
+      const all = page.locator(sel.denyReason!);
+      const n = await all.count().catch(() => 0);
+      for (let i = 0; i < n; i++) {
+        if (await all.nth(i).isVisible().catch(() => false)) return all.nth(i);
+      }
+      return null;
+    })();
+    if (box) await box.fill(reason);
 
-    await page.locator(sel.denyConfirm!).last().click();
+    await clickFirstVisible(page, sel.denyConfirm!, "Deny confirm button", ms);
     const said = await confirmActioned(page, sel, target, "denied");
     return reason ? `${said}, reason: ${reason}` : said;
   });
