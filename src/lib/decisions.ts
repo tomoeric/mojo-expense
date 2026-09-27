@@ -164,6 +164,22 @@ export function useDecisions(keys: string[]) {
   };
 }
 
+/** Look at Emburse's edit form for a queued expense, changing nothing. */
+export async function inspectEditForm(id: number): Promise<{
+  ok: boolean;
+  steps: { name: string; ok: boolean; detail: string; ms: number }[];
+  fields: string[];
+  screenshot: string | null;
+}> {
+  const res = await fetch(`/api/decisions/${id}/edit-form`, { method: "POST" });
+  const body = await readJson<{
+    error?: string; ok: boolean; fields: string[]; screenshot: string | null;
+    steps: { name: string; ok: boolean; detail: string; ms: number }[];
+  }>(res);
+  if (!res.ok) throw new Error(body.error ?? "Could not look at the form.");
+  return body;
+}
+
 /** Prove a queued decision finds the right row, without making it. */
 export async function testDecision(id: number): Promise<{
   ok: boolean;

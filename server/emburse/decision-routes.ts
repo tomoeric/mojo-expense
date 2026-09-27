@@ -5,7 +5,7 @@ import { requireAuth } from "../auth/index.js";
 import { answerChallenge, cancelChallenge, currentChallenge, waitForCode } from "../emburse/challenge.js";
 import { browserQueue, whyWaiting } from "./browser-lock.js";
 import { credentialForUser, hasCredential, noteResult } from "./credentials.js";
-import { runDecision, testConnection, type Decision, type Target } from "./decide.js";
+import { inspectEditForm, runDecision, testConnection, type Decision, type Target } from "./decide.js";
 import {
   cancelDecision, decisionsFor, pendingDecisions, queueDecision, recentDecisions,
 } from "./decisions.js";
@@ -293,6 +293,38 @@ decisionRouter.post("/decisions/:id/test", requireAuth, async (req: Request, res
     });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "The test could not run." });
+  }
+});
+
+/**
+ * Look at Emburse's Edit form for one queued expense, and change nothing.
+ *
+ * Groundwork for editing a category before approving. Every attempt so far
+ * at writing selectors for a part of Emburse nobody has looked at has cost
+ * a round of failures — divs instead of a table, hidden measuring rows, a
+ * pinned Action column. One click here reports what the form really
+ * contains, and the change gets written against that.
+ */
+decisionRouter.post("/decisions/:id/edit-form", requireAuth, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  const queued = (await pendingDecisions()).find((d) => d.id === Number(req.params.id));
+  if (!queued) {
+    res.status(404).json({ error: "No decision is waiting with that id." });
+    return;
+  }
+  // As the person whose decision it is, like everything else that touches
+  // their Emburse account.
+  const login = await credentialForUser(queued.decidedBy);
+  if (!login) {
+    res.status(400).json({ error: `${queued.decidedBy} has no Emburse login stored.` });
+    return;
+  }
+  try {
+    const settings = await readSettings();
+    const run = await inspectEditForm(queued.target, settings.selectors, settings.emburseUrl, login);
+    res.json({ ok: run.ok, steps: run.steps, fields: run.fields, screenshot: run.screenshot });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "Could not look at the form." });
   }
 });
 

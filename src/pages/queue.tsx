@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Loader2, Send } from "lucide-react";
 import type { ExpenseReport, ReportsResponse } from "@/lib/api";
 import { ExpenseTable, buildRows, type Row } from "@/components/expense-table";
-import { DecideButtons, TestDecision } from "@/components/decide-controls";
+import { DecideButtons, InspectEditForm, TestDecision } from "@/components/decide-controls";
 import { useDecisions } from "@/lib/decisions";
 import { CodePrompt } from "@/components/code-prompt";
 
@@ -162,6 +162,7 @@ export function QueuePage({
           {/* One test is enough to trust the matching; offering it per row
               would invite twenty browser sessions. */}
           <TestDecision id={pending[0]!.id} trace={trace} />
+          {canDecide && <InspectEditForm id={pending[0]!.id} />}
         </div>
       )}
 

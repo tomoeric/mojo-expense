@@ -632,6 +632,144 @@ async function whyNoRows(
  * here leaves the device remembered, and every later approval goes straight
  * through.
  */
+/**
+ * What is actually in Emburse's Edit form?
+ *
+ * Changing an expense's category before approving it means driving a dialog
+ * nobody here has seen, and tonight has been a long lesson in what guessing
+ * at somebody else's markup costs: the grid was divs not a table, the rows
+ * had hidden measuring copies, the Action column was pinned. Three rounds,
+ * each invisible until the one before it was fixed.
+ *
+ * So this looks before anything is written. It finds the row the ordinary
+ * way — same search, same four-field verification — opens the ⋮ menu,
+ * clicks Edit, and reports every control in the form that appears: its
+ * role, its label, its current value, and for a dropdown the options it
+ * offers. Then it closes without saving.
+ *
+ * It CHANGES NOTHING. Escape, and out.
+ */
+export async function inspectEditForm(
+  target: Target,
+  selectors: Record<string, string>,
+  emburseUrl: string,
+  login: Login,
+  opts: { onChallenge?: ChallengeHook } = {},
+): Promise<DecisionRun & { fields: string[] }> {
+  const steps: StepResult[] = [];
+  const step = makeStepper(steps);
+  const sel = { ...DECISION_SELECTORS, ...selectors } as Record<string, string>;
+  const fields: string[] = [];
+
+  const run = await withBrowser("looking at Emburse's edit form", async () => {
+    let close: (() => Promise<void>) | null = null;
+    let page: Page | null = null;
+    try {
+      const opened = await openBrowser();
+      close = opened.close;
+      page = await opened.context.newPage();
+      page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
+
+      if (!(await signInOnce(page, sel, emburseUrl, login, step, opts.onChallenge))) {
+        return { ok: false, steps, matchedRow: null, screenshot: null };
+      }
+      await keepTrust(opened.context);
+
+      let row: Locator | null = null;
+      const ms = env.emburseLogin.stepTimeoutMs;
+
+      if (!(await step("find the expense", async () => {
+        const term = target.merchant.trim().split(/\s+/).slice(0, 2).join(" ");
+        await page!.goto(gridUrl(emburseUrl, { query: term, path: sel.gridPath }), {
+          waitUntil: "domcontentloaded",
+        });
+        if (!(await gridLoaded(page!, sel as never))) throw new Error(await whyNoGrid(page!, sel, login.email));
+        const rows = page!.locator(sel.resultRow!);
+        const count = await rows.count();
+        if (count === 0) throw new Error(await whyNoRows(page!, sel, term));
+        const hits: number[] = [];
+        for (let i = 0; i < Math.min(count, ROWS_EXAMINED); i++) {
+          if (rowMatches(await rows.nth(i).innerText().catch(() => ""), target).ok) hits.push(i);
+        }
+        if (hits.length !== 1) {
+          throw new Error(`${hits.length} of ${count} rows match this expense; need exactly one to look at its edit form.`);
+        }
+        row = rows.nth(hits[0]!);
+        return `matched 1 of ${count} rows`;
+      }))) return { ok: false, steps, matchedRow: null, screenshot: null };
+
+      if (!(await step("open the \u22ee menu", async () => {
+        await (await controlForRow(page!, row!, sel.rowMenu!, "\u22ee row menu", ms)).click();
+        await page!.waitForTimeout(400);
+        const items = await countAll(page!, ['[role="menuitem"]', "[role=menu] button", "li button", "li"]);
+        const seen = items.filter((i) => i.n > 0).map((i) => `${i.sel} \u00d7${i.n}`).join(", ");
+        return `menu open \u2014 ${seen || "nothing menu-shaped found"}`;
+      }))) return { ok: false, steps, matchedRow: null, screenshot: null };
+
+      if (!(await step("click Edit", async () => {
+        const edit = page!.locator('text=/^\\s*Edit\\s*$/i');
+        const n = await edit.count();
+        for (let i = 0; i < n; i++) {
+          if (await edit.nth(i).isVisible().catch(() => false)) {
+            await edit.nth(i).click();
+            await page!.waitForTimeout(1200);
+            return "the edit form is open";
+          }
+        }
+        throw new Error(`nothing visible in the \u22ee menu matched Edit (${n} candidate(s)).`);
+      }))) return { ok: false, steps, matchedRow: null, screenshot: null };
+
+      await step("read the form", async () => {
+        // Everything a person could type into or choose from, with whatever
+        // names the page gives it. This is the whole point of the exercise:
+        // the next change is written against what is really there.
+        const controls = page!.locator("input, select, textarea, [role=combobox], [role=listbox], [contenteditable=true]");
+        const n = Math.min(await controls.count(), 40);
+        for (let i = 0; i < n; i++) {
+          const c = controls.nth(i);
+          if (!(await c.isVisible().catch(() => false))) continue;
+          const [tag, name, id, ph, label, value, role] = await Promise.all([
+            c.evaluate((el) => el.tagName.toLowerCase()).catch(() => "?"),
+            c.getAttribute("name").catch(() => null),
+            c.getAttribute("id").catch(() => null),
+            c.getAttribute("placeholder").catch(() => null),
+            c.getAttribute("aria-label").catch(() => null),
+            c.inputValue().catch(() => null),
+            c.getAttribute("role").catch(() => null),
+          ]);
+          const bits = [tag, role && `role=${role}`, name && `name=${name}`, id && `id=${id}`,
+            label && `aria-label=${label}`, ph && `placeholder=${ph}`,
+            value && `value=${value.slice(0, 40)}`].filter(Boolean);
+          fields.push(bits.join(" "));
+        }
+        return fields.length > 0
+          ? `${fields.length} control(s): ${fields.slice(0, 6).join(" | ")}`
+          : "no form controls are visible \u2014 the edit form may open elsewhere";
+      });
+
+      // Never save. Out the way it came in.
+      await page.keyboard.press("Escape").catch(() => undefined);
+      return {
+        ok: true,
+        steps,
+        matchedRow: null,
+        screenshot: (await page.screenshot().catch(() => null))?.toString("base64") ?? null,
+      };
+    } catch (err) {
+      steps.push({ name: "look at the edit form", ok: false, ms: 0,
+        detail: err instanceof Error ? err.message : String(err) });
+      return {
+        ok: false, steps, matchedRow: null,
+        screenshot: (await page?.screenshot().catch(() => null))?.toString("base64") ?? null,
+      };
+    } finally {
+      await close?.().catch(() => undefined);
+    }
+  });
+
+  return { ...run, fields };
+}
+
 export async function testConnection(
   selectors: Record<string, string>,
   emburseUrl: string,

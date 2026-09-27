@@ -2,7 +2,7 @@ import { useState } from "react";
 import {
   Check, X, Loader2, Clock, AlertTriangle, Undo2, FlaskConical, ShieldCheck,
 } from "lucide-react";
-import { testDecision, type QueuedDecision } from "@/lib/decisions";
+import { inspectEditForm, testDecision, type QueuedDecision } from "@/lib/decisions";
 import { money } from "@/lib/format";
 
 /**
@@ -405,6 +405,58 @@ function DenyDialog({
  * rather than in a test file: the matching is the thing being trusted, and
  * seeing it name the row it found is what earns that.
  */
+/**
+ * Look at Emburse's edit form, and change nothing.
+ *
+ * Groundwork for fixing a category before approving. Every part of Emburse
+ * this app has had to drive blind has cost a round of failures — a grid of
+ * divs, hidden measuring rows, a pinned Action column — each invisible
+ * until the one before it was fixed. One click reports what the form
+ * really contains so the change can be written against it rather than
+ * guessed at.
+ */
+export function InspectEditForm({ id }: { id: number }) {
+  const [state, setState] = useState<
+    { phase: "idle" } | { phase: "running" } | { phase: "done"; ok: boolean; fields: string[]; detail: string }
+  >({ phase: "idle" });
+
+  return (
+    <span className="inline-flex flex-wrap items-center gap-2 text-xs">
+      <button
+        type="button"
+        disabled={state.phase === "running"}
+        title="Opens Emburse's edit form for this expense and reports what is on it. Saves nothing."
+        onClick={() => {
+          setState({ phase: "running" });
+          void inspectEditForm(id)
+            .then((r) => setState({
+              phase: "done", ok: r.ok, fields: r.fields,
+              detail: r.steps.find((s) => !s.ok)?.detail ?? r.steps.at(-1)?.detail ?? "",
+            }))
+            .catch((e: Error) => setState({ phase: "done", ok: false, fields: [], detail: e.message }));
+        }}
+        className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 font-semibold hover:bg-muted disabled:opacity-40"
+      >
+        {state.phase === "running" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FlaskConical className="h-3.5 w-3.5" />}
+        {state.phase === "running" ? "Looking…" : "Inspect edit form"}
+      </button>
+      {state.phase === "running" && (
+        <span className="text-muted-foreground">Opening the row's edit form — nothing is saved.</span>
+      )}
+      {state.phase === "done" && (
+        <span className="block w-full">
+          <span className={state.ok ? "text-emerald-600" : "text-amber-600"}>{state.detail}</span>
+          {state.fields.length > 0 && (
+            <span className="mt-1 block rounded-lg border border-border bg-muted/40 p-2 font-mono text-[11px] break-words">
+              {state.fields.map((f, i) => <span key={i} className="block">{f}</span>)}
+            </span>
+          )}
+        </span>
+      )}
+    </span>
+  );
+}
+
 export function TestDecision({ id, trace }: { id: number; trace: boolean }) {
   const [state, setState] = useState<
     { phase: "idle" } | { phase: "running" } |
