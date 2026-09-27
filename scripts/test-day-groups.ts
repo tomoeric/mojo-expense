@@ -197,6 +197,37 @@ if (!process.env.DATABASE_URL) {
 
     check("a run records WHEN it ran, so a stale count can be seen as stale",
       Boolean((await store.activeRules()).find((r) => r.name === `${TAG} day limit`)?.lastRunAt));
+
+    // The queue's filter chips are built from whatever rules have caught
+    // something, so making and unmaking a rule has to add and remove its
+    // chip with nothing else to clean up. A chip for a rule that no longer
+    // exists is a filter that shows an empty queue and cannot be dismissed.
+    console.log("\n7. Rules appearing and disappearing");
+    const chips = async () =>
+      [...new Set([...(await store.hitsFor(keys)).values()].flat()
+        .map((h) => h.ruleName).filter((n) => n.startsWith(TAG)))].sort();
+
+    check("both rules show up once they have caught something",
+      (await chips()).length === 2, (await chips()).join(", "));
+
+    const dayId = (await store.activeRules()).find((r) => r.name === `${TAG} day limit`)!.id;
+    await store.setEnabled(dayId, false, "tester@example.invalid");
+    check("turning one off removes its chip, without touching the other",
+      (await chips()).join() === `${TAG} per expense`, (await chips()).join(", "));
+
+    await store.setEnabled(dayId, true, "tester@example.invalid");
+    check("…and turning it back on brings it back, verdicts intact",
+      (await chips()).length === 2, (await chips()).join(", "));
+
+    // Deletion has to take the verdicts with it. They are a separate table,
+    // so this only holds because of the cascade on the foreign key.
+    await store.deleteRule(dayId);
+    check("deleting a rule takes its chip AND its stored verdicts with it",
+      (await chips()).join() === `${TAG} per expense`, (await chips()).join(", "));
+    const orphans = await db().query<{ n: string }>(
+      "SELECT count(*) AS n FROM expense_rule_hits WHERE rule_id = $1", [dayId]);
+    check("…leaving nothing behind to haunt the queue",
+      Number(orphans.rows[0]!.n) === 0, orphans.rows[0]!.n);
   } finally {
     await db().query("DELETE FROM expenses WHERE dedupe_key LIKE $1", [`${TAG}%`]);
     await db().query("DELETE FROM expense_rules WHERE name LIKE $1", [`${TAG}%`]);

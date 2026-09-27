@@ -344,9 +344,11 @@ export function bandsFor(rows: Row[], rule: string): Band[] {
  * pretending the DOM has one.
  */
 function BandRows({
-  band, banded, columns, onOpen, onDiff,
+  band, rule, banded, columns, onOpen, onDiff,
 }: {
   band: Band;
+  /** Which rule drew this band, named on it. */
+  rule: string;
   banded: boolean;
   columns: Column[];
   onOpen: (r: Row) => void;
@@ -367,6 +369,12 @@ function BandRows({
               <AlertTriangle className="h-3.5 w-3.5 shrink-0 self-center text-amber-600" />
               <strong className="font-semibold">{band.employee}</strong>
               <span className="text-muted-foreground">{shortDate(band.day)}</span>
+              {rule && (
+                <>
+                  <span className="text-muted-foreground">\u00b7</span>
+                  <span className="text-muted-foreground">{rule}</span>
+                </>
+              )}
               <span className="text-muted-foreground">\u00b7</span>
               <span>
                 {band.rows.length} receipt{band.rows.length === 1 ? "" : "s"}
@@ -763,6 +771,7 @@ export function ExpenseTable({
                 <BandRows
                   key={band.key}
                   band={band}
+                  rule={flagGroup ?? ""}
                   banded={bands !== null && band.key !== "\u0000loose"}
                   columns={columns}
                   onOpen={onOpen}
