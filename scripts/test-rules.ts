@@ -414,6 +414,33 @@ check("a typed value is still matched exactly",
     { field: "merchant", op: "is", value: "Walmart" }) === false);
 
 console.log("\nWhat a rule is not allowed to be");
+// "Why can't I save this" has twice meant this exact thing: every new rule
+// arrives with a MUST row, and a rule that is complete at the WHEN — "flag
+// anything where the receipt shows alcohol" — cannot be saved until somebody
+// works out the row is optional. The message has to say what the × does, not
+// just offer it.
+check("a blank MUST on a flag rule says what removing it would mean",
+  problems(rule({ action: "flag", must: { field: "category", op: "is", value: "" } }))
+    .some((p) => /flags everything the WHEN matches/.test(p)),
+  problems(rule({ action: "flag", must: { field: "category", op: "is", value: "" } })).join(" "));
+check("…and on a deny rule it says denies, not flags",
+  problems(rule({ action: "deny", message: "no", must: { field: "category", op: "is", value: "" } }))
+    .some((p) => /denies everything the WHEN matches/.test(p)));
+// An approve rule is the one case where dropping the MUST is dangerous — it
+// would approve the whole matched set — so it is never suggested there.
+check("…but an approve rule is never told to just drop it",
+  problems(rule({ action: "approve", must: { field: "category", op: "is", value: "" } }))
+    .every((p) => !/approves everything the WHEN matches, which is all/.test(p)));
+// A flag rule with NO must at all is valid, and that is the shape this is
+// steering toward.
+check("a flag rule with no expectation is valid",
+  problems(rule({ action: "flag", must: null })).length === 0,
+  problems(rule({ action: "flag", must: null })).join(" "));
+check("…and reads as acting on everything it matches",
+  summarise(rule({ action: "flag", must: null }))
+    === "Flags every expense where Note contains “gas”.",
+  summarise(rule({ action: "flag", must: null })));
+
 check("a rule needs a name", problems(rule({ name: "  " })).some((p) => /needs a name/.test(p)));
 check("a rule needs a condition", problems(rule({ when: [] })).some((p) => /at least one condition/.test(p)));
 check("a condition needs a value",

@@ -628,7 +628,21 @@ export function problems(rule: RuleBody): string[] {
   for (const { c, where } of rows) {
     const at = `${where}: `;
     if (needsValue(c) && !c.value.trim()) {
-      out.push(`${at}“${FIELD_LABEL[c.field]} ${opLabel(c.field, c.op)}” needs a value — pick one, or remove the row with the ×.`);
+      // For a flag or deny rule the × is often the right answer rather than
+      // the fallback, and the old wording did not say so. Every new rule
+      // arrives with a MUST row, so "flag anything where the receipt shows
+      // alcohol" — a rule that is complete at the WHEN — cannot be saved
+      // until somebody works out that the row is optional. That is the
+      // second time "why can't I save this" has meant exactly this.
+      const removable = where === "MUST" && rule.action !== "approve";
+      out.push(
+        `${at}“${FIELD_LABEL[c.field]} ${opLabel(c.field, c.op)}” needs a value — pick one, ` +
+        (removable
+          ? `or remove the row with the ×: with no MUST this rule ` +
+            `${rule.action === "deny" ? "denies" : "flags"} everything ` +
+            `the WHEN matches, which is all a rule like this usually needs.`
+          : `or remove the row with the ×.`),
+      );
     }
     // Every numeric field, not just Amount. Only Amount was checked, so
     // "$75.00" saved against "Matching total that day" without a word and
