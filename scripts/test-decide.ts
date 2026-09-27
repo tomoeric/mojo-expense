@@ -202,6 +202,88 @@ const onTable = await decide(TARGET);
 check("a real <table> grid still works, so this is a widening not a swap",
   onTable.ok, onTable.steps.find((s) => !s.ok)?.detail ?? "");
 
+console.log("\n13. Does DENY work, or only approve?");
+// The dry run used to stop the instant the row was found, so it proved
+// everything except the part most likely to break. Approve is one button
+// inside the row; deny is a ⋮ menu, an item in it, a reason box and a
+// confirm — four more selectors a green test never touched.
+mock.reset();
+const dryDeny = await runDecision("deny", TARGET, "over budget", SEL, mock.url, LOGIN, { dryRun: true });
+check("a dry deny now reaches for the ⋮ menu and the Deny item", dryDeny.ok,
+  dryDeny.steps.find((s) => !s.ok)?.detail ?? "");
+check("…and says so, without denying anything",
+  /opened its ⋮ menu and found Deny/.test(dryDeny.steps.at(-1)?.detail ?? ""),
+  dryDeny.steps.at(-1)?.detail ?? "");
+
+mock.reset();
+const noMenu = await runDecision(
+  "deny", TARGET, "x", { ...SEL, rowMenu: "button.no-such-menu" }, mock.url, LOGIN, { dryRun: true });
+check("a missing ⋮ menu is caught BEFORE anything is denied", !noMenu.ok);
+check("…and says approving would still work, so the two are not confused",
+  /Approving would still work|denying needs that/.test(noMenu.steps.find((s) => !s.ok)?.detail ?? ""),
+  noMenu.steps.find((s) => !s.ok)?.detail ?? "");
+
+console.log("\n14. A click that lands on nothing must not report success");
+// Both paths used to click, sleep 1.5s and say "approved in Emburse"
+// whether or not anything happened — the worst failure available on an
+// audit-relevant action: the queue says applied and the expense sits there.
+mock.reset();
+await fetch(`${mock.url}/__app?actions=dead`, { method: "POST" });
+const deadClick = await runDecision("approve", TARGET, "", SEL, mock.url, LOGIN, {});
+check("a dead APPROVE button is reported as a failure, not a success", !deadClick.ok,
+  deadClick.steps.at(-1)?.detail ?? "");
+check("…saying it may have gone through, since that is the honest state",
+  /check the expense in Emburse/.test(deadClick.steps.find((s) => !s.ok)?.detail ?? ""),
+  deadClick.steps.find((s) => !s.ok)?.detail ?? "");
+
+console.log("\n15. And a click that works is confirmed, not assumed");
+mock.reset();
+const realApprove = await runDecision("approve", TARGET, "", SEL, mock.url, LOGIN, {});
+check("approving is confirmed by the row leaving Needs Review", realApprove.ok,
+  realApprove.steps.at(-1)?.detail ?? "");
+check("…and says what confirmed it", /left Needs Review/.test(realApprove.steps.at(-1)?.detail ?? ""),
+  realApprove.steps.at(-1)?.detail ?? "");
+
+mock.reset();
+const realDeny = await runDecision("deny", TARGET, "over budget", SEL, mock.url, LOGIN, {});
+check("denying works end to end: menu, item, reason, confirm", realDeny.ok,
+  realDeny.steps.at(-1)?.detail ?? "");
+check("…and the reason is carried into the record",
+  /over budget/.test(realDeny.steps.at(-1)?.detail ?? ""), realDeny.steps.at(-1)?.detail ?? "");
+
+console.log("\n16. Progress while a batch runs");
+// Three decisions take about three minutes, and with only a final result
+// to go on the queue showed nothing for three minutes and then changed all
+// three at once — which, while it is happening, is indistinguishable from
+// nothing happening. Each one is now reported as it lands.
+mock.reset();
+const { runDecisions } = await import("../server/emburse/decide.js");
+const asItLands: { id: number; ok: boolean; at: number }[] = [];
+const batch = [
+  { id: 1, decision: "approve" as const, target: TARGET, reason: null },
+  { id: 2, decision: "approve" as const, target: { ...TARGET, amount: 999.99 }, reason: null },
+  { id: 3, decision: "approve" as const,
+    target: { ...TARGET, employee: "Kevin McBride" }, reason: null },
+];
+const out = await runDecisions(batch, SEL, mock.url, LOGIN, {
+  dryRun: true,
+  onResult: (id, run) => { asItLands.push({ id, ok: run.ok, at: Date.now() }); },
+});
+check("every decision is reported as it finishes, not only at the end",
+  asItLands.length === 3, `${asItLands.length} reported`);
+check("…in the order they were worked",
+  asItLands.map((r) => r.id).join(",") === "1,2,3", asItLands.map((r) => r.id).join(","));
+check("…before the batch as a whole returns",
+  asItLands.every((r) => r.at <= Date.now()));
+// The one that cannot be found must not take the others down with it.
+check("a decision that fails does not stop the ones after it",
+  out.get(1)?.ok === true && out.get(2)?.ok === false && out.get(3)?.ok === true,
+  [1, 2, 3].map((i) => `${i}:${out.get(i)?.ok}`).join(" "));
+// This is also what stops a batch that dies halfway leaving already-actioned
+// decisions unrecorded.
+check("…and each result is the same one the batch returns",
+  asItLands.every((r) => out.get(r.id)?.ok === r.ok));
+
 await mock.close();
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}\n`);
 process.exit(failures === 0 ? 0 : 1);

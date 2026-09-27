@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Loader2, Send } from "lucide-react";
 import type { ExpenseReport, ReportsResponse } from "@/lib/api";
 import { ExpenseTable, buildRows, type Row } from "@/components/expense-table";
@@ -35,6 +35,23 @@ export function QueuePage({
     useDecisions(keys);
   const [error, setError] = useState("");
   const [sendNote, setSendNote] = useState<string | null>(null);
+  /**
+   * The batch is OURS when the browser's holder is the decision run rather
+   * than the export. The export also holds it, and "applying 2 of 3" while
+   * the export has it would be a lie about whose minute this is.
+   */
+  const running = /applying \d+ decision/.test(browser?.holder?.label ?? "");
+  /**
+   * How many were in the batch, remembered across polls: the pending count
+   * falls as they land, so on its own it can only say what is left, never
+   * how far through. Reset whenever a run is not in progress.
+   */
+  const [sent, setSent] = useState(0);
+  useEffect(() => {
+    const n = Number(/applying (\d+) decision/.exec(browser?.holder?.label ?? "")?.[1] ?? 0);
+    if (n > 0) setSent(n);
+    else if (pending.length === 0) setSent(0);
+  }, [browser?.holder?.label, pending.length]);
 
   const rows: Row[] = useMemo(
     () =>
@@ -101,13 +118,23 @@ export function QueuePage({
       {pending.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-sky-500/30 bg-sky-500/5 p-2.5 text-xs">
           <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-600" aria-hidden />
+          {/* Progress, not just a count. A batch of three takes about three
+              minutes and the only thing on screen was "3 decisions waiting"
+              — which reads the same at the start, in the middle and when it
+              has stalled. Decisions now settle one at a time as they land,
+              so counting what is left against what was sent says how far
+              along it is. */}
           <span className="font-semibold">
-            {pending.length} decision{pending.length === 1 ? "" : "s"} waiting to reach Emburse
+            {running
+              ? `Applying ${sent - pending.length + 1} of ${sent} — ${pending.length} to go`
+              : `${pending.length} decision${pending.length === 1 ? "" : "s"} waiting to reach Emburse`}
           </span>
           <span className="text-muted-foreground">
-            {browser?.holder
-              ? `${browser.holder.label} has the browser; these go next.`
-              : "Sent together in one sign-in, shortly."}
+            {running
+              ? `signing in and clicking takes about a minute each (${Math.round((Date.now() - (browser?.holder?.since ?? Date.now())) / 1000)}s so far).`
+              : browser?.holder
+                ? `${browser.holder.label} has the browser; these go next.`
+                : "Sent together in one sign-in, shortly."}
           </span>
           {/* Pressing it has to visibly do something. It used to produce no
               change at all — no spinner, no word — while the run it started

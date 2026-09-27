@@ -199,7 +199,20 @@ export async function runDecisions(
   selectors: Record<string, string>,
   emburseUrl: string,
   login: Login,
-  opts: { dryRun?: boolean; onChallenge?: ChallengeHook } = {},
+  /**
+   * `onResult` fires as each decision finishes, rather than the caller
+   * waiting for the whole batch. Three decisions take three minutes, and
+   * with only a final Map to go on the queue showed nothing at all for
+   * three minutes and then flipped all three at once — indistinguishable,
+   * while it is happening, from nothing happening. Settling one at a time
+   * also means a batch that dies on the third does not leave the first two
+   * unrecorded, having already actioned them in Emburse.
+   */
+  opts: {
+    dryRun?: boolean;
+    onChallenge?: ChallengeHook;
+    onResult?: (id: number, run: DecisionRun) => Promise<void> | void;
+  } = {},
 ): Promise<Map<number, DecisionRun>> {
   const results = new Map<number, DecisionRun>();
   if (items.length === 0) return results;
@@ -240,12 +253,20 @@ export async function runDecisions(
           page, it.decision, it.target, it.reason ?? "", sel, emburseUrl, step, opts,
           (t) => (matchedRow = t), login.email,
         );
-        results.set(it.id, {
+        const run: DecisionRun = {
           ok,
           steps,
           screenshot: ok ? null : (await page.screenshot().catch(() => null))?.toString("base64") ?? null,
           matchedRow,
-        });
+        };
+        results.set(it.id, run);
+        // Reported now, not at the end. A reporting failure must not abandon
+        // the rest of the batch: the browser is held and the remaining
+        // decisions are what it is held for.
+        if (opts.onResult) {
+          try { await opts.onResult(it.id, run); }
+          catch (err) { console.error("decisions: could not record one as it finished:", err); }
+        }
       }
       return results;
     } catch (err) {
@@ -679,16 +700,52 @@ async function applyOne(
     return `${verdict.why} — ${text.slice(0, 120)}`;
   }))) return false;
 
+  // The dry run used to stop the moment the row was found, which meant it
+  // proved everything EXCEPT the part most likely to be wrong. Approve is one
+  // button inside the row; deny is a ⋮ menu, an item in it, a reason box and
+  // a confirm — four more selectors, none of which a dry run ever touched. So
+  // a green test told you nothing about whether denying would work.
+  //
+  // It now reaches for the controls without using them. For deny that means
+  // opening the menu and looking for Deny, then pressing Escape. Opening a
+  // menu changes nothing; the confirm is never clicked, on any path.
   if (opts.dryRun) {
-    await step("dry run", async () => `found the row; stopped without ${decision === "approve" ? "approving" : "denying"}`);
-    return true;
+    return step("dry run", async () => {
+      if (decision === "approve") {
+        const btn = row!.locator(sel.approveButton!);
+        if ((await btn.count()) === 0) {
+          throw new Error(
+            `the row is right, but nothing inside it matched the approve button ` +
+            `“${sel.approveButton}”. The row reads: “${(await row!.innerText()).replace(/\s+/g, " ").trim().slice(0, 140)}”`);
+        }
+        return "found the row and its APPROVE button; stopped without approving";
+      }
+
+      const menu = row!.locator(sel.rowMenu!);
+      if ((await menu.count()) === 0) {
+        throw new Error(
+          `the row is right, but nothing inside it matched the row menu “${sel.rowMenu}” ` +
+          `— denying needs that ⋮ menu, so it would fail here.`);
+      }
+      await menu.first().click();
+      const item = page.locator(sel.denyButton!).first();
+      const there = await item.isVisible().catch(() => false);
+      // Always close it, whatever was found. A menu left open over the grid
+      // is the next run's problem.
+      await page.keyboard.press("Escape").catch(() => undefined);
+      if (!there) {
+        throw new Error(
+          `opened the row's ⋮ menu, but nothing in it matched “${sel.denyButton}”. ` +
+          `Approving would still work; denying would fail at this point.`);
+      }
+      return "found the row, opened its ⋮ menu and found Deny; stopped without denying";
+    });
   }
 
   if (decision === "approve") {
     return step("approve", async () => {
       await row!.locator(sel.approveButton!).first().click();
-      await page.waitForTimeout(1500);
-      return "approved in Emburse";
+      return await confirmActioned(page, sel, target, "approved");
     });
   }
 
@@ -702,7 +759,52 @@ async function applyOne(
     if (await box.isVisible().catch(() => false)) await box.fill(reason);
 
     await page.locator(sel.denyConfirm!).last().click();
-    await page.waitForTimeout(1500);
-    return reason ? `denied in Emburse: ${reason}` : "denied in Emburse";
+    const said = await confirmActioned(page, sel, target, "denied");
+    return reason ? `${said}, reason: ${reason}` : said;
   });
+}
+
+/**
+ * Did the click actually do anything?
+ *
+ * Both paths used to click, wait a flat second and a half, and report
+ * "approved in Emburse" unconditionally — whether or not the button was hit,
+ * whether or not Emburse recorded a thing. That is the worst available
+ * failure on an audit-relevant action: the queue says applied, the expense
+ * sits unapproved, and nobody looks again.
+ *
+ * The check is that the expense leaves the Needs Review grid, which is what
+ * actioning it does. Polled rather than slept on, so a fast tenant is not
+ * waited out and a slow one is not called a failure.
+ *
+ * When it does NOT disappear this throws, which marks the decision failed.
+ * That is the safer of the two mistakes: a decision wrongly marked failed
+ * gets tried again and the retry finds no matching row, while one wrongly
+ * marked applied is simply lost. The message says as much, because "it may
+ * have worked, go and look" is the honest state and the reviewer can settle
+ * it in ten seconds.
+ */
+async function confirmActioned(
+  page: Page,
+  sel: Record<string, string>,
+  target: Target,
+  what: string,
+): Promise<string> {
+  for (let i = 0; i < 12; i++) {
+    await page.waitForTimeout(500);
+    // Re-scanned rather than held as a locator: the grid re-renders after an
+    // action, so the row that was nth(3) is a different expense now.
+    const rows = page.locator(sel.resultRow!);
+    const n = Math.min(await rows.count().catch(() => 0), 60);
+    let still = false;
+    for (let j = 0; j < n; j++) {
+      const text = await rows.nth(j).innerText().catch(() => "");
+      if (rowMatches(text, target).ok) { still = true; break; }
+    }
+    if (!still) return `${what} in Emburse — the row left Needs Review`;
+  }
+  throw new Error(
+    `clicked ${what === "approved" ? "APPROVE" : "Deny"}, but the expense is still in ` +
+    `Needs Review six seconds later, so nothing confirms Emburse recorded it. It may ` +
+    `have gone through — check the expense in Emburse before deciding it again.`);
 }

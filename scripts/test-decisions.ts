@@ -218,7 +218,48 @@ const twice = await queueDecision({
 check("but still only one in flight at a time",
   !twice.ok && /already waiting/.test(twice.ok ? "" : twice.error));
 
-console.log("\n9. A pass that could not even try");
+console.log("\n9. The page where it stopped");
+// "It sits on this step and then errors out. No message."
+//
+// The run has always taken a screenshot when a decision fails and then
+// thrown it away. For that failure it is the only thing that answers the
+// question — a spinner still turning, an unexpected modal, a session
+// bounced back to sign-in — all obvious in a picture and invisible in a
+// step name.
+{
+  const shotKey = "test-shot-1";
+  await db().query(
+    `INSERT INTO expenses (dedupe_key, employee, expense_date, merchant, amount_cents,
+                           category, department, location, note, method, in_inbox)
+     VALUES ($1,'Shot Person','2026-09-13','SQ *SHOT',900,'Meals','Ops','Site','x','Card',true)
+     ON CONFLICT (dedupe_key) DO NOTHING`, [shotKey]);
+  const q = await queueDecision({
+    dedupeKey: shotKey, decision: "approve", reason: "r", decidedBy: "tester@example.invalid",
+    target: { employee: "Shot Person", merchant: "SQ *SHOT", amount: 9, date: "2026-09-13" },
+  });
+  if (!q.ok) throw new Error(q.error);
+  await settleDecision(q.queued.id, { ok: false, error: "timed out" }, null, "UE9SVFJBSVQ=");
+  const withShot = (await decisionsFor([shotKey])).get(shotKey)!;
+  check("a failure keeps the picture of where it stopped",
+    withShot.shot === "UE9SVFJBSVQ=", withShot.shot ?? "(none)");
+
+  // It must not be kept for ever, nor on a success: it is the largest thing
+  // on a row that is read on every queue poll.
+  await settleDecision(q.queued.id, { ok: true, matchedRow: "a row" });
+  const cleared = (await decisionsFor([shotKey])).get(shotKey)!;
+  check("…and drops it once the decision succeeds", cleared.shot === null,
+    cleared.shot === null ? "" : "still stored");
+
+  // A megabyte-and-a-half PNG must not be written into a row read on every poll.
+  await settleDecision(q.queued.id, { ok: false, error: "again" }, null, "x".repeat(3_000_000));
+  const huge = (await decisionsFor([shotKey])).get(shotKey)!;
+  check("…and refuses one too large to belong on a polled row", huge.shot === null,
+    huge.shot === null ? "" : `${huge.shot.length} chars stored`);
+  await db().query("DELETE FROM expense_decisions WHERE dedupe_key = $1", [shotKey]);
+  await db().query("DELETE FROM expenses WHERE dedupe_key = $1", [shotKey]);
+}
+
+console.log("\n10. A pass that could not even try");
 // "Click approve does not work, and nothing comes back to say why."
 //
 // The worker caught its own exceptions, logged them, and swallowed them. A

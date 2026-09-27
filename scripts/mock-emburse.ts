@@ -59,6 +59,12 @@ type State = {
    */
   padRows: number;
   /**
+   * Whether clicking APPROVE or confirming Deny actually removes the row.
+   * Off reproduces a click that lands on nothing — which used to be
+   * reported as "approved in Emburse" all the same.
+   */
+  actionsWork: boolean;
+  /**
    * How the export dialog offers a format.
    *
    *   "links"  — a link that opens a page of choices.
@@ -127,6 +133,7 @@ const state: State = {
   showNavLabel: true,
   gridShape: "table",
   padRows: 0,
+  actionsWork: true,
   formatControl: "links",
   chipsUnmatchable: false,
   chipState: "aria",
@@ -162,7 +169,35 @@ const grid = (search: string) => {
   const shown = [...filler, ...matching];
   const cells = (r: (typeof ROWS)[number]) =>
     `${r.date}</td><td>${r.merchant}</td><td>${r.who}</td><td>$${r.amount}</td>
-     <td><button>APPROVE</button> <button aria-label="more">&#8942;</button>`;
+     <td><button class="ap">APPROVE</button> <button aria-label="more" class="mn">&#8942;</button>`;
+
+  // A grid whose buttons DO something. Approving or confirming a denial
+  // takes the row out of Needs Review, which is how the run now confirms
+  // the click landed — before this the mock's APPROVE was inert, so a test
+  // could not tell a working click from one that hit nothing.
+  const behaviour = `<div id="menu" hidden><button class="dn">Deny</button></div>
+    <div id="dlg" hidden><textarea placeholder="Reason"></textarea><button class="dc">Deny</button></div>
+    <script>
+      var live = ${state.actionsWork ? "true" : "false"};
+      var target = null;
+      document.addEventListener("click", function (e) {
+        var b = e.target.closest("button"); if (!b) return;
+        var row = b.closest("tr") || b.closest('[role="row"]');
+        if (b.classList.contains("ap")) { if (live && row) row.remove(); return; }
+        if (b.classList.contains("mn")) { target = row; document.getElementById("menu").hidden = false; return; }
+        if (b.classList.contains("dn")) {
+          document.getElementById("menu").hidden = true;
+          document.getElementById("dlg").hidden = false; return;
+        }
+        if (b.classList.contains("dc")) {
+          document.getElementById("dlg").hidden = true;
+          if (live && target) target.remove(); return;
+        }
+      });
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") { document.getElementById("menu").hidden = true; }
+      });
+    </script>`;
 
   const realTable = `<table><thead><tr><th>Date</th><th>Merchant</th><th>Employee</th><th>Amount</th><th></th></tr></thead>
     <tbody>${shown.map((r) => `<tr><td>${cells(r)}</td></tr>`).join("")}</tbody></table>`;
@@ -172,7 +207,7 @@ const grid = (search: string) => {
     // <table>, it comes first, and it is never visible — so a wait on the
     // first match sits on it until it times out, next to a grid that loaded
     // immediately.
-    return `<table style="display:none"><tbody><tr><td>sizing</td></tr></tbody></table>${realTable}`;
+    return `<table style="display:none"><tbody><tr><td>sizing</td></tr></tbody></table>${realTable}${behaviour}`;
   }
   if (state.gridShape === "divs") {
     // What spend.emburse.com actually serves: a grid of divs with ARIA
@@ -184,9 +219,9 @@ const grid = (search: string) => {
       <div role="rowgroup"><div role="row"></div>${shown
         .map((r) => `<div role="row"><div role="cell">${cells(r).replace(/<\/?td>/g, "")}</div></div>`)
         .join("")}</div>
-    </div>`;
+    </div>${behaviour}`;
   }
-  return realTable;
+  return realTable + behaviour;
 };
 
 const page = (body: string) => `<!doctype html><html><body style="font-family:sans-serif">${body}</body></html>`;
@@ -563,6 +598,7 @@ app.post("/__app", (req, res) => {
   if ("nav" in q) state.showNavLabel = q["nav"] !== "false";
   if ("grid" in q) state.gridShape = q["grid"] as State["gridShape"];
   if ("pad" in q) state.padRows = Math.max(0, Math.min(500, Number(q["pad"]) || 0));
+  if ("actions" in q) state.actionsWork = q["actions"] !== "dead";
   if ("format" in q) state.formatControl = q["format"] as State["formatControl"];
   if ("chips" in q) state.chipsUnmatchable = q["chips"] === "unmatchable";
   if ("chipState" in q) state.chipState = q["chipState"] as State["chipState"];
@@ -589,7 +625,7 @@ const reset = () =>
     // the grid to divs left every later test running against divs — and the
     // one that then failed looked like a regression in whatever it was
     // actually testing, rather than leftover state from three tests ago.
-    gridShape: "table", padRows: 0, formatControl: "links",
+    gridShape: "table", padRows: 0, actionsWork: true, formatControl: "links",
     chipsUnmatchable: false, appPaintMs: 0, showNavLabel: true,
     sections: {
       "Needs Review": true, "Needs Manager Review": false,

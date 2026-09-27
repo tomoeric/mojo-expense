@@ -120,13 +120,26 @@ async function tick(): Promise<void> {
       // all — which is what happens the first time anybody decides from an
       // account this browser has never signed in as, and it failed with no
       // way to put it right.
-      const results = await runDecisions(batch, settings.selectors, settings.emburseUrl, login, {
-        onChallenge: (ctx) => waitForCode({ ...ctx, owner: decider }),
-      });
-
       // Read once per batch, not per decision: it is the same answer for all
       // of them and this runs while a browser is held open.
       const tracing = await getFlag("traceDecisions").catch(() => false);
+
+      const settle = (id: number, run: Awaited<ReturnType<typeof runDecisions>> extends Map<number, infer R> ? R : never) =>
+        settleDecision(
+          id,
+          run.ok
+            ? { ok: true, matchedRow: run.matchedRow }
+            : { ok: false, error: run.steps.find((s) => !s.ok)?.detail ?? "The decision did not go through." },
+          tracing ? run.steps : null,
+          tracing ? run.screenshot : null,
+        );
+
+      const results = await runDecisions(batch, settings.selectors, settings.emburseUrl, login, {
+        onChallenge: (ctx) => waitForCode({ ...ctx, owner: decider }),
+        // Recorded as each one finishes, so the queue shows them landing one
+        // by one instead of sitting still and then changing all at once.
+        onResult: settle,
+      });
 
       const missed: number[] = [];
       for (const item of items) {
@@ -134,13 +147,10 @@ async function tick(): Promise<void> {
         // Never attempted — the batch stopped before reaching it. It stays
         // pending for the next pass, but says so rather than saying nothing.
         if (!run) { missed.push(item.id); continue; }
-        await settleDecision(
-          item.id,
-          run.ok
-            ? { ok: true, matchedRow: run.matchedRow }
-            : { ok: false, error: run.steps.find((s) => !s.ok)?.detail ?? "The decision did not go through." },
-          tracing ? run.steps : null,
-        );
+        // Anything onResult already handled is settled; this catches the
+        // ones filled in by the batch's own error paths, which never went
+        // through the callback.
+        await settle(item.id, run);
       }
       if (missed.length > 0) {
         await noteAttemptFailed(missed,

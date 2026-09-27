@@ -123,6 +123,7 @@ function FailedBadge({ decision, word }: { decision: QueuedDecision; word: strin
             <span className="mt-1 block opacity-70">Tried {decision.attempts} times.</span>
           )}
           <DecisionSteps steps={decision.steps} />
+          <FailureShot shot={decision.shot} />
         </span>
       )}
     </span>
@@ -141,6 +142,41 @@ function FailedBadge({ decision, word }: { decision: QueuedDecision; word: strin
  * Only present when the trace is switched on in Configuration, so nothing
  * here should imply the run had no steps when it is absent.
  */
+/**
+ * The page at the moment it gave up.
+ *
+ * The run has always taken this on a failure and then discarded it. For the
+ * failure that reads "it sat on a step and then errored out with no
+ * message" it is the only thing that actually answers the question: a
+ * spinner still turning, a modal nobody expected, a session bounced back to
+ * sign-in. All obvious in a picture, none of them visible in a step name.
+ *
+ * Collapsed behind a link, because it is large and most failures are
+ * explained by the sentence above it.
+ */
+function FailureShot({ shot }: { shot?: string | null }) {
+  const [open, setOpen] = useState(false);
+  if (!shot) return null;
+  return (
+    <span className="mt-2 block border-t border-amber-500/30 pt-1.5">
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
+        className="underline underline-offset-2 hover:no-underline"
+      >
+        {open ? "Hide" : "Show"} the page where it stopped
+      </button>
+      {open && (
+        <img
+          src={`data:image/png;base64,${shot}`}
+          alt="The Emburse page at the moment the decision failed"
+          className="mt-1.5 block w-full rounded border border-amber-500/30"
+        />
+      )}
+    </span>
+  );
+}
+
 function DecisionSteps({ steps }: { steps: QueuedDecision["steps"] }) {
   if (!steps || steps.length === 0) return null;
   return (

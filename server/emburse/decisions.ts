@@ -40,6 +40,8 @@ export type QueuedDecision = {
    * the default — so a missing trace means "not recorded", never "no steps".
    */
   steps: DecisionStep[] | null;
+  /** A screenshot of the page where it failed, when tracing was on. */
+  shot: string | null;
 };
 
 const SCHEMA = `
@@ -80,6 +82,15 @@ ALTER TABLE expense_decisions DROP CONSTRAINT IF EXISTS expense_decisions_dedupe
 -- on. Before this, a failure was one line of text and the question "where did
 -- it stop" could only be answered by approving a real expense and watching.
 ALTER TABLE expense_decisions ADD COLUMN IF NOT EXISTS steps jsonb;
+-- The page at the moment it gave up, base64 PNG.
+--
+-- The run has always taken this on a failure and then thrown it away. For
+-- "it sits on a step and then errors out with no message" it is the single
+-- most informative thing there is: a spinner, a modal nobody expected, a
+-- session bounced back to sign-in, all of them obvious in a picture and
+-- invisible in a step name. Kept only when the trace toggle is on, and only
+-- for failures.
+ALTER TABLE expense_decisions ADD COLUMN IF NOT EXISTS shot text;
 `;
 
 let ready: Promise<void> | null = null;
@@ -92,7 +103,7 @@ type Row = {
   id: string; dedupe_key: string; decision: Decision; reason: string | null;
   decided_by: string; decided_at: Date; state: DecisionState; attempts: number;
   applied_at: Date | null; matched_row: string | null; error: string | null; target: Target;
-  steps: DecisionStep[] | null;
+  steps: DecisionStep[] | null; shot: string | null;
 };
 
 const shape = (r: Row): QueuedDecision => ({
@@ -109,10 +120,11 @@ const shape = (r: Row): QueuedDecision => ({
   error: r.error,
   target: r.target,
   steps: r.steps ?? null,
+  shot: r.shot ?? null,
 });
 
 const COLUMNS = `id, dedupe_key, decision, reason, decided_by, decided_at, state,
-                 attempts, applied_at, matched_row, error, target, steps`;
+                 attempts, applied_at, matched_row, error, target, steps, shot`;
 
 /**
  * Record a decision, to be applied on the next pass.
@@ -236,6 +248,8 @@ export async function settleDecision(
    * a later failure readable by comparison.
    */
   steps?: DecisionStep[] | null,
+  /** Base64 PNG of where it stopped. Stored only with the trace, and only on a failure. */
+  shot?: string | null,
 ): Promise<void> {
   await ensure();
   await db().query(
@@ -245,7 +259,8 @@ export async function settleDecision(
             applied_at = CASE WHEN $2 = 'applied' THEN now() ELSE applied_at END,
             matched_row = COALESCE($3, matched_row),
             error      = $4,
-            steps      = COALESCE($5::jsonb, steps)
+            steps      = COALESCE($5::jsonb, steps),
+            shot       = CASE WHEN $2 = 'applied' THEN NULL ELSE COALESCE($6, shot) END
       WHERE id = $1`,
     [
       id,
@@ -253,6 +268,9 @@ export async function settleDecision(
       outcome.ok ? outcome.matchedRow : null,
       outcome.ok ? null : outcome.error.slice(0, 1000),
       steps && steps.length > 0 ? JSON.stringify(steps) : null,
+      // Capped rather than trusted: a full-page PNG of a long grid can run
+      // to megabytes, and a row in this table is read on every queue poll.
+      shot && shot.length < 2_000_000 ? shot : null,
     ],
   );
 }

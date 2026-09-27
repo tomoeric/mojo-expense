@@ -30,6 +30,8 @@ export type QueuedDecision = {
    * no steps.
    */
   steps: { name: string; ok: boolean; detail: string; ms: number }[] | null;
+  /** The page where it stopped, base64 PNG. Only kept when tracing is on. */
+  shot?: string | null;
 };
 
 export type Challenge = {
