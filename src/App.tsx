@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  ListChecks, FileText, BarChart3, Loader2, Upload, Tags, MapPin, Building2, Scale,
+  ListChecks, FileText, BarChart3, Loader2, Upload, Tags, MapPin, Building2, Scale, BookOpen,
   SlidersHorizontal, ChevronRight, ChevronDown, type LucideIcon,
 } from "lucide-react";
 import { useAuth, useConfig, useReports, type ExpenseReport } from "@/lib/api";
@@ -19,11 +19,12 @@ import { MyEmburseLoginPage } from "@/pages/my-emburse-login";
 import { TaxonomyPage } from "@/pages/taxonomy";
 import { RulesPage } from "@/pages/rules";
 import { ConfigurationPage } from "@/pages/configuration";
+import { HowEmburseWorksPage } from "@/pages/how-emburse-works";
 import { timeOfDay } from "@/lib/format";
 
 type PageKey =
   | "queue" | "reports" | "analytics" | "rules" | "import"
-  | "configuration" | "categories" | "locations" | "departments";
+  | "configuration" | "categories" | "locations" | "departments" | "how-emburse-works";
 
 type RailItem = {
   key: PageKey;
@@ -57,6 +58,11 @@ const RAIL: RailItem[] = [
       { key: "categories", label: "Categories", Icon: Tags, description: "Every expense category Emburse has sent, whether or not anything is using it today." },
       { key: "locations", label: "Locations & Sites", Icon: MapPin, description: "Every location / site Emburse has sent, whether or not anything is using it today." },
       { key: "departments", label: "Departments", Icon: Building2, description: "Every department Emburse has sent, whether or not anything is using it today." },
+      // The reference, where the questions get asked. It lived only in
+      // docs/, which means GitHub — a relative link from the README does
+      // not resolve in Replit's editor, so clicking through to it simply
+      // failed and the answers stayed where nobody could reach them.
+      { key: "how-emburse-works", label: "How Emburse is driven", Icon: BookOpen, description: "Emburse has no expense API, so the app drives a browser. How the grid URL is built, what the export run does, and how an approve or deny finds its row." },
     ],
   },
 ];
@@ -329,6 +335,7 @@ export function App() {
             <ConfigurationPage onOpen={setRoute} isAdmin={auth.data?.isAdmin ?? false} />
           )}
           {route in LISTS && <TaxonomyPage kind={LISTS[route as keyof typeof LISTS]} />}
+          {route === "how-emburse-works" && <HowEmburseWorksPage />}
           {route === "rules" && <RulesPage isAdmin={auth.data?.isAdmin ?? false} />}
           {route === "settings" && <ExportSettingsPage isAdmin={auth.data?.isAdmin ?? false} />}
           {route === "emburse-login" && <MyEmburseLoginPage />}

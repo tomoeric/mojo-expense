@@ -28,3 +28,53 @@
     font-variant-numeric: tabular-nums;
   }
 }
+
+/*
+ * Markdown rendered from docs/EMBURSE.md.
+ *
+ * Tailwind resets headings and lists to nothing, which is right everywhere
+ * else in this app and wrong for a document: unstyled, a 380-line reference
+ * renders as one undifferentiated wall and is harder to read than the raw
+ * file it came from. Scoped to this one container so nothing else inherits
+ * document styling.
+ */
+.prose-emburse > * + * { margin-top: 0.85rem; }
+.prose-emburse h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.01em; }
+.prose-emburse h2 { font-size: 1.15rem; font-weight: 700; margin-top: 2rem; }
+.prose-emburse h3 { font-size: 1rem; font-weight: 600; margin-top: 1.5rem; }
+.prose-emburse p, .prose-emburse li { color: var(--color-foreground); }
+.prose-emburse ul, .prose-emburse ol { padding-left: 1.25rem; }
+.prose-emburse ul { list-style: disc; }
+.prose-emburse ol { list-style: decimal; }
+.prose-emburse li + li { margin-top: 0.3rem; }
+.prose-emburse a { text-decoration: underline; text-underline-offset: 2px; }
+.prose-emburse strong { font-weight: 600; }
+.prose-emburse code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  background: var(--color-muted);
+  border-radius: 0.25rem;
+  padding: 0.1rem 0.3rem;
+}
+.prose-emburse pre {
+  background: var(--color-muted);
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  padding: 0.75rem 0.9rem;
+  overflow-x: auto;
+}
+.prose-emburse pre code { background: none; padding: 0; font-size: 0.8rem; }
+.prose-emburse hr { border-color: var(--color-border); margin: 2rem 0; }
+.prose-emburse blockquote {
+  border-left: 3px solid var(--color-border);
+  padding-left: 0.75rem;
+  color: var(--color-muted-foreground);
+}
+.prose-emburse table { width: 100%; border-collapse: collapse; display: block; overflow-x: auto; }
+.prose-emburse th, .prose-emburse td {
+  border: 1px solid var(--color-border);
+  padding: 0.35rem 0.55rem;
+  text-align: left;
+  vertical-align: top;
+}
+.prose-emburse th { background: var(--color-muted); font-weight: 600; }
