@@ -623,13 +623,43 @@ async function chooseFormatByRole(page: Page): Promise<string | null> {
  * Both signals are given the full budget rather than being tried in sequence,
  * since either arriving is the answer.
  */
+/**
+ * How a grid says it has nothing in it.
+ *
+ * Emburse writes "No rows". That wording was in neither of the two places
+ * that test for an empty result, so a search returning nothing produced the
+ * one diagnosis it could not be — see `gridLoaded`.
+ */
+export const EMPTY_GRID =
+  /no rows|no results|no expenses|no transactions|nothing to show|no data|0 results/i;
+
 export async function gridLoaded(page: Page, sel: Selectors): Promise<string | null> {
   const ms = env.emburseLogin.stepTimeoutMs;
   const [grid, count] = await Promise.all([
     firstVisible(page, sel.grid, ms).then((l) => (l ? "the grid is on screen" : null)),
     firstVisible(page, sel.itemCount, ms).then((l) => (l ? "the item count is on screen" : null)),
   ]);
-  return grid ?? count;
+  if (grid ?? count) return grid ?? count;
+
+  // An EMPTY grid is still a loaded grid, and it used to be indistinguishable
+  // from a page that never arrived. Both of the signals above are absent when
+  // a search matches nothing: the shipped grid selector is "table" and this
+  // tenant builds its grid from divs, while the item-count line — "4 items,
+  // $118.33" — is not rendered at all when the count is zero.
+  //
+  // So every approval whose expense had left Needs Review failed with "no
+  // grid … Set the grid and row selectors in Settings to match", against a
+  // screenshot showing the grid, the filters, and the words "No rows". That
+  // sends somebody to fix configuration that is working, for an expense that
+  // is simply not there any more — usually because it has already been
+  // approved.
+  const body = (await page.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ");
+  if (EMPTY_GRID.test(body)) return "the grid is on screen and empty";
+  // A standard ARIA grid, as a last resort. Not a substitute for the
+  // configured selector — the row selector still has to match before
+  // anything is clicked — but enough to say the page arrived.
+  const aria = await firstVisible(page, '[role="grid"]', 1_000);
+  return aria ? "the grid is on screen" : null;
 }
 
 export async function signIn(

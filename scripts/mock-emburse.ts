@@ -180,6 +180,13 @@ const ROWS = [
   { date: "9/13/2026", merchant: "SHELL OIL", who: "Brianna Ruth", amount: "44.10" },
 ];
 
+/** Whether a search matches nothing, as the page above the grid needs to know. */
+const gridIsEmpty = (search: string): boolean => {
+  const term = search.trim().toLowerCase();
+  if (!term) return ROWS.length === 0 && state.padRows === 0;
+  return state.padRows === 0 && !ROWS.some((r) => r.merchant.toLowerCase().includes(term));
+};
+
 const grid = (search: string) => {
   const term = search.trim().toLowerCase();
   const matching = term ? ROWS.filter((r) => r.merchant.toLowerCase().includes(term)) : ROWS;
@@ -190,6 +197,18 @@ const grid = (search: string) => {
     amount: (1000 + i).toFixed(2),
   }));
   const shown = [...filler, ...matching];
+  // What Emburse renders when nothing matches: the grid, the column headings
+  // and the words "No rows". NOT an error, and not an absent grid — which is
+  // exactly how it was read, because the shipped grid selector is "table" on
+  // a tenant that builds its grid from divs, and the item-count line above
+  // is not drawn when the count is zero. So every approval for an expense
+  // that had left Needs Review failed with "no grid … set the grid and row
+  // selectors in Settings", against a screenshot of a working page.
+  if (shown.length === 0) {
+    return `<div role="grid"><div role="rowgroup"><div role="row">` +
+      `<div role="columnheader">Transaction Date</div><div role="columnheader">Merchant</div>` +
+      `</div></div><p>No rows</p></div>`;
+  }
   const cells = (r: (typeof ROWS)[number]) =>
     `${r.date}</td><td>${r.merchant}</td><td>${r.who}</td><td>$${r.amount}</td>
      <td><button class="ap">APPROVE</button> <button aria-label="more" class="mn">&#8942;</button>`;
@@ -467,7 +486,7 @@ app.get(["/transactions", "/transactions/team"], (req, res) => {
   const total = state.receiptsFilter ? "39,706.03" : "52,110.44";
   res.send(page(`
     <a href="/admin">ADMIN</a> <a href="/transactions">Transactions</a>
-    <p>${count} items, $${total}</p>
+    ${gridIsEmpty(state.search) ? "" : `<p>${count} items, $${total}</p>`}
     <a href="/filters">ADVANCED FILTERS</a>
     <form method="post" action="/tick"><button type="submit">Tick a row</button></form>
     <p>rows ticked: ${state.rowsTicked}</p>

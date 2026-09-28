@@ -1,8 +1,8 @@
 import type { BrowserContext, Locator, Page } from "playwright";
 import { env } from "../env.js";
 import {
-  explainLaunch, firstVisible, gridLoaded, gridUrl, makeStepper, openBrowser, openEmburse,
-  safeUrl, signIn,
+  EMPTY_GRID, explainLaunch, firstVisible, gridLoaded, gridUrl, makeStepper, openBrowser,
+  openEmburse, safeUrl, signIn,
   type ChallengeHook,
   type Login, type StepResult,
 } from "./auto-export.js";
@@ -572,8 +572,10 @@ async function whyNoGrid(page: Page, sel: Record<string, string>, asEmail?: stri
     return `Emburse sent us back to sign in at ${where} — the session did not survive the search. ` +
       "Test your Emburse connection to sign in again.";
   }
-  if (/no results|no expenses|nothing to show|0 results/i.test(text)) {
-    return `the grid loaded at ${where} but Emburse says there are no results for that search.`;
+  if (EMPTY_GRID.test(text)) {
+    return `the grid loaded at ${where} and is empty — Emburse has no match for that search, ` +
+      `so this expense is not in this view. An expense that has already been approved or denied ` +
+      `leaves Needs Review, which is the commonest reason for this.`;
   }
 
   // Present in the DOM but never visible is a different fault from absent, and
@@ -628,9 +630,12 @@ async function whyNoRows(
   page: Page, sel: Record<string, string>, term: string,
 ): Promise<string> {
   const text = (await page.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ").trim();
-  if (/no results|no expenses|no transactions|nothing to show|0 results/i.test(text)) {
-    return `Emburse says there are no results for “${term}”, so the expense is not in ` +
-      `this view — it may already have been actioned, or be in a different section.`;
+  if (EMPTY_GRID.test(text)) {
+    return `Emburse has no match for “${term}”, so this expense is not in this view. ` +
+      `An expense that has already been approved or denied leaves Needs Review, so the ` +
+      `commonest reason for an empty result here is that the decision already went through. ` +
+      `It will drop off this queue at the next import, which deletes whatever the newest ` +
+      `export no longer carries. Trying again will search the same empty view.`;
   }
 
   const candidates = await countAll(page, [

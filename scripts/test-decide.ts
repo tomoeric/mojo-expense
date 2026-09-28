@@ -388,6 +388,33 @@ check("a decision that fails does not stop the ones after it",
 check("…and each result is the same one the batch returns",
   asItLands.every((r) => out.get(r.id)?.ok === r.ok));
 
+console.log("\n16b. The expense has already left Needs Review");
+// The failure that filled a queue with red rows and sent somebody to fix
+// settings that were working. Emburse renders an EMPTY grid — the columns,
+// and the words "No rows" — with no item-count line above it, because
+// there is nothing to count. Both of the signals that prove the grid
+// arrived are therefore absent, and the run reported "no grid … Set the
+// grid and row selectors in Settings to match" about a page that had
+// loaded perfectly and simply had no match.
+//
+// An expense that has already been approved or denied LEAVES Needs Review,
+// so this is what every already-actioned expense looks like on a retry.
+mock.reset();
+{
+  const gone = await runDecision(
+    "approve", { ...TARGET, merchant: "NOTHINGMATCHESTHIS" }, "", SEL, mock.url, LOGIN, {});
+  const why = gone.steps.find((s) => !s.ok)?.detail ?? "";
+  check("it fails, since there is nothing to approve", !gone.ok);
+  check("…and does NOT claim the grid is missing",
+    !/no grid/i.test(why) && !/selectors in Settings/i.test(why), why.slice(0, 160));
+  check("…it says the expense is not in this view",
+    /not in this view/i.test(why), why.slice(0, 160));
+  check("…naming an approval that already went through as the likely reason",
+    /already been approved or denied/i.test(why), why.slice(0, 200));
+  check("…and that trying again searches the same empty view",
+    /same empty view/i.test(why), why.slice(-120));
+}
+
 console.log("\n17. A hidden APPROVE ahead of the real one");
 // What a real tenant produced: five green steps, then "approve —
 // locator.click: Timeout 30000ms exceeded". A virtualised grid keeps hidden
