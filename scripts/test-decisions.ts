@@ -146,6 +146,28 @@ check("the batch signed in once, not once per decision", signIns === 1, `${signI
 // Brian's denial under Eric's login would put Eric's name on a decision he
 // did not make — in the finance system, permanently, where nobody would think
 // to doubt it. So a decision is carried out as its decider or not at all.
+console.log("\n6b. Pause reaches the batch that is already running");
+// Pausing used to mean "queue nothing more and start no new batch", which
+// does nothing about the batch already going — and when that batch is a
+// hundred and forty decisions long, pressing Pause and watching it carry
+// on for two more hours is indistinguishable from the button not working.
+{
+  const three = [1, 2, 3].map((id) => ({
+    id, decision: "approve" as const, reason: null,
+    target: { employee: "Brianna Ruth", merchant: "DOORDASH INC.", amount: 26.4, date: "2026-09-13" },
+  }));
+  let seen = 0;
+  const stopped = await runDecisions(three, SEL, mock.url,
+    { userId: null, email: "bot@example.invalid", password: "x" }, {
+    dryRun: true,
+    // Stop after the first, exactly as the flag does mid-batch.
+    shouldStop: () => seen++ >= 1,
+  });
+  check("it stops between decisions, not mid-click", stopped.size === 1, `${stopped.size} run`);
+  check("…and the ones not reached are simply absent, so they stay queued",
+    !stopped.has(2) && !stopped.has(3));
+}
+
 console.log("\n8. A decision is applied as the person who made it");
 await deleteCredential("u-brian");
 await deleteCredential("u-eric");

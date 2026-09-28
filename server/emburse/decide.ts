@@ -302,6 +302,19 @@ export async function runDecisions(
     dryRun?: boolean;
     onChallenge?: ChallengeHook;
     onResult?: (id: number, run: DecisionRun) => Promise<void> | void;
+    /**
+     * Asked before each decision: should this batch stop here?
+     *
+     * Between decisions, never during one. Pausing used to mean "queue
+     * nothing more and start no new batch", which does nothing about the
+     * batch already running — and when that batch is a hundred and forty
+     * decisions long, pressing Pause and watching it carry on for two more
+     * hours is indistinguishable from the button not working.
+     *
+     * The ones not reached are simply not in the results: they were never
+     * attempted, so they stay queued and go when it resumes.
+     */
+    shouldStop?: () => boolean | Promise<boolean>;
   } = {},
 ): Promise<Map<number, DecisionRun>> {
   const results = new Map<number, DecisionRun>();
@@ -336,6 +349,12 @@ export async function runDecisions(
       }
 
       for (const it of items) {
+        // Between decisions, never mid-click: a half-clicked approval
+        // abandoned is worse than one allowed to land.
+        if (opts.shouldStop && (await opts.shouldStop())) {
+          console.log(`decisions: stopping after ${results.size} of ${items.length}`);
+          break;
+        }
         const steps: StepResult[] = [...shared];
         const step = makeStepper(steps);
         let matchedRow: string | null = null;

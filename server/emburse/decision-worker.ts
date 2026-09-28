@@ -152,6 +152,10 @@ async function tick(): Promise<void> {
 
       const results = await runDecisions(batch, settings.selectors, settings.emburseUrl, login, {
         onChallenge: (ctx) => waitForCode({ ...ctx, owner: decider }),
+        // Pause has to reach the batch already running, or it only stops
+        // work that had not started — which, mid-way through a hundred and
+        // forty, is not what anybody means by stop.
+        shouldStop: () => getFlag("holdDecisions").catch(() => false),
         // Recorded as each one finishes, so the queue shows them landing one
         // by one instead of sitting still and then changing all at once.
         onResult: settle,
@@ -169,8 +173,13 @@ async function tick(): Promise<void> {
         await settle(item.id, run);
       }
       if (missed.length > 0) {
-        await noteAttemptFailed(missed,
-          "The run stopped before reaching this one. It is still queued and will be tried again.");
+        // Paused is not a fault, and saying "the run stopped" about a
+        // deliberate stop reads like one. Asked again here rather than
+        // remembered, because the pause may have been lifted since.
+        const paused = await getFlag("holdDecisions").catch(() => false);
+        await noteAttemptFailed(missed, paused
+          ? "Paused before this one was reached. It is still queued and goes when you resume."
+          : "The run stopped before reaching this one. It is still queued and will be tried again.");
       }
       const applied = [...results.values()].filter((r) => r.ok).length;
       console.log(`decisions: ${applied} of ${batch.length} applied as ${decider}`);
