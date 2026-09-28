@@ -101,7 +101,16 @@ Two separate things, and confusing them cost a queue full of failures.
   away; searched for `MAVERIK`, it is right there. `searchTerms()` therefore
   tries the first two words, then the first word with digits and punctuation
   off, then the longest run of plain letters, stopping at the first that
-  returns the expense. Searching WIDER is the safe direction: every row still
+  returns the expense, and finally the **cardholder's surname** — Emburse's
+  names are clean where the merchant strings are not, so that is the rung most
+  likely to rescue a merchant nothing else matches, and a surname alone returns
+  only that person's queue. It is last, not first, only because it is not yet
+  known whether this tenant's search box looks at the cardholder at all; the
+  failure messages name every term and what it returned, so the moment one
+  shows the surname returning rows it should be promoted. Better still would
+  be Emburse's own **users filter** — a real filter rather than a text search —
+  which needs one thing nobody here has: the URL parameter it uses.
+  Searching WIDER is the safe direction: every row still
   has to pass all four checks below, so a broad search costs seconds while a
   term that silently excluded the right row reports "not there" about an
   expense that is.

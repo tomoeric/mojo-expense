@@ -62,6 +62,21 @@ console.log("\n1b. What we actually ask Emburse for");
   check("a clean merchant needs no ladder at all",
     searchTerms("Publix")[0] === "Publix" && searchTerms("Publix").length === 1,
     JSON.stringify(searchTerms("Publix")));
+
+  // The cardholder, last. Emburse's names are clean where the merchant
+  // strings are not, so this is the rung most likely to rescue a merchant
+  // nothing else can match — and a surname alone returns that person's whole
+  // queue, a dozen rows, every one of which still has to pass all four
+  // checks.
+  check("the cardholder's surname is tried, after the merchant",
+    searchTerms("MAVERIK #5074MAVERIK", "Shawn Emerson").at(-1) === "Emerson",
+    JSON.stringify(searchTerms("MAVERIK #5074MAVERIK", "Shawn Emerson")));
+  check("…never before it, since merchant plus amount is the tighter search",
+    searchTerms("MAVERIK #5074MAVERIK", "Shawn Emerson")[0] === "MAVERIK #5074MAVERIK",
+    JSON.stringify(searchTerms("MAVERIK #5074MAVERIK", "Shawn Emerson")));
+  check("…and a surname too short to search for is left out",
+    !searchTerms("Publix", "Al Li").includes("Li"),
+    JSON.stringify(searchTerms("Publix", "Al Li")));
   check("two clean words give the pair and then the first",
     JSON.stringify(searchTerms("DOORDASH INC.")) === JSON.stringify(["DOORDASH INC.", "DOORDASH"]),
     JSON.stringify(searchTerms("DOORDASH INC.")));

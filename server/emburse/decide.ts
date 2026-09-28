@@ -628,16 +628,26 @@ async function countAll(
  * excluded the right row reports "not there" about an expense that is —
  * which is exactly what was happening.
  */
-export function searchTerms(merchant: string): string[] {
+export function searchTerms(merchant: string, employee = ""): string[] {
   const words = merchant.trim().split(/\s+/).filter(Boolean);
   const letters = (w: string) => w.replace(/[^A-Za-z]/g, "");
   const runs = merchant.match(/[A-Za-z]{4,}/g) ?? [];
   const longest = runs.slice().sort((a, b) => b.length - a.length)[0] ?? "";
+  // The cardholder, last. Emburse's grid has a users filter and the names in
+  // it are clean, which is exactly what the merchant strings are not — so
+  // this is the rung most likely to rescue a merchant nothing else can
+  // match. It goes last rather than first only because it is not known yet
+  // whether this tenant's search box looks at the cardholder at all; if it
+  // does, the failure messages will show it returning rows and it should be
+  // promoted. A surname alone returns that person's whole queue, which is a
+  // dozen rows, and all four checks still have to pass on each of them.
+  const surname = letters(employee.trim().split(/\s+/).pop() ?? "");
 
   const out = [
     words.slice(0, 2).join(" "),
     letters(words[0] ?? ""),
     longest,
+    surname,
   ];
   // Deduped, and anything with fewer than four letters-or-digits dropped:
   // "BP" returns the whole month, and "#1" is not a search at all. Measured
@@ -835,7 +845,7 @@ export async function inspectEditForm(
       if (!(await step("find the expense", async () => {
         // The same ladder as the decision path: one term is not enough on a
         // tenant whose merchant strings carry the card descriptor.
-        const term = searchTerms(target.merchant)[0] ?? target.merchant;
+        const term = searchTerms(target.merchant, target.employee)[0] ?? target.merchant;
         await page!.goto(gridUrl(emburseUrl, { query: term, path: sel.gridPath }), {
           waitUntil: "domcontentloaded",
         });
@@ -1127,7 +1137,7 @@ async function applyOne(
     // expense; every row still has to match on all four fields before
     // anything is clicked, so widening the search costs seconds and risks
     // nothing.
-    const terms = searchTerms(target.merchant);
+    const terms = searchTerms(target.merchant, target.employee);
     /** What each term returned, so a total failure can say what was tried. */
     const tried: string[] = [];
     let rows = page.locator(sel.resultRow!);
