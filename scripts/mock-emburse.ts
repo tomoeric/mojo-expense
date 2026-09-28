@@ -85,6 +85,15 @@ type State = {
    */
   twinRows: boolean;
   /**
+   * How the search matches.
+   *
+   *   "substring" — any part of the merchant, which is the forgiving case.
+   *   "name"      — only the leading run of letters, which is what
+   *                 spend.emburse.com behaves like: searching
+   *                 "MAVERIK #5074" finds nothing, "MAVERIK" finds the row.
+   */
+  searchMode: "substring" | "name";
+  /**
    * How the export dialog offers a format.
    *
    *   "links"  — a link that opens a page of choices.
@@ -157,6 +166,7 @@ const state: State = {
   ghostButtons: false,
   ghostRows: false,
   twinRows: false,
+  searchMode: "substring",
   formatControl: "links",
   chipsUnmatchable: false,
   chipState: "aria",
@@ -178,18 +188,29 @@ const ROWS = [
   { date: "9/13/2026", merchant: "DOORDASH INC.", who: "Kevin McBride", amount: "26.40" },
   { date: "9/12/2026", merchant: "DOORDASH INC.", who: "Brianna Ruth", amount: "126.40" },
   { date: "9/13/2026", merchant: "SHELL OIL", who: "Brianna Ruth", amount: "44.10" },
+  // The shape that broke a queue: our export carries the card descriptor
+  // with the merchant name run into it, so the first two words are
+  // "MAVERIK #5074MAVERIK" — which the real Emburse search returns nothing
+  // for, while the row sits there one filter away.
+  { date: "9/8/2026", merchant: "MAVERIK #5074MAVERIK COUNTRY STORE", who: "Shawn Emerson", amount: "21.67" },
 ];
 
 /** Whether a search matches nothing, as the page above the grid needs to know. */
+/** One row against one search term, in whichever mode is set. */
+const rowHits = (merchant: string, term: string): boolean =>
+  state.searchMode === "name"
+    ? (merchant.match(/^[A-Za-z]+/)?.[0] ?? "").toLowerCase().startsWith(term.toLowerCase())
+    : merchant.toLowerCase().includes(term.toLowerCase());
+
 const gridIsEmpty = (search: string): boolean => {
-  const term = search.trim().toLowerCase();
+  const term = search.trim();
   if (!term) return ROWS.length === 0 && state.padRows === 0;
-  return state.padRows === 0 && !ROWS.some((r) => r.merchant.toLowerCase().includes(term));
+  return state.padRows === 0 && !ROWS.some((r) => rowHits(r.merchant, term));
 };
 
 const grid = (search: string) => {
   const term = search.trim().toLowerCase();
-  const matching = term ? ROWS.filter((r) => r.merchant.toLowerCase().includes(term)) : ROWS;
+  const matching = term ? ROWS.filter((r) => rowHits(r.merchant, search.trim())) : ROWS;
   // Filler goes IN FRONT, so the row being looked for is past the cap —
   // which is the situation being reproduced, not merely a long list.
   const filler = Array.from({ length: state.padRows }, (_, i) => ({
@@ -706,6 +727,7 @@ app.post("/__app", (req, res) => {
   if ("ghostButtons" in q) state.ghostButtons = q["ghostButtons"] === "true";
   if ("ghostRows" in q) state.ghostRows = q["ghostRows"] === "true";
   if ("twinRows" in q) state.twinRows = q["twinRows"] === "true";
+  if ("searchMode" in q) state.searchMode = q["searchMode"] as State["searchMode"];
   if ("format" in q) state.formatControl = q["format"] as State["formatControl"];
   if ("chips" in q) state.chipsUnmatchable = q["chips"] === "unmatchable";
   if ("chipState" in q) state.chipState = q["chipState"] as State["chipState"];
@@ -732,7 +754,7 @@ const reset = () =>
     // the grid to divs left every later test running against divs — and the
     // one that then failed looked like a regression in whatever it was
     // actually testing, rather than leftover state from three tests ago.
-    gridShape: "table", padRows: 0, actionsWork: true, ghostButtons: false, ghostRows: false, twinRows: false,
+    gridShape: "table", padRows: 0, actionsWork: true, ghostButtons: false, ghostRows: false, twinRows: false, searchMode: "substring",
     formatControl: "links",
     chipsUnmatchable: false, appPaintMs: 0, showNavLabel: true,
     sections: {

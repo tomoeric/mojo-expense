@@ -226,6 +226,10 @@ export function rowMatches(rowText: string, t: Target): { ok: boolean; why: stri
       // approved one yet — the three that worked were the 16th, 21st and
       // 24th, where padding makes no difference.
       `${short} ${String(d).padStart(2, "0")}`,
+      // Padded day, unpadded month. Cheap to allow and perfectly plausible
+      // on a grid that pads one field and not the other; the string is
+      // specific enough that it cannot match a different date.
+      `${m}/${String(d).padStart(2, "0")}/${y}`,
     ];
     if (!forms.some((f) => text.includes(f))) {
       return { ok: false, why: `date ${t.date} not in the row` };
@@ -603,6 +607,48 @@ async function countAll(
  * keep stable is how it quietly stops working the next time somebody
  * improves a sentence.
  */
+/**
+ * What to ask Emburse for, most specific first.
+ *
+ * The search used to be one term: the first two words of the merchant. That
+ * is wrong often enough to matter, because the merchant our export carries
+ * is the card descriptor with the merchant name run into it —
+ * "MAVERIK #5074MAVERIK ..." — and the first two words of that are
+ * "MAVERIK #5074", which Emburse's own search box returns NO ROWS for while
+ * the expense sits in the grid one filter away. Searched by hand for
+ * "MAVERIK", it is right there.
+ *
+ * So the term is tried, and then simplified, until something comes back:
+ * the first two words, then the first word with its digits and punctuation
+ * taken off, then the longest run of plain letters anywhere in the string.
+ *
+ * Searching WIDER is the safe direction, and deliberately so. Every row that
+ * comes back still has to match employee, merchant, amount AND date before
+ * anything is clicked, so a broad search costs seconds; a term that silently
+ * excluded the right row reports "not there" about an expense that is —
+ * which is exactly what was happening.
+ */
+export function searchTerms(merchant: string): string[] {
+  const words = merchant.trim().split(/\s+/).filter(Boolean);
+  const letters = (w: string) => w.replace(/[^A-Za-z]/g, "");
+  const runs = merchant.match(/[A-Za-z]{4,}/g) ?? [];
+  const longest = runs.slice().sort((a, b) => b.length - a.length)[0] ?? "";
+
+  const out = [
+    words.slice(0, 2).join(" "),
+    letters(words[0] ?? ""),
+    longest,
+  ];
+  // Deduped, and anything with fewer than four letters-or-digits dropped:
+  // "BP" returns the whole month, and "#1" is not a search at all. Measured
+  // on the alphanumerics, not the length, or "#1 @" counts as four.
+  const kept = [...new Set(out.map((t) => t.trim()))]
+    .filter((t) => t.replace(/[^A-Za-z0-9]/g, "").length >= 4);
+  // Never nothing: a merchant with no searchable run still gets asked for
+  // as it stands, which at worst returns nothing and says so.
+  return kept.length > 0 ? kept : (merchant.trim() ? [merchant.trim()] : []);
+}
+
 export class NotInQueue extends Error {}
 
 /**
@@ -787,7 +833,9 @@ export async function inspectEditForm(
       const ms = env.emburseLogin.stepTimeoutMs;
 
       if (!(await step("find the expense", async () => {
-        const term = target.merchant.trim().split(/\s+/).slice(0, 2).join(" ");
+        // The same ladder as the decision path: one term is not enough on a
+        // tenant whose merchant strings carry the card descriptor.
+        const term = searchTerms(target.merchant)[0] ?? target.merchant;
         await page!.goto(gridUrl(emburseUrl, { query: term, path: sel.gridPath }), {
           waitUntil: "domcontentloaded",
         });
@@ -1073,46 +1121,60 @@ async function applyOne(
     // The search box is a query parameter, so navigate to the filtered grid
     // rather than typing into it. One less thing that can be focused wrong,
     // debounced, or left holding a previous search.
-    const term = target.merchant.trim().split(/\s+/).slice(0, 2).join(" ");
-    await page.goto(gridUrl(emburseUrl, { query: term, path: sel.gridPath }), {
-      waitUntil: "domcontentloaded",
-    });
-    // Any visible match, not element number one: a grid's hidden measuring
-    // rows come first in the DOM and never become visible.
-    // The same two signals the export accepts, not just the grid selector.
-    // The export has always taken the item-count line as proof the grid
-    // arrived — "34 items, $42,249.94" cannot be on screen unless the rows
-    // are — while this path demanded the grid element itself. So on a tenant
-    // whose grid selector is stale the export ran fine and every decision
-    // failed, and the difference looked like an account problem. It was not.
-    if (!(await gridLoaded(page, sel as never))) {
-      throw await asError(whyNoGrid(page, sel, asEmail));
-    }
-
-    const rows = page.locator(sel.resultRow!);
-    const count = await rows.count();
-    // "the search returned no rows" is true and tells nobody what to do. The
-    // rows are almost always right there — it is the SELECTOR that does not
-    // describe them, and which selector would is readable off the page.
-    if (count === 0) throw await asError(whyNoRows(page, sel, term));
-
-    // Narrow by the full match rather than by position: whichever row Emburse
-    // happens to put first is not evidence of anything.
     //
-    // The search is deliberately WIDE — two words of the merchant — and the
-    // narrowing happens here, against employee, merchant, amount and date
-    // together. That is the safe direction: fetching too much costs a few
-    // seconds, while a filter that silently excluded the right row would
-    // report "not there" about an expense that is.
-    const examined = Math.min(count, ROWS_EXAMINED);
-    const matches: number[] = [];
-    for (let i = 0; i < examined; i++) {
-      const text = await rows.nth(i).innerText().catch(() => "");
-      if (rowMatches(text, target).ok) matches.push(i);
+    // Several terms, simplified in turn, because one was not enough: see
+    // searchTerms. Each is tried until rows come back that contain the
+    // expense; every row still has to match on all four fields before
+    // anything is clicked, so widening the search costs seconds and risks
+    // nothing.
+    const terms = searchTerms(target.merchant);
+    /** What each term returned, so a total failure can say what was tried. */
+    const tried: string[] = [];
+    let rows = page.locator(sel.resultRow!);
+    let count = 0;
+    let matches: number[] = [];
+    let term = terms[0] ?? target.merchant;
+    let emptyEveryTime = true;
+
+    for (const candidate of terms) {
+      term = candidate;
+      await page.goto(gridUrl(emburseUrl, { query: candidate, path: sel.gridPath }), {
+        waitUntil: "domcontentloaded",
+      });
+      // The same two signals the export accepts, not just the grid selector.
+      // The export has always taken the item-count line as proof the grid
+      // arrived — "34 items, $42,249.94" cannot be on screen unless the rows
+      // are — while this path demanded the grid element itself. So on a
+      // tenant whose grid selector is stale the export ran fine and every
+      // decision failed, and the difference looked like an account problem.
+      if (!(await gridLoaded(page, sel as never))) {
+        throw await asError(whyNoGrid(page, sel, asEmail));
+      }
+
+      rows = page.locator(sel.resultRow!);
+      count = await rows.count();
+      // Narrow by the full match rather than by position: whichever row
+      // Emburse happens to put first is not evidence of anything.
+      const examined = Math.min(count, ROWS_EXAMINED);
+      matches = [];
+      for (let i = 0; i < examined; i++) {
+        const text = await rows.nth(i).innerText().catch(() => "");
+        if (rowMatches(text, target).ok) matches.push(i);
+      }
+      // Whether the page was genuinely empty, for the one conclusion that
+      // must not be drawn from a bad search term: "this expense has already
+      // been actioned". A term Emburse does not understand produces an empty
+      // grid too, and calling THAT gone is how an expense that is sitting
+      // there gets written off.
+      const emptyHere = count === 0 ||
+        EMPTY_GRID.test((await page.locator("body").innerText().catch(() => "")).replace(/\s+/g, " "));
+      if (!emptyHere) emptyEveryTime = false;
+      tried.push(`“${candidate}” → ${emptyHere ? "no rows" : `${count} row(s), ${matches.length} matching`}`);
+      if (matches.length > 0) break;
     }
 
     if (matches.length === 0) {
-      const first = await rows.nth(0).innerText().catch(() => "");
+      const examined = Math.min(count, ROWS_EXAMINED);
       // Why EACH row was turned down, not just the first. "None of the 4
       // rows match — amount 39.94 not in the row" was the first row's
       // reason presented as all four, and the row that mattered had a
@@ -1123,7 +1185,20 @@ async function applyOne(
         const why = rowMatches(await rows.nth(i).innerText().catch(() => ""), target).why;
         if (!reasons.includes(why)) reasons.push(why);
       }
-      const spread = reasons.length > 1 ? ` The rows were turned down for: ${reasons.join("; ")}.` : "";
+      const spread = reasons.length > 0 ? ` The rows were turned down for: ${reasons.join("; ")}.` : "";
+      const attempts = `Searched ${tried.join(", ")}.`;
+
+      // Empty for EVERY term is the only honest basis for "it is not there".
+      // One empty result means the term was wrong at least as often as it
+      // means the expense has gone.
+      if (emptyEveryTime) {
+        throw new NotInQueue(
+          `Emburse returned nothing for this expense, whichever way it was searched for. ` +
+          `${attempts} An expense that has already been approved or denied leaves Needs ` +
+          `Review, so the commonest reason for this is that the decision already went ` +
+          `through. It will drop off this queue at the next import. Trying again will ` +
+          `search the same empty views.`);
+      }
       // Never claim none of N matched when only the first few were read. A
       // merchant like DOORDASH returns the whole month, and "none of the 340
       // rows match" — said after looking at fifty — is a false statement
@@ -1132,22 +1207,21 @@ async function applyOne(
       if (examined < count) {
         throw new Error(
           `looked at the first ${examined} of ${count} rows and none match this expense. ` +
-          `The search for “${term}” is too broad to find it this way — narrow it in ` +
-          `Emburse, or the expense may genuinely not be in this view. ` +
-          `The first row reads differently: ${rowMatches(first, target).why}.${spread}`);
+          `The search is too broad to find it this way — narrow it in Emburse, or the ` +
+          `expense may genuinely not be in this view. ${attempts}${spread}`);
       }
       throw new Error(
-        `none of the ${count} rows match this expense — ${rowMatches(first, target).why}.${spread} ` +
+        `none of the rows match this expense. ${attempts}${spread} ` +
         // The other reading of "it is not there", and the one nobody thinks
         // of: an expense that has ALREADY been approved or denied leaves
         // Needs Review. So a decision that was applied and then reported as
-        // unconfirmed looks exactly like this on the retry — the row is
-        // gone because the work was done.
+        // unconfirmed looks exactly like this on the retry.
         `An expense that has already been actioned leaves Needs Review, so this also looks ` +
         `like a decision that went through and was reported as unconfirmed — check the ` +
         `expense in Emburse before deciding it again.`,
       );
     }
+
     // Hidden copies first: a grid that keeps them matches the same expense
     // more than once, and none of the copies is the row on screen.
     const chosen = matches.length > 1 ? await visibleOf(rows, matches) : matches;
@@ -1169,7 +1243,10 @@ async function applyOne(
 
     row = rows.nth(chosen[0]!);
     const ghosts = matches.length - chosen.length;
-    return `matched 1 of ${count} rows${ghosts > 0 ? ` (${ghosts} hidden ${ghosts === 1 ? "copy" : "copies"} ignored)` : ""}`;
+    // Which term found it, because the first one often does not and that is
+    // the single most useful thing this step can report.
+    return `matched 1 of ${count} rows searching “${term}”` +
+      (ghosts > 0 ? ` (${ghosts} hidden ${ghosts === 1 ? "copy" : "copies"} ignored)` : "");
   }))) return false;
 
   if (!(await step("verify it is the right row", async () => {

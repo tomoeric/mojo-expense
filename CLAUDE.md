@@ -90,6 +90,32 @@ the blocks.
   expense is gone. A decision still `pending` when its expense is purged is
   cancelled, not left for the worker to retry against a row that is not there.
 
+## Finding the row
+
+Two separate things, and confusing them cost a queue full of failures.
+
+- **The SEARCH is what narrows Emburse's grid**, and one term is not enough.
+  Our export carries the card descriptor with the merchant name run into it —
+  `MAVERIK #5074MAVERIK COUNTRY STORE` — and Emburse's own search box returns
+  **no rows** for `MAVERIK #5074` while the expense sits in the grid one filter
+  away; searched for `MAVERIK`, it is right there. `searchTerms()` therefore
+  tries the first two words, then the first word with digits and punctuation
+  off, then the longest run of plain letters, stopping at the first that
+  returns the expense. Searching WIDER is the safe direction: every row still
+  has to pass all four checks below, so a broad search costs seconds while a
+  term that silently excluded the right row reports "not there" about an
+  expense that is.
+- **The MATCH is what picks the row**, and it is strict. All four must hold:
+  **amount** exact and unsigned with the sign read from the page (so `6.40`
+  cannot match inside `$126.40`, and `($47.56)` is a credit); **surname**,
+  with a truncation stem accepted only where the page marks the cut
+  (`CRAIG W DEMORA…`); **first word of the merchant**, ≥4 chars, punctuation
+  stripped from both sides; and **date** in any of Emburse's forms, padded or
+  not. Exactly one VISIBLE match acts; two refuse.
+- **"Empty" only means "gone" when EVERY term came back empty.** A term
+  Emburse cannot use produces an empty grid too, and treating that as "already
+  approved" writes off an expense that is sitting there.
+
 ## When a decision fails
 
 - **The export's hardening has to reach the decision path, every time.** Both

@@ -10,7 +10,7 @@
  * are weighted accordingly — most of them are near-misses that must be refused.
  */
 
-import { rowMatches, type Target } from "../server/emburse/decide.js";
+import { rowMatches, searchTerms, type Target } from "../server/emburse/decide.js";
 
 let failures = 0;
 const check = (label: string, ok: boolean, detail = "") => {
@@ -40,6 +40,42 @@ accepts("zero-padded date", "09/13/2026 DOORDASH INC. Brianna Ruth Meals $26.40"
 accepts("short month form", "Sep 13 DOORDASH INC. Brianna Ruth Meals $26.40");
 accepts("merchant truncated by the grid", "9/13/2026 DOORDASHDOORDASH,… Brianna Ruth $26.40");
 accepts("odd whitespace", "  9/13/2026\n DOORDASH INC.\tBrianna  Ruth   $26.40 ");
+
+console.log("\n1b. What we actually ask Emburse for");
+// The real one that cost a queue full of failures. Our export carries the
+// card descriptor with the merchant name run into it, so the first two
+// words of "MAVERIK #5074MAVERIK ..." are "MAVERIK #5074" — which Emburse's
+// own search box returns NO ROWS for, while the expense sits in the grid one
+// filter away. Searched by hand for "MAVERIK", it is right there.
+{
+  const t = searchTerms("MAVERIK #5074MAVERIK COUNTRY STORE");
+  check("the first try is still the most specific thing available",
+    t[0] === "MAVERIK #5074MAVERIK", JSON.stringify(t));
+  check("…and it falls back to the plain merchant name",
+    t.includes("MAVERIK"), JSON.stringify(t));
+  check("a term Emburse chokes on is not the only one tried",
+    t.length >= 2, JSON.stringify(t));
+
+  check("digits and punctuation come off the fallback",
+    searchTerms("CIRCLEK#2746075CIRCLE K STORES").includes("CIRCLEK"),
+    JSON.stringify(searchTerms("CIRCLEK#2746075CIRCLE K STORES")));
+  check("a clean merchant needs no ladder at all",
+    searchTerms("Publix")[0] === "Publix" && searchTerms("Publix").length === 1,
+    JSON.stringify(searchTerms("Publix")));
+  check("two clean words give the pair and then the first",
+    JSON.stringify(searchTerms("DOORDASH INC.")) === JSON.stringify(["DOORDASH INC.", "DOORDASH"]),
+    JSON.stringify(searchTerms("DOORDASH INC.")));
+  // A two-letter search returns the month and finds nothing useful.
+  check("nothing shorter than four characters is ever searched for",
+    searchTerms("BP #12").every((x) => x.length >= 4), JSON.stringify(searchTerms("BP #12")));
+  // "#1 @" is not a search — measured on the letters and digits, not on the
+  // length, or the spaces and the hash make it look like four characters.
+  check("…and a merchant with nothing searchable is asked for as it stands, once",
+    JSON.stringify(searchTerms("#1 @")) === JSON.stringify(["#1 @"]),
+    JSON.stringify(searchTerms("#1 @")));
+  check("…while an empty merchant asks for nothing at all",
+    searchTerms("   ").length === 0, JSON.stringify(searchTerms("   ")));
+}
 
 console.log("\n2. Near misses that must be refused");
 refuses("same everything, different amount", "9/13/2026 DOORDASH INC. Brianna Ruth $26.41");
@@ -433,6 +469,39 @@ mock.reset();
   check("rows that come back and do not match are NOT called absent",
     !mismatch.ok && !mismatch.steps.some((s) => !s.ok && s.absent === true),
     mismatch.steps.filter((s) => !s.ok).map((s) => `${s.name}:${String(s.absent)}`).join(", "));
+}
+
+console.log("\n16c. A merchant whose first search term finds nothing");
+// The real one. Emburse's search behaves like it matches the merchant NAME,
+// not the card descriptor our export carries, so "MAVERIK #5074" returns no
+// rows while the expense sits in the grid one filter away — and searched by
+// hand for "MAVERIK" it is right there. One term was not enough.
+mock.reset();
+await fetch(`${mock.url}/__app?searchMode=name`, { method: "POST" });
+{
+  const MAV = {
+    employee: "Shawn Emerson", merchant: "MAVERIK #5074MAVERIK COUNTRY STORE",
+    amount: 21.67, date: "2026-09-08",
+  };
+  const found = await runDecision("approve", MAV, "", SEL, mock.url, LOGIN, {});
+  const searched = found.steps.find((s) => s.name === "search for the expense");
+  check("it is found anyway, by simplifying the term", found.ok,
+    found.steps.find((s) => !s.ok)?.detail ?? "");
+  check("…and says which term found it, since the first one did not",
+    /searching “MAVERIK”/.test(searched?.detail ?? ""), searched?.detail ?? "");
+
+  // The conclusion that must NOT be drawn from a term Emburse cannot use.
+  const partial = await runDecision("approve", { ...MAV, amount: 99.99 }, "", SEL, mock.url, LOGIN, {});
+  check("a wrong first term is not mistaken for a missing expense",
+    !partial.ok && !partial.steps.some((s) => !s.ok && s.absent === true),
+    partial.steps.filter((s) => !s.ok).map((s) => `${s.name}:${String(s.absent)}`).join(", "));
+
+  const gone = await runDecision("approve", { ...MAV, merchant: "NOTHINGLIKETHIS LLC" }, "", SEL, mock.url, LOGIN, {});
+  const why = gone.steps.find((s) => !s.ok)?.detail ?? "";
+  check("…while empty for EVERY term is, and it names them all",
+    gone.steps.some((s) => !s.ok && s.absent === true) &&
+      /“NOTHINGLIKETHIS LLC”/.test(why) && /“NOTHINGLIKETHIS”/.test(why),
+    why.slice(0, 200));
 }
 
 console.log("\n17. A hidden APPROVE ahead of the real one");
