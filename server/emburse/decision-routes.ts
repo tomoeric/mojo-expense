@@ -8,7 +8,7 @@ import { credentialForUser, hasCredential, noteResult } from "./credentials.js";
 import { inspectEditForm, runDecision, testConnection, type Decision, type Target } from "./decide.js";
 import {
   appliedCount, cancelDecision, decisionsFor, pendingDecisions, queueApprovalFor, queueDecision,
-  recentDecisions, retryFailedDecisions,
+  failureSummary, recentDecisions, retryFailedDecisions,
 } from "./decisions.js";
 import { decisionWorkerStarted, nudgeDecisionWorker } from "./decision-worker.js";
 import { getFlag, setFlag } from "../flags.js";
@@ -290,6 +290,21 @@ decisionRouter.post("/decisions/hold", requireAuth, async (req: Request, res: Re
   // than run here: the worker owns the browser, not a request.
   if (!held) nudgeDecisionWorker();
   res.json({ held });
+});
+
+/**
+ * What the failures are, grouped by cause.
+ *
+ * "99 did not go through" is a number, not a diagnosis, and reading ninety-
+ * nine dialogs one at a time is how three separate causes got taken for one.
+ */
+decisionRouter.get("/decisions/failures", requireAuth, async (_req: Request, res: Response) => {
+  if (!guard(res)) return;
+  try {
+    res.json({ groups: await failureSummary() });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 /** The queue, the history, and what the browser is busy with. */

@@ -23,7 +23,7 @@ process.env.EMBURSE_SIGN_IN_WAIT_MS ||= "20000";
 
 const {
   queueDecision, pendingDecisions, cancelDecision, settleDecision, decisionsFor, recentDecisions,
-  retryFailedDecisions,
+  retryFailedDecisions, failureSummary,
 } = await import("../server/emburse/decisions.js");
 const { saveCredential, deleteCredential, credentialForUser, hasCredential } =
   await import("../server/emburse/credentials.js");
@@ -422,6 +422,57 @@ console.log("\n11. Running every failure again, in one go");
   const gone = await retryFailedDecisions("second@example.invalid");
   check("a failure on an expense no longer in the queue is left where it is",
     gone.queued === 0, `${gone.queued} queued`);
+}
+
+console.log("\n12. What the failures actually are");
+// "99 did not go through" is a number, not a diagnosis. Read one dialog at a
+// time, three separate causes look like one problem — which is what happened.
+// The shape is the thing: sixty "not in Emburse's queue" and four "could not
+// open Emburse" are two completely different jobs.
+{
+  await db().query("DELETE FROM expense_decisions WHERE dedupe_key LIKE 'test-fs-%'");
+  const cases: [string, string][] = [
+    ["a", "Emburse has no match for “FedEx”, so this expense is not in this view."],
+    ["b", "Emburse has no match for “Publix”, so this expense is not in this view."],
+    ["c", "none of the 5 rows match this expense — amount 13.09 not in the row."],
+    ["d", "https://spend.emburse.com/ did not load within 90s, three times."],
+    ["e", "2 rows match this expense equally well; refusing to guess which one to approve"],
+  ];
+  for (const [k, err] of cases) {
+    const key = `test-fs-${k}`;
+    await db().query(
+      `INSERT INTO expenses (dedupe_key, employee, expense_date, merchant, amount_cents,
+                             category, department, location, note, method, in_inbox)
+       VALUES ($1,'Kevin Bray','2026-09-13','SQ *COFFEE',850,'Meals','Ops','Site','x','Corporate card',true)
+       ON CONFLICT (dedupe_key) DO UPDATE SET in_inbox = true`, [key]);
+    const q = await queueDecision({
+      dedupeKey: key, decision: "approve", reason: "", decidedBy: "fs@example.invalid",
+      target: { employee: "Kevin Bray", merchant: "SQ *COFFEE", amount: 8.5, date: "2026-09-13" },
+    });
+    if (!q.ok) throw new Error(q.error);
+    await settleDecision(q.queued.id, { ok: false, error: err });
+  }
+  const groups = await failureSummary();
+  const find = (t: RegExp) => groups.find((g) => t.test(g.reason));
+  check("the two that are not in Emburse's queue are counted together",
+    find(/not in Emburse/)?.n === 2, JSON.stringify(groups.map((g) => [g.reason.slice(0, 30), g.n])));
+  check("…and the other three are three separate causes, not one pile",
+    Boolean(find(/none matched/)) && Boolean(find(/did not load/i)) && Boolean(find(/refused to guess/)),
+    groups.map((g) => `${g.n}×${g.reason.slice(0, 24)}`).join(" | "));
+  check("…grouped by pattern, not by exact text — five errors, four causes",
+    groups.length === 4, String(groups.length));
+  check("…biggest first, so the shape reads at a glance",
+    groups[0]!.n >= groups[groups.length - 1]!.n);
+
+  // An expense that has left the queue is nobody's problem any more.
+  await db().query("UPDATE expenses SET in_inbox = false WHERE dedupe_key = 'test-fs-a'");
+  const fewer = await failureSummary();
+  check("a failure on an expense that has left the queue is not counted",
+    fewer.find((g) => /not in Emburse/.test(g.reason))?.n === 1,
+    JSON.stringify(fewer.map((g) => [g.reason.slice(0, 30), g.n])));
+
+  await db().query("DELETE FROM expense_decisions WHERE dedupe_key LIKE 'test-fs-%'");
+  await db().query("DELETE FROM expenses WHERE dedupe_key LIKE 'test-fs-%'");
 }
 
 await db().query("DELETE FROM expense_decisions WHERE dedupe_key LIKE 'test-%'");

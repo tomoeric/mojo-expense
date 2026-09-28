@@ -5,7 +5,9 @@ import {
 } from "lucide-react";
 import type { ExpenseReport, ExpenseLine, ReportsResponse } from "@/lib/api";
 import { money, shortDate, daysAgo } from "@/lib/format";
+import { useQuery } from "@tanstack/react-query";
 import { Empty } from "@/components/ui";
+import { failureGroups } from "@/lib/decisions";
 
 /**
  * Set by the table so a flag chip can filter to the set it belongs to.
@@ -614,6 +616,58 @@ function FlagTabs({
  * what changes: re-queuing records the decision against whoever presses
  * this, and the approval carries their name in Emburse.
  */
+/**
+ * The failures, grouped by cause, behind one link.
+ *
+ * Ninety-nine red rows is a number. "61 not in Emburse's Needs Review · 30
+ * rows came back but none matched · 8 could not open Emburse" is three jobs,
+ * two of which need nothing at all — and which is which was invisible until
+ * they were counted. Read one dialog at a time, three separate causes look
+ * like one problem, which is exactly what happened.
+ */
+function WhyTheyFailed({ onClose }: { onClose: () => void }) {
+  const { data, error } = useQuery({
+    queryKey: ["failure-groups"],
+    queryFn: failureGroups,
+  });
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 whitespace-normal sm:p-8"
+      onClick={(e) => { e.stopPropagation(); onClose(); }}
+    >
+      <div
+        className="w-full max-w-2xl rounded-xl border border-border bg-background p-4 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start gap-2">
+          <p className="flex-1 text-sm font-semibold">Why they did not go through</p>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-border px-2 py-1 text-xs font-semibold hover:bg-muted"
+          >
+            Close
+          </button>
+        </div>
+        {error && <p className="mt-3 text-xs text-red-700">{(error as Error).message}</p>}
+        {!data && !error && <p className="mt-3 text-xs text-muted-foreground">Counting…</p>}
+        {data?.length === 0 && (
+          <p className="mt-3 text-xs text-muted-foreground">Nothing is failing.</p>
+        )}
+        {data?.map((g) => (
+          <div key={g.reason} className="mt-3 rounded-lg border border-border p-3 text-xs">
+            <p>
+              <strong className="font-semibold tabular-nums">{g.n.toLocaleString()}</strong>{" "}
+              &middot; {g.reason}
+            </p>
+            <p className="mt-1 [overflow-wrap:anywhere] text-muted-foreground">{g.example}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function FailedStrip({
   rows, retry,
 }: {
@@ -625,6 +679,7 @@ function FailedStrip({
   // expense is simply not in Emburse's queue any more needs nothing at all.
   // Forty of the second is how "46 did not go through" stopped meaning
   // anything.
+  const [why, setWhy] = useState(false);
   const failed = rows.filter((r) => r.decision?.state === "failed" && !r.decision.notInQueue);
   const gone = rows.filter((r) => r.decision?.state === "failed" && r.decision.notInQueue);
   if (failed.length === 0 && gone.length === 0 && !retry.note) return null;
@@ -636,10 +691,18 @@ function FailedStrip({
       {failed.length > 0 && (
         <span className="text-amber-800 dark:text-amber-300">
           <strong className="font-semibold tabular-nums">{failed.length.toLocaleString()}</strong>{" "}
-          {failed.length === 1 ? "decision" : "decisions"} did not go through. Open one to see why,
-          or run them all again — they will be applied under your Emburse login.
+          {failed.length === 1 ? "decision" : "decisions"} did not go through.{" "}
+          <button
+            type="button"
+            onClick={() => setWhy(true)}
+            className="underline underline-offset-2 hover:no-underline"
+          >
+            See what is failing
+          </button>
+          , or run them all again — they will be applied under your Emburse login.
         </span>
       )}
+      {why && <WhyTheyFailed onClose={() => setWhy(false)} />}
       {gone.length > 0 && (
         <span className="text-muted-foreground">
           <strong className="font-semibold tabular-nums">{gone.length.toLocaleString()}</strong>{" "}

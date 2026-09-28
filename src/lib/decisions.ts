@@ -212,6 +212,16 @@ export async function retryDecision(d: {
   }
 }
 
+export type FailureGroup = { reason: string; n: number; example: string };
+
+/** What the failures are, grouped — a shape rather than a count. */
+export async function failureGroups(): Promise<FailureGroup[]> {
+  const res = await fetch("/api/decisions/failures");
+  const body = await readJson<{ groups?: FailureGroup[]; error?: string }>(res);
+  if (!res.ok) throw new Error(body.error ?? "Could not read the failures.");
+  return body.groups ?? [];
+}
+
 /** Pause everything reaching Emburse, or let it go again. */
 export async function holdDecisions(held: boolean): Promise<void> {
   const res = await fetch("/api/decisions/hold", {

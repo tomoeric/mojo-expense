@@ -382,6 +382,66 @@ export async function retryFailedDecisions(
   return { queued, refused };
 }
 
+/**
+ * What the failures actually are, grouped.
+ *
+ * Ninety-nine red rows is a number, not a diagnosis, and reading them one
+ * dialog at a time is how three separate causes got mistaken for one. The
+ * shape is the thing: sixty "not in Emburse's queue" and four "could not
+ * open Emburse" are two completely different jobs, and which is which is
+ * invisible until they are counted.
+ *
+ * Bucketed by PATTERN, not by exact text: every message carries the amount,
+ * the search term or the URL, so no two are identical and grouping by string
+ * would produce ninety-nine groups of one.
+ */
+const FAILURE_KINDS: [RegExp, string][] = [
+  [/not in this view|no match for/i,
+    "The expense is not in Emburse's Needs Review — already approved or denied there"],
+  [/rows match this expense equally well/i,
+    "Two rows matched equally well, so it refused to guess"],
+  [/none of the .* rows match|looked at the first/i,
+    "Rows came back, but none matched this expense on employee, merchant, amount and date"],
+  [/did not load within|page\.goto|Timeout \d+ms/i,
+    "Could not open Emburse — the page did not load in time"],
+  [/still in Needs Review/i,
+    "It clicked, but the row did not leave Needs Review, so nothing confirms it landed"],
+  [/no .*(APPROVE|Deny|menu).*matched|line up with this row|none of them is visible/i,
+    "The control to click could not be found on the row"],
+  [/sign in|sign-in|password|code-authentication/i,
+    "Signing in to Emburse did not go through"],
+  [/no grid|row selector|selectors in Settings/i,
+    "The grid or row selector did not match what is on the page"],
+  [/no Emburse login/i, "Whoever decided it has no Emburse login stored"],
+];
+
+export type FailureGroup = { reason: string; n: number; example: string };
+
+export async function failureSummary(): Promise<FailureGroup[]> {
+  await ensure();
+  // The newest decision per expense, and only the ones still in the queue:
+  // an expense that has left is not somebody's problem any more.
+  const { rows } = await db().query<{ error: string | null }>(
+    `SELECT d.error
+       FROM (SELECT DISTINCT ON (dedupe_key) dedupe_key, state, error
+               FROM expense_decisions
+              WHERE state <> 'cancelled'
+              ORDER BY dedupe_key, decided_at DESC) d
+       JOIN expenses e ON e.dedupe_key = d.dedupe_key AND e.in_inbox = true
+      WHERE d.state = 'failed'`);
+
+  const groups = new Map<string, FailureGroup>();
+  for (const r of rows) {
+    const text = r.error ?? "";
+    const reason = FAILURE_KINDS.find(([re]) => re.test(text))?.[1] ?? "Something else";
+    const g = groups.get(reason) ?? { reason, n: 0, example: text.slice(0, 220) };
+    g.n++;
+    // Keep the first example, which is enough to recognise the group.
+    groups.set(reason, g);
+  }
+  return [...groups.values()].sort((a, b) => b.n - a.n);
+}
+
 /** How many expenses still held locally have already been actioned. */
 export async function appliedCount(): Promise<number> {
   await ensure();
