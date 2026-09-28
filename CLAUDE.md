@@ -138,6 +138,14 @@ Two separate things, and confusing them cost a queue full of failures.
 
 ## When a decision fails
 
+- **EVERY navigation needs its own budget, not just the first one.** The open
+  got `openTimeoutMs` (90s) while the grid navigations were left on the shared
+  30s step timeout — and then the search ladder made up to three of them per
+  decision, so half of one morning's failures were
+  "page.goto: Timeout 30000ms exceeded" on a GRID, while the message and the
+  screenshot pointed at a sign-in page. The failure report now names the step
+  for exactly this reason: the same sentence means different things at
+  different points in the run.
 - **The export's hardening has to reach the decision path, every time.** Both
   drive the same tenant through the same browser, and twice now the export
   learned something the decisions did not inherit: the export accepted the

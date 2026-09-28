@@ -96,8 +96,14 @@ export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
   // Selectors are configuration here precisely because they cannot be known
   // from outside the tenant; these are a starting point, and a failed run
   // names the step, quotes what it looked for and hands back a screenshot.
-  userFilter: 'button:has-text("All users"), [aria-label*="user" i]',
-  userFilterInput: 'input[placeholder*="search" i], input[type="text"]',
+  // Ordered most specific first, because firstVisible takes the first
+  // match: the users control sits before the categories one on the page,
+  // so a bare [role="combobox"] lands on the right one — but only just, and
+  // that is why this is configuration rather than code.
+  userFilter:
+    'input[role="combobox"][aria-label*="user" i], [aria-label*="all users" i], ' +
+    'button:has-text("All users"), input[role="combobox"], [role="combobox"]',
+  userFilterInput: 'input[role="combobox"], input[placeholder*="search" i], input[type="text"]',
   userFilterOption: '[role="option"], li',
 };
 
@@ -529,13 +535,27 @@ async function filterToCardholder(
   const known = cardholderIds.get(employee.toLowerCase());
   if (known) {
     await page.goto(gridUrl(emburseUrl, { userId: known, path: gridPath }), {
-      waitUntil: "domcontentloaded",
+      waitUntil: "domcontentloaded", timeout: env.emburseLogin.openTimeoutMs,
     });
     return page.url();
   }
 
-  await (await firstVisible(page, sel.userFilter!, 8_000)
-    ?? (() => { throw new Error(`no users filter matched “${sel.userFilter}”`); })()).click();
+  const control = await firstVisible(page, sel.userFilter!, 8_000);
+  if (!control) {
+    // What IS there, rather than only what was not. A selector guessed from
+    // outside the tenant is wrong until proven otherwise, and the fix is to
+    // correct it in settings — which needs to know what to correct it TO.
+    const probes = await countAll(page, [
+      '[role="combobox"]', "input[role=combobox]", "select", "button",
+      '[aria-haspopup="listbox"]', '[class*="autocomplete" i]', '[class*="select" i]',
+    ]);
+    const here = probes.filter((p) => p.n > 0).map((p) => `${p.sel} ×${p.n}`).join(", ");
+    throw new Error(
+      `no users filter matched “${sel.userFilter}”. Control-shaped things on the page: ` +
+      `${here || "none"}. Set the users filter selector in Export settings to whichever of ` +
+      `those is the dropdown reading “All users”.`);
+  }
+  await control.click();
   await page.waitForTimeout(400);
 
   // Typing narrows the list; without it the right name may not be rendered
@@ -737,21 +757,19 @@ export function searchTerms(merchant: string, employee = ""): string[] {
   const letters = (w: string) => w.replace(/[^A-Za-z]/g, "");
   const runs = merchant.match(/[A-Za-z]{4,}/g) ?? [];
   const longest = runs.slice().sort((a, b) => b.length - a.length)[0] ?? "";
-  // The cardholder, last. Emburse's grid has a users filter and the names in
-  // it are clean, which is exactly what the merchant strings are not — so
-  // this is the rung most likely to rescue a merchant nothing else can
-  // match. It goes last rather than first only because it is not known yet
-  // whether this tenant's search box looks at the cardholder at all; if it
-  // does, the failure messages will show it returning rows and it should be
-  // promoted. A surname alone returns that person's whole queue, which is a
-  // dozen rows, and all four checks still have to pass on each of them.
-  const surname = letters(employee.trim().split(/\s+/).pop() ?? "");
+  // No cardholder rung. It was added on the guess that Emburse's search box
+  // might look at the cardholder as well as the merchant, to be settled by
+  // the first failure report that showed it returning rows. The report came
+  // back with “Carroll” → no rows on every one of Brian Carroll's expenses:
+  // it does not. Keeping it cost a page load per failing decision and found
+  // nothing. The cardholder is reached by Emburse's users FILTER instead,
+  // which is a filter and not a search — see filterToCardholder.
+  void employee;
 
   const out = [
     words.slice(0, 2).join(" "),
     letters(words[0] ?? ""),
     longest,
-    surname,
   ];
   // Deduped, and anything with fewer than four letters-or-digits dropped:
   // "BP" returns the whole month, and "#1" is not a search at all. Measured
@@ -1252,8 +1270,13 @@ async function applyOne(
 
     for (const candidate of terms) {
       term = candidate;
+      // Its own budget, like the first navigation. This was left on the
+      // shared 30s step timeout while only the OPEN got 90s — and then the
+      // search ladder made four of these per decision, so half of one
+      // morning's failures were "page.goto: Timeout 30000ms exceeded" on a
+      // grid, not on the sign-in page anybody was looking at.
       await page.goto(gridUrl(emburseUrl, { query: candidate, path: sel.gridPath }), {
-        waitUntil: "domcontentloaded",
+        waitUntil: "domcontentloaded", timeout: env.emburseLogin.openTimeoutMs,
       });
       // The same two signals the export accepts, not just the grid selector.
       // The export has always taken the item-count line as proof the grid

@@ -129,9 +129,14 @@ check("the one that matches succeeds", results.get(1)?.ok === true,
 check("the one that does not, fails", results.get(2)?.ok === false);
 check("…without stopping the rest", results.get(3)?.ok === true,
   results.get(3)?.steps.find((s) => !s.ok)?.detail ?? "");
+// Not just "it failed": what was asked for, what came back, and why each
+// row was turned down. The wording moved when the search became a ladder;
+// what has to hold is that all three are still in it.
 check("…and the failure says why",
-  /none of the .* rows match/.test(results.get(2)?.steps.find((s) => !s.ok)?.detail ?? ""),
-  results.get(2)?.steps.find((s) => !s.ok)?.detail?.slice(0, 80) ?? "");
+  /none of the rows match/.test(results.get(2)?.steps.find((s) => !s.ok)?.detail ?? "") &&
+    /Searched “/.test(results.get(2)?.steps.find((s) => !s.ok)?.detail ?? "") &&
+    /turned down for/.test(results.get(2)?.steps.find((s) => !s.ok)?.detail ?? ""),
+  results.get(2)?.steps.find((s) => !s.ok)?.detail?.slice(0, 120) ?? "");
 check("the right row is recorded for the audit",
   /Brianna Ruth/.test(results.get(1)?.matchedRow ?? ""), results.get(1)?.matchedRow ?? "none");
 check("…and it is Brianna's, not Kevin's",

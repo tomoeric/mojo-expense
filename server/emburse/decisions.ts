@@ -403,7 +403,7 @@ const FAILURE_KINDS: [RegExp, string][] = [
   [/none of the .* rows match|looked at the first/i,
     "Rows came back, but none matched this expense on employee, merchant, amount and date"],
   [/did not load within|page\.goto|Timeout \d+ms/i,
-    "Could not open Emburse — the page did not load in time"],
+    "A page did not load in time"],
   [/still in Needs Review/i,
     "It clicked, but the row did not leave Needs Review, so nothing confirms it landed"],
   [/no .*(APPROVE|Deny|menu).*matched|line up with this row|none of them is visible/i,
@@ -460,9 +460,10 @@ export async function failureReport(): Promise<string> {
   const { rows } = await db().query<{
     error: string | null; decision: Decision; decided_at: Date; attempts: number;
     target: Target; matched_row: string | null; automatic: boolean; not_in_queue: boolean;
+    steps: DecisionStep[] | null;
   }>(
     `SELECT d.error, d.decision, d.decided_at, d.attempts, d.target, d.matched_row,
-            d.automatic, d.not_in_queue
+            d.automatic, d.not_in_queue, d.steps
        FROM (SELECT DISTINCT ON (dedupe_key) *
                FROM expense_decisions
               WHERE state <> 'cancelled'
@@ -474,7 +475,7 @@ export async function failureReport(): Promise<string> {
   // A pipe or a newline inside a cell breaks the table it is in.
   const cell = (v: string) => v.replace(/\|/g, "\\|").replace(/\s+/g, " ").trim();
   const money = (n: number) => `${n < 0 ? "-" : ""}$${Math.abs(n).toFixed(2)}`;
-  /** What the run actually asks Emburse for: the first two words. */
+  /** What the run actually asks Emburse for first: the first two words. */
   const searchTerm = (merchant: string) => merchant.trim().split(/\s+/).slice(0, 2).join(" ");
 
   const byReason = new Map<string, typeof rows>();
@@ -498,13 +499,17 @@ export async function failureReport(): Promise<string> {
 
   for (const [reason, items] of groups) {
     out.push(`## ${items.length} · ${reason}`, ``);
-    out.push(`| Date | Employee | Merchant | Search term | Amount | Tries | Auto | Error |`);
-    out.push(`| --- | --- | --- | --- | ---: | ---: | :-: | --- |`);
+    out.push(`| Date | Employee | Merchant | Search term | Amount | Step | Tries | Auto | Error |`);
+    out.push(`| --- | --- | --- | --- | ---: | --- | ---: | :-: | --- |`);
     for (const r of items) {
+      // WHICH step failed, which a timeout badly needs: "page.goto timed
+      // out" on the sign-in page and on a grid three navigations later are
+      // different faults, and the message alone cannot tell them apart.
+      const failed = (r.steps ?? []).find((st) => !st.ok)?.name ?? "—";
       out.push(`| ${cell(r.target.date ?? "—")} | ${cell(r.target.employee)} | ` +
         `${cell(r.target.merchant)} | ${cell(searchTerm(r.target.merchant))} | ` +
-        `${money(r.target.amount)} | ${r.attempts} | ${r.automatic ? "yes" : "no"} | ` +
-        `${cell(r.error ?? "(nothing recorded)")} |`);
+        `${money(r.target.amount)} | ${cell(failed)} | ${r.attempts} | ` +
+        `${r.automatic ? "yes" : "no"} | ${cell(r.error ?? "(nothing recorded)")} |`);
     }
     out.push(``);
   }

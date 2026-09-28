@@ -68,15 +68,13 @@ console.log("\n1b. What we actually ask Emburse for");
   // nothing else can match — and a surname alone returns that person's whole
   // queue, a dozen rows, every one of which still has to pass all four
   // checks.
-  check("the cardholder's surname is tried, after the merchant",
-    searchTerms("MAVERIK #5074MAVERIK", "Shawn Emerson").at(-1) === "Emerson",
+  // No cardholder rung: the search box does not look at the cardholder on
+  // this tenant. Every one of Brian Carroll's failures reported
+  // “Carroll” → no rows, so it cost a page load each and found nothing.
+  // The cardholder is reached by Emburse's users FILTER instead.
+  check("the cardholder is NOT searched for as text",
+    !searchTerms("MAVERIK #5074MAVERIK", "Shawn Emerson").includes("Emerson"),
     JSON.stringify(searchTerms("MAVERIK #5074MAVERIK", "Shawn Emerson")));
-  check("…never before it, since merchant plus amount is the tighter search",
-    searchTerms("MAVERIK #5074MAVERIK", "Shawn Emerson")[0] === "MAVERIK #5074MAVERIK",
-    JSON.stringify(searchTerms("MAVERIK #5074MAVERIK", "Shawn Emerson")));
-  check("…and a surname too short to search for is left out",
-    !searchTerms("Publix", "Al Li").includes("Li"),
-    JSON.stringify(searchTerms("Publix", "Al Li")));
   check("two clean words give the pair and then the first",
     JSON.stringify(searchTerms("DOORDASH INC.")) === JSON.stringify(["DOORDASH INC.", "DOORDASH"]),
     JSON.stringify(searchTerms("DOORDASH INC.")));
