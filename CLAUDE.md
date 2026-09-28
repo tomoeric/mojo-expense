@@ -155,9 +155,16 @@ the blocks.
   automatically (`autoQueueApprovals`) and start no new batch
   (`decision-worker`'s tick returns before reading the queue). Nothing is
   cancelled — pending decisions stay pending and go on resume, which nudges the
-  worker so it does not wait out the idle timer. A batch already at the browser
-  finishes, because abandoning a half-clicked approval is worse than letting it
-  land.
+  worker so it does not wait out the idle timer.
+- **And it reaches the batch that is already running.** It did not at first, and
+  the excuse sounded like care: "a batch already at the browser finishes,
+  because abandoning a half-clicked approval is worse than letting it land."
+  True of one decision. The batch was a hundred and forty, so "finishes" meant
+  two more hours of them, and the failure count climbed while the strip said
+  Paused. `runDecisions` now asks `shouldStop` BETWEEN decisions, never during
+  one. The ones not reached are simply absent from the results, so they stay
+  queued, and their note says "Paused before this one was reached" rather than
+  reporting a fault that did not happen.
 - **Automatic approvals also stand aside while an import is in flight**
   (`exportInFlight`: an `export_runs` row with no `finished_at`). An import adds
   and removes expenses underneath the queue the automation reads, and the rules
