@@ -252,7 +252,11 @@ const SEL = {
   loggedIn: 'a:has-text("Transactions")',
   adminTab: 'a:has-text("ADMIN")',
   userFilter: "#uf",
-  userFilterInput: "#ufq",
+  // Empty, as the shipped default now is: the click focuses the dropdown's
+  // own input and the name is typed there. The page has a Search field of
+  // its own ahead of it in the DOM, which is exactly what a selector union
+  // used to grab instead.
+  userFilterInput: "",
   userFilterOption: "#ufmenu li",
   grid: "table",
   gridPath: "/transactions/team",
@@ -558,6 +562,33 @@ mock.reset();
     /Shawn Emerson's own queue/.test(why) &&
       gone.steps.some((s) => !s.ok && s.absent === true),
     why.slice(0, 160));
+}
+
+console.log("\n16e. When the users filter is not what we think it is");
+// A selector guessed from outside the tenant is wrong until proven
+// otherwise, and the first attempt was: "no users filter matched
+// button:has-text(\"All users\")", then "nothing in it named Vigna, 1
+// option". Neither says what to correct it TO. Run BEFORE the case that
+// succeeds, because a cardholder id is cached after the first success and
+// a cached id skips the dropdown entirely.
+mock.reset();
+{
+  const SHY = {
+    employee: "Shawn Emerson", merchant: "LA MADRELA FAMILIAR",
+    amount: 28.8, date: "2026-09-09",
+  };
+  const blind = await runDecision(
+    "approve", SHY, "", { ...SEL, userFilterOption: ".no-such-option" }, mock.url, LOGIN, {});
+  const why = blind.steps.find((s) => !s.ok)?.detail ?? "";
+  check("it fails rather than guessing at an option", !blind.ok);
+  check("…listing the list-shaped things that ARE on the page",
+    /List-shaped things/.test(why), why.slice(0, 200));
+  check("…and quoting what the visible entries read",
+    /Visible entries read/.test(why), why.slice(-200));
+  // The one conclusion a broken selector must never produce.
+  check("…and never calls the expense absent on the strength of it",
+    !blind.steps.some((s) => !s.ok && s.absent === true),
+    blind.steps.filter((s) => !s.ok).map((s) => `${s.name}:${String(s.absent)}`).join(", "));
 }
 
 console.log("\n17. A hidden APPROVE ahead of the real one");

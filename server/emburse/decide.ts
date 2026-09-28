@@ -103,7 +103,10 @@ export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
   userFilter:
     'input[role="combobox"][aria-label*="user" i], [aria-label*="all users" i], ' +
     'button:has-text("All users"), input[role="combobox"], [role="combobox"]',
-  userFilterInput: 'input[role="combobox"], input[placeholder*="search" i], input[type="text"]',
+  // EMPTY on purpose: clicking the dropdown focuses its own input, and
+  // typing into the focused element cannot land in the page's Search box
+  // the way a selector union can. Set it only if a tenant needs it.
+  userFilterInput: "",
   userFilterOption: '[role="option"], li',
 };
 
@@ -558,34 +561,68 @@ async function filterToCardholder(
   await control.click();
   await page.waitForTimeout(400);
 
-  // Typing narrows the list; without it the right name may not be rendered
-  // at all on a tenant with hundreds of cardholders.
-  const box = await firstVisible(page, sel.userFilterInput!, 4_000);
-  if (box) {
-    await box.fill(surname).catch(() => {});
-    await page.waitForTimeout(700);
-  }
+  // Typed into whatever the click FOCUSED, not into a box found by
+  // selector. The page has its own Search field sitting right beside this
+  // dropdown, and a union selector returns matches in DOM order, so
+  // "input[role=combobox], input[placeholder*=search]" put the cardholder's
+  // name into the page search box instead — which then filtered the grid to
+  // nothing and left the dropdown's list unnarrowed. Clicking a combobox
+  // focuses its own input; typing there cannot go anywhere else.
+  //
+  // A configured selector still wins, for a tenant where the click does not
+  // focus anything.
+  const box = sel.userFilterInput ? await firstVisible(page, sel.userFilterInput, 2_000) : null;
+  if (box) await box.fill(surname).catch(() => {});
+  else await page.keyboard.type(surname, { delay: 30 }).catch(() => {});
 
   // The option that actually names this person, not merely the first one
   // offered: a list narrowed by "Emerson" can still hold two Emersons, and
   // picking the wrong one silently filters to somebody else's expenses.
+  //
+  // Waited for rather than read once. The list is fetched, so a fixed pause
+  // is a guess that is either wasted time or too short — and too short
+  // reads as "the name is not in the list", which is a different fault
+  // entirely and sent this looking in the wrong place once already.
   const options = page.locator(sel.userFilterOption!);
-  const total = await options.count().catch(() => 0);
   const want = surname.toLowerCase();
   let picked = false;
-  for (let i = 0; i < Math.min(total, 40); i++) {
-    const one = options.nth(i);
-    if (!(await one.isVisible().catch(() => false))) continue;
-    const text = (await one.innerText().catch(() => "")).toLowerCase();
-    if (!text.includes(want)) continue;
-    await one.click();
-    picked = true;
-    break;
-  }
+  let total = 0;
+  const deadline = Date.now() + 6_000;
+  do {
+    total = await options.count().catch(() => 0);
+    for (let i = 0; i < Math.min(total, 60) && !picked; i++) {
+      const one = options.nth(i);
+      if (!(await one.isVisible().catch(() => false))) continue;
+      const text = (await one.innerText().catch(() => "")).toLowerCase();
+      if (!text.includes(want)) continue;
+      await one.click();
+      picked = true;
+    }
+    if (!picked) await page.waitForTimeout(400);
+  } while (!picked && Date.now() < deadline);
+
   if (!picked) {
+    // What the list actually holds, which is the only thing that says
+    // whether the option selector is wrong, the typing went elsewhere, or
+    // the name really is not there. "Nothing named Vigna, 1 option" says
+    // none of the three.
+    const probes = await countAll(page, [
+      sel.userFilterOption ?? "", '[role="option"]', '[role="listbox"] *',
+      "li", '[class*="option" i]', '[class*="menu" i] li', "[data-value]",
+    ]);
+    const counts = probes.filter((p) => p.n > 0).map((p) => `${p.sel} ×${p.n}`).join(", ");
+    const seen: string[] = [];
+    const any = page.locator('[role="option"], [role="listbox"] li, li');
+    const n = await any.count().catch(() => 0);
+    for (let i = 0; i < Math.min(n, 30) && seen.length < 6; i++) {
+      if (!(await any.nth(i).isVisible().catch(() => false))) continue;
+      const t = (await any.nth(i).innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+      if (t) seen.push(t.slice(0, 40));
+    }
     throw new Error(
       `the users filter opened but nothing in it named “${surname}” ` +
-      `(${total} option(s) matched “${sel.userFilterOption}”)`);
+      `(${total} matched “${sel.userFilterOption}”). List-shaped things on the page: ` +
+      `${counts || "none"}. Visible entries read: ${seen.length > 0 ? seen.map((t) => `“${t}”`).join(", ") : "(none)"}.`);
   }
   await page.waitForTimeout(1200);
   // What the dropdown put in the URL is the id, and the only way to get it.

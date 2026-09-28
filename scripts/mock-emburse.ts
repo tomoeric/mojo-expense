@@ -553,6 +553,7 @@ app.get(["/transactions", "/transactions/team"], (req, res) => {
     <a href="/admin">ADMIN</a> <a href="/transactions">Transactions</a>
     ${gridIsEmpty(state.search) ? "" : `<p>${count} items, $${total}</p>`}
     <div>
+      <input id="pagesearch" type="text" placeholder="Search" />
       <button id="uf" type="button">All users</button>
       <div id="ufmenu" hidden>
         <input id="ufq" type="text" placeholder="Search" />
@@ -563,6 +564,9 @@ app.get(["/transactions", "/transactions/team"], (req, res) => {
     <script>
       document.getElementById("uf").addEventListener("click", function () {
         document.getElementById("ufmenu").hidden = false;
+        // A real combobox focuses its own input, which is what makes
+        // typing safe without hunting for a selector.
+        document.getElementById("ufq").focus();
       });
       document.getElementById("ufq").addEventListener("input", function (e) {
         var want = e.target.value.toLowerCase();

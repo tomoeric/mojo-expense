@@ -126,6 +126,13 @@ Two separate things, and confusing them cost a queue full of failures.
   Review: searching "MADRELA" returned the one from the 24th and not the one
   from the 9th. So an empty or partial search result is not evidence of
   anything, and nothing may be concluded from it.
+- **Type into what the click FOCUSED, not into a box found by selector.** The
+  page has its own Search field beside the users dropdown, and a union selector
+  returns matches in DOM order — so `input[role=combobox], input[placeholder*=search]`
+  put the cardholder's name into the PAGE search box, which filtered the grid to
+  nothing and left the dropdown unnarrowed. Clicking a combobox focuses its own
+  input. `userFilterInput` therefore ships EMPTY, and is only for a tenant where
+  the click focuses nothing.
 - **The users FILTER is the authoritative view**, and the only thing "this
   expense is not in the queue" may be claimed from. The parameter is
   `filters[user_id][]` and the value is an opaque id
