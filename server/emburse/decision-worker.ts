@@ -74,6 +74,15 @@ async function tick(): Promise<void> {
   running = true;
   again = false;
   try {
+    // Paused by hand. Checked here rather than at the queueing end, because
+    // "stop" has to mean the hundred already waiting as well as the next
+    // one — those are the ones holding the browser the import needs.
+    //
+    // Nothing is cancelled or lost: they stay pending and go when it is
+    // lifted. A batch already at the browser is not interrupted, because
+    // abandoning a half-clicked approval is worse than letting it land.
+    if (await getFlag("holdDecisions").catch(() => false)) return;
+
     const waiting = await pendingDecisions();
     if (waiting.length === 0) return;
 

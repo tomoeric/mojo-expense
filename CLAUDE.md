@@ -121,6 +121,40 @@ the blocks.
   on everything are a split purchase and still refuse — that property is what
   the narrowing must not cost, and there is a test for each.
 
+## The table
+
+- **A cell holding CONTROLS must not truncate.** Every column truncates so
+  eleven fit on one line, and the hover title gives back what the ellipsis ate —
+  which is right for text and wrong for buttons: `truncate` sets
+  `white-space: nowrap`, defeating the flex-wrap on the controls, so a badge
+  plus an "auto" chip plus Approve/Deny ran off the right edge and was clipped
+  by the scroll container. A title attribute cannot give back a button nobody
+  can click. Columns opt out with `wrap: true` on the column definition.
+
+## Pausing
+
+- **`holdDecisions` is the stop button, and it stops BOTH ends.** The
+  automatic-approvals switch only stops new ones being QUEUED; it says nothing
+  about the hundred already waiting, and those are what stands between the
+  morning import and the browser it needs. Paused means: queue nothing
+  automatically (`autoQueueApprovals`) and start no new batch
+  (`decision-worker`'s tick returns before reading the queue). Nothing is
+  cancelled — pending decisions stay pending and go on resume, which nudges the
+  worker so it does not wait out the idle timer. A batch already at the browser
+  finishes, because abandoning a half-clicked approval is worse than letting it
+  land.
+- **Automatic approvals also stand aside while an import is in flight**
+  (`exportInFlight`: an `export_runs` row with no `finished_at`). An import adds
+  and removes expenses underneath the queue the automation reads, and the rules
+  have not seen the new arrivals. It resumes by itself. The one-hour age limit
+  on that query is a fuse, not a nicety: a process killed mid-run leaves a row
+  that never finishes, and without it that stuck row would disable the
+  automation for ever — a fault indistinguishable from the feature being broken.
+- **The control lives on the QUEUE**, not only in Configuration. The moment
+  somebody wants it is the moment they are watching a hundred decisions march
+  into Emburse. The strip stays on screen while paused, or the pause could never
+  be lifted from the page that set it.
+
 ## Receipts
 
 - **A receipt is a photo embedded in the export PDF.** Keep it at the camera's

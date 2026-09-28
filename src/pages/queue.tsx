@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Loader2, Send } from "lucide-react";
+import { Loader2, Pause, Play, Send } from "lucide-react";
 import type { ExpenseReport, ReportsResponse } from "@/lib/api";
 import { ExpenseTable, buildRows, type Row } from "@/components/expense-table";
 import { DecideButtons, InspectEditForm, TestDecision } from "@/components/decide-controls";
-import { approveMany, retryAllFailed } from "@/lib/decisions";
+import { approveMany, holdDecisions, retryAllFailed } from "@/lib/decisions";
 import { useDecisions } from "@/lib/decisions";
 import { CodePrompt } from "@/components/code-prompt";
 
@@ -33,14 +33,17 @@ export function QueuePage({
   );
 
   const keys = useMemo(() => waiting.map((r) => r.line.id), [waiting]);
-  const { byExpense, pending, browser, canDecide, challenge, decide, cancel, applyNow, answerCode, trace } =
-    useDecisions(keys);
+  const {
+    byExpense, pending, browser, canDecide, challenge, decide, cancel, applyNow, answerCode, trace,
+    held, importing,
+  } = useDecisions(keys);
   const [error, setError] = useState("");
   const [sendNote, setSendNote] = useState<string | null>(null);
   const [bulkNote, setBulkNote] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [retryBusy, setRetryBusy] = useState(false);
   const [retryNote, setRetryNote] = useState<string | null>(null);
+  const [holdBusy, setHoldBusy] = useState(false);
   const qc = useQueryClient();
   /**
    * The batch is OURS when the browser's holder is the decision run rather
@@ -143,9 +146,13 @@ export function QueuePage({
           this strip is the only place that says they have not landed yet.
           Without it "Approved" on a row would be a claim about Emburse that is
           not true for another minute. */}
-      {pending.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-sky-500/30 bg-sky-500/5 p-2.5 text-xs">
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-600" aria-hidden />
+      {(pending.length > 0 || held) && (
+        <div className={`flex flex-wrap items-center gap-2 rounded-lg border p-2.5 text-xs ${
+          held ? "border-amber-500/40 bg-amber-500/5" : "border-sky-500/30 bg-sky-500/5"
+        }`}>
+          {held
+            ? <Pause className="h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />
+            : <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-sky-600" aria-hidden />}
           {/* Progress, not just a count. A batch of three takes about three
               minutes and the only thing on screen was "3 decisions waiting"
               — which reads the same at the start, in the middle and when it
@@ -153,17 +160,22 @@ export function QueuePage({
               so counting what is left against what was sent says how far
               along it is. */}
           <span className="font-semibold">
-            {running
-              ? `Applying ${Math.min(sent, pending.length).toLocaleString()} of ${pending.length.toLocaleString()} queued` +
-                (peak > pending.length ? ` — ${(peak - pending.length).toLocaleString()} landed so far` : "")
-              : `${pending.length} decision${pending.length === 1 ? "" : "s"} waiting to reach Emburse`}
+            {held
+              ? `Paused — ${pending.length.toLocaleString()} decision${pending.length === 1 ? "" : "s"} held back`
+              : running
+                ? `Applying ${Math.min(sent, pending.length).toLocaleString()} of ${pending.length.toLocaleString()} queued` +
+                  (peak > pending.length ? ` — ${(peak - pending.length).toLocaleString()} landed so far` : "")
+                : `${pending.length} decision${pending.length === 1 ? "" : "s"} waiting to reach Emburse`}
           </span>
           <span className="text-muted-foreground">
-            {running
-              ? `signing in and clicking takes about a minute each (${Math.round((Date.now() - (browser?.holder?.since ?? Date.now())) / 1000)}s so far).`
-              : browser?.holder
-                ? `${browser.holder.label} has the browser; these go next.`
-                : "Sent together in one sign-in, shortly."}
+            {held
+              ? "Nothing is queued automatically and no new batch starts. Nothing is lost — these go when you resume."
+              : running
+                ? `signing in and clicking takes about a minute each (${Math.round((Date.now() - (browser?.holder?.since ?? Date.now())) / 1000)}s so far).`
+                : browser?.holder
+                  ? `${browser.holder.label} has the browser; these go next.`
+                  : "Sent together in one sign-in, shortly."}
+            {!held && importing && " An import is running, so automatic approvals are waiting for it."}
           </span>
           {/* Pressing it has to visibly do something. It used to produce no
               change at all — no spinner, no word — while the run it started
@@ -171,9 +183,38 @@ export function QueuePage({
               "the button is broken", and pressing again pushed the run
               further out. */}
           {sendNote && <span className="text-emerald-700">{sendNote}</span>}
+          {/* Stop, without losing anything. The automatic-approvals switch
+              stops new ones being QUEUED and says nothing about the hundred
+              already waiting — and those are what stands between the
+              morning import and the browser it needs. */}
           <button
             type="button"
-            disabled={applyNow.isPending}
+            disabled={holdBusy}
+            onClick={() => {
+              setError("");
+              setHoldBusy(true);
+              holdDecisions(!held)
+                .then(() => qc.invalidateQueries({ queryKey: ["decisions"] }))
+                .catch((e: Error) => setError(e.message))
+                .finally(() => setHoldBusy(false));
+            }}
+            title={held
+              ? "Let queued decisions reach Emburse again, and let the automation queue more"
+              : "Hold everything back: queue nothing automatically, start no new batch. A batch already at the browser finishes."}
+            className={`ml-auto inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 font-semibold disabled:opacity-40 ${
+              held
+                ? "border-emerald-600/40 text-emerald-700 hover:bg-emerald-600/10 dark:text-emerald-400"
+                : "border-border hover:bg-muted"
+            }`}
+          >
+            {holdBusy
+              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              : held ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
+            {held ? "Resume" : "Pause"}
+          </button>
+          <button
+            type="button"
+            disabled={applyNow.isPending || held}
             onClick={() => {
               setSendNote(null);
               applyNow.mutate(undefined, {
@@ -181,7 +222,7 @@ export function QueuePage({
                 onError: (e) => setError((e as Error).message),
               });
             }}
-            className="ml-auto inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1 font-semibold hover:bg-muted disabled:opacity-40"
+            className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1 font-semibold hover:bg-muted disabled:opacity-40"
           >
             {applyNow.isPending
               ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -190,8 +231,8 @@ export function QueuePage({
           </button>
           {/* One test is enough to trust the matching; offering it per row
               would invite twenty browser sessions. */}
-          <TestDecision id={pending[0]!.id} trace={trace} />
-          {canDecide && <InspectEditForm id={pending[0]!.id} />}
+          {pending.length > 0 && <TestDecision id={pending[0]!.id} trace={trace} />}
+          {canDecide && pending.length > 0 && <InspectEditForm id={pending[0]!.id} />}
         </div>
       )}
 

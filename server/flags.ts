@@ -54,6 +54,22 @@ export const FLAGS = {
    * approval it makes.
    */
   autoApprove: false,
+
+  /**
+   * Hold everything back from Emburse, without losing anything.
+   *
+   * There was no way to say "not now". The only control was the automatic
+   * approvals switch, which stops new ones being QUEUED and does nothing
+   * about the hundred already waiting — and they share one browser with the
+   * export, so a long run of decisions is also the thing standing between
+   * the morning import and the queue it refreshes.
+   *
+   * Paused means: queue nothing automatically, and start no new batch.
+   * Already-queued decisions stay exactly as they are and go when it is
+   * lifted; a batch already at the browser finishes, because abandoning a
+   * half-clicked approval is worse than letting it land.
+   */
+  holdDecisions: false,
 } as const;
 
 export type FlagKey = keyof typeof FLAGS;

@@ -75,6 +75,18 @@ type Column = {
    * share as dead space, so the visible ones are rescaled to fill the table.
    */
   pct: number;
+  /**
+   * Let this column's contents WRAP instead of truncating.
+   *
+   * Every other column truncates so eleven of them fit one line, and the
+   * hover title gives back what the ellipsis ate. That is wrong for a cell
+   * holding controls: `truncate` sets `white-space: nowrap`, which defeats
+   * the flex-wrap on the buttons, so a badge plus an "auto" chip plus
+   * Approve/Deny simply ran off the right-hand edge of the table and was
+   * clipped by the scroll container. A title attribute cannot give back a
+   * button somebody cannot click.
+   */
+  wrap?: boolean;
   value: (r: Row) => string | number;
   render?: (r: Row) => React.ReactNode;
 };
@@ -136,7 +148,7 @@ const COLUMNS: Column[] = [
     render: (r) => <span className="font-semibold">{money(r.line.amount)}</span> },
   // Last by default, and sortable by state so everything still waiting to
   // reach Emburse can be brought together.
-  { key: "decide", label: "Decision", pct: 12,
+  { key: "decide", label: "Decision", pct: 14, wrap: true,
     value: (r) => r.decision?.state ?? "",
     render: (r) => r.decide ?? <span className="text-xs text-muted-foreground">—</span> },
 ];
@@ -427,7 +439,7 @@ function BandRows({
           {columns.map((c, i) => (
             <td
               key={c.key}
-              className={`truncate px-2 py-2 ${c.numeric ? "tnum text-right" : ""} ${
+              className={`px-2 py-2 ${c.wrap ? "whitespace-normal" : "truncate"} ${c.numeric ? "tnum text-right" : ""} ${
                 // The accent runs down the first cell of every row in the
                 // band, which is what closes the box on the left.
                 banded && i === 0 ? "border-l-2 border-l-amber-400/70" : ""

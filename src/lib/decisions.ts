@@ -60,6 +60,10 @@ export type DecisionsResponse = {
   applied?: number;
   /** Set when a decision is parked waiting for a device-verification code. */
   challenge: Challenge | null;
+  /** Paused by hand — nothing is queued automatically and no batch starts. */
+  held?: boolean;
+  /** An import is running, which holds automatic approvals by itself. */
+  importing?: boolean;
 };
 
 async function readJson<T>(res: Response): Promise<T> {
@@ -158,6 +162,9 @@ export function useDecisions(keys: string[]) {
     trace: q.data?.trace ?? false,
     /** Already actioned and only waiting for the next sync to disappear. */
     applied: q.data?.applied ?? 0,
+    /** Paused by hand, and whether an import is holding things up anyway. */
+    held: q.data?.held ?? false,
+    importing: q.data?.importing ?? false,
     byExpense: q.data?.byExpense ?? {},
     pending: q.data?.pending ?? [],
     recent: q.data?.recent ?? [],
@@ -196,6 +203,18 @@ export async function retryDecision(d: {
   if (!res.ok) {
     const body = await readJson<{ error?: string }>(res);
     throw new Error(body.error ?? "Could not queue it again.");
+  }
+}
+
+/** Pause everything reaching Emburse, or let it go again. */
+export async function holdDecisions(held: boolean): Promise<void> {
+  const res = await fetch("/api/decisions/hold", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ held }),
+  });
+  if (!res.ok) {
+    throw new Error((await readJson<{ error?: string }>(res)).error ?? "Could not change it.");
   }
 }
 

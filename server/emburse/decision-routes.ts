@@ -11,7 +11,8 @@ import {
   recentDecisions, retryFailedDecisions,
 } from "./decisions.js";
 import { decisionWorkerStarted, nudgeDecisionWorker } from "./decision-worker.js";
-import { getFlag } from "../flags.js";
+import { getFlag, setFlag } from "../flags.js";
+import { exportInFlight } from "./export-scheduler.js";
 
 export const decisionRouter = Router();
 
@@ -273,6 +274,24 @@ decisionRouter.post("/decisions/retry-failed", requireAuth, async (req: Request,
   }
 });
 
+/**
+ * Pause, or let it go again.
+ *
+ * On the queue rather than buried in Configuration, because the moment
+ * somebody wants this is the moment they are watching a hundred decisions
+ * march into Emburse and a morning import waiting behind them.
+ */
+decisionRouter.post("/decisions/hold", requireAuth, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  const body = req.body as { held?: unknown };
+  const held = Boolean(body.held);
+  await setFlag("holdDecisions", held, req.user?.email ?? "unknown");
+  // Lifting it should not mean waiting out the idle timer. Nudged rather
+  // than run here: the worker owns the browser, not a request.
+  if (!held) nudgeDecisionWorker();
+  res.json({ held });
+});
+
 /** The queue, the history, and what the browser is busy with. */
 decisionRouter.get("/decisions", requireAuth, async (req: Request, res: Response) => {
   if (!guard(res)) return;
@@ -309,6 +328,12 @@ decisionRouter.get("/decisions", requireAuth, async (req: Request, res: Response
     // the queue already makes rather than getting a request of its own: it
     // is one boolean and the page is useless without this response anyway.
     trace: await getFlag("traceDecisions").catch(() => false),
+    // Paused, and whether an import is holding things up by itself. Both
+    // ride on the poll the queue already makes: the strip has to be able to
+    // say why nothing is moving, and "paused" and "waiting for the import"
+    // are the two answers that are not a fault.
+    held: await getFlag("holdDecisions").catch(() => false),
+    importing: await exportInFlight().catch(() => false),
   });
 });
 

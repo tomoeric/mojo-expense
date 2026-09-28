@@ -148,6 +148,29 @@ export async function recentRuns(limit = 20): Promise<RunRow[]> {
   }));
 }
 
+/**
+ * Whether an export/import is in flight right now.
+ *
+ * A run writes its row when it starts and stamps `finished_at` when it ends,
+ * so an unfinished row IS a run in progress. Automatic approvals stand aside
+ * while one is going: an import adds and removes expenses underneath the
+ * very queue the automation is reading, and the rules have not seen the new
+ * arrivals yet.
+ *
+ * The hour is a fuse, not a nicety. A process killed mid-run leaves a row
+ * that never finishes, and without this that stuck row would silently
+ * disable automatic approvals for ever — a fault that looks exactly like
+ * the feature being broken. `closeOrphanedRuns` tidies them on boot; this
+ * makes the automation safe in the meantime.
+ */
+export async function exportInFlight(): Promise<boolean> {
+  await ensure();
+  const { rows } = await db().query(
+    `SELECT 1 FROM export_runs
+      WHERE finished_at IS NULL AND started_at > now() - interval '1 hour' LIMIT 1`);
+  return rows.length > 0;
+}
+
 export async function runScreenshot(id: number): Promise<Buffer | null> {
   await ensure();
   const { rows } = await db().query<{ screenshot: Buffer | null }>(

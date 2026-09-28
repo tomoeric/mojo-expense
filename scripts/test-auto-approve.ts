@@ -208,6 +208,41 @@ try {
     if (byHand.ok) await db().query("DELETE FROM expense_decisions WHERE id = $1", [byHand.queued.id]);
   }
 
+  console.log("\n7c. Standing aside");
+  // Two reasons to do nothing that are not faults, and both have to be said
+  // rather than looking like the feature being broken.
+  {
+    const { setFlag: flag } = await import("../server/flags.js");
+    await flag("holdDecisions", true, OWNER);
+    const paused = await autoQueueApprovals();
+    check("paused by hand queues nothing", paused.queued === 0, String(paused.queued));
+    check("…and says it is paused", /paused/.test(paused.skipped ?? ""), paused.skipped ?? "(nothing)");
+    await flag("holdDecisions", false, OWNER);
+
+    // An import adds and removes expenses underneath the queue this reads,
+    // and the rules have not seen the new arrivals yet — so anything queued
+    // mid-import is judged against a queue that is changing as it is read.
+    const { rows } = await db().query<{ id: string }>(
+      `INSERT INTO export_runs (local_date, attempt, trigger) VALUES ('2026-09-28', 1, 'test')
+       RETURNING id`);
+    const runId = rows[0]!.id;
+    const during = await autoQueueApprovals();
+    check("an import in flight queues nothing", during.queued === 0, String(during.queued));
+    check("…and says it is waiting for the import",
+      /import is running/.test(during.skipped ?? ""), during.skipped ?? "(nothing)");
+
+    // The fuse: a run killed mid-flight leaves a row that never finishes,
+    // and without the age limit that stuck row would disable the automation
+    // for ever — a fault indistinguishable from the feature being broken.
+    await db().query(
+      "UPDATE export_runs SET started_at = now() - interval '3 hours' WHERE id = $1", [runId]);
+    const stale = await autoQueueApprovals();
+    check("…but a run stuck open for hours does not hold it for ever",
+      stale.skipped === null || !/import is running/.test(stale.skipped),
+      stale.skipped ?? "(nothing)");
+    await db().query("DELETE FROM export_runs WHERE id = $1", [runId]);
+  }
+
   console.log("\n8. Saying why nothing moved");
   // The report is the answer to "it is on and nothing is happening", which
   // before it existed had no answer anywhere in the app. It has to classify

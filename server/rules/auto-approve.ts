@@ -32,6 +32,7 @@
  */
 
 import { db } from "../db.js";
+import { exportInFlight } from "../emburse/export-scheduler.js";
 import { flagOwner, getFlag, getLimit } from "../flags.js";
 import { hasCredential } from "../emburse/credentials.js";
 import { queueApprovalFor } from "../emburse/decisions.js";
@@ -127,6 +128,22 @@ type Setup = {
 };
 
 /**
+ * The first condition that holds, with the sentence that goes with it.
+ *
+ * Each test is either a plain boolean or a function, so the expensive ones
+ * — a database read, a credential decrypt — are only run once the cheap
+ * ones ahead of them have passed.
+ */
+async function firstReason(
+  tests: [boolean | (() => Promise<boolean>), string][],
+): Promise<string | null> {
+  for (const [test, why] of tests) {
+    if (typeof test === "function" ? await test() : test) return why;
+  }
+  return null;
+}
+
+/**
  * Read the setup and apply the refusals, without touching any expense.
  *
  * Shared by the pass and the report so the page cannot say one thing while
@@ -142,19 +159,36 @@ async function setup(): Promise<Setup> {
       (c) => NEEDS_A_READING.has(c.field) || (c.compare && NEEDS_A_READING.has(c.compare)),
     ));
 
-  const blocked = !on
-    ? "automatic approvals are switched off"
-    : !owner
-      ? "nobody owns the automatic approvals, so there is no login to make them under"
-      // The same rule as everywhere else: Emburse records an approval against
-      // whoever signed in. No credential, no approval — never a shared one.
-      : !(await hasCredential(owner))
-        ? `${owner} switched automatic approvals on but has no Emburse login stored, so none can be made`
-        : rules.length === 0
-          // No rules means nothing has been checked at all, and "no flags" is
-          // vacuously true of every expense in the queue.
-          ? "no rules are enabled, so nothing has actually been checked"
-          : null;
+  // Standing aside for an import. It adds and removes expenses underneath
+  // the very queue this reads, and the rules have not seen the new arrivals
+  // yet — so anything queued mid-import is judged against a queue that is
+  // changing as it is read. It resumes on its own when the run finishes;
+  // nothing has to be remembered or switched back.
+  // Written as a chain of reasons rather than one nested ternary: this list
+  // only ever grows, and the ordering IS the meaning — the first thing that
+  // would stop a run is the thing to say.
+  const blocked = await firstReason([
+    [!on, "automatic approvals are switched off"],
+    // Paused by hand. Deliberately ahead of everything else: somebody has
+    // said "not now", and no other detail is worth reporting over that.
+    [async () => await getFlag("holdDecisions").catch(() => false),
+      "everything is paused — nothing is being queued or sent to Emburse until it is resumed"],
+    // Standing aside for an import. It adds and removes expenses underneath
+    // the very queue this reads, and the rules have not seen the new
+    // arrivals yet, so anything queued mid-import is judged against a queue
+    // that is changing as it is read. It resumes on its own when the run
+    // finishes; nothing has to be remembered or switched back.
+    [async () => await exportInFlight().catch(() => false),
+      "an import is running, so approvals wait until it has finished and the rules have run"],
+    [!owner, "nobody owns the automatic approvals, so there is no login to make them under"],
+    // The same rule as everywhere else: Emburse records an approval against
+    // whoever signed in. No credential, no approval — never a shared one.
+    [async () => Boolean(owner) && !(await hasCredential(owner!)),
+      `${owner} switched automatic approvals on but has no Emburse login stored, so none can be made`],
+    // No rules means nothing has been checked at all, and "no flags" is
+    // vacuously true of every expense in the queue.
+    [rules.length === 0, "no rules are enabled, so nothing has actually been checked"],
+  ]);
 
   return { on, owner, perRun, rules: rules.length, receiptMatters, blocked };
 }
