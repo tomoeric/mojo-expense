@@ -8,7 +8,7 @@ import { credentialForUser, hasCredential, noteResult } from "./credentials.js";
 import { inspectEditForm, runDecision, testConnection, type Decision, type Target } from "./decide.js";
 import {
   appliedCount, cancelDecision, decisionsFor, pendingDecisions, queueApprovalFor, queueDecision,
-  failureSummary, recentDecisions, retryFailedDecisions,
+  failureReport, failureSummary, recentDecisions, retryFailedDecisions,
 } from "./decisions.js";
 import { decisionWorkerStarted, nudgeDecisionWorker } from "./decision-worker.js";
 import { getFlag, setFlag } from "../flags.js";
@@ -302,6 +302,25 @@ decisionRouter.get("/decisions/failures", requireAuth, async (_req: Request, res
   if (!guard(res)) return;
   try {
     res.json({ groups: await failureSummary() });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/**
+ * The same failures as a markdown file, to read properly or send on.
+ *
+ * Served as an attachment rather than as a page: a .md rendered in a browser
+ * tab is a wall of pipes, and the point of it is to be opened in something
+ * that reads markdown, or pasted somewhere.
+ */
+decisionRouter.get("/decisions/failures.md", requireAuth, async (_req: Request, res: Response) => {
+  if (!guard(res)) return;
+  try {
+    const day = new Date().toISOString().slice(0, 10);
+    res.setHeader("content-type", "text/markdown; charset=utf-8");
+    res.setHeader("content-disposition", `attachment; filename="decision-failures-${day}.md"`);
+    res.send(await failureReport());
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }

@@ -639,8 +639,19 @@ function WhyTheyFailed({ onClose }: { onClose: () => void }) {
         className="w-full max-w-2xl rounded-xl border border-border bg-background p-4 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-start gap-2">
+        <div className="flex flex-wrap items-start gap-2">
           <p className="flex-1 text-sm font-semibold">Why they did not go through</p>
+          {/* Every one of them, with the merchant string and the search term
+              derived from it — the two things that diagnose a matching
+              failure and are invisible in a count. Downloaded rather than
+              opened in a tab: a .md rendered as a page is a wall of pipes. */}
+          <a
+            href="/api/decisions/failures.md"
+            download
+            className="rounded-md border border-border px-2 py-1 text-xs font-semibold hover:bg-muted"
+          >
+            Download all as markdown
+          </a>
           <button
             type="button"
             onClick={onClose}

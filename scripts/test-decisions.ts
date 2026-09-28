@@ -23,7 +23,7 @@ process.env.EMBURSE_SIGN_IN_WAIT_MS ||= "20000";
 
 const {
   queueDecision, pendingDecisions, cancelDecision, settleDecision, decisionsFor, recentDecisions,
-  retryFailedDecisions, failureSummary,
+  retryFailedDecisions, failureSummary, failureReport,
 } = await import("../server/emburse/decisions.js");
 const { saveCredential, deleteCredential, credentialForUser, hasCredential } =
   await import("../server/emburse/credentials.js");
@@ -463,6 +463,48 @@ console.log("\n12. What the failures actually are");
     groups.length === 4, String(groups.length));
   check("…biggest first, so the shape reads at a glance",
     groups[0]!.n >= groups[groups.length - 1]!.n);
+
+  // The same failures as a file somebody can read or send on. It carries
+  // the two things that actually diagnose a matching failure and are
+  // invisible in a count: the merchant string as our export gave it, and
+  // the SEARCH TERM derived from it — the first two words, which is what
+  // Emburse is really asked for.
+  const md = await failureReport();
+  check("the report names every failure, grouped like the summary",
+    /^# Decision failures/.test(md) && /## 2 · The expense is not in Emburse/.test(md),
+    md.split("\n").slice(0, 2).join(" / "));
+  check("…and says what was actually searched for, not just the merchant",
+    /\| Search term \|/.test(md) && /\| SQ \*COFFEE \| SQ \*COFFEE \|/.test(md),
+    md.split("\n").find((l) => l.includes("SQ *COFFEE"))?.slice(0, 120) ?? "(no row)");
+  check("…with a row for each, and the error on it",
+    md.split("\n").filter((l) => l.startsWith("| 2026-09-13")).length === 5,
+    String(md.split("\n").filter((l) => l.startsWith("| 2026-09-13")).length));
+  // A pipe inside an error would otherwise split the row it is in, silently
+  // shifting every later column — a table that still renders and lies.
+  {
+    const key = "test-fs-pipe";
+    await db().query(
+      `INSERT INTO expenses (dedupe_key, employee, expense_date, merchant, amount_cents,
+                             category, department, location, note, method, in_inbox)
+       VALUES ($1,'Kevin Bray','2026-09-13','SQ *COFFEE',850,'Meals','Ops','Site','x','Corporate card',true)
+       ON CONFLICT (dedupe_key) DO UPDATE SET in_inbox = true`, [key]);
+    const q = await queueDecision({
+      dedupeKey: key, decision: "approve", reason: "", decidedBy: "fs@example.invalid",
+      target: { employee: "Kevin Bray", merchant: "SQ *COFFEE", amount: 8.5, date: "2026-09-13" },
+    });
+    if (!q.ok) throw new Error(q.error);
+    await settleDecision(q.queued.id, { ok: false, error: "a | b | c went wrong" });
+    const piped = await failureReport();
+    const row = piped.split("\n").find((l) => l.includes("a \\| b"));
+    check("a pipe inside an error is escaped, not left to split the row",
+      Boolean(row), piped.split("\n").find((l) => l.includes("went wrong"))?.slice(0, 120) ?? "(no row)");
+    check("…so the row still has the columns the header promises",
+      row !== undefined && row.replace(/\\\|/g, "").split("|").length ===
+        piped.split("\n").find((l) => l.startsWith("| Date |"))!.split("|").length,
+      row?.slice(0, 140) ?? "");
+    await db().query("DELETE FROM expense_decisions WHERE dedupe_key = $1", [key]);
+    await db().query("DELETE FROM expenses WHERE dedupe_key = $1", [key]);
+  }
 
   // An expense that has left the queue is nobody's problem any more.
   await db().query("UPDATE expenses SET in_inbox = false WHERE dedupe_key = 'test-fs-a'");

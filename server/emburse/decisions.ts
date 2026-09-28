@@ -442,6 +442,76 @@ export async function failureSummary(): Promise<FailureGroup[]> {
   return [...groups.values()].sort((a, b) => b.n - a.n);
 }
 
+/**
+ * Every failure, as a markdown file somebody can read or send on.
+ *
+ * The grouped counts say what SHAPE the problem is; this says which
+ * expenses, and carries the two things that actually diagnose a matching
+ * failure and are otherwise invisible: the merchant string exactly as our
+ * export gave it, and **the search term derived from it** — the first two
+ * words, which is what Emburse is actually asked for. A merchant recorded
+ * as "DOLLARTREE 8508DOLLAR TREE STORES INC" is searched for as
+ * "DOLLARTREE 8508", and no amount of reading the error says so.
+ *
+ * Grouped by the same buckets as the summary, so the two cannot disagree.
+ */
+export async function failureReport(): Promise<string> {
+  await ensure();
+  const { rows } = await db().query<{
+    error: string | null; decision: Decision; decided_at: Date; attempts: number;
+    target: Target; matched_row: string | null; automatic: boolean; not_in_queue: boolean;
+  }>(
+    `SELECT d.error, d.decision, d.decided_at, d.attempts, d.target, d.matched_row,
+            d.automatic, d.not_in_queue
+       FROM (SELECT DISTINCT ON (dedupe_key) *
+               FROM expense_decisions
+              WHERE state <> 'cancelled'
+              ORDER BY dedupe_key, decided_at DESC) d
+       JOIN expenses e ON e.dedupe_key = d.dedupe_key AND e.in_inbox = true
+      WHERE d.state = 'failed'
+      ORDER BY d.decided_at DESC`);
+
+  // A pipe or a newline inside a cell breaks the table it is in.
+  const cell = (v: string) => v.replace(/\|/g, "\\|").replace(/\s+/g, " ").trim();
+  const money = (n: number) => `${n < 0 ? "-" : ""}$${Math.abs(n).toFixed(2)}`;
+  /** What the run actually asks Emburse for: the first two words. */
+  const searchTerm = (merchant: string) => merchant.trim().split(/\s+/).slice(0, 2).join(" ");
+
+  const byReason = new Map<string, typeof rows>();
+  for (const r of rows) {
+    const reason = FAILURE_KINDS.find(([re]) => re.test(r.error ?? ""))?.[1] ?? "Something else";
+    (byReason.get(reason) ?? byReason.set(reason, []).get(reason)!).push(r);
+  }
+  const groups = [...byReason.entries()].sort((a, b) => b[1].length - a[1].length);
+
+  const out: string[] = [
+    `# Decision failures`,
+    ``,
+    `${rows.length} failure${rows.length === 1 ? "" : "s"} on expenses still in the queue, ` +
+    `as at ${new Date().toISOString().replace("T", " ").slice(0, 16)} UTC.`,
+    ``,
+    `A failure means the decision never reached Emburse, so Emburse still lists the expense and ` +
+    `every import brings it back. **Search term** is what the run actually asks Emburse for — ` +
+    `the first two words of the merchant — which is the thing a matching failure usually turns on.`,
+    ``,
+  ];
+
+  for (const [reason, items] of groups) {
+    out.push(`## ${items.length} · ${reason}`, ``);
+    out.push(`| Date | Employee | Merchant | Search term | Amount | Tries | Auto | Error |`);
+    out.push(`| --- | --- | --- | --- | ---: | ---: | :-: | --- |`);
+    for (const r of items) {
+      out.push(`| ${cell(r.target.date ?? "—")} | ${cell(r.target.employee)} | ` +
+        `${cell(r.target.merchant)} | ${cell(searchTerm(r.target.merchant))} | ` +
+        `${money(r.target.amount)} | ${r.attempts} | ${r.automatic ? "yes" : "no"} | ` +
+        `${cell(r.error ?? "(nothing recorded)")} |`);
+    }
+    out.push(``);
+  }
+  if (groups.length === 0) out.push(`Nothing is failing.`, ``);
+  return out.join("\n");
+}
+
 /** How many expenses still held locally have already been actioned. */
 export async function appliedCount(): Promise<number> {
   await ensure();
