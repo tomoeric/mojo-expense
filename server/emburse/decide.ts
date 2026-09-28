@@ -2,7 +2,7 @@ import type { BrowserContext, Locator, Page } from "playwright";
 import { env } from "../env.js";
 import {
   EMPTY_GRID, explainLaunch, firstVisible, gridLoaded, gridUrl, makeStepper, openBrowser,
-  openEmburse, safeUrl, signIn,
+  openEmburse, safeUrl, signIn, userIdInUrl,
   type ChallengeHook,
   type Login, type StepResult,
 } from "./auto-export.js";
@@ -65,7 +65,8 @@ export type DecisionRun = {
 
 export type DecisionSelectorKey =
   | "resultRow" | "approveButton" | "rowMenu"
-  | "denyButton" | "denyReason" | "denyConfirm" | "decisionApplied";
+  | "denyButton" | "denyReason" | "denyConfirm" | "decisionApplied"
+  | "userFilter" | "userFilterInput" | "userFilterOption";
 
 export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
   // Both grid shapes, because Emburse uses the second one.
@@ -85,6 +86,19 @@ export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
   denyReason: 'textarea, input[placeholder*="reason" i]',
   denyConfirm: 'button:has-text("Deny")',
   decisionApplied: "text=/approved|denied/i",
+  // The cardholder filter, which is a FILTER and not the text search — and
+  // that distinction is the whole point of it. Emburse's text search
+  // demonstrably misses rows that are in the view: searching "MADRELA"
+  // returned the LA MADRELA of the 24th and not the LA MADRELA of the 9th,
+  // both in Needs Review, both the same person. The users dropdown showed
+  // all ten of that person's rows, the missing one among them.
+  //
+  // Selectors are configuration here precisely because they cannot be known
+  // from outside the tenant; these are a starting point, and a failed run
+  // names the step, quotes what it looked for and hands back a screenshot.
+  userFilter: 'button:has-text("All users"), [aria-label*="user" i]',
+  userFilterInput: 'input[placeholder*="search" i], input[type="text"]',
+  userFilterOption: '[role="option"], li',
 };
 
 export const DECISION_SELECTOR_HELP: Record<DecisionSelectorKey, string> = {
@@ -95,10 +109,13 @@ export const DECISION_SELECTOR_HELP: Record<DecisionSelectorKey, string> = {
   denyReason: "The reason box, if Emburse asks for one.",
   denyConfirm: "The button that confirms the denial.",
   decisionApplied: "Confirmation that the decision was recorded.",
+  userFilter: "The users dropdown above the grid — the one reading “All users”.",
+  userFilterInput: "The box inside that dropdown you type a name into.",
+  userFilterOption: "One name in the list the dropdown offers.",
 };
 
 export const DECISION_STEP_SELECTORS: Record<string, DecisionSelectorKey[]> = {
-  "search for the expense": ["resultRow"],
+  "search for the expense": ["resultRow", "userFilter", "userFilterInput", "userFilterOption"],
   "verify it is the right row": ["resultRow"],
   approve: ["approveButton", "decisionApplied"],
   deny: ["rowMenu", "denyButton", "denyReason", "denyConfirm", "decisionApplied"],
@@ -470,6 +487,93 @@ const ROWS_EXAMINED = 250;
  * split purchase — and there is nothing here that could tell them apart,
  * so that still refuses. What is discarded is only what nobody can see.
  */
+/**
+ * Narrow the grid to one cardholder, using Emburse's own users FILTER.
+ *
+ * Not the text search, and that is the entire point. Emburse's text search
+ * misses rows that are in the view: "MADRELA" returned the LA MADRELA of
+ * the 24th and not the LA MADRELA of the 9th — same merchant, same person,
+ * both sitting in Needs Review. The users dropdown showed all ten of that
+ * person's rows with the missing one among them.
+ *
+ * So this is the authoritative view, and the only one from which "the
+ * expense is not there" can honestly be concluded.
+ *
+ * Returns the URL it produced. That URL carries whatever parameter Emburse
+ * uses for the filter, which nobody here knows — recording it is how this
+ * becomes a plain navigation instead of three clicks.
+ */
+/**
+ * Cardholder ids learned from the dropdown, for the life of the process.
+ *
+ * Emburse's id is opaque — `uk4l0byvo7zzwgfzidt34awh2afoixiphkfka8fx` — so
+ * it cannot be constructed, only read off the URL after using the dropdown
+ * once. Kept in memory rather than a table: it is one small string per
+ * person, it never changes, and re-learning it after a restart costs three
+ * clicks on the first decision of the day.
+ */
+const cardholderIds = new Map<string, string>();
+
+async function filterToCardholder(
+  page: Page,
+  sel: Record<string, string>,
+  employee: string,
+  emburseUrl: string,
+  gridPath?: string,
+): Promise<string> {
+  const surname = employee.trim().split(/\s+/).pop() ?? employee.trim();
+  if (!surname) throw new Error("no cardholder name to filter by");
+
+  // Straight there, if this person's id is already known. One navigation
+  // instead of a dropdown, a typed name and a click on the right option.
+  const known = cardholderIds.get(employee.toLowerCase());
+  if (known) {
+    await page.goto(gridUrl(emburseUrl, { userId: known, path: gridPath }), {
+      waitUntil: "domcontentloaded",
+    });
+    return page.url();
+  }
+
+  await (await firstVisible(page, sel.userFilter!, 8_000)
+    ?? (() => { throw new Error(`no users filter matched “${sel.userFilter}”`); })()).click();
+  await page.waitForTimeout(400);
+
+  // Typing narrows the list; without it the right name may not be rendered
+  // at all on a tenant with hundreds of cardholders.
+  const box = await firstVisible(page, sel.userFilterInput!, 4_000);
+  if (box) {
+    await box.fill(surname).catch(() => {});
+    await page.waitForTimeout(700);
+  }
+
+  // The option that actually names this person, not merely the first one
+  // offered: a list narrowed by "Emerson" can still hold two Emersons, and
+  // picking the wrong one silently filters to somebody else's expenses.
+  const options = page.locator(sel.userFilterOption!);
+  const total = await options.count().catch(() => 0);
+  const want = surname.toLowerCase();
+  let picked = false;
+  for (let i = 0; i < Math.min(total, 40); i++) {
+    const one = options.nth(i);
+    if (!(await one.isVisible().catch(() => false))) continue;
+    const text = (await one.innerText().catch(() => "")).toLowerCase();
+    if (!text.includes(want)) continue;
+    await one.click();
+    picked = true;
+    break;
+  }
+  if (!picked) {
+    throw new Error(
+      `the users filter opened but nothing in it named “${surname}” ` +
+      `(${total} option(s) matched “${sel.userFilterOption}”)`);
+  }
+  await page.waitForTimeout(1200);
+  // What the dropdown put in the URL is the id, and the only way to get it.
+  const id = userIdInUrl(page.url());
+  if (id) cardholderIds.set(employee.toLowerCase(), id);
+  return page.url();
+}
+
 async function visibleOf(rows: Locator, indexes: number[]): Promise<number[]> {
   const on: number[] = [];
   for (const i of indexes) {
@@ -1183,6 +1287,35 @@ async function applyOne(
       if (matches.length > 0) break;
     }
 
+    // Emburse's own users filter, once the text searches have failed.
+    //
+    // The text search is not reliable: it returned the LA MADRELA of the
+    // 24th and not the LA MADRELA of the 9th, both in Needs Review, both
+    // the same person. So a search that comes back empty proves nothing,
+    // and this filter — a filter, not a search — is the only view from
+    // which "the expense is not there" can honestly be concluded.
+    let filtered = false;
+    if (matches.length === 0 && target.employee.trim()) {
+      try {
+        const where = await filterToCardholder(page, sel, target.employee, emburseUrl, sel.gridPath);
+        filtered = true;
+        rows = page.locator(sel.resultRow!);
+        count = await rows.count();
+        const examined = Math.min(count, ROWS_EXAMINED);
+        matches = [];
+        for (let i = 0; i < examined; i++) {
+          if (rowMatches(await rows.nth(i).innerText().catch(() => ""), target).ok) matches.push(i);
+        }
+        term = `the ${target.employee} filter`;
+        // The URL is worth recording: it carries whatever parameter Emburse
+        // uses, which is how this becomes one navigation instead of three
+        // clicks. Redacted, since a grid URL can carry a session token.
+        tried.push(`${safeUrl(where)} → ${count} row(s), ${matches.length} matching`);
+      } catch (err) {
+        tried.push(`the users filter could not be used (${err instanceof Error ? err.message : String(err)})`);
+      }
+    }
+
     if (matches.length === 0) {
       const examined = Math.min(count, ROWS_EXAMINED);
       // Why EACH row was turned down, not just the first. "None of the 4
@@ -1198,16 +1331,28 @@ async function applyOne(
       const spread = reasons.length > 0 ? ` The rows were turned down for: ${reasons.join("; ")}.` : "";
       const attempts = `Searched ${tried.join(", ")}.`;
 
-      // Empty for EVERY term is the only honest basis for "it is not there".
-      // One empty result means the term was wrong at least as often as it
-      // means the expense has gone.
-      if (emptyEveryTime) {
+      // "It is not there" is claimed from the FILTER and nothing else.
+      //
+      // It used to be claimed from an empty search, on the reasoning that an
+      // expense which has been approved leaves Needs Review. The reasoning
+      // was fine; the premise was not. Emburse's text search misses rows
+      // that are in the view — proven on two LA MADRELA expenses of the same
+      // person, one returned and one not — so an empty search says nothing
+      // about whether the expense is there, and writing it off on that basis
+      // buries an expense sitting in plain sight.
+      if (filtered) {
         throw new NotInQueue(
-          `Emburse returned nothing for this expense, whichever way it was searched for. ` +
+          `${target.employee}'s own queue in Emburse does not hold this expense. ` +
           `${attempts} An expense that has already been approved or denied leaves Needs ` +
           `Review, so the commonest reason for this is that the decision already went ` +
-          `through. It will drop off this queue at the next import. Trying again will ` +
-          `search the same empty views.`);
+          `through. It will drop off this queue at the next import.`);
+      }
+      if (emptyEveryTime) {
+        throw new Error(
+          `Emburse returned nothing for this expense, whichever way it was searched for, ` +
+          `and its users filter could not be used to check properly. ${attempts} ` +
+          `Emburse's text search is known to miss rows that ARE in the view, so this does ` +
+          `not mean the expense has gone — check it in Emburse.`);
       }
       // Never claim none of N matched when only the first few were read. A
       // merchant like DOORDASH returns the whole month, and "none of the 340

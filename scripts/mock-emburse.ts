@@ -94,6 +94,17 @@ type State = {
    */
   searchMode: "substring" | "name";
   /**
+   * A row the text search will not return, whatever it is asked.
+   *
+   * Emburse does this: "MADRELA" returned the LA MADRELA of the 24th and
+   * not the LA MADRELA of the 9th, same person, both in Needs Review. Only
+   * the users filter showed it. Without a row like this in the mock, the
+   * filter path can be written but never proven.
+   */
+  hiddenFromSearch: boolean;
+  /** Which cardholder the users filter is set to, "" for all. */
+  userFilter: string;
+  /**
    * How the export dialog offers a format.
    *
    *   "links"  — a link that opens a page of choices.
@@ -167,6 +178,8 @@ const state: State = {
   ghostRows: false,
   twinRows: false,
   searchMode: "substring",
+  hiddenFromSearch: false,
+  userFilter: "",
   formatControl: "links",
   chipsUnmatchable: false,
   chipState: "aria",
@@ -193,7 +206,23 @@ const ROWS = [
   // "MAVERIK #5074MAVERIK" — which the real Emburse search returns nothing
   // for, while the row sits there one filter away.
   { date: "9/8/2026", merchant: "MAVERIK #5074MAVERIK COUNTRY STORE", who: "Shawn Emerson", amount: "21.67" },
+  { date: "9/24/2026", merchant: "LA MADRELA FAMILIAR", who: "Shawn Emerson", amount: "37.35" },
+  // The one the text search will not return, whatever it is asked — which
+  // is what Emburse actually did: searching "MADRELA" gave back the LA
+  // MADRELA of the 24th and not the LA MADRELA of the 9th, same person,
+  // both sitting in Needs Review. Only the users filter showed it.
+  { date: "9/9/2026", merchant: "LA MADRELA FAMILIAR", who: "Shawn Emerson", amount: "28.80", shy: true },
 ];
+
+/**
+ * Emburse's cardholder ids: opaque, and the only way to filter by URL.
+ * Real one, for shape: uk4l0byvo7zzwgfzidt34awh2afoixiphkfka8fx.
+ */
+const USER_IDS = new Map([
+  ["uk4l0byvo7zzwgfzidt34awh2afoixiphkfka8fx", "Shawn Emerson"],
+  ["b1r2i3a4n5n6a7", "Brianna Ruth"],
+  ["k1e2v3i4n5", "Kevin McBride"],
+]);
 
 /** Whether a search matches nothing, as the page above the grid needs to know. */
 /** One row against one search term, in whichever mode is set. */
@@ -204,13 +233,25 @@ const rowHits = (merchant: string, term: string): boolean =>
 
 const gridIsEmpty = (search: string): boolean => {
   const term = search.trim();
-  if (!term) return ROWS.length === 0 && state.padRows === 0;
-  return state.padRows === 0 && !ROWS.some((r) => rowHits(r.merchant, term));
+  const mine = state.userFilter
+    ? ROWS.filter((r) => r.who.toLowerCase().includes(state.userFilter.toLowerCase()))
+    : ROWS;
+  if (!term) return mine.length === 0 && state.padRows === 0;
+  return state.padRows === 0 &&
+    !mine.some((r) => !("shy" in r && r.shy) && rowHits(r.merchant, term));
 };
 
 const grid = (search: string) => {
   const term = search.trim().toLowerCase();
-  const matching = term ? ROWS.filter((r) => rowHits(r.merchant, search.trim())) : ROWS;
+  // The users filter first: it is a FILTER, and it shows everything that
+  // person has — including the row the text search refuses to return.
+  const mine = state.userFilter
+    ? ROWS.filter((r) => r.who.toLowerCase().includes(state.userFilter.toLowerCase()))
+    : ROWS;
+  const matching = term
+    // `shy` rows never come back from a text search, however it is phrased.
+    ? mine.filter((r) => !("shy" in r && r.shy) && rowHits(r.merchant, search.trim()))
+    : mine;
   // Filler goes IN FRONT, so the row being looked for is past the cap —
   // which is the situation being reproduced, not merely a long list.
   const filler = Array.from({ length: state.padRows }, (_, i) => ({
@@ -502,12 +543,43 @@ app.get(["/transactions", "/transactions/team"], (req, res) => {
   const q = req.query as Record<string, string>;
   if ("filters[receipt]" in q) state.receiptsFilter = q["filters[receipt]"] === "true";
   state.search = q["filters[query]"] ?? "";
+  // The real parameter, learned from a real URL: an opaque id, not a name.
+  const uid = (req.query as Record<string, unknown>)["filters[user_id][]"];
+  state.userFilter = typeof uid === "string" ? (USER_IDS.get(uid) ?? "") : "";
 
   const count = state.receiptsFilter ? 193 : 275;
   const total = state.receiptsFilter ? "39,706.03" : "52,110.44";
   res.send(page(`
     <a href="/admin">ADMIN</a> <a href="/transactions">Transactions</a>
     ${gridIsEmpty(state.search) ? "" : `<p>${count} items, $${total}</p>`}
+    <div>
+      <button id="uf" type="button">All users</button>
+      <div id="ufmenu" hidden>
+        <input id="ufq" type="text" placeholder="Search" />
+        <ul>${[...USER_IDS].map(([id, who]) =>
+          `<li role="option" data-id="${id}">${who}</li>`).join("")}</ul>
+      </div>
+    </div>
+    <script>
+      document.getElementById("uf").addEventListener("click", function () {
+        document.getElementById("ufmenu").hidden = false;
+      });
+      document.getElementById("ufq").addEventListener("input", function (e) {
+        var want = e.target.value.toLowerCase();
+        var items = document.querySelectorAll("#ufmenu li");
+        for (var i = 0; i < items.length; i++) {
+          items[i].hidden = want !== "" && items[i].textContent.toLowerCase().indexOf(want) < 0;
+        }
+      });
+      document.querySelectorAll("#ufmenu li").forEach(function (li) {
+        li.addEventListener("click", function () {
+          var u = new URL(window.location.href);
+          u.searchParams.set("filters[user_id][]", li.dataset.id);
+          u.searchParams.set("filters[query]", "");
+          window.location.href = u.toString();
+        });
+      });
+    </script>
     <a href="/filters">ADVANCED FILTERS</a>
     <form method="post" action="/tick"><button type="submit">Tick a row</button></form>
     <p>rows ticked: ${state.rowsTicked}</p>
@@ -728,6 +800,7 @@ app.post("/__app", (req, res) => {
   if ("ghostRows" in q) state.ghostRows = q["ghostRows"] === "true";
   if ("twinRows" in q) state.twinRows = q["twinRows"] === "true";
   if ("searchMode" in q) state.searchMode = q["searchMode"] as State["searchMode"];
+  if ("hiddenFromSearch" in q) state.hiddenFromSearch = q["hiddenFromSearch"] === "true";
   if ("format" in q) state.formatControl = q["format"] as State["formatControl"];
   if ("chips" in q) state.chipsUnmatchable = q["chips"] === "unmatchable";
   if ("chipState" in q) state.chipState = q["chipState"] as State["chipState"];
@@ -755,6 +828,7 @@ const reset = () =>
     // one that then failed looked like a regression in whatever it was
     // actually testing, rather than leftover state from three tests ago.
     gridShape: "table", padRows: 0, actionsWork: true, ghostButtons: false, ghostRows: false, twinRows: false, searchMode: "substring",
+    hiddenFromSearch: false, userFilter: "",
     formatControl: "links",
     chipsUnmatchable: false, appPaintMs: 0, showNavLabel: true,
     sections: {

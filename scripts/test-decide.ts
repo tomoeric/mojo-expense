@@ -253,6 +253,9 @@ const SEL = {
   loginSubmit: 'button[type="submit"]',
   loggedIn: 'a:has-text("Transactions")',
   adminTab: 'a:has-text("ADMIN")',
+  userFilter: "#uf",
+  userFilterInput: "#ufq",
+  userFilterOption: "#ufmenu li",
   grid: "table",
   gridPath: "/transactions/team",
   resultRow: "table tbody tr",
@@ -517,6 +520,46 @@ await fetch(`${mock.url}/__app?searchMode=name`, { method: "POST" });
     gone.steps.some((s) => !s.ok && s.absent === true) &&
       /“NOTHINGLIKETHIS LLC”/.test(why) && /“NOTHINGLIKETHIS”/.test(why),
     why.slice(0, 200));
+}
+
+console.log("\n16d. A row Emburse's text search will not return");
+// The one that settled it. Two LA MADRELA expenses, same person, both in
+// Needs Review — and searching "MADRELA" gave back the 24th and not the
+// 9th. The users filter showed all ten of that person's rows with the
+// missing one among them. So the text search is not a reliable view of
+// what is there, and "the search found nothing" proves nothing at all.
+mock.reset();
+{
+  const SHY = {
+    employee: "Shawn Emerson", merchant: "LA MADRELA FAMILIAR",
+    amount: 28.8, date: "2026-09-09",
+  };
+  const found = await runDecision("approve", SHY, "", SEL, mock.url, LOGIN, {});
+  const searched = found.steps.find((s) => s.name === "search for the expense");
+  check("the users filter finds what the search would not", found.ok,
+    found.steps.find((s) => !s.ok)?.detail ?? "");
+  check("…and says it was the filter, not a search, that found it",
+    /Shawn Emerson filter/.test(searched?.detail ?? ""), searched?.detail ?? "");
+
+  // The filter is the fallback, not the route: a search that works costs
+  // one navigation, and three clicks per decision would be minutes a day.
+  mock.reset();
+  const plain = await runDecision(
+    "approve", { ...SHY, amount: 37.35, date: "2026-09-24" }, "", SEL, mock.url, LOGIN, {});
+  const s2 = plain.steps.find((s) => s.name === "search for the expense");
+  check("…and is not used at all when the search does work",
+    plain.ok && !/filter/.test(s2?.detail ?? ""), s2?.detail ?? "");
+
+  // "Not there" is now claimed from the person's OWN queue and nothing
+  // else. It used to be claimed from an empty search — on a search that
+  // demonstrably misses rows.
+  mock.reset();
+  const gone = await runDecision("approve", { ...SHY, amount: 12345.67 }, "", SEL, mock.url, LOGIN, {});
+  const why = gone.steps.find((s) => !s.ok)?.detail ?? "";
+  check("absent is claimed from that person's own queue",
+    /Shawn Emerson's own queue/.test(why) &&
+      gone.steps.some((s) => !s.ok && s.absent === true),
+    why.slice(0, 160));
 }
 
 console.log("\n17. A hidden APPROVE ahead of the real one");

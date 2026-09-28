@@ -121,9 +121,20 @@ Two separate things, and confusing them cost a queue full of failures.
   (`CRAIG W DEMORA…`); **first word of the merchant**, ≥4 chars, punctuation
   stripped from both sides; and **date** in any of Emburse's forms, padded or
   not. Exactly one VISIBLE match acts; two refuse.
-- **"Empty" only means "gone" when EVERY term came back empty.** A term
-  Emburse cannot use produces an empty grid too, and treating that as "already
-  approved" writes off an expense that is sitting there.
+- **Emburse's text search MISSES ROWS THAT ARE THERE.** Not "is fussy about
+  terms" — misses them. Two LA MADRELA expenses, same cardholder, both in Needs
+  Review: searching "MADRELA" returned the one from the 24th and not the one
+  from the 9th. So an empty or partial search result is not evidence of
+  anything, and nothing may be concluded from it.
+- **The users FILTER is the authoritative view**, and the only thing "this
+  expense is not in the queue" may be claimed from. The parameter is
+  `filters[user_id][]` and the value is an opaque id
+  (`uk4l0byvo7zzwgfzidt34awh2afoixiphkfka8fx`), not a name, so it cannot be
+  constructed — only learned by driving the dropdown once and reading the URL
+  that comes back. `filterToCardholder` does that and caches the id in memory
+  for the life of the process; after the first decision for a person it is one
+  navigation. It is the FALLBACK, not the route: a search that works costs one
+  page load, and three clicks per decision would be minutes a day.
 
 ## When a decision fails
 

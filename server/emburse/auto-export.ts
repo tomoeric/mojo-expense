@@ -227,13 +227,38 @@ export const SELECTOR_HELP: Record<SelectorKey, string> = {
  */
 export function gridUrl(
   base: string,
-  opts: { section?: string; receiptsOnly?: boolean; query?: string; path?: string } = {},
+  opts: {
+    section?: string; receiptsOnly?: boolean; query?: string; path?: string;
+    /**
+     * One cardholder's own queue, by Emburse's internal user id.
+     *
+     * The parameter is `filters[user_id][]` and the value is an opaque
+     * string — `uk4l0byvo7zzwgfzidt34awh2afoixiphkfka8fx`, not a name — so
+     * it cannot be constructed, only learned by using the dropdown once and
+     * reading the URL that comes back.
+     *
+     * Worth the trouble because it is a FILTER: it returns everything that
+     * person has, including the rows Emburse's text search refuses to
+     * return.
+     */
+    userId?: string;
+  } = {},
 ): string {
   const url = new URL(opts.path ?? "/transactions/team", base);
   url.searchParams.set("filters[section]", opts.section ?? "inbox");
   if (opts.receiptsOnly) url.searchParams.set("filters[receipt]", "true");
+  if (opts.userId) url.searchParams.append("filters[user_id][]", opts.userId);
   url.searchParams.set("filters[query]", opts.query ?? "");
   return url.toString();
+}
+
+/** The cardholder id Emburse put in a grid URL, if it is carrying one. */
+export function userIdInUrl(href: string): string | null {
+  try {
+    return new URL(href).searchParams.get("filters[user_id][]");
+  } catch {
+    return null;
+  }
 }
 
 export function envLogin(): Login | null {
