@@ -34,6 +34,12 @@ export type QueuedDecision = {
   shot?: string | null;
   /** Decided by the automation rather than by a person clicking. */
   automatic?: boolean;
+  /**
+   * Emburse has nothing matching this in Needs Review — not a fault, and
+   * nothing a retry can change. It clears when the next import removes the
+   * expense.
+   */
+  notInQueue?: boolean;
 };
 
 export type Challenge = {

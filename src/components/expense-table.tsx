@@ -46,7 +46,9 @@ export type Row = {
   dayGroups: { rule: string; day: string }[];
   ageDays: number | null;
   /** The decision on this expense, when there is one. */
-  decision?: { state: string; decision?: string; automatic?: boolean } | undefined;
+  decision?: {
+    state: string; decision?: string; automatic?: boolean; notInQueue?: boolean;
+  } | undefined;
   /** The control for deciding it, supplied by whoever renders the table. */
   decide?: React.ReactNode;
   /**
@@ -618,16 +620,31 @@ function FailedStrip({
   rows: Row[];
   retry: { onRun: () => void; busy?: boolean; note?: string | null };
 }) {
-  const failed = rows.filter((r) => r.decision?.state === "failed");
-  if (failed.length === 0 && !retry.note) return null;
+  // Two different things were being counted as one, and the second was
+  // drowning the first: a decision that FAILED needs somebody, and one whose
+  // expense is simply not in Emburse's queue any more needs nothing at all.
+  // Forty of the second is how "46 did not go through" stopped meaning
+  // anything.
+  const failed = rows.filter((r) => r.decision?.state === "failed" && !r.decision.notInQueue);
+  const gone = rows.filter((r) => r.decision?.state === "failed" && r.decision.notInQueue);
+  if (failed.length === 0 && gone.length === 0 && !retry.note) return null;
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs">
+    <div className={`flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-xs ${
+      failed.length > 0 ? "border-amber-500/40 bg-amber-500/5" : "border-border bg-muted/40"
+    }`}>
       {failed.length > 0 && (
         <span className="text-amber-800 dark:text-amber-300">
           <strong className="font-semibold tabular-nums">{failed.length.toLocaleString()}</strong>{" "}
           {failed.length === 1 ? "decision" : "decisions"} did not go through. Open one to see why,
           or run them all again — they will be applied under your Emburse login.
+        </span>
+      )}
+      {gone.length > 0 && (
+        <span className="text-muted-foreground">
+          <strong className="font-semibold tabular-nums">{gone.length.toLocaleString()}</strong>{" "}
+          {gone.length === 1 ? "is" : "are"} no longer in Emburse&rsquo;s queue — already approved or
+          denied there, so there is nothing to retry. They drop off at the next import.
         </span>
       )}
       {retry.note && <span className="text-emerald-700">{retry.note}</span>}

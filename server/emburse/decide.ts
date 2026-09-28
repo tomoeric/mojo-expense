@@ -50,6 +50,17 @@ export type DecisionRun = {
   screenshot: string | null;
   /** The row text the decision was applied to, for the audit record. */
   matchedRow: string | null;
+  /**
+   * The run established that Emburse has NOTHING matching this in Needs
+   * Review — not that anything went wrong.
+   *
+   * Set only for the unambiguous case: the grid loaded and is empty. NOT for
+   * "rows came back and none of them matched", which is the shape a matching
+   * bug takes — a truncated cardholder, an unpadded day, a credit read as a
+   * charge — and marking that as "gone" would quietly stop anybody ever
+   * retrying a real defect.
+   */
+  notInQueue?: boolean;
 };
 
 export type DecisionSelectorKey =
@@ -564,6 +575,33 @@ async function countAll(
   return out;
 }
 
+/**
+ * Emburse has nothing matching this in Needs Review.
+ *
+ * Its own type rather than a phrase to grep for in the message: the queue
+ * treats these differently from failures — no retry, no red row, they clear
+ * at the next import — and hanging that on wording nobody would think to
+ * keep stable is how it quietly stops working the next time somebody
+ * improves a sentence.
+ */
+export class NotInQueue extends Error {}
+
+/**
+ * Turn an explanation into the error to throw, preserving its kind.
+ *
+ * These helpers either RETURN a sentence (an ordinary failure) or THROW a
+ * NotInQueue (the expense is simply not there). Wrapping the call in
+ * `new Error(await …)` would turn the second into the first at the one
+ * point where the difference matters.
+ */
+async function asError(explain: Promise<string>): Promise<Error> {
+  try {
+    return new Error(await explain);
+  } catch (err) {
+    return err instanceof Error ? err : new Error(String(err));
+  }
+}
+
 async function whyNoGrid(page: Page, sel: Record<string, string>, asEmail?: string): Promise<string> {
   const where = safeUrl(page.url());
   const text = (await page.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ").trim();
@@ -573,9 +611,10 @@ async function whyNoGrid(page: Page, sel: Record<string, string>, asEmail?: stri
       "Test your Emburse connection to sign in again.";
   }
   if (EMPTY_GRID.test(text)) {
-    return `the grid loaded at ${where} and is empty — Emburse has no match for that search, ` +
+    throw new NotInQueue(
+      `the grid loaded at ${where} and is empty — Emburse has no match for that search, ` +
       `so this expense is not in this view. An expense that has already been approved or denied ` +
-      `leaves Needs Review, which is the commonest reason for this.`;
+      `leaves Needs Review, which is the commonest reason for this.`);
   }
 
   // Present in the DOM but never visible is a different fault from absent, and
@@ -631,11 +670,12 @@ async function whyNoRows(
 ): Promise<string> {
   const text = (await page.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ").trim();
   if (EMPTY_GRID.test(text)) {
-    return `Emburse has no match for “${term}”, so this expense is not in this view. ` +
+    throw new NotInQueue(
+      `Emburse has no match for “${term}”, so this expense is not in this view. ` +
       `An expense that has already been approved or denied leaves Needs Review, so the ` +
       `commonest reason for an empty result here is that the decision already went through. ` +
       `It will drop off this queue at the next import, which deletes whatever the newest ` +
-      `export no longer carries. Trying again will search the same empty view.`;
+      `export no longer carries. Trying again will search the same empty view.`);
   }
 
   const candidates = await countAll(page, [
@@ -732,10 +772,10 @@ export async function inspectEditForm(
         await page!.goto(gridUrl(emburseUrl, { query: term, path: sel.gridPath }), {
           waitUntil: "domcontentloaded",
         });
-        if (!(await gridLoaded(page!, sel as never))) throw new Error(await whyNoGrid(page!, sel, login.email));
+        if (!(await gridLoaded(page!, sel as never))) throw await asError(whyNoGrid(page!, sel, login.email));
         const rows = page!.locator(sel.resultRow!);
         const count = await rows.count();
-        if (count === 0) throw new Error(await whyNoRows(page!, sel, term));
+        if (count === 0) throw await asError(whyNoRows(page!, sel, term));
         const hits: number[] = [];
         for (let i = 0; i < Math.min(count, ROWS_EXAMINED); i++) {
           if (rowMatches(await rows.nth(i).innerText().catch(() => ""), target).ok) hits.push(i);
@@ -857,7 +897,7 @@ export async function testConnection(
             waitUntil: "domcontentloaded",
           });
           if (!(await gridLoaded(sheet, sel as never))) {
-            throw new Error(await whyNoGrid(sheet, sel, login.email));
+            throw await asError(whyNoGrid(sheet, sel, login.email));
           }
           const rows = await sheet.locator(sel.resultRow!).count().catch(() => 0);
           return `the grid is there with ${rows} row(s) — a decision could find its expense here`;
@@ -1027,7 +1067,7 @@ async function applyOne(
     // whose grid selector is stale the export ran fine and every decision
     // failed, and the difference looked like an account problem. It was not.
     if (!(await gridLoaded(page, sel as never))) {
-      throw new Error(await whyNoGrid(page, sel, asEmail));
+      throw await asError(whyNoGrid(page, sel, asEmail));
     }
 
     const rows = page.locator(sel.resultRow!);
@@ -1035,7 +1075,7 @@ async function applyOne(
     // "the search returned no rows" is true and tells nobody what to do. The
     // rows are almost always right there — it is the SELECTOR that does not
     // describe them, and which selector would is readable off the page.
-    if (count === 0) throw new Error(await whyNoRows(page, sel, term));
+    if (count === 0) throw await asError(whyNoRows(page, sel, term));
 
     // Narrow by the full match rather than by position: whichever row Emburse
     // happens to put first is not evidence of anything.

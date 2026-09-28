@@ -52,6 +52,17 @@ export type QueuedDecision = {
    * anybody asks of an automation that approves spending.
    */
   automatic: boolean;
+  /**
+   * The failure was "Emburse has nothing matching this in Needs Review".
+   *
+   * A different thing from a failure, and it was drowning the queue as one.
+   * An expense that has already been approved or denied LEAVES Needs Review,
+   * so once our copy of the queue is a few days stale, every decision on it
+   * fails this way — and retrying searches the same empty view, for ever.
+   * Nothing here can fix it and nothing should try: the next import deletes
+   * the expense, and these go with it.
+   */
+  notInQueue: boolean;
 };
 
 const SCHEMA = `
@@ -108,6 +119,12 @@ ALTER TABLE expense_decisions ADD COLUMN IF NOT EXISTS shot text;
 -- answer. Defaults false: everything decided before this column existed was
 -- decided by somebody clicking.
 ALTER TABLE expense_decisions ADD COLUMN IF NOT EXISTS automatic boolean NOT NULL DEFAULT false;
+-- The failure that is not a fault: the expense is not in Emburse's Needs
+-- Review at all. Kept apart from ordinary failures because the answer to it
+-- is different — nothing to fix, nothing to retry, it clears at the next
+-- import — and because forty of them in one list buries the handful that do
+-- need somebody.
+ALTER TABLE expense_decisions ADD COLUMN IF NOT EXISTS not_in_queue boolean NOT NULL DEFAULT false;
 `;
 
 let ready: Promise<void> | null = null;
@@ -121,6 +138,7 @@ type Row = {
   decided_by: string; decided_at: Date; state: DecisionState; attempts: number;
   applied_at: Date | null; matched_row: string | null; error: string | null; target: Target;
   steps: DecisionStep[] | null; shot: string | null; automatic: boolean;
+  not_in_queue: boolean;
 };
 
 const shape = (r: Row): QueuedDecision => ({
@@ -139,10 +157,12 @@ const shape = (r: Row): QueuedDecision => ({
   steps: r.steps ?? null,
   shot: r.shot ?? null,
   automatic: r.automatic ?? false,
+  notInQueue: r.not_in_queue ?? false,
 });
 
 const COLUMNS = `id, dedupe_key, decision, reason, decided_by, decided_at, state,
-                 attempts, applied_at, matched_row, error, target, steps, shot, automatic`;
+                 attempts, applied_at, matched_row, error, target, steps, shot, automatic,
+                 not_in_queue`;
 
 /**
  * Record a decision, to be applied on the next pass.
@@ -331,6 +351,10 @@ export async function retryFailedDecisions(
               WHERE state <> 'cancelled'
               ORDER BY dedupe_key, decided_at DESC) d
       WHERE d.state = 'failed'
+        -- Not these. The run already established that Emburse has nothing
+        -- matching them in Needs Review; searching the same empty view again
+        -- is the definition of doing the same thing twice.
+        AND d.not_in_queue = false
         AND EXISTS (SELECT 1 FROM expenses e
                      WHERE e.dedupe_key = d.dedupe_key AND e.in_inbox = true)
       ORDER BY d.decided_at`,
@@ -372,7 +396,13 @@ export async function appliedCount(): Promise<number> {
 
 export async function settleDecision(
   id: number,
-  outcome: { ok: true; matchedRow: string | null } | { ok: false; error: string },
+  outcome:
+    | { ok: true; matchedRow: string | null }
+    /**
+     * `notInQueue` says the run established the expense is not in Emburse's
+     * Needs Review — not that something went wrong. See the column comment.
+     */
+    | { ok: false; error: string; notInQueue?: boolean },
   /**
    * The browser run, step by step. Stored only when the trace flag is on, and
    * on a SUCCESS as well as a failure — "it worked, here is how" is what makes
@@ -391,7 +421,8 @@ export async function settleDecision(
             matched_row = COALESCE($3, matched_row),
             error      = $4,
             steps      = COALESCE($5::jsonb, steps),
-            shot       = CASE WHEN $2 = 'applied' THEN NULL ELSE COALESCE($6, shot) END
+            shot       = CASE WHEN $2 = 'applied' THEN NULL ELSE COALESCE($6, shot) END,
+            not_in_queue = $7
       WHERE id = $1`,
     [
       id,
@@ -402,6 +433,7 @@ export async function settleDecision(
       // Capped rather than trusted: a full-page PNG of a long grid can run
       // to megabytes, and a row in this table is read on every queue poll.
       shot && shot.length < 2_000_000 ? shot : null,
+      outcome.ok ? false : outcome.notInQueue === true,
     ],
   );
 }

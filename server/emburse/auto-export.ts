@@ -30,6 +30,13 @@ export type StepResult = {
   /** What actually happened — the selector tried, the text seen, the error. */
   detail: string;
   ms: number;
+  /**
+   * The step failed because the thing looked for is simply not there, which
+   * is not a fault. Carried on the step rather than inferred from its
+   * wording, so the queue can treat it differently without anybody having to
+   * keep a sentence stable.
+   */
+  absent?: boolean;
 };
 
 export type ExportRun = {
@@ -326,6 +333,10 @@ export function makeStepper(steps: StepResult[]) {
         ok: false,
         detail: err instanceof Error ? err.message.split("\n")[0]! : String(err),
         ms: Date.now() - started,
+        // `NotInQueue` is thrown when Emburse has nothing matching in Needs
+        // Review. Named by constructor rather than by instanceof, so this
+        // module does not have to import from the one that throws it.
+        ...(err instanceof Error && err.constructor.name === "NotInQueue" ? { absent: true } : {}),
       });
       return false;
     }

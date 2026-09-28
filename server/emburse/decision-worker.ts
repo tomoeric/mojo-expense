@@ -138,7 +138,14 @@ async function tick(): Promise<void> {
           id,
           run.ok
             ? { ok: true, matchedRow: run.matchedRow }
-            : { ok: false, error: run.steps.find((s) => !s.ok)?.detail ?? "The decision did not go through." },
+            : {
+                ok: false,
+                error: run.steps.find((s) => !s.ok)?.detail ?? "The decision did not go through.",
+                // Not a failure to fix: Emburse has nothing matching this in
+                // Needs Review. Kept apart so it neither invites a retry nor
+                // buries the handful of failures that do need somebody.
+                notInQueue: run.steps.some((s) => !s.ok && s.absent === true),
+              },
           tracing ? run.steps : null,
           tracing ? run.screenshot : null,
         );

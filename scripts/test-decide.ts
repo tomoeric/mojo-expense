@@ -413,6 +413,26 @@ mock.reset();
     /already been approved or denied/i.test(why), why.slice(0, 200));
   check("…and that trying again searches the same empty view",
     /same empty view/i.test(why), why.slice(-120));
+  // Carried as a FACT on the step, not as a phrase to grep for. The queue
+  // treats these differently from failures — no retry, no red row — and
+  // hanging that on wording nobody would think to keep stable is how it
+  // quietly stops working the next time somebody improves a sentence.
+  check("…marked absent on the step, so the queue need not read the sentence",
+    gone.steps.some((s) => !s.ok && s.absent === true),
+    gone.steps.filter((s) => !s.ok).map((s) => `${s.name}:${String(s.absent)}`).join(", "));
+}
+
+{
+  // Rows come back and none of them matches: a truncated cardholder, an
+  // unpadded day, a credit read as a charge all look like this. Marking it
+  // "not in the queue" would quietly stop anybody ever retrying a real
+  // defect, so only the EMPTY view counts.
+  mock.reset();
+  const mismatch = await runDecision(
+    "approve", { ...TARGET, amount: 999.99 }, "", SEL, mock.url, LOGIN, {});
+  check("rows that come back and do not match are NOT called absent",
+    !mismatch.ok && !mismatch.steps.some((s) => !s.ok && s.absent === true),
+    mismatch.steps.filter((s) => !s.ok).map((s) => `${s.name}:${String(s.absent)}`).join(", "));
 }
 
 console.log("\n17. A hidden APPROVE ahead of the real one");

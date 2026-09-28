@@ -1,6 +1,6 @@
 import { useState } from "react";
 import {
-  Check, X, Loader2, Clock, AlertTriangle, Undo2, FlaskConical, ShieldCheck, Bot,
+  Check, X, Loader2, Clock, AlertTriangle, Undo2, FlaskConical, ShieldCheck, Bot, CircleSlash,
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { inspectEditForm, retryDecision, testDecision, type QueuedDecision } from "@/lib/decisions";
@@ -362,6 +362,12 @@ export function DecisionBadge({
   }
 
   if (decision.state === "failed") {
+    // "Not in Emburse's queue" is not a failure, and showing it as one is
+    // what turned a stale queue into forty red rows nobody could act on.
+    // The expense has already been approved or denied — usually by an
+    // earlier pass of this app — so there is nothing to fix, nothing to
+    // retry, and it goes when the next import drops the expense.
+    if (decision.notInQueue) return <GoneBadge decision={decision} word={word} />;
     // The reason used to live in a `title` tooltip, which meant a reviewer
     // looking at a failed decision was told only that it failed. Whatever
     // Emburse said is the whole value of the row, so it is on screen.
@@ -413,6 +419,33 @@ function AutoMark({ decision }: { decision: QueuedDecision }) {
       <Bot className="h-3 w-3" />
       auto
     </span>
+  );
+}
+
+/**
+ * The expense is not in Emburse's queue any more.
+ *
+ * Quiet on purpose. Red is for something somebody has to do, and this is the
+ * opposite: the decision was made, the expense is no longer awaiting one in
+ * Emburse, and the row disappears at the next import. Shown rather than
+ * hidden because "where did my approval go" deserves an answer, but shown as
+ * a fact rather than an alarm.
+ */
+function GoneBadge({ decision, word }: { decision: QueuedDecision; word: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setOpen(true); }}
+        title="Emburse has nothing matching this in Needs Review — see what the run found"
+        className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-semibold text-muted-foreground"
+      >
+        <CircleSlash className="h-3 w-3" />
+        Not in Emburse&rsquo;s queue
+      </button>
+      {open && <FailureDialog decision={decision} word={word} onClose={() => setOpen(false)} />}
+    </>
   );
 }
 

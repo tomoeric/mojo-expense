@@ -103,6 +103,21 @@ the blocks.
   screenshot of a sign-in page that had plainly finished rendering. Both now
   call the SAME `openEmburse()` / `gridLoaded()`. Anything added to one path
   belongs in the shared function, not copied.
+- **"Not in Emburse's queue" is not a failure.** An expense that has already
+  been approved or denied LEAVES Needs Review, so once our copy of the queue is
+  a few days stale, every decision on it fails that way — forty red rows nobody
+  can act on, burying the handful that need somebody. `expense_decisions.
+  not_in_queue` keeps them apart: a quiet grey badge, excluded from the failure
+  count, and skipped by **Try all again** (retrying searches the same empty view
+  for ever). They clear when the next import deletes the expense. It is set
+  ONLY for the unambiguous case — the grid loaded and is empty — never for
+  "rows came back and none matched", which is the shape a matching bug takes
+  (truncated cardholder, unpadded day, credit read as a charge) and which must
+  stay retryable.
+- **It travels as a type, not a phrase.** `NotInQueue` is thrown by
+  `whyNoGrid`/`whyNoRows`, `makeStepper` records it as `absent` on the step, and
+  the worker reads that. Matching on the wording would break the first time
+  somebody improved a sentence.
 - **A failure is a recording, and the UI has to date it.** `expense_decisions`
   keeps the error for ever, which is right, but an unchanged sentence reads as
   a fresh verdict — "this approval error didn't go away" was a three-deploy-old

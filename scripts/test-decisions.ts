@@ -357,6 +357,36 @@ console.log("\n11. Running every failure again, in one go");
     await db().query("DELETE FROM expenses WHERE dedupe_key = 'test-rf-auto'");
   }
 
+  // A failure whose expense is not in Emburse's queue can only fail the same
+  // way: the run already established there is nothing matching it there, and
+  // searching the same empty view again is doing the same thing twice.
+  {
+    await db().query("DELETE FROM expense_decisions WHERE dedupe_key = 'test-rf-gone'");
+    await db().query(
+      `INSERT INTO expenses (dedupe_key, employee, expense_date, merchant, amount_cents,
+                             category, department, location, note, method, in_inbox)
+       VALUES ('test-rf-gone','Kevin Bray','2026-09-13','SQ *COFFEE',850,'Meals','Ops','Site','x','Corporate card',true)
+       ON CONFLICT (dedupe_key) DO UPDATE SET in_inbox = true`);
+    const q = await queueDecision({
+      dedupeKey: "test-rf-gone", decision: "approve", reason: "", decidedBy: "first@example.invalid",
+      target: { employee: "Kevin Bray", merchant: "SQ *COFFEE", amount: 8.5, date: "2026-09-13" },
+    });
+    if (!q.ok) throw new Error(q.error);
+    await settleDecision(q.queued.id, {
+      ok: false, error: "Emburse has no match for that, so this expense is not in this view.",
+      notInQueue: true,
+    });
+    const after = await retryFailedDecisions("second@example.invalid");
+    check("a failure whose expense is not in Emburse's queue is not retried",
+      after.queued === 0, `${after.queued} queued`);
+    const still = (await decisionsFor(["test-rf-gone"])).get("test-rf-gone");
+    check("…and it keeps the mark that says why",
+      still?.notInQueue === true && still?.state === "failed",
+      `${still?.state} / ${String(still?.notInQueue)}`);
+    await db().query("DELETE FROM expense_decisions WHERE dedupe_key = 'test-rf-gone'");
+    await db().query("DELETE FROM expenses WHERE dedupe_key = 'test-rf-gone'");
+  }
+
   // Pressing it twice must not double-queue: the second press finds them
   // pending, not failed.
   const twiceOver = await retryFailedDecisions("second@example.invalid");
