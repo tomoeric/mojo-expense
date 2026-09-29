@@ -254,6 +254,27 @@ Two separate things, and confusing them cost a queue full of failures.
   unread forever — which is why the reader (`receipt-reader.ts`) runs shortly
   after each import rather than on a daily schedule.
 
+## A flag has to be able to go away
+
+- **`runRules` clears verdicts it did not reproduce.** `not-applicable` is
+  skipped when writing, which is right, and for a long time nothing removed
+  what an earlier run had written — so a flag was permanent. Correct a receipt
+  total that was read off the wrong line and the amounts match on screen while
+  the row sits in the flagged bucket. Stale hits are now deleted, scoped to the
+  rules and expenses THAT RUN examined so a keyed run cannot wipe anything
+  else, and rows with `acted = true` are kept: they are the record that an
+  approve/deny fired, and deleting one would let it fire twice.
+- **Reading a receipt re-judges the expenses it belongs to.** A rule about a
+  receipt returns UNKNOWN while it is unread and records no hit, so reading it
+  changes nothing by itself — the verdicts stored at import time stay. Both the
+  reader's pass and the "Read again" button now call `runRules({ keys })` for
+  the affected expenses, BEFORE automatic approvals.
+- **That second one was not cosmetic.** Automatic approval refuses to touch an
+  expense until every enabled rule has run since it arrived — but `last_run_at`
+  is per RULE, so a rule that ran at import time counted as run for a receipt
+  read hours later. The one case that module exists to prevent, straight
+  through the back door.
+
 ## Reading a receipt total
 
 - **The figure labelled "Total" is not what the card was charged.** A

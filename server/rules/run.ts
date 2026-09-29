@@ -93,6 +93,18 @@ export async function runRules(opts: { keys?: string[]; decide?: boolean } = {})
   }
 
   await writeVerdicts(db(), verdicts);
+  // And CLEAR the ones that no longer apply.
+  //
+  // Without this a flag is permanent. `not-applicable` was skipped, which
+  // is right for writing, and nothing ever removed what an earlier run had
+  // written — so an expense stayed flagged after the thing being flagged
+  // stopped being true. Correct a receipt total that was read off the
+  // wrong line and the amounts now match on screen while the row sits in
+  // the flagged bucket, which is exactly what it looked like.
+  //
+  // Scoped to the rules and the expenses THIS run examined, so a keyed run
+  // over one expense cannot wipe verdicts for everything else.
+  await clearStaleHits(db(), rows.map((r) => r.dedupeKey), rules.map((r) => r.id), verdicts);
   await db().query(
     `UPDATE expense_rules SET last_run_at = now() WHERE id = ANY($1::bigint[])`,
     [rules.map((r) => r.id)]);
@@ -153,6 +165,36 @@ async function writeVerdicts(
                              THEN expense_rule_hits.first_seen ELSE now() END`,
     [verdicts.map((v) => v.key), verdicts.map((v) => v.ruleId),
      verdicts.map((v) => v.verdict), verdicts.map((v) => v.detail)],
+  );
+}
+
+/**
+ * Remove verdicts that this run did not reproduce.
+ *
+ * A rule that no longer applies to an expense produces nothing, and the
+ * absence has to be written as much as a verdict does.
+ *
+ * Rows an action already fired on are left alone. They are the record that
+ * it fired, and the expense behind them has a decision against it anyway;
+ * deleting one would let the same approval or denial be attempted twice if
+ * the rule ever matched again.
+ */
+async function clearStaleHits(
+  client: Pick<pg.PoolClient, "query">,
+  keys: string[],
+  ruleIds: number[],
+  verdicts: { key: string; ruleId: number }[],
+): Promise<void> {
+  if (keys.length === 0 || ruleIds.length === 0) return;
+  await client.query(
+    `DELETE FROM expense_rule_hits h
+      WHERE h.dedupe_key = ANY($1::text[])
+        AND h.rule_id = ANY($2::bigint[])
+        AND h.acted = false
+        AND NOT EXISTS (
+              SELECT 1 FROM unnest($3::text[], $4::bigint[]) AS kept(k, r)
+               WHERE kept.k = h.dedupe_key AND kept.r = h.rule_id)`,
+    [keys, ruleIds, verdicts.map((v) => v.key), verdicts.map((v) => v.ruleId)],
   );
 }
 

@@ -502,6 +502,22 @@ export async function detailsForExpenses(keys: string[]): Promise<Map<string, Re
   return out;
 }
 
+/**
+ * The expenses a receipt image belongs to.
+ *
+ * One image can sit on several expenses — the same photograph attached
+ * twice, or a shared bill — so this is a list, and every one of them has
+ * rule verdicts that were computed from what the receipt said BEFORE it
+ * was read.
+ */
+export async function expensesForReceipts(shas: string[]): Promise<string[]> {
+  await ensure();
+  if (shas.length === 0) return [];
+  const { rows } = await db().query<{ dedupe_key: string }>(
+    "SELECT DISTINCT dedupe_key FROM expense_receipts WHERE sha256 = ANY($1)", [shas]);
+  return rows.map((r) => r.dedupe_key);
+}
+
 /** Receipts we hold an image for but have never read. */
 /**
  * How many times a failing image is retried before it is left alone.

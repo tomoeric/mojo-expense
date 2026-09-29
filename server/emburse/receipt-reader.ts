@@ -53,12 +53,39 @@ async function tick(): Promise<void> {
     }
     console.log(`receipts: read ${read} of ${pending.length}`);
 
-    // Automatic approvals wait on these. Without this, an expense whose
-    // receipt is read at 09:15 could not be approved until the NEXT
-    // import — tomorrow — because that is the only other thing that runs
-    // the automation. The reader is what unblocks them, so the reader
-    // says so.
     if (read > 0) {
+      // THE RULES FIRST, and this was missing.
+      //
+      // A rule about a receipt — its total, its merchant, alcohol on it —
+      // returns UNKNOWN while the receipt is unread, so it records no hit.
+      // Reading the receipt does not change that on its own: the verdicts
+      // stored at import time stay exactly as they were, so an expense
+      // whose receipt turned out to disagree with the claim sat there
+      // unflagged, and one that was flagged before a re-read corrected the
+      // figures stayed flagged with the amounts plainly matching.
+      //
+      // Worse, it made the automation's central promise untrue. It refuses
+      // to approve anything until every enabled rule has run since the
+      // expense arrived — but `last_run_at` is per rule, not per expense,
+      // so a rule that ran at import time counted as run for a receipt
+      // read hours later. The one case the whole module exists to prevent,
+      // through the back door.
+      try {
+        const { expensesForReceipts } = await import("./receipt-items.js");
+        const keys = await expensesForReceipts(pending);
+        if (keys.length > 0) {
+          const { runRules } = await import("../rules/run.js");
+          const ran = await runRules({ keys });
+          console.log(`receipts: re-judged ${keys.length} expense(s), ${ran.failed} flagged`);
+        }
+      } catch (err) {
+        console.error("receipts: the rules could not be re-run:", err);
+      }
+
+      // Then the automatic approvals, which wait on all of the above.
+      // Without this, an expense whose receipt is read at 09:15 could not
+      // be approved until the NEXT import — tomorrow — because that is the
+      // only other thing that runs the automation.
       try {
         const { autoQueueApprovals } = await import("../rules/auto-approve.js");
         const auto = await autoQueueApprovals();

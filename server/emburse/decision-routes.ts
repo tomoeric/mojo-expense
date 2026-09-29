@@ -529,6 +529,20 @@ decisionRouter.post("/receipt-items/:sha", requireAuth, async (req: Request, res
       res.status(404).json({ error: "That receipt image is no longer stored." });
       return;
     }
+    // And judge the expense again on what the receipt NOW says. Rule
+    // verdicts are stored, so without this a corrected total leaves the old
+    // flag sitting on a row whose amounts plainly match — which is exactly
+    // what "stuck in the flag bucket" looks like.
+    try {
+      const { expensesForReceipts } = await import("./receipt-items.js");
+      const keys = await expensesForReceipts([sha]);
+      if (keys.length > 0) {
+        const { runRules } = await import("../rules/run.js");
+        await runRules({ keys });
+      }
+    } catch (err) {
+      console.error("receipts: could not re-judge after a re-read:", err);
+    }
     res.json(detail);
   } catch (err) {
     res.status(502).json({ error: err instanceof Error ? err.message : "The receipt could not be read." });
