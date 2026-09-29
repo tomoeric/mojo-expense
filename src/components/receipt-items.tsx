@@ -78,6 +78,7 @@ export function ReceiptItems({
   const qc = useQueryClient();
   const [rereading, setRereading] = useState(false);
   const [rereadError, setRereadError] = useState<string | null>(null);
+  const [rereadNote, setRereadNote] = useState<string | null>(null);
   const sha = details?.[0]?.sha256;
 
   /**
@@ -90,13 +91,28 @@ export function ReceiptItems({
     if (!sha) return;
     setRereading(true);
     setRereadError(null);
+    setRereadNote(null);
     try {
       const res = await fetch(`/api/receipt-items/${sha}?force=1`, { method: "POST" });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(body?.error ?? "The receipt could not be read again.");
-      }
+      const body = (await res.json().catch(() => null)) as
+        | { error?: string; total?: number | null }
+        | null;
+      if (!res.ok) throw new Error(body?.error ?? "The receipt could not be read again.");
       await qc.invalidateQueries({ queryKey: ["receipt-items"] });
+      // Say what came of it, ALWAYS — including when nothing changed.
+      // Pressing it and seeing the same figure is the one outcome that
+      // looks identical to the button being broken, and that is exactly
+      // what happened: "Read again didn't work" about a re-read that had
+      // simply agreed with itself.
+      const before = details?.[0]?.total ?? null;
+      const now = body?.total ?? null;
+      setRereadNote(
+        now === null
+          ? "Read again — no total could be made out this time."
+          : before !== null && Math.abs(now - before) < 0.005
+            ? `Read again — the total is the same, ${moneyExact(now)}.`
+            : `Read again — the total is now ${moneyExact(now)}.`,
+      );
     } catch (err) {
       setRereadError(err instanceof Error ? err.message : "The receipt could not be read again.");
     } finally {
@@ -165,6 +181,7 @@ export function ReceiptItems({
         </button>
       </h4>
       {rereadError && <p className="text-xs text-red-700">{rereadError}</p>}
+      {rereadNote && <p className="text-xs text-emerald-700">{rereadNote}</p>}
 
       {/* WHEN this was read, which turns "the figure is wrong" into "the
           figure is old" at a glance.

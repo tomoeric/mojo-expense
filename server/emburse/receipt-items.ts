@@ -215,8 +215,10 @@ export const ensureReceiptItems = ensure;
  *
  *   2 — the total is the amount CHARGED, not the line labelled "Total".
  *   3 — the summary block is transcribed, so the choosing happens in code.
+ *   4 — handwritten tips and totals are read, and the lower part of the
+ *       receipt is sent again enlarged so the pen is legible.
  */
-export const READER_VERSION = 3;
+export const READER_VERSION = 4;
 
 const cents = (n: number | null | undefined): number | null =>
   n === null || n === undefined || !Number.isFinite(n) ? null : Math.round(n * 100);
@@ -265,7 +267,22 @@ labels. Choosing is done elsewhere; getting the lines down accurately is
 the job here, and it is the job you are good at.
 
 Where a second image is given, it is the lower part of the SAME receipt,
-enlarged. Read the money off that one — it is the same print, bigger.`;
+enlarged. Read the money off that one — it is the same print, bigger.
+
+HANDWRITING COUNTS. A restaurant runs the card for the printed total and
+the customer then writes the tip and the new total on the slip by hand:
+
+    Total     31.35        <- printed, and NOT what was charged
+    Amount    31.35        <- printed on the card line, also not it
+    + Tip:     6.00        <- written in pen
+    = Total:  37.35        <- written in pen, and this is the charge
+
+Read the pen. Put the written tip in "tip", the written total in "paid",
+and give both as lines in "totals" labelled as they appear. A total that
+ignores the handwriting is short by exactly the tip, every time, and turns
+an ordinary meal into an overclaim. If the writing is there but you cannot
+make out the figures, say so in notes rather than passing the printed
+total off as the charge.`;
 
 /**
  * What the card was actually charged, which is often not the figure the
@@ -319,7 +336,17 @@ function fromTotalsBlock(totals: { label: string; amount: number }[]): number | 
 export function chargedTotal(r: ReceiptReading): ReceiptReading {
   const { subtotal, tax, tip, total, paid } = r;
   const near = (a: number, b: number) => Math.abs(a - b) <= 0.011;
-  const note = (was: number | null, now: number, why: string): ReceiptReading => ({
+  /**
+   * Record a correction — or make none, when there is nothing to correct.
+   *
+   * The guard matters. A receipt with a handwritten tip the reader could
+   * not make out has total = subtotal + tax and no tip figure, so the
+   * "before the tip" branch fires and adds nothing: the total is unchanged
+   * and the reading acquires a note announcing a correction that did not
+   * happen, which is worse than saying nothing at all.
+   */
+  const note = (was: number | null, now: number, why: string): ReceiptReading =>
+    was !== null && near(was, now) ? r : ({
     ...r,
     total: now,
     notes: [
