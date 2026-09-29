@@ -52,6 +52,16 @@ export function useReceiptItems(keys: string[]) {
   });
 }
 
+/** How long ago the reading was made, in words. */
+function readWhen(iso: string): string {
+  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60_000);
+  if (!Number.isFinite(mins)) return "at an unknown time";
+  if (mins < 2) return "just now";
+  if (mins < 60) return `${mins} minutes ago`;
+  if (mins < 60 * 36) return `${Math.round(mins / 60)} hours ago`;
+  return `${Math.round(mins / 1440)} days ago`;
+}
+
 export function ReceiptItems({
   details,
   loading,
@@ -155,6 +165,17 @@ export function ReceiptItems({
         </button>
       </h4>
       {rereadError && <p className="text-xs text-red-700">{rereadError}</p>}
+
+      {/* WHEN this was read, which turns "the figure is wrong" into "the
+          figure is old" at a glance.
+          A reading is cached by image hash and never read twice, so a fix to
+          the reader does not reach anything already read until a sweep comes
+          round. Without a date on it, a stale reading and a broken one look
+          identical — and both were being argued about as if they were the
+          same thing. */}
+      <p className="text-xs text-muted-foreground">
+        Read {readWhen(detail.extractedAt)}.
+      </p>
 
       {/* What the receipt says it is and when, beside what was claimed. The
           reader has always pulled these; they were stored and never shown, so
