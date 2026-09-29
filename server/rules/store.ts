@@ -2,7 +2,7 @@ import type pg from "pg";
 import { db, ensureSchema } from "../db.js";
 import { ensureReceiptItems } from "../emburse/receipt-items.js";
 import {
-  ACTIONS, FIELDS, OPS, comparableTo, isGroupField, opsFor, problems, summarise,
+  ACTIONS, FIELDS, OPS, chosenReceiptTotal, comparableTo, isGroupField, opsFor, problems, summarise,
   type Action, type Condition, type Field, type Op, type RuleBody, type Subject,
 } from "./engine.js";
 
@@ -233,7 +233,7 @@ export async function subjects(
     dedupe_key: string; employee: string; merchant: string; note: string | null;
     category: string | null; location: string | null; department: string | null;
     method: string | null; amount_cents: string; receipts: string; items: string | null;
-    in_inbox: boolean; expense_date: string | null; receipt_total_cents: string | null;
+    in_inbox: boolean; expense_date: string | null; receipt_totals: string[] | null;
     alcohol: boolean | null; readable: boolean | null;
     receipt_date: string | null; receipt_merchant: string | null;
   }>(
@@ -245,25 +245,18 @@ export async function subjects(
                FROM expense_receipts r
                JOIN receipt_items i ON i.sha256 = r.sha256
               WHERE r.dedupe_key = e.dedupe_key) AS items,
-            -- The total the reader took off the receipt image. NULL when none
-            -- has been read — which is not zero and must not compare as one.
-            --
-            -- DISTINCT, then summed. An expense can carry several receipts and
-            -- two of them are usually the same bill twice: the importer splits
-            -- a multi-page PDF into a page each, and page two is the card slip
-            -- repeating the total, or the employee attaches both the photo and
-            -- the emailed copy. Adding those up doubled the total, so a $14.18
-            -- FedEx charge with a $14.18 receipt was compared against $28.36
-            -- and flagged "Amounts Off" while the drawer beside it showed the
-            -- same two figures matching. Two receipts for genuinely different
-            -- amounts still sum, which is what a split bill needs.
-            (SELECT sum(d.total_cents)
-               FROM (SELECT DISTINCT rr.total_cents
-                       FROM expense_receipts r
-                       JOIN receipt_readings rr ON rr.sha256 = r.sha256
-                      WHERE r.dedupe_key = e.dedupe_key
-                        AND rr.error IS NULL
-                        AND rr.total_cents IS NOT NULL) d) AS receipt_total_cents,
+            -- Every total the reader took off a receipt on this expense, one
+            -- per image. Which of them counts as THE receipt total is decided
+            -- in chosenReceiptTotal(), not here: it is the rule that produced
+            -- "$937.32 does not equal $312.44" on an expense carrying the same
+            -- $312.44 bill three times, so it belongs somewhere it can be read
+            -- and tested rather than buried in an aggregate.
+            (SELECT array_agg(rr.total_cents ORDER BY rr.total_cents)
+               FROM expense_receipts r
+               JOIN receipt_readings rr ON rr.sha256 = r.sha256
+              WHERE r.dedupe_key = e.dedupe_key
+                AND rr.error IS NULL
+                AND rr.total_cents IS NOT NULL) AS receipt_totals,
             -- Alcohol on any line the reader saw. NULL when no reading with
             -- usable lines exists, so "cannot say" stays distinct from "no".
             (SELECT bool_or(i.alcohol)
@@ -309,7 +302,8 @@ export async function subjects(
     amountCents: Number(r.amount_cents),
     hasReceipt: Number(r.receipts) > 0,
     receiptItems: r.items ?? "",
-    receiptTotalCents: r.receipt_total_cents === null ? null : Number(r.receipt_total_cents),
+    receiptTotalsCents: (r.receipt_totals ?? []).map(Number),
+    receiptTotalCents: chosenReceiptTotal(Number(r.amount_cents), (r.receipt_totals ?? []).map(Number)),
     receiptAlcohol: r.alcohol,
     receiptReadable: r.readable,
     receiptDate: r.receipt_date,

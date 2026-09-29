@@ -64,30 +64,46 @@ export function verdictFor(
 }
 
 /**
- * The receipt total for a whole expense, aggregated exactly as the rule
- * engine aggregates it (`subjects()` in server/rules/store.ts).
+ * The receipt total for a whole expense, chosen exactly as the rule engine
+ * chooses it (`chosenReceiptTotal` in server/rules/engine.ts).
  *
  * This used to be `details[0].total` — the first receipt — while the rules
  * summed every receipt on the expense. On an expense carrying the same bill
- * twice, the badge here said "Match" against $14.18 and the rule flagged
- * "Amounts Off" against $28.36, at the same time, on the same row. The two
- * halves of the app have to answer with the same number or neither is worth
- * reading, so the aggregation lives in one place and both sides call it.
+ * three times, the badge here said "Match" against $312.44 and the rule
+ * flagged "Amounts Off" against $937.32, at the same time, on the same row.
+ * The two halves of the app have to answer with the same number or neither
+ * is worth reading, so the choosing is written down once, in both places,
+ * and a test pins them to each other.
  *
- * Distinct totals, then summed: duplicates of one bill count once, genuinely
- * different receipts on one expense still add up.
+ * One receipt: that one. Several, and one of them IS the charge: that one.
+ * Several, none of them the charge: the distinct ones added up.
  */
 export function receiptTotalOf(
   details: { total: number | null; error: string | null }[] | undefined,
+  claimed: number,
 ): number | null {
   if (!details || details.length === 0) return null;
-  const cents = new Set<number>();
+  const cents: number[] = [];
   for (const d of details) {
     if (d.error !== null || d.total === null) continue;
-    cents.add(Math.round(d.total * 100));
+    cents.push(Math.round(d.total * 100));
   }
-  if (cents.size === 0) return null;
+  if (cents.length === 0) return null;
+  if (cents.length === 1) return cents[0]! / 100;
+
+  const want = Math.round(claimed * 100);
+  // The same slack the rules use: two cents, or one percent, whichever is
+  // larger. Kept in step with MONEY_TOLERANCE_* in server/rules/engine.ts.
+  const slack = Math.max(2, Math.round(Math.abs(want) * 0.01));
+  let covers: number | null = null;
+  for (const c of cents) {
+    const off = Math.abs(c - want);
+    if (off > slack) continue;
+    if (covers === null || off < Math.abs(covers - want)) covers = c;
+  }
+  if (covers !== null) return covers / 100;
+
   let sum = 0;
-  for (const c of cents) sum += c;
+  for (const c of new Set(cents)) sum += c;
   return sum / 100;
 }

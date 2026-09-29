@@ -25,6 +25,8 @@ const { db, ensureSchema } = await import("../server/db.js");
 const store = await import("../server/rules/store.js");
 const { runRules } = await import("../server/rules/run.js");
 const { ensureReceiptItems } = await import("../server/emburse/receipt-items.js");
+const { chosenReceiptTotal } = await import("../server/rules/engine.js");
+const { receiptTotalOf } = await import("../src/lib/receipt-verdict.js");
 
 let failures = 0;
 const check = (label: string, ok: boolean, detail = "") => {
@@ -41,6 +43,8 @@ const TWICE = `${TAG}-twice`;   // one bill, two pages, both read $14.18
 const SPLIT = `${TAG}-split`;   // two genuinely different receipts
 const ONCE  = `${TAG}-once`;    // the ordinary case, one receipt
 const OFF   = `${TAG}-off`;     // a real mismatch, which must still be caught
+const TRIPLE = `${TAG}-triple`; // the Menards case: the same bill three times
+const PENNY  = `${TAG}-penny`;  // copies that did not read to the exact cent
 
 const clean = async () => {
   await db().query("DELETE FROM expenses WHERE dedupe_key LIKE $1", [`${TAG}%`]);
@@ -92,12 +96,29 @@ try {
   await addExpense(OFF, 1000);
   await addReceipt(OFF, `${TAG}-f`, 2500);
 
+  // Three receipts, each the whole $312.44 charge. Summed, this read as
+  // $937.32 and flagged three identical expenses apiece.
+  await addExpense(TRIPLE, 31244);
+  await addReceipt(TRIPLE, `${TAG}-g`, 31244);
+  await addReceipt(TRIPLE, `${TAG}-h`, 31244);
+  await addReceipt(TRIPLE, `${TAG}-i`, 31244);
+
+  // The same, except the scan of page two came back a penny out. Dropping
+  // exact duplicates does nothing here, which is why that was not the fix.
+  await addExpense(PENNY, 31244);
+  await addReceipt(PENNY, `${TAG}-j`, 31244);
+  await addReceipt(PENNY, `${TAG}-k`, 31243);
+
   console.log("\n1. What the rules see as the receipt total");
   check("the same bill twice counts once", await totalFor(TWICE) === 1418,
     `${await totalFor(TWICE)}`);
   check("…two different receipts still add up", await totalFor(SPLIT) === 4200,
     `${await totalFor(SPLIT)}`);
   check("…and a mismatch is left alone", await totalFor(OFF) === 2500);
+  check("the same bill three times counts once", await totalFor(TRIPLE) === 31244,
+    `${await totalFor(TRIPLE)}`);
+  check("…even when the copies read a penny apart", await totalFor(PENNY) === 31244,
+    `${await totalFor(PENNY)}`);
   check("…and one receipt is itself", await totalFor(ONCE) === 1418);
 
   console.log("\n2. The rule the user wrote: no expectation, just a WHEN");
@@ -108,13 +129,16 @@ try {
   }, "tester@example.invalid");
   if (!saved.ok) throw new Error(saved.error);
 
-  await runRules({ keys: [TWICE, SPLIT, ONCE, OFF], decide: false });
-  const hits = await store.hitsFor([TWICE, SPLIT, ONCE, OFF]);
+  const all = [TWICE, SPLIT, ONCE, OFF, TRIPLE, PENNY];
+  await runRules({ keys: all, decide: false });
+  const hits = await store.hitsFor(all);
   check("the doubled one is no longer flagged", !hits.has(TWICE),
     hits.get(TWICE)?.[0]?.detail ?? "");
   check("…nor the plain one", !hits.has(ONCE));
   check("…nor the split bill that adds up", !hits.has(SPLIT),
     hits.get(SPLIT)?.[0]?.detail ?? "");
+  check("…nor the Menards triple", !hits.has(TRIPLE), hits.get(TRIPLE)?.[0]?.detail ?? "");
+  check("…nor the penny-apart pair", !hits.has(PENNY), hits.get(PENNY)?.[0]?.detail ?? "");
   check("…and a real mismatch still is", hits.has(OFF));
 
   console.log("\n3. A flag with no expectation shows its arithmetic");
@@ -124,6 +148,38 @@ try {
   check("it names both figures", detail.includes("$25.00") && detail.includes("$10.00"),
     detail);
   check("…and does not just name itself", !/^Matches /.test(detail), detail);
+
+  console.log("\n3b. …and says which receipts it added up");
+  // $937.32 on a $312.44 charge could not be argued with, because nothing
+  // said where it came from. A flag over several receipts now lists them.
+  await addExpense(`${TAG}-many`, 19793);
+  await addReceipt(`${TAG}-many`, `${TAG}-m`, 6698);
+  await addReceipt(`${TAG}-many`, `${TAG}-n`, 3000);
+  await runRules({ keys: [`${TAG}-many`], decide: false });
+  const many = (await store.hitsFor([`${TAG}-many`])).get(`${TAG}-many`)?.[0]?.detail ?? "";
+  check("no single receipt covers it, so they are summed", many.includes("$96.98"), many);
+  check("…and both receipts are named", many.includes("$66.98") && many.includes("$30.00"), many);
+  check("…and it says how many there are", many.includes("carries 2 receipts"), many);
+
+  console.log("\n3c. The screen and the rules answer with the same number");
+  // They did not, and that is the whole complaint: a green tick reading
+  // Match beside a flag reading Amounts Off, on one row, at one moment.
+  const cases: { claim: number; totals: number[] }[] = [
+    { claim: 31244, totals: [31244, 31244, 31244] },
+    { claim: 31244, totals: [31244, 31243] },
+    { claim: 1418,  totals: [1418, 1418] },
+    { claim: 4200,  totals: [3000, 1200] },
+    { claim: 19793, totals: [6698, 3000] },
+    { claim: 1000,  totals: [2500] },
+    { claim: 1000,  totals: [] },
+  ];
+  const disagreed = cases.filter(({ claim, totals }) => {
+    const server = chosenReceiptTotal(claim, totals);
+    const client = receiptTotalOf(
+      totals.map((c) => ({ total: c / 100, error: null })), claim / 100);
+    return (server === null ? null : server / 100) !== client;
+  });
+  check("every case agrees", disagreed.length === 0, JSON.stringify(disagreed));
 
   console.log("\n4. A stale flag goes away once the totals agree");
   // The doubled expense is the case that mattered: it WAS flagged, under the

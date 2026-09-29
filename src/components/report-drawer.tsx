@@ -223,7 +223,7 @@ export function ReportDrawer({
                     line={l}
                     department={report.department}
                     flagged={flaggedLineIds.has(l.id)}
-                    audit={verdictFor(l.amount, receiptTotalOf(items.data?.byExpense?.[l.id]), l.id) ?? undefined}
+                    audit={verdictFor(l.amount, receiptTotalOf(items.data?.byExpense?.[l.id], l.amount), l.id) ?? undefined}
                     items={items.data?.byExpense?.[l.id]}
                     itemsLoading={items.isLoading}
                     itemsEnabled={items.data?.enabled ?? false}

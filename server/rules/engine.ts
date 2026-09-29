@@ -53,6 +53,23 @@ export const FIELD_LABEL: Record<Field, string> = {
 };
 
 /**
+ * The same labels, shortened for a flag.
+ *
+ * The editor wants "Receipt total (read off the image)" — somebody choosing a
+ * field needs telling where the figure comes from. A flag does not: it is a
+ * chip on a queue row, read a hundred times a day, and the parenthesis pushes
+ * the two figures that matter off the end of the line. Only the labels that
+ * are actually long appear here; the rest fall through.
+ */
+const SHORT_LABEL: Partial<Record<Field, string>> = {
+  receiptTotal: "Receipt total",
+  receiptMerchant: "Receipt business name",
+  receiptItems: "Receipt lines",
+};
+
+const shortLabel = (f: Field): string => SHORT_LABEL[f] ?? FIELD_LABEL[f];
+
+/**
  * Fields that describe a GROUP rather than one expense: how many of the
  * expenses this rule matched belong to the same person on the same day, and
  * what they add up to.
@@ -97,6 +114,58 @@ export const MONEY_TOLERANCE_PCT = 0.01;
 
 const tolerance = (a: number, b: number): number =>
   Math.max(MONEY_TOLERANCE_ABS, Math.abs(b || a) * MONEY_TOLERANCE_PCT);
+
+/**
+ * Which figure to treat as "the receipt total" when an expense carries
+ * several receipts.
+ *
+ * This started as a plain sum, and the sum is what produced a flag reading
+ * "Receipt total $937.32 does not equal Amount $312.44" on a $312.44 Menards
+ * charge — three receipts on the expense, each for the same $312.44, added
+ * together. Every duplicate attachment became a mismatch, and the flag could
+ * not be argued with because it would not say where $937.32 came from.
+ *
+ * Deduplicating identical totals was my first answer and it was too narrow:
+ * it only helps when the copies are read to the exact cent, and one page of
+ * a scan read a penny out puts the expense straight back in the bucket.
+ *
+ * The question the rule is actually asking is whether a receipt SUBSTANTIATES
+ * the charge. So:
+ *
+ *   - one receipt: that one, always;
+ *   - several, and one of them is the charge: that one — the bill is here,
+ *     whatever else was attached alongside it;
+ *   - several, none of them the charge: the distinct ones added up, which is
+ *     what a genuine split bill needs, and what a genuine shortfall shows.
+ *
+ * It cannot make an unsubstantiated claim look substantiated: every candidate
+ * is a real total off a real receipt on this expense, so the only claims that
+ * come out matching are ones a receipt actually covers. The direction it
+ * moves in is fewer false flags, never fewer true ones.
+ */
+export function chosenReceiptTotal(
+  amountCents: number,
+  totalsCents: readonly number[],
+): number | null {
+  if (totalsCents.length === 0) return null;
+  if (totalsCents.length === 1) return totalsCents[0]!;
+
+  const slack = Math.round(tolerance(amountCents / 100, amountCents / 100) * 100);
+  // The CLOSEST candidate within tolerance, not the first one found. Two
+  // scans of one bill can read a penny apart, and picking whichever the sort
+  // happened to put first made the figure on the flag depend on nothing.
+  let covers: number | null = null;
+  for (const c of totalsCents) {
+    const off = Math.abs(c - amountCents);
+    if (off > slack) continue;
+    if (covers === null || off < Math.abs(covers - amountCents)) covers = c;
+  }
+  if (covers !== null) return covers;
+
+  let sum = 0;
+  for (const c of new Set(totalsCents)) sum += c;
+  return sum;
+}
 
 /**
  * Fields holding a figure rather than words. The value typed against one of
@@ -300,6 +369,15 @@ export type Subject = {
    * mismatch.
    */
   receiptTotalCents: number | null;
+  /**
+   * Every receipt total on this expense, individually, smallest first.
+   *
+   * `receiptTotalCents` is one number chosen from these — see
+   * `chosenReceiptTotal`. The list is kept so a flag can show its working,
+   * because "does not equal" on a figure nobody can account for is not a
+   * finding, it is a riddle.
+   */
+  receiptTotalsCents: number[];
   inInbox: boolean;
   /** The expense's own date, and what a receipt's date is checked against. */
   date: string | null;
@@ -581,14 +659,32 @@ const shown = (subject: Subject, field: Field, group?: Group): string => {
  * a flag that only names itself sends somebody to the source code.
  */
 function said(subject: Subject, c: Condition, group?: Group): string {
-  const label = FIELD_LABEL[c.field];
+  const label = shortLabel(c.field);
   const op = opLabel(c.field, c.op);
   if (c.op === "is_blank" || c.op === "is_not_blank") return `${label} ${op}`;
   const mine = shown(subject, c.field, group);
   const theirs = c.compare
-    ? `${FIELD_LABEL[c.compare]} ${shown(subject, c.compare, group)}`
+    ? `${shortLabel(c.compare)} ${shown(subject, c.compare, group)}`
     : `“${c.value}”`;
   return `${label} ${mine} ${op} ${theirs}`;
+}
+
+/**
+ * Where the receipt total came from, when it came from more than one place.
+ *
+ * Silent for the ordinary single-receipt expense. Appended to any flag that
+ * names the receipt total otherwise, because the alternative is a figure the
+ * reviewer cannot account for and cannot check — which is how $937.32 stood
+ * unchallenged on a $312.44 charge.
+ */
+function receiptsBehind(subject: Subject, rule: RuleBody): string {
+  const totals = subject.receiptTotalsCents;
+  if (totals.length < 2) return "";
+  const mentions = (c: Condition | null) =>
+    c !== null && (c.field === "receiptTotal" || c.compare === "receiptTotal");
+  if (!rule.when.some(mentions) && !mentions(rule.must)) return "";
+  const each = totals.map((c) => `$${(c / 100).toFixed(2)}`).join(", ");
+  return ` This expense carries ${totals.length} receipts: ${each}.`;
 }
 
 /** What the reviewer is told, in the rule's own terms. */
@@ -599,19 +695,21 @@ export function explain(subject: Subject, rule: RuleBody, group?: Group): string
   if (!rule.must) {
     const matched = rule.when.filter((c) => test(subject, c, group) === true);
     if (matched.length === 0) return `Matches “${rule.name}”.`;
-    return `${matched.map((c) => said(subject, c, group)).join(" and ")}.`;
+    return `${matched.map((c) => said(subject, c, group)).join(" and ")}.`
+      + receiptsBehind(subject, rule);
   }
   const got = shown(subject, rule.must.field, group);
 
   // A field-against-a-field mismatch reads best as the two figures side by
   // side — "$43.57 against $39.88" says more than either half alone.
   if (rule.must.compare) {
-    return `Expected ${FIELD_LABEL[rule.must.field]} ${opLabel(rule.must.field, rule.must.op)} ` +
-      `${FIELD_LABEL[rule.must.compare]}, but found ${got} against ` +
-      `${shown(subject, rule.must.compare, group)}.`;
+    return `Expected ${shortLabel(rule.must.field)} ${opLabel(rule.must.field, rule.must.op)} ` +
+      `${shortLabel(rule.must.compare)}, but found ${got} against ` +
+      `${shown(subject, rule.must.compare, group)}.` + receiptsBehind(subject, rule);
   }
-  return `${FIELD_LABEL[rule.must.field]} ${opLabel(rule.must.field, rule.must.op)} ` +
-    `${rule.must.value ? `“${rule.must.value}”` : ""} was expected — found “${got}”.`;
+  return `${shortLabel(rule.must.field)} ${opLabel(rule.must.field, rule.must.op)} ` +
+    `${rule.must.value ? `“${rule.must.value}”` : ""} was expected — found “${got}”.`
+    + receiptsBehind(subject, rule);
 }
 
 /**
