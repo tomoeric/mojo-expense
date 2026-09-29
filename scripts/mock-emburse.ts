@@ -105,6 +105,21 @@ type State = {
   /** Which cardholder the users filter is set to, "" for all. */
   userFilter: string;
   /**
+   * How many more loads of "/" hang without ever answering.
+   *
+   * Stands in for the Chromium that cannot load a page while the container
+   * plainly can — the commonest failure in a real report, and the one a
+   * batch now reopens the browser for. Counted down, so a run can be made
+   * to fail once and then succeed on the fresh browser.
+   */
+  hangOpens: number;
+  /**
+   * Hang for EVERYBODY, browser and plain fetch alike — a container with no
+   * route out. The app must not reopen the browser for this: a second one
+   * fails identically and costs another two minutes of every batch.
+   */
+  hangAll: boolean;
+  /**
    * How the export dialog offers a format.
    *
    *   "links"  — a link that opens a page of choices.
@@ -180,6 +195,8 @@ const state: State = {
   searchMode: "substring",
   hiddenFromSearch: false,
   userFilter: "",
+  hangOpens: 0,
+  hangAll: false,
   formatControl: "links",
   chipsUnmatchable: false,
   chipState: "aria",
@@ -402,7 +419,21 @@ const grid = (search: string) => {
 
 const page = (body: string) => `<!doctype html><html><body style="font-family:sans-serif">${body}</body></html>`;
 
-app.get("/", (_req, res) => {
+app.get("/", (req, res) => {
+  // Hang without answering — what a wedged browser looks like from the
+  // outside: the navigation never completes.
+  //
+  // For the BROWSER only. That is the whole distinction the app turns on:
+  // it gives up on the page, then proves with a plain fetch that the
+  // container can still reach Emburse, and only then is a corrupt profile
+  // or a leftover process the explanation. A mock that hung on everything
+  // would look like a network outage, where reopening the browser is
+  // exactly the wrong thing to do.
+  if (state.hangAll) return;
+  if (state.hangOpens > 0 && /Chrome|Chromium|HeadlessChrome/i.test(req.get("user-agent") ?? "")) {
+    state.hangOpens--;
+    return;
+  }
   if (!state.signedIn) {
     // Email first, password on the next screen — the shape account.emburse.app
     // actually uses, and the one that defeats filling both at once.
@@ -818,6 +849,8 @@ app.post("/__outcome/:kind", (req, res) => {
 app.post("/__app", (req, res) => {
   const q = req.query as Record<string, string>;
   if ("paintMs" in q) state.appPaintMs = Number(q["paintMs"]) || 0;
+  if ("hangOpens" in q) state.hangOpens = Math.max(0, Number(q["hangOpens"]) || 0);
+  if ("hangAll" in q) state.hangAll = q["hangAll"] === "true";
   if ("nav" in q) state.showNavLabel = q["nav"] !== "false";
   if ("grid" in q) state.gridShape = q["grid"] as State["gridShape"];
   if ("pad" in q) state.padRows = Math.max(0, Math.min(500, Number(q["pad"]) || 0));
@@ -854,7 +887,7 @@ const reset = () =>
     // one that then failed looked like a regression in whatever it was
     // actually testing, rather than leftover state from three tests ago.
     gridShape: "table", padRows: 0, actionsWork: true, ghostButtons: false, ghostRows: false, twinRows: false, searchMode: "substring",
-    hiddenFromSearch: false, userFilter: "",
+    hiddenFromSearch: false, userFilter: "", hangOpens: 0, hangAll: false,
     formatControl: "links",
     chipsUnmatchable: false, appPaintMs: 0, showNavLabel: true,
     sections: {

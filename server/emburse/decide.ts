@@ -339,6 +339,18 @@ export async function runDecision(
  * batch that abandons nineteen good decisions over one bad one is worse than
  * no batch at all.
  */
+/**
+ * Did the run establish that CHROMIUM, not the network, could not load the
+ * page?
+ *
+ * `openEmburse` already answers this — it tries a plain fetch from the
+ * container before giving up, and says which of the two it is. This reads
+ * that finding rather than guessing at one, so a relaunch is only ever
+ * attempted where a relaunch is the documented remedy.
+ */
+const browserWedged = (steps: StepResult[]): boolean =>
+  steps.some((s) => !s.ok && /BROWSER is what could not load the page/i.test(s.detail));
+
 export async function runDecisions(
   items: BatchItem[],
   selectors: Record<string, string>,
@@ -381,14 +393,41 @@ export async function runDecisions(
     let close: (() => Promise<void>) | null = null;
     let page: Page | null = null;
     try {
-      const opened = await openBrowser();
+      let opened = await openBrowser();
       close = opened.close;
       page = await opened.context.newPage();
       page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
 
       // Once, for the whole batch.
       const shared: StepResult[] = [];
-      const signedIn = await signInOnce(page, sel, emburseUrl, login, makeStepper(shared), opts.onChallenge);
+      let signedIn = await signInOnce(page, sel, emburseUrl, login, makeStepper(shared), opts.onChallenge);
+
+      // ONE relaunch, when the diagnosis says the browser is the problem.
+      //
+      // A batch signs in once, so a Chromium that cannot load a page takes
+      // the whole batch with it: one report had forty-one failures, twenty
+      // of them five-at-a-time with identical timings, every one reading
+      // "the network is fine and the BROWSER is what could not load the
+      // page — a corrupt profile, a leftover process, or memory on this
+      // VM". The app had worked that out and then done nothing with it.
+      //
+      // Throwing the context away and opening a fresh one is the remedy for
+      // exactly that list of causes. Gated on the app's OWN finding, which
+      // it only reaches after proving with a plain fetch that the container
+      // can reach Emburse — so this never retries a network outage, where a
+      // second browser would fail the same way and cost another two
+      // minutes. Both attempts stay on the record.
+      if (!signedIn && browserWedged(shared)) {
+        console.log("decisions: the browser could not load Emburse though the network is up — reopening it");
+        await close().catch(() => {});
+        close = null;
+        opened = await openBrowser();
+        close = opened.close;
+        page = await opened.context.newPage();
+        page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
+        signedIn = await signInOnce(page, sel, emburseUrl, login, makeStepper(shared), opts.onChallenge);
+      }
+
       if (signedIn) await keepTrust(opened.context);
       if (!signedIn) {
         // Nothing can be applied, and each item should say why rather than
@@ -626,6 +665,16 @@ async function filterToCardholder(
   // reason to try the next candidate. Which one is the users filter cannot
   // be known from outside the tenant, and this is how it is found out:
   // by opening them and looking.
+  // WAIT for one to appear before counting any.
+  //
+  // Rewriting this to try every candidate dropped the wait that was here,
+  // and the wait was the load-bearing part: Emburse's transactions page
+  // paints in stages, so counting immediately counts an empty page. A live
+  // report then showed the giveaway — "no users filter matched … Control
+  // shaped things on the page: input[role=combobox] ×2, button ×24" — the
+  // diagnostic probe, which runs a moment later, saw controls the match
+  // itself had not. Ten decisions failed on a page that had the dropdown.
+  await firstVisible(page, sel.userFilter!, 8_000);
   const all = page.locator(sel.userFilter!);
   const found = await all.count().catch(() => 0);
   const candidates: Locator[] = [];
@@ -725,7 +774,19 @@ async function filterToCardholder(
       `${counts || "none"}. If one of those IS the users dropdown, name it exactly in Export ` +
       `settings so it is tried first.`);
   }
-  await page.waitForTimeout(1200);
+  // WAIT for the navigation the click starts, rather than guessing at it.
+  //
+  // Picking an option makes Emburse navigate to the filtered grid. A fixed
+  // pause meant the next page.goto could be issued while that navigation
+  // was still in flight, and Playwright aborts one for the other:
+  // "Navigation to …filters[query]=MAVERIK… is interrupted by another
+  // navigation to …filters[query]=" — which is our own filter arriving
+  // late and cancelling our own search.
+  await page.waitForLoadState("domcontentloaded", { timeout: 15_000 }).catch(() => {});
+  // Then until the URL actually carries the filter, since the load state
+  // can settle on the page we were already on.
+  await page.waitForURL((u) => userIdInUrl(u.toString()) !== null, { timeout: 10_000 })
+    .catch(() => {});
   // What the dropdown put in the URL is the id, and the only way to get it.
   const id = userIdInUrl(page.url());
   if (id) cardholderIds.set(employee.toLowerCase(), id);
@@ -941,6 +1002,16 @@ async function whyNoGrid(page: Page, sel: Record<string, string>, asEmail?: stri
   const where = safeUrl(page.url());
   const text = (await page.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ").trim();
 
+  // Emburse's own error page. It says so in plain words, and reporting it
+  // as a selector problem sends somebody to fix configuration that is
+  // fine — "Oops, something went wrong! Try refreshing the page." was
+  // filed under "the grid or row selector did not match what is on the
+  // page" for want of reading the sentence underneath.
+  if (/oops,? something went wrong|try refreshing the page/i.test(text)) {
+    return `Emburse itself errored at ${where} — its page says \u201cOops, something went ` +
+      `wrong! Try refreshing the page.\u201d Nothing here is misconfigured; the decision ` +
+      `is worth trying again.`;
+  }
   if (/sign in|log in|password|code-authentication/i.test(text) || /login|auth/i.test(page.url())) {
     return `Emburse sent us back to sign in at ${where} — the session did not survive the search. ` +
       "Test your Emburse connection to sign in again.";
