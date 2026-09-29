@@ -1,5 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
-import { Loader2, ListTree, AlertTriangle } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { Loader2, ListTree, AlertTriangle, RotateCcw } from "lucide-react";
 // Exact, to the cent. These figures exist to be compared with a card charge,
 // and rounding "38.24" to "$38" against "$45.89" hides both the real total
 // and the fact that the difference is exactly the printed tip.
@@ -64,6 +65,35 @@ export function ReceiptItems({
   /** What the expense claims, so a total that disagrees can say so. */
   claimed?: number;
 }) {
+  const qc = useQueryClient();
+  const [rereading, setRereading] = useState(false);
+  const [rereadError, setRereadError] = useState<string | null>(null);
+  const sha = details?.[0]?.sha256;
+
+  /**
+   * Read this one again, ignoring what was stored.
+   *
+   * `force` is what makes it mean anything: without it the server hands
+   * back the cached reading, which is the very thing being disputed.
+   */
+  const reread = async () => {
+    if (!sha) return;
+    setRereading(true);
+    setRereadError(null);
+    try {
+      const res = await fetch(`/api/receipt-items/${sha}?force=1`, { method: "POST" });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(body?.error ?? "The receipt could not be read again.");
+      }
+      await qc.invalidateQueries({ queryKey: ["receipt-items"] });
+    } catch (err) {
+      setRereadError(err instanceof Error ? err.message : "The receipt could not be read again.");
+    } finally {
+      setRereading(false);
+    }
+  };
+
   if (loading) {
     return (
       <p className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -108,7 +138,23 @@ export function ReceiptItems({
       <h4 className="flex items-center gap-1.5 text-xs font-bold tracking-wide text-muted-foreground uppercase">
         <ListTree className="h-3.5 w-3.5" />
         On the receipt
+        {/* Readings are cached by image hash and never read twice, which is
+            right — the vision call is the expensive part — but it also means
+            a receipt read wrongly STAYS wrong until something forces it.
+            Waiting for a background sweep to come round is no answer when
+            the wrong figure is on screen in front of somebody. */}
+        <button
+          type="button"
+          disabled={rereading}
+          onClick={() => void reread()}
+          title="Read this receipt again, ignoring what was stored"
+          className="ml-auto inline-flex items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-[10px] font-semibold normal-case hover:bg-muted disabled:opacity-50"
+        >
+          {rereading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
+          {rereading ? "Reading…" : "Read again"}
+        </button>
       </h4>
+      {rereadError && <p className="text-xs text-red-700">{rereadError}</p>}
 
       {/* What the receipt says it is and when, beside what was claimed. The
           reader has always pulled these; they were stored and never shown, so
