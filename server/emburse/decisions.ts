@@ -63,6 +63,8 @@ export type QueuedDecision = {
    * the expense, and these go with it.
    */
   notInQueue: boolean;
+  /** When it last went wrong. Null on rows that failed before this existed. */
+  failedAt: string | null;
 };
 
 const SCHEMA = `
@@ -125,6 +127,14 @@ ALTER TABLE expense_decisions ADD COLUMN IF NOT EXISTS automatic boolean NOT NUL
 -- import — and because forty of them in one list buries the handful that do
 -- need somebody.
 ALTER TABLE expense_decisions ADD COLUMN IF NOT EXISTS not_in_queue boolean NOT NULL DEFAULT false;
+-- WHEN it failed, which is not when it was decided.
+--
+-- A decision queued on Monday and attempted on Thursday carried Monday's
+-- date and nothing else, so thirty-five failures spanning several runs were
+-- one undifferentiated pile — "hard to tell what is new and what is old",
+-- exactly. Null on rows that failed before this column existed, and those
+-- read as "at some point", which is the truth about them.
+ALTER TABLE expense_decisions ADD COLUMN IF NOT EXISTS failed_at timestamptz;
 `;
 
 let ready: Promise<void> | null = null;
@@ -138,7 +148,7 @@ type Row = {
   decided_by: string; decided_at: Date; state: DecisionState; attempts: number;
   applied_at: Date | null; matched_row: string | null; error: string | null; target: Target;
   steps: DecisionStep[] | null; shot: string | null; automatic: boolean;
-  not_in_queue: boolean;
+  not_in_queue: boolean; failed_at: Date | null;
 };
 
 const shape = (r: Row): QueuedDecision => ({
@@ -158,11 +168,12 @@ const shape = (r: Row): QueuedDecision => ({
   shot: r.shot ?? null,
   automatic: r.automatic ?? false,
   notInQueue: r.not_in_queue ?? false,
+  failedAt: r.failed_at ? r.failed_at.toISOString() : null,
 });
 
 const COLUMNS = `id, dedupe_key, decision, reason, decided_by, decided_at, state,
                  attempts, applied_at, matched_row, error, target, steps, shot, automatic,
-                 not_in_queue`;
+                 not_in_queue, failed_at`;
 
 /**
  * Record a decision, to be applied on the next pass.
@@ -383,6 +394,45 @@ export async function retryFailedDecisions(
 }
 
 /**
+ * Put the failures down.
+ *
+ * A failed decision is a note to somebody, and a note nobody can put down
+ * stops being a note. Thirty-five of them sat on the queue across several
+ * runs, some from days ago and some from minutes ago, and the strip counted
+ * them as one number — so the honest answer to "what is new here" was to
+ * read every row. Clearing is what makes the next failure legible: an empty
+ * strip means the next thing to appear in it is new.
+ *
+ * Cancelled, not deleted. The row stays as the record that it was tried and
+ * did not land, with who cleared it and when written on it; everything that
+ * reads decisions already ignores `cancelled`, so the expense simply goes
+ * back to offering Approve and Deny.
+ *
+ * It does NOT touch anything pending or applied. Clearing is about the
+ * failures on screen, and cancelling a decision that is on its way to
+ * Emburse — or one that already landed — is a different and much worse
+ * thing to do by accident.
+ *
+ * `onlyGone` clears just the ones Emburse no longer has in Needs Review:
+ * the failures that are not faults, need nobody, and are only in the way.
+ */
+export async function clearFailedDecisions(
+  by: string,
+  opts: { onlyGone?: boolean } = {},
+): Promise<number> {
+  await ensure();
+  const { rowCount } = await db().query(
+    `UPDATE expense_decisions
+        SET state = 'cancelled',
+            error = coalesce(error, 'It did not go through.')
+                    || ' — cleared by ' || $1 || ' on ' || to_char(now(), 'YYYY-MM-DD HH24:MI')
+      WHERE state = 'failed'
+        ${opts.onlyGone ? "AND not_in_queue = true" : ""}`,
+    [by || "somebody"]);
+  return rowCount ?? 0;
+}
+
+/**
  * What the failures actually are, grouped.
  *
  * Ninety-nine red rows is a number, not a diagnosis, and reading them one
@@ -599,7 +649,11 @@ export async function settleDecision(
             error      = $4,
             steps      = COALESCE($5::jsonb, steps),
             shot       = CASE WHEN $2 = 'applied' THEN NULL ELSE COALESCE($6, shot) END,
-            not_in_queue = $7
+            not_in_queue = $7,
+            -- Stamped on every failure, including a repeat one: what the
+            -- queue needs is when this row last went wrong, not when it
+            -- first did.
+            failed_at  = CASE WHEN $2 = 'failed' THEN now() ELSE failed_at END
       WHERE id = $1`,
     [
       id,

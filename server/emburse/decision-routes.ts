@@ -8,7 +8,7 @@ import { credentialForUser, hasCredential, noteResult } from "./credentials.js";
 import { inspectEditForm, runDecision, testConnection, type Decision, type Target } from "./decide.js";
 import {
   appliedCount, cancelDecision, decisionsFor, pendingDecisions, queueApprovalFor, queueDecision,
-  failureReport, failureSummary, recentDecisions, retryFailedDecisions,
+  clearFailedDecisions, failureReport, failureSummary, recentDecisions, retryFailedDecisions,
 } from "./decisions.js";
 import { decisionWorkerStarted, nudgeDecisionWorker } from "./decision-worker.js";
 import { getFlag, setFlag } from "../flags.js";
@@ -269,6 +269,25 @@ decisionRouter.post("/decisions/retry-failed", requireAuth, async (req: Request,
     const { queued, refused } = await retryFailedDecisions(decider);
     if (queued > 0) nudgeDecisionWorker();
     res.status(202).json({ queued, refused: refused.slice(0, 10), waiting: whyWaiting() });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/**
+ * Put the failures down, so the next one that appears is visibly new.
+ *
+ * No Emburse login needed and nothing reaches Emburse: this only changes
+ * what our own queue shows. `gone=1` clears just the ones Emburse no longer
+ * has in Needs Review — the failures that were never faults.
+ */
+decisionRouter.post("/decisions/clear-failed", requireAuth, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  try {
+    const cleared = await clearFailedDecisions(
+      req.user?.email ?? "unknown",
+      { onlyGone: (req.query as { gone?: string }).gone === "1" });
+    res.json({ cleared });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }

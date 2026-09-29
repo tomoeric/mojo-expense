@@ -40,6 +40,8 @@ export type QueuedDecision = {
    * expense.
    */
   notInQueue?: boolean;
+  /** When it last went wrong. Null when it has not, or is too old to say. */
+  failedAt?: string | null;
 };
 
 export type Challenge = {
@@ -240,6 +242,21 @@ export async function retryAllFailed(): Promise<{ queued: number; refused: strin
   const body = await readJson<{ queued?: number; refused?: string[]; error?: string }>(res);
   if (!res.ok) throw new Error(body.error ?? "Could not queue them again.");
   return { queued: body.queued ?? 0, refused: body.refused ?? [] };
+}
+
+/**
+ * Put the failures down.
+ *
+ * Nothing reaches Emburse — this only clears what our own queue shows, so
+ * the next failure to appear is visibly a new one. `onlyGone` clears just
+ * the ones Emburse no longer has in Needs Review.
+ */
+export async function clearFailed(onlyGone = false): Promise<number> {
+  const res = await fetch(`/api/decisions/clear-failed${onlyGone ? "?gone=1" : ""}`,
+    { method: "POST" });
+  const body = await readJson<{ cleared?: number; error?: string }>(res);
+  if (!res.ok) throw new Error(body.error ?? "Could not clear them.");
+  return body.cleared ?? 0;
 }
 
 /** Approve everything that was ticked, in one request. */

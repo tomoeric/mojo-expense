@@ -50,6 +50,7 @@ export type Row = {
   /** The decision on this expense, when there is one. */
   decision?: {
     state: string; decision?: string; automatic?: boolean; notInQueue?: boolean;
+    failedAt?: string | null;
   } | undefined;
   /** The control for deciding it, supplied by whoever renders the table. */
   decide?: React.ReactNode;
@@ -679,11 +680,50 @@ function WhyTheyFailed({ onClose }: { onClose: () => void }) {
   );
 }
 
+/**
+ * How long ago, in the fewest words that are still true.
+ *
+ * Null is "at some point": rows that failed before there was a column for
+ * it. Saying "just now" about those would be a guess dressed as a fact.
+ */
+function ago(iso: string | null | undefined): string {
+  if (!iso) return "at some point";
+  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (!Number.isFinite(mins) || mins < 0) return "just now";
+  if (mins < 2) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 36) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+/** The oldest and newest of a batch, when they are not the same moment. */
+function span(rows: Row[]): string {
+  const times = rows
+    .map((r) => r.decision?.failedAt)
+    .filter((t): t is string => Boolean(t))
+    .sort();
+  if (times.length === 0) return "";
+  const oldest = ago(times[0]);
+  const newest = ago(times[times.length - 1]);
+  if (times.length < rows.length) return ` Oldest ${oldest}; some older than that.`;
+  return oldest === newest ? ` All ${oldest}.` : ` Oldest ${oldest}, newest ${newest}.`;
+}
+
 function FailedStrip({
-  rows, retry,
+  rows, retry, clear,
 }: {
   rows: Row[];
   retry: { onRun: () => void; busy?: boolean; note?: string | null };
+  /**
+   * Putting them down. A failed decision is a note to somebody, and a note
+   * nobody can put down stops being a note — thirty-five of them across
+   * several runs counted as one number, so "what is new here" could only be
+   * answered by reading every row. An empty strip is what makes the next
+   * failure legible.
+   */
+  clear?: { onRun: (onlyGone: boolean) => void; busy?: boolean };
 }) {
   // Two different things were being counted as one, and the second was
   // drowning the first: a decision that FAILED needs somebody, and one whose
@@ -711,6 +751,7 @@ function FailedStrip({
             See what is failing
           </button>
           , or run them all again — they will be applied under your Emburse login.
+          <span className="text-muted-foreground">{span(failed)}</span>
         </span>
       )}
       {why && <WhyTheyFailed onClose={() => setWhy(false)} />}
@@ -719,20 +760,50 @@ function FailedStrip({
           <strong className="font-semibold tabular-nums">{gone.length.toLocaleString()}</strong>{" "}
           {gone.length === 1 ? "is" : "are"} no longer in Emburse&rsquo;s queue — already approved or
           denied there, so there is nothing to retry. They drop off at the next import.
+          {clear && (
+            <>
+              {" "}
+              <button
+                type="button"
+                disabled={clear.busy}
+                onClick={() => clear.onRun(true)}
+                className="underline underline-offset-2 hover:no-underline disabled:opacity-50"
+              >
+                Clear {gone.length === 1 ? "it" : "these"} now
+              </button>
+            </>
+          )}
         </span>
       )}
       {retry.note && <span className="text-emerald-700">{retry.note}</span>}
-      {failed.length > 0 && (
-        <button
-          type="button"
-          disabled={retry.busy}
-          onClick={retry.onRun}
-          className="ml-auto inline-flex items-center gap-1 rounded-lg border border-amber-600/50 px-2.5 py-1 font-semibold text-amber-800 hover:bg-amber-500/10 disabled:opacity-50 dark:text-amber-300"
-        >
-          {retry.busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
-          Try all {failed.length.toLocaleString()} again
-        </button>
-      )}
+      <span className="ml-auto flex items-center gap-2">
+        {/* Clearing changes nothing in Emburse and cancels nothing on its
+            way there — it only puts down the failures on this screen, so
+            the rows go back to offering Approve and Deny. */}
+        {clear && failed.length + gone.length > 0 && (
+          <button
+            type="button"
+            disabled={clear.busy}
+            onClick={() => clear.onRun(false)}
+            title="Put these down. Nothing is sent to Emburse; the rows go back to Approve and Deny."
+            className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1 font-semibold hover:bg-muted disabled:opacity-50"
+          >
+            {clear.busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+            Clear all {(failed.length + gone.length).toLocaleString()}
+          </button>
+        )}
+        {failed.length > 0 && (
+          <button
+            type="button"
+            disabled={retry.busy}
+            onClick={retry.onRun}
+            className="inline-flex items-center gap-1 rounded-lg border border-amber-600/50 px-2.5 py-1 font-semibold text-amber-800 hover:bg-amber-500/10 disabled:opacity-50 dark:text-amber-300"
+          >
+            {retry.busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+            Try all {failed.length.toLocaleString()} again
+          </button>
+        )}
+      </span>
     </div>
   );
 }
@@ -743,6 +814,7 @@ export function ExpenseTable({
   emptyMessage = "Nothing here.",
   bulk,
   retryFailed,
+  clearFailed,
 }: {
   rows: Row[];
   onOpen: (r: Row) => void;
@@ -773,6 +845,11 @@ export function ExpenseTable({
     onRun: () => void;
     busy?: boolean;
     note?: string | null;
+  };
+  /** Putting the failures down, so the next one to appear is visibly new. */
+  clearFailed?: {
+    onRun: (onlyGone: boolean) => void;
+    busy?: boolean;
   };
 }) {
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
@@ -928,7 +1005,7 @@ export function ExpenseTable({
         onFlagGroup={setFlagGroup}
       />
 
-      {retryFailed && <FailedStrip rows={rows} retry={retryFailed} />}
+      {retryFailed && <FailedStrip rows={rows} retry={retryFailed} clear={clearFailed} />}
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative min-w-56 flex-1">

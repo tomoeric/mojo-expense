@@ -4,7 +4,7 @@ import { Loader2, Pause, Play, Send } from "lucide-react";
 import type { ExpenseReport, ReportsResponse } from "@/lib/api";
 import { ExpenseTable, buildRows, type Row } from "@/components/expense-table";
 import { DecideButtons, InspectEditForm, TestDecision } from "@/components/decide-controls";
-import { approveMany, holdDecisions, retryAllFailed } from "@/lib/decisions";
+import { approveMany, clearFailed, holdDecisions, retryAllFailed } from "@/lib/decisions";
 import { useDecisions } from "@/lib/decisions";
 import { CodePrompt } from "@/components/code-prompt";
 
@@ -42,6 +42,7 @@ export function QueuePage({
   const [bulkNote, setBulkNote] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [retryBusy, setRetryBusy] = useState(false);
+  const [clearBusy, setClearBusy] = useState(false);
   const [retryNote, setRetryNote] = useState<string | null>(null);
   const [holdBusy, setHoldBusy] = useState(false);
   const qc = useQueryClient();
@@ -261,6 +262,27 @@ export function QueuePage({
               })
               .catch((e: Error) => setError(e.message))
               .finally(() => setBulkBusy(false));
+          },
+        }}
+        clearFailed={{
+          busy: clearBusy,
+          onRun: (onlyGone: boolean) => {
+            setError("");
+            setRetryNote(null);
+            setClearBusy(true);
+            clearFailed(onlyGone)
+              .then((n) => {
+                setRetryNote(
+                  n === 0
+                    ? "There was nothing to clear."
+                    : `Cleared ${n.toLocaleString()} — nothing was sent to Emburse. ` +
+                      "Anything that turns up here now is new.",
+                );
+                void qc.invalidateQueries({ queryKey: ["decisions"] });
+                void qc.invalidateQueries({ queryKey: ["failure-groups"] });
+              })
+              .catch((e: Error) => setError(e.message))
+              .finally(() => setClearBusy(false));
           },
         }}
         retryFailed={{

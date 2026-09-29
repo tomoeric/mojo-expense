@@ -108,9 +108,28 @@ export function DecideButtons({
  * thumbnail of a page. The information was all there and none of it was
  * legible, which is the same as not having it.
  */
+/**
+ * How long ago, in the fewest words that are still true.
+ *
+ * Null is "at some point" — rows that failed before there was a column
+ * recording when. Saying "just now" about one of those would be a guess
+ * dressed as a fact, and the whole reason this is here is that a pile of
+ * failures of unknown age reads as one event.
+ */
+function failedAgo(iso: string | null | undefined): string {
+  if (!iso) return "at some point";
+  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (!Number.isFinite(mins) || mins < 2) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 36) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
 function FailedBadge({ decision, word }: { decision: QueuedDecision; word: string }) {
   const [open, setOpen] = useState(false);
   const why = decision.error?.trim();
+  const when = failedAgo(decision.failedAt);
 
   return (
     <>
@@ -125,6 +144,11 @@ function FailedBadge({ decision, word }: { decision: QueuedDecision; word: strin
       >
         <AlertTriangle className="h-3 w-3" />
         {word} · did not go through
+        {/* Which run this one is from. Without it, a failure from Tuesday
+            and one from four minutes ago are the same amber pill, and the
+            only way to tell a new problem from an old one is to open every
+            row in turn. */}
+        <span className="font-normal opacity-70">· {when}</span>
       </button>
       {open && (
         <FailureDialog decision={decision} word={word} onClose={() => setOpen(false)} />
