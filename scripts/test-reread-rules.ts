@@ -102,6 +102,17 @@ try {
   await runRules({ keys: [KEY], decide: false });
   check("the flag is gone once the rules see the corrected total", !(await flagged()));
 
+  console.log("\n4b. A run over everything clears it too");
+  // The keyed run is what a re-read triggers. The UNKEYED run is what the
+  // Rules page and the boot recheck do, and it is how a queue full of
+  // stale flags gets cleared in one go — so it has to clear them as well.
+  await setTotal(3824);
+  await runRules({ keys: [KEY], decide: false });
+  check("flagged again, to have something to clear", await flagged());
+  await setTotal(4589);
+  await runRules({ decide: false });
+  check("a run over everything clears the stale flag", !(await flagged()));
+
   console.log("\n5. And it works the other way, which is the dangerous one");
   // Unread receipt: the rule returns UNKNOWN and records no hit, so the
   // expense looks clean — which is precisely when automatic approval is

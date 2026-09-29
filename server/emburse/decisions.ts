@@ -517,6 +517,48 @@ export async function failureReport(): Promise<string> {
   return out.join("\n");
 }
 
+/**
+ * Which of these expenses an enabled rule currently fails.
+ *
+ * Asked at APPLY time, not only at queue time, and that gap is where the
+ * fault lived: the automation queues an approval for an expense nothing
+ * flagged, the receipt is read minutes later, the rules run again and the
+ * expense is flagged — and the approval, already queued, went to Emburse
+ * anyway. The queue showed it plainly: rows sitting in the Flagged tab
+ * reading "Approved · sending".
+ */
+export async function flaggedNow(keys: string[]): Promise<Set<string>> {
+  await ensure();
+  if (keys.length === 0) return new Set();
+  const { rows } = await db().query<{ dedupe_key: string }>(
+    `SELECT DISTINCT h.dedupe_key
+       FROM expense_rule_hits h
+       JOIN expense_rules r ON r.id = h.rule_id AND r.enabled
+      WHERE h.verdict = 'fail' AND h.dedupe_key = ANY($1::text[])`, [keys]);
+  return new Set(rows.map((r) => r.dedupe_key));
+}
+
+/**
+ * Take back an automatic approval a rule has since flagged.
+ *
+ * Cancelled rather than failed: nothing went wrong and nothing was tried.
+ * The row goes back to offering Approve and Deny, which is the right place
+ * for it — a person can still approve a flagged expense, and often should.
+ * Only the machine is stopped.
+ */
+export async function cancelBecauseFlagged(ids: number[]): Promise<number> {
+  if (ids.length === 0) return 0;
+  await ensure();
+  const { rowCount } = await db().query(
+    `UPDATE expense_decisions
+        SET state = 'cancelled',
+            error = 'A rule flagged this expense after the approval was queued, so it was not ' ||
+                    'sent. Look at the flag, then approve it yourself if it is fine.'
+      WHERE id = ANY($1::bigint[]) AND state = 'pending'`,
+    [ids]);
+  return rowCount ?? 0;
+}
+
 /** How many expenses still held locally have already been actioned. */
 export async function appliedCount(): Promise<number> {
   await ensure();

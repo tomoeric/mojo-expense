@@ -3,7 +3,9 @@ import { readSettings } from "../import/settings.js";
 import { credentialForUser } from "./credentials.js";
 import { runDecisions, type BatchItem } from "./decide.js";
 import { waitForCode } from "./challenge.js";
-import { noteAttemptFailed, pendingDecisions, settleDecision } from "./decisions.js";
+import {
+  cancelBecauseFlagged, flaggedNow, noteAttemptFailed, pendingDecisions, settleDecision,
+} from "./decisions.js";
 import { getFlag } from "../flags.js";
 
 /**
@@ -83,8 +85,32 @@ async function tick(): Promise<void> {
     // abandoning a half-clicked approval is worse than letting it land.
     if (await getFlag("holdDecisions").catch(() => false)) return;
 
-    const waiting = await pendingDecisions();
+    let waiting = await pendingDecisions();
     if (waiting.length === 0) return;
+
+    // A flag beats a queued approval, and this is the last moment it can.
+    //
+    // The automation only ever queues expenses nothing flagged — but the
+    // receipt is often read minutes later, the rules run again on what it
+    // said, and the expense is flagged AFTER its approval is already in the
+    // queue. Nothing re-checked, so it went to Emburse regardless: rows sat
+    // in the Flagged tab reading "Approved · sending".
+    //
+    // Only the machine's approvals are stopped. A person who clicks Approve
+    // on a flagged expense means it, and often should — that is what the
+    // flag is for, a prompt to look rather than a prohibition.
+    const machine = waiting.filter((d) => d.automatic && d.decision === "approve");
+    if (machine.length > 0) {
+      const flagged = await flaggedNow(machine.map((d) => d.dedupeKey));
+      const stop = machine.filter((d) => flagged.has(d.dedupeKey)).map((d) => d.id);
+      if (stop.length > 0) {
+        const n = await cancelBecauseFlagged(stop);
+        console.log(`decisions: held back ${n} automatic approval(s) a rule has since flagged`);
+        const stopped = new Set(stop);
+        waiting = waiting.filter((d) => !stopped.has(d.id));
+        if (waiting.length === 0) return;
+      }
+    }
 
     const settings = await readSettings();
 

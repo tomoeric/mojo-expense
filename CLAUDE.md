@@ -254,6 +254,23 @@ Two separate things, and confusing them cost a queue full of failures.
   unread forever — which is why the reader (`receipt-reader.ts`) runs shortly
   after each import rather than on a daily schedule.
 
+## A flag beats a queued approval
+
+- **Checked at APPLY time, not only at queue time.** The automation only ever
+  queues expenses nothing flagged — and then the receipt is read minutes
+  later, the rules run again on what it turned out to say, and the expense is
+  flagged while its approval is already in the queue. Nothing re-checked, so
+  it went to Emburse regardless: rows sat in the Flagged tab reading
+  "Approved · sending". The worker now asks `flaggedNow()` before each batch
+  and takes those back with `cancelBecauseFlagged`.
+- **Cancelled, not failed.** Nothing went wrong and nothing was tried, and the
+  row goes back to offering Approve and Deny — which is where it belongs.
+- **Only the MACHINE is stopped.** A person who clicks Approve on a flagged
+  expense means it, and often should: a flag is a prompt to look, not a
+  prohibition. Stopping a human here would make flags useless for the thing
+  they are for. That is what `automatic` is for, and there is a test that a
+  person's approval still goes through on a flagged expense.
+
 ## A flag has to be able to go away
 
 - **`runRules` clears verdicts it did not reproduce.** `not-applicable` is
