@@ -49,9 +49,24 @@ const Reading = z.object({
   items: z.array(Item).describe(
     "One entry per purchased line. Exclude subtotal, tax, tip, total, change and payment lines — those are separate fields.",
   ),
-  subtotal: z.number().nullable(),
+  subtotal: z.number().nullable().describe(
+    "The figure before tax, when the receipt prints one. Menards labels it “TOTAL” and prints the " +
+    "real charge on “TOTAL SALE” below it — put the pre-tax figure here even when the receipt " +
+    "calls it the total, because the arithmetic is what catches a misread.",
+  ),
   tax: z.number().nullable(),
   tip: z.number().nullable(),
+  /**
+   * The single most reliable figure on the page, and the one both misreads
+   * would have been saved by: receipts print what the card was charged
+   * against the card itself.
+   */
+  paid: z.number().nullable().describe(
+    "The amount printed against the payment line — “AMERICAN EXPRESS 1002  13.54”, “Amount Paid”, " +
+    "“TOTAL SALE”, “Total Paid”, “Charged”. This is what the card was actually charged, so give it " +
+    "whenever the receipt shows one, even if it repeats a figure above. Null only when there is no " +
+    "such line at all.",
+  ),
   total: z.number().nullable().describe(
     "The amount actually CHARGED — the last money figure on the receipt, after any tip. " +
     "A restaurant slip prints “Total” BEFORE the tip line and then “Amount Paid”, “Total Paid” " +
@@ -108,11 +123,22 @@ CREATE TABLE IF NOT EXISTS receipt_readings (
   tax_cents      bigint,
   tip_cents      bigint,
   total_cents    bigint,
+  paid_cents     bigint,
   notes        text NOT NULL DEFAULT '',
   -- Set when the read itself failed, so a retry is distinguishable from a
   -- receipt that genuinely has no items on it.
   error        text
 );
+
+-- The amount printed against the payment card. Added after two receipts
+-- were read off the wrong line: it is the figure the card was charged,
+-- stated by the receipt itself, and it settles what arithmetic can only
+-- infer.
+ALTER TABLE receipt_readings ADD COLUMN IF NOT EXISTS paid_cents bigint;
+-- Which generation of the reader produced this. Bumping READER_VERSION is
+-- how a fixed prompt reaches receipts that were already read: the cache is
+-- by image hash and nothing is ever read twice without it.
+ALTER TABLE receipt_readings ADD COLUMN IF NOT EXISTS reader_version integer NOT NULL DEFAULT 1;
 
 CREATE TABLE IF NOT EXISTS receipt_items (
   sha256       text    NOT NULL REFERENCES receipt_readings (sha256) ON DELETE CASCADE,
@@ -156,6 +182,24 @@ const ensure = (): Promise<void> =>
  */
 export const ensureReceiptItems = ensure;
 
+/**
+ * Which generation of the reader produced a stored reading.
+ *
+ * Readings are cached by image hash and never read twice, which is right —
+ * a vision call per receipt is the expensive part of this app. But it also
+ * means a FIXED reader never reaches anything already read: two receipts
+ * were read off the wrong line, the prompt now says which line to take, and
+ * without this the stored totals would stay wrong until those images
+ * happened to turn over.
+ *
+ * Bumping this re-reads everything, once. That is a real cost — one call
+ * per stored receipt — so it is bumped deliberately, when what changed
+ * makes the old readings wrong rather than merely better.
+ *
+ *   2 — the total is the amount CHARGED, not the line labelled "Total".
+ */
+export const READER_VERSION = 2;
+
 const cents = (n: number | null | undefined): number | null =>
   n === null || n === undefined || !Number.isFinite(n) ? null : Math.round(n * 100);
 const dollars = (c: string | number | null): number | null =>
@@ -173,50 +217,91 @@ Thermal receipts fade. When a line is partly unreadable, give what you can read
 and leave the amount null rather than guessing a number — a wrong figure is
 worse than a missing one, because it will be believed.
 
-The total is the figure the card was charged, which on a restaurant slip is
-NOT the one labelled "Total". Those print:
+THE TOTAL IS WHAT THE CARD WAS CHARGED, and on many receipts the word
+"TOTAL" is printed against a smaller figure. Two real ones, both read
+wrongly:
 
-    Sub Total  35.37
-    Tax         2.87
-    Total      38.24      <- before the tip
-    Tip         7.65
-    Amount Paid 45.89     <- what was charged
+    Sub Total    35.37
+    Tax           2.87
+    Total        38.24     <- before the tip, NOT the answer
+    Tip           7.65
+    Amount Paid  45.89     <- charged
 
-Take the last one. Reading 38.24 there makes an ordinary meal look like $7.65
-of overclaiming, which is the tip.`;
+    TOTAL                     12.49    <- before tax, NOT the answer
+    TAX WASHINGTON-MN 8.375%   1.05
+    TOTAL SALE                13.54    <- charged
+    AMERICAN EXPRESS 1002     13.54
+
+Take the last money figure, the one on the payment line: 45.89 and 13.54.
+Reading 38.24 or 12.49 turns an ordinary purchase into an overclaim of
+exactly the tip, or exactly the tax.
+
+Give "paid" whenever a payment line prints an amount, and put the pre-tax
+figure in "subtotal" even where the receipt labels THAT one "TOTAL". The two
+together are what catch a misread.`;
 
 /**
- * Put the tip back on a total that was read from above the tip line.
+ * What the card was actually charged, which is often not the figure the
+ * receipt labels "Total".
  *
- * A restaurant slip prints Total, then Tip, then Amount Paid, and the word
- * "Total" sits against the SMALLER figure. A Texas Roadhouse receipt read
- * 38.24 where the card was charged 45.89, and the app reported the meal as
- * $7.65 of overclaiming — the tip, exactly.
+ * Two real misreads, a day apart, same shape:
  *
- * The prompt now says so, but a prompt is a request and this is arithmetic:
- * when the total agrees with subtotal + tax and there is a tip beside it,
- * the tip is demonstrably not in it. Both have to be present, and they have
- * to reconcile to the cent (a penny of slack for rounding), or nothing is
- * changed — a guess dressed as a correction would be worse than the fault.
+ *   - Texas Roadhouse printed Total 38.24, Tip 7.65, Amount Paid 45.89. The
+ *     reading took 38.24 and the app reported an ordinary meal as $7.65 of
+ *     overclaiming — the tip, exactly.
+ *   - Menards printed TOTAL 12.49, TAX 1.05, TOTAL SALE 13.54. The reading
+ *     took 12.49 and the app reported $1.05 of overclaiming — the tax,
+ *     exactly. Menards labels its PRE-TAX figure "TOTAL".
+ *
+ * So the word is worthless and two things are worth more. First, the
+ * payment line: a receipt prints what the card was charged against the card
+ * ("AMERICAN EXPRESS 1002  13.54"), and where that exists it settles the
+ * question outright. Second, the arithmetic: subtotal + tax + tip is what
+ * was paid, so a total matching a PARTIAL sum of those is a total read off
+ * the wrong line.
+ *
+ * Nothing is changed unless one of those two proves it. A guess dressed as
+ * a correction is worse than the fault, because it will be believed.
  */
-export function withTip(r: ReceiptReading): ReceiptReading {
-  const { subtotal, tax, tip, total } = r;
-  if (total === null || tip === null || tip <= 0 || subtotal === null) return r;
-  const beforeTip = subtotal + (tax ?? 0);
-  if (Math.abs(total - beforeTip) > 0.01) return r;
-  // Already right, if the total happens to equal subtotal + tax + tip too
-  // (a zero-tax receipt where the numbers coincide).
-  const charged = Number((total + tip).toFixed(2));
-  if (charged === total) return r;
-  return {
+export function chargedTotal(r: ReceiptReading): ReceiptReading {
+  const { subtotal, tax, tip, total, paid } = r;
+  const near = (a: number, b: number) => Math.abs(a - b) <= 0.011;
+  const note = (was: number | null, now: number, why: string): ReceiptReading => ({
     ...r,
-    total: charged,
+    total: now,
     notes: [
       r.notes.trim(),
-      `The printed total of ${total.toFixed(2)} is before the ${tip.toFixed(2)} tip; ` +
-      `the amount charged is ${charged.toFixed(2)}.`,
+      `${was === null ? "No total was printed clearly" : `The printed total of ${was.toFixed(2)}`}` +
+      ` ${why}; the amount charged is ${now.toFixed(2)}.`,
     ].filter(Boolean).join(" "),
-  };
+  });
+
+  // The payment line, when there is one. It is the figure the card was
+  // charged, stated by the receipt itself, and it beats any arithmetic.
+  if (paid !== null && paid > 0 && (total === null || !near(total, paid))) {
+    return note(total, paid, "is not what the card paid");
+  }
+  if (total === null || subtotal === null) return r;
+
+  const whole = Number((subtotal + (tax ?? 0) + (tip ?? 0)).toFixed(2));
+  if (near(total, whole)) return r;
+  // A total that equals the run-up rather than the sum: read off the line
+  // above the tax, or the line above the tip.
+  //
+  // What is MISSING gets added to the printed total, rather than the parts
+  // being re-added from scratch. Both are the same number when everything
+  // was read perfectly; they differ when one component is out by a penny,
+  // and then the larger printed figure is the better anchor — it is the one
+  // the eye and the card agree on.
+  if (near(total, subtotal)) {
+    return note(total, Number((total + (tax ?? 0) + (tip ?? 0)).toFixed(2)), "is before the tax");
+  }
+  if (tax !== null && near(total, subtotal + tax)) {
+    return note(total, Number((total + (tip ?? 0)).toFixed(2)), "is before the tip");
+  }
+  // Anything else does not reconcile, and an unreconciled receipt is a
+  // thing for a person to look at, not for this to adjust.
+  return r;
 }
 
 /** Read one receipt image. Throws only for a failure worth retrying. */
@@ -256,7 +341,7 @@ export async function readReceipt(image: Buffer, contentType = "image/jpeg"): Pr
 
   const parsed = response.parsed_output;
   if (!parsed) throw new Error("The receipt reading came back in an unexpected shape.");
-  return withTip(parsed);
+  return chargedTotal(parsed);
 }
 
 /**
@@ -307,15 +392,18 @@ export async function extractReceipt(
     await client2.query(
       `INSERT INTO receipt_readings
          (sha256, extracted_at, model, legible, merchant, purchased_at, currency,
-          subtotal_cents, tax_cents, tip_cents, total_cents, notes, error, itemised, attempts)
-       VALUES ($1, now(), $2, $3, $4, NULLIF($5,'')::date, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+          subtotal_cents, tax_cents, tip_cents, total_cents, paid_cents, notes, error,
+          itemised, attempts, reader_version)
+       VALUES ($1, now(), $2, $3, $4, NULLIF($5,'')::date, $6, $7, $8, $9, $10, $15, $11, $12,
+               $13, $14, ${READER_VERSION})
        ON CONFLICT (sha256) DO UPDATE SET
          extracted_at = now(), model = EXCLUDED.model, legible = EXCLUDED.legible,
          merchant = EXCLUDED.merchant, purchased_at = EXCLUDED.purchased_at,
          currency = EXCLUDED.currency, subtotal_cents = EXCLUDED.subtotal_cents,
          tax_cents = EXCLUDED.tax_cents, tip_cents = EXCLUDED.tip_cents,
-         total_cents = EXCLUDED.total_cents, notes = EXCLUDED.notes, error = EXCLUDED.error,
-         itemised = EXCLUDED.itemised,
+         total_cents = EXCLUDED.total_cents, paid_cents = EXCLUDED.paid_cents,
+         notes = EXCLUDED.notes, error = EXCLUDED.error,
+         itemised = EXCLUDED.itemised, reader_version = EXCLUDED.reader_version,
          -- Counted on the row rather than passed in, so a retry increments
          -- whatever is already there. A success resets it to zero: the next
          -- time this image is re-read, for a new extracted field say, it
@@ -331,7 +419,8 @@ export async function extractReceipt(
        reading?.purchasedAt ?? "", reading?.currency ?? null,
        cents(reading?.subtotal), cents(reading?.tax), cents(reading?.tip), cents(reading?.total),
        reading?.notes ?? "", error, reading ? reading.itemised === true : null,
-       error === null ? 0 : permanent ? MAX_ATTEMPTS : 1],
+       error === null ? 0 : permanent ? MAX_ATTEMPTS : 1,
+       cents(reading?.paid)],
     );
 
     // Replaced wholesale rather than merged: a re-read is a new opinion about
@@ -434,10 +523,14 @@ export async function unreadReceipts(limit: number): Promise<string[]> {
       WHERE NOT EXISTS (
               SELECT 1 FROM receipt_readings r
                WHERE r.sha256 = b.sha256
-                 -- Read, or tried enough times that trying again is just
-                 -- spending money to get the same answer.
+                 -- Read by the CURRENT reader, or tried enough times that
+                 -- trying again is just spending money to get the same
+                 -- answer. A reading from an older reader is not "read":
+                 -- that is how a fixed prompt reaches receipts that were
+                 -- already done.
+                 AND r.reader_version >= $3
                  AND (r.error IS NULL OR r.attempts >= $2))
-      ORDER BY b.created_at DESC LIMIT $1`, [limit, MAX_ATTEMPTS]);
+      ORDER BY b.created_at DESC LIMIT $1`, [limit, MAX_ATTEMPTS, READER_VERSION]);
   return rows.map((r) => r.sha256);
 }
 

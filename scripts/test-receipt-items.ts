@@ -181,9 +181,23 @@ await db().query(
   `INSERT INTO receipt_blobs (sha256, content_type, byte_size, bytes)
    VALUES ($1,'image/jpeg',3,'\\x001122'), ($2,'image/jpeg',3,'\\x001122')`,
   [SHA, "ri" + "1".repeat(62)]);
+const { READER_VERSION } = await import("../server/emburse/receipt-items.js");
+await db().query("UPDATE receipt_readings SET reader_version = $2 WHERE sha256 = $1",
+  [SHA, READER_VERSION]);
 const queued = await unreadReceipts(50);
 check("a receipt already read is not queued again", !queued.includes(SHA), SHA.slice(0, 8));
 check("…but an unread one is", queued.includes("ri" + "1".repeat(62)));
+
+// Readings are cached by image hash and never read twice, so a FIXED
+// reader would never reach anything already read — two receipts were read
+// off the wrong line and the stored totals would have stayed wrong for
+// ever. Bumping READER_VERSION is what re-reads them, once.
+await db().query("UPDATE receipt_readings SET reader_version = $2 WHERE sha256 = $1",
+  [SHA, READER_VERSION - 1]);
+check("…and one read by an OLDER reader is queued again",
+  (await unreadReceipts(50)).includes(SHA));
+await db().query("UPDATE receipt_readings SET reader_version = $2 WHERE sha256 = $1",
+  [SHA, READER_VERSION]);
 
 await clean();
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}\n`);

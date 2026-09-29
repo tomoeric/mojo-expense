@@ -267,6 +267,21 @@ Two separate things, and confusing them cost a queue full of failures.
   a tip beside it, the tip is demonstrably not in it, so it is added and a note
   says so. Both figures must be present and must reconcile, or nothing is
   changed: a guess dressed as a correction is worse than the fault.
+- **Menards does the same thing with tax.** It prints `TOTAL 12.49`,
+  `TAX 1.05`, `TOTAL SALE 13.54` — the word TOTAL against the PRE-TAX figure,
+  and the reading took it, reporting $1.05 of overclaiming. Same shape, same
+  fix: the last money figure, on the payment line.
+- **`paid` is the field that settles it.** Receipts print what the card was
+  charged against the card itself (`AMERICAN EXPRESS 1002  13.54`), so the
+  reader is asked for that line directly; where it exists it beats any
+  arithmetic. `chargedTotal()` prefers it, then falls back to the reconciliation
+  above, then leaves the reading alone.
+- **`READER_VERSION` is how a fixed reader reaches receipts already read.**
+  Readings are cached by image hash and never read twice — right, since a
+  vision call per receipt is the expensive part — but that also means a prompt
+  fix never reaches the backlog. `unreadReceipts` re-queues anything read by an
+  older reader. Bumping it costs one call per stored receipt, so bump it only
+  when what changed makes the old readings WRONG rather than merely better.
 - **Receipt figures are shown to the cent** (`moneyExact`, not `money`). They
   exist to be compared with a card charge, and rounding 38.24 to "$38" against
   "$45.89" hides both the real total and the fact that the gap is exactly the
