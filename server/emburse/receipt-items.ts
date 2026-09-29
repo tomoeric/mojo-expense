@@ -52,7 +52,13 @@ const Reading = z.object({
   subtotal: z.number().nullable(),
   tax: z.number().nullable(),
   tip: z.number().nullable(),
-  total: z.number().nullable().describe("The final amount charged."),
+  total: z.number().nullable().describe(
+    "The amount actually CHARGED — the last money figure on the receipt, after any tip. " +
+    "A restaurant slip prints “Total” BEFORE the tip line and then “Amount Paid”, “Total Paid” " +
+    "or “Charged” below it: the later, larger figure is the answer, never the one labelled Total " +
+    "above the tip. Where the customer has written a tip in by hand, add it. Where there is no tip " +
+    "line at all, the printed total is the answer.",
+  ),
   notes: z.string().describe(
     "One short sentence only when something would change how a reviewer reads this — items too faded to be sure of, a count that disagrees with the lines, several people's meals on one bill. Empty string when unremarkable.",
   ),
@@ -165,7 +171,53 @@ match against, so do not expand or interpret them.
 
 Thermal receipts fade. When a line is partly unreadable, give what you can read
 and leave the amount null rather than guessing a number — a wrong figure is
-worse than a missing one, because it will be believed.`;
+worse than a missing one, because it will be believed.
+
+The total is the figure the card was charged, which on a restaurant slip is
+NOT the one labelled "Total". Those print:
+
+    Sub Total  35.37
+    Tax         2.87
+    Total      38.24      <- before the tip
+    Tip         7.65
+    Amount Paid 45.89     <- what was charged
+
+Take the last one. Reading 38.24 there makes an ordinary meal look like $7.65
+of overclaiming, which is the tip.`;
+
+/**
+ * Put the tip back on a total that was read from above the tip line.
+ *
+ * A restaurant slip prints Total, then Tip, then Amount Paid, and the word
+ * "Total" sits against the SMALLER figure. A Texas Roadhouse receipt read
+ * 38.24 where the card was charged 45.89, and the app reported the meal as
+ * $7.65 of overclaiming — the tip, exactly.
+ *
+ * The prompt now says so, but a prompt is a request and this is arithmetic:
+ * when the total agrees with subtotal + tax and there is a tip beside it,
+ * the tip is demonstrably not in it. Both have to be present, and they have
+ * to reconcile to the cent (a penny of slack for rounding), or nothing is
+ * changed — a guess dressed as a correction would be worse than the fault.
+ */
+export function withTip(r: ReceiptReading): ReceiptReading {
+  const { subtotal, tax, tip, total } = r;
+  if (total === null || tip === null || tip <= 0 || subtotal === null) return r;
+  const beforeTip = subtotal + (tax ?? 0);
+  if (Math.abs(total - beforeTip) > 0.01) return r;
+  // Already right, if the total happens to equal subtotal + tax + tip too
+  // (a zero-tax receipt where the numbers coincide).
+  const charged = Number((total + tip).toFixed(2));
+  if (charged === total) return r;
+  return {
+    ...r,
+    total: charged,
+    notes: [
+      r.notes.trim(),
+      `The printed total of ${total.toFixed(2)} is before the ${tip.toFixed(2)} tip; ` +
+      `the amount charged is ${charged.toFixed(2)}.`,
+    ].filter(Boolean).join(" "),
+  };
+}
 
 /** Read one receipt image. Throws only for a failure worth retrying. */
 export async function readReceipt(image: Buffer, contentType = "image/jpeg"): Promise<ReceiptReading> {
@@ -204,7 +256,7 @@ export async function readReceipt(image: Buffer, contentType = "image/jpeg"): Pr
 
   const parsed = response.parsed_output;
   if (!parsed) throw new Error("The receipt reading came back in an unexpected shape.");
-  return parsed;
+  return withTip(parsed);
 }
 
 /**

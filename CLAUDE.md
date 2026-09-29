@@ -254,6 +254,24 @@ Two separate things, and confusing them cost a queue full of failures.
   unread forever — which is why the reader (`receipt-reader.ts`) runs shortly
   after each import rather than on a daily schedule.
 
+## Reading a receipt total
+
+- **The figure labelled "Total" is not what the card was charged.** A
+  restaurant slip prints Total, then Tip, then Amount Paid, and the word Total
+  sits against the SMALLER number. A Texas Roadhouse receipt read 38.24 against
+  a $45.89 charge, and the app reported an ordinary meal as $7.65 of
+  overclaiming — the tip, exactly. The prompt now shows that layout and says to
+  take the last figure.
+- **And `withTip()` checks the arithmetic afterwards**, because a prompt is a
+  request. When the total agrees with subtotal + tax to the penny and there is
+  a tip beside it, the tip is demonstrably not in it, so it is added and a note
+  says so. Both figures must be present and must reconcile, or nothing is
+  changed: a guess dressed as a correction is worse than the fault.
+- **Receipt figures are shown to the cent** (`moneyExact`, not `money`). They
+  exist to be compared with a card charge, and rounding 38.24 to "$38" against
+  "$45.89" hides both the real total and the fact that the gap is exactly the
+  printed tip.
+
 ## Rules
 
 - **A rule is an expectation, not a filter**: WHEN conditions pick the

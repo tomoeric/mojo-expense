@@ -1,6 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { Loader2, ListTree, AlertTriangle } from "lucide-react";
-import { money } from "@/lib/format";
+// Exact, to the cent. These figures exist to be compared with a card charge,
+// and rounding "38.24" to "$38" against "$45.89" hides both the real total
+// and the fact that the difference is exactly the printed tip.
+import { moneyExact } from "@/lib/format";
 
 /**
  * What the receipt itself says was bought, one item per line.
@@ -136,7 +139,7 @@ export function ReceiptItems({
               )}
             </span>
             <span className="tnum shrink-0 text-muted-foreground">
-              {i.amount === null ? "—" : money(i.amount)}
+              {i.amount === null ? "—" : moneyExact(i.amount)}
             </span>
           </li>
         ))}
@@ -157,7 +160,7 @@ export function ReceiptItems({
           value === null ? null : (
             <li key={label} className="flex items-baseline justify-between gap-3 px-2.5 py-1 text-xs text-muted-foreground">
               <span>{label}</span>
-              <span className="tnum">{money(value)}</span>
+              <span className="tnum">{moneyExact(value)}</span>
             </li>
           ),
         )}
@@ -165,15 +168,15 @@ export function ReceiptItems({
         {detail.total !== null && (
           <li className="flex items-baseline justify-between gap-3 bg-muted/40 px-2.5 py-1.5 font-semibold">
             <span>Receipt total</span>
-            <span className="tnum">{money(detail.total)}</span>
+            <span className="tnum">{moneyExact(detail.total)}</span>
           </li>
         )}
       </ul>
 
       {off !== null && (
         <p className="text-xs text-amber-600">
-          The receipt totals {money(detail.total!)}, {off > 0 ? "more" : "less"} than the{" "}
-          {money(claimed!)} claimed — worth a look. A split bill or a tip added after printing both
+          The receipt totals {moneyExact(detail.total!)}, {off > 0 ? "more" : "less"} than the{" "}
+          {moneyExact(claimed!)} claimed — worth a look. A split bill or a tip added after printing both
           do this.
         </p>
       )}
