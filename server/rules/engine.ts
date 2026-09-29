@@ -569,10 +569,38 @@ const shown = (subject: Subject, field: Field, group?: Group): string => {
   return textOf(subject, field) || "(blank)";
 };
 
+/**
+ * One condition, written out with the figures it actually saw.
+ *
+ * "Receipt total (read off the image) $28.36 does not equal Amount $14.18" —
+ * the two numbers, side by side, in the rule's own words. What this replaces
+ * is a flag that said only `Matches “Amounts Off”.` on an expense whose
+ * receipt and charge were both $14.18 on screen, which reads as the app being
+ * broken. It was not: the expense carried the same bill twice and the rule
+ * had added them up. A flag that shows its arithmetic says that in one line;
+ * a flag that only names itself sends somebody to the source code.
+ */
+function said(subject: Subject, c: Condition, group?: Group): string {
+  const label = FIELD_LABEL[c.field];
+  const op = opLabel(c.field, c.op);
+  if (c.op === "is_blank" || c.op === "is_not_blank") return `${label} ${op}`;
+  const mine = shown(subject, c.field, group);
+  const theirs = c.compare
+    ? `${FIELD_LABEL[c.compare]} ${shown(subject, c.compare, group)}`
+    : `“${c.value}”`;
+  return `${label} ${mine} ${op} ${theirs}`;
+}
+
 /** What the reviewer is told, in the rule's own terms. */
 export function explain(subject: Subject, rule: RuleBody, group?: Group): string {
   if (rule.message.trim()) return rule.message.trim();
-  if (!rule.must) return `Matches “${rule.name}”.`;
+  // A rule with no expectation flags everything its WHEN matches, so the WHEN
+  // *is* the finding. Say which parts of it matched, and on what figures.
+  if (!rule.must) {
+    const matched = rule.when.filter((c) => test(subject, c, group) === true);
+    if (matched.length === 0) return `Matches “${rule.name}”.`;
+    return `${matched.map((c) => said(subject, c, group)).join(" and ")}.`;
+  }
   const got = shown(subject, rule.must.field, group);
 
   // A field-against-a-field mismatch reads best as the two figures side by

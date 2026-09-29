@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { X, ReceiptText, AlertTriangle, ScanSearch, Loader2, Eye } from "lucide-react";
 import { type AuditResult, type ExpenseLine, type ExpenseReport } from "@/lib/api";
-import { verdictFor } from "@/lib/receipt-verdict";
+import { receiptTotalOf, verdictFor } from "@/lib/receipt-verdict";
 import { moneyExact, shortDate } from "@/lib/format";
 import { useDecisions } from "@/lib/decisions";
 import { StatusPill } from "./ui";
@@ -223,7 +223,7 @@ export function ReportDrawer({
                     line={l}
                     department={report.department}
                     flagged={flaggedLineIds.has(l.id)}
-                    audit={verdictFor(l.amount, items.data?.byExpense?.[l.id]?.[0]?.total, l.id) ?? undefined}
+                    audit={verdictFor(l.amount, receiptTotalOf(items.data?.byExpense?.[l.id]), l.id) ?? undefined}
                     items={items.data?.byExpense?.[l.id]}
                     itemsLoading={items.isLoading}
                     itemsEnabled={items.data?.enabled ?? false}

@@ -245,15 +245,25 @@ export async function subjects(
                FROM expense_receipts r
                JOIN receipt_items i ON i.sha256 = r.sha256
               WHERE r.dedupe_key = e.dedupe_key) AS items,
-            -- The total the reader took off the receipt image. Summed because
-            -- an expense can carry more than one receipt, and NULL when none
+            -- The total the reader took off the receipt image. NULL when none
             -- has been read — which is not zero and must not compare as one.
-            (SELECT sum(rr.total_cents)
-               FROM expense_receipts r
-               JOIN receipt_readings rr ON rr.sha256 = r.sha256
-              WHERE r.dedupe_key = e.dedupe_key
-                AND rr.error IS NULL
-                AND rr.total_cents IS NOT NULL) AS receipt_total_cents,
+            --
+            -- DISTINCT, then summed. An expense can carry several receipts and
+            -- two of them are usually the same bill twice: the importer splits
+            -- a multi-page PDF into a page each, and page two is the card slip
+            -- repeating the total, or the employee attaches both the photo and
+            -- the emailed copy. Adding those up doubled the total, so a $14.18
+            -- FedEx charge with a $14.18 receipt was compared against $28.36
+            -- and flagged "Amounts Off" while the drawer beside it showed the
+            -- same two figures matching. Two receipts for genuinely different
+            -- amounts still sum, which is what a split bill needs.
+            (SELECT sum(d.total_cents)
+               FROM (SELECT DISTINCT rr.total_cents
+                       FROM expense_receipts r
+                       JOIN receipt_readings rr ON rr.sha256 = r.sha256
+                      WHERE r.dedupe_key = e.dedupe_key
+                        AND rr.error IS NULL
+                        AND rr.total_cents IS NOT NULL) d) AS receipt_total_cents,
             -- Alcohol on any line the reader saw. NULL when no reading with
             -- usable lines exists, so "cannot say" stays distinct from "no".
             (SELECT bool_or(i.alcohol)

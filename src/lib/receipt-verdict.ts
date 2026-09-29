@@ -62,3 +62,32 @@ export function verdictFor(
     message: `Receipt total is ${money(receiptTotal)}, ${money(difference)} more than claimed — often a split bill.`,
   };
 }
+
+/**
+ * The receipt total for a whole expense, aggregated exactly as the rule
+ * engine aggregates it (`subjects()` in server/rules/store.ts).
+ *
+ * This used to be `details[0].total` — the first receipt — while the rules
+ * summed every receipt on the expense. On an expense carrying the same bill
+ * twice, the badge here said "Match" against $14.18 and the rule flagged
+ * "Amounts Off" against $28.36, at the same time, on the same row. The two
+ * halves of the app have to answer with the same number or neither is worth
+ * reading, so the aggregation lives in one place and both sides call it.
+ *
+ * Distinct totals, then summed: duplicates of one bill count once, genuinely
+ * different receipts on one expense still add up.
+ */
+export function receiptTotalOf(
+  details: { total: number | null; error: string | null }[] | undefined,
+): number | null {
+  if (!details || details.length === 0) return null;
+  const cents = new Set<number>();
+  for (const d of details) {
+    if (d.error !== null || d.total === null) continue;
+    cents.add(Math.round(d.total * 100));
+  }
+  if (cents.size === 0) return null;
+  let sum = 0;
+  for (const c of cents) sum += c;
+  return sum / 100;
+}
