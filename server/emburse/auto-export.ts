@@ -694,7 +694,15 @@ export async function gridLoaded(page: Page, sel: Selectors): Promise<string | n
   // A standard ARIA grid, as a last resort. Not a substitute for the
   // configured selector — the row selector still has to match before
   // anything is clicked — but enough to say the page arrived.
-  const aria = await firstVisible(page, '[role="grid"]', 1_000);
+  //
+  // Given the SAME budget as the configured selector, not one second. A
+  // failure report showed "no grid … Nothing matched the grid selector
+  // 'table'. What IS on the page: [role='grid'] ×1, [role='row'] ×2 — so
+  // the page loaded and one of those is the grid." The fallback that would
+  // have answered it had already been given a second and lost, after the
+  // configured selector spent the whole step budget failing. A last resort
+  // that is only tried when there is no time left is not a last resort.
+  const aria = await firstVisible(page, '[role="grid"], [role="table"]', ms);
   return aria ? "the grid is on screen" : null;
 }
 

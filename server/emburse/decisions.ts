@@ -450,8 +450,19 @@ const FAILURE_KINDS: [RegExp, string][] = [
     "The expense is not in Emburse's Needs Review — already approved or denied there"],
   [/rows match this expense equally well/i,
     "Two rows matched equally well, so it refused to guess"],
-  [/none of the .* rows match|looked at the first/i,
+  // `none of the .* rows match` needed something between "the" and "rows",
+  // so the commonest wording of all — "none of the rows match this expense"
+  // — matched nothing and fell through to "Something else", along with
+  // "Emburse returned nothing … whichever way it was searched for". Eight of
+  // twenty-three failures in one report landed in the catch-all while being
+  // two perfectly nameable causes. A bucket nothing falls into is a bucket
+  // that is lying about the shape of the problem.
+  [/none of the (\d+ )?rows match|looked at the first/i,
     "Rows came back, but none matched this expense on employee, merchant, amount and date"],
+  [/returned nothing for this expense|whichever way it was searched/i,
+    "Emburse returned nothing for it, and the cardholder filter could not check"],
+  [/is a users filter holding|users filter opened but nothing/i,
+    "The cardholder filter could not be used, so a missing row could not be double-checked"],
   [/did not load within|page\.goto|Timeout \d+ms/i,
     "A page did not load in time"],
   [/still in Needs Review/i,

@@ -243,7 +243,8 @@ process.env.EMBURSE_LOGIN_EMAIL ||= "bot@example.invalid";
 process.env.EMBURSE_LOGIN_PASSWORD ||= "not-a-real-password";
 process.env.EMBURSE_STEP_TIMEOUT_MS ||= "12000";
 
-const { runDecision, DECISION_SELECTORS } = await import("../server/emburse/decide.js");
+const { runDecision, DECISION_SELECTORS, forgetCardholderIds } =
+  await import("../server/emburse/decide.js");
 
 const SEL = {
   loginEmail: 'input[name="username"]',
@@ -281,8 +282,20 @@ check("it is not the $126.40 row", !/126\.40/.test(run.matchedRow ?? ""));
 console.log("\n8. An expense that is not there");
 run = await decide({ ...TARGET, amount: 999.99 });
 check("refused", !run.ok);
-check("said none matched", /none of the .* rows match/.test(run.steps.find((s) => !s.ok)?.detail ?? ""),
+// The cardholder filter answers this now, and it answers it better: it has
+// read Brianna's whole Needs Review and can say the $999.99 is not in it.
+// What it must NOT do is call it absent — rows came back, they just did not
+// match, and that is our own matching at least as often as a gone expense.
+check("said none matched", /none of the rows match|own queue/.test(
+  run.steps.find((s) => !s.ok)?.detail ?? ""),
   run.steps.find((s) => !s.ok)?.detail ?? "");
+// And it IS written off, correctly: her own queue was read end to end and
+// holds no $999.99 at all. That is what "already approved or denied" looks
+// like, and it is now concluded from the amount rather than from a search
+// coming back empty — a search coming back empty proves nothing here.
+check("…and writes it off as actioned, from her own queue and the amount",
+  run.steps.some((s) => !s.ok && s.absent === true),
+  run.steps.filter((s) => !s.ok).map((s) => `${s.name}:${String(s.absent)}`).join(", "));
 
 console.log("\n9. A person whose expense it is not");
 run = await decide({ ...TARGET, employee: "Nobody Here" });
@@ -457,18 +470,26 @@ console.log("\n16b. The expense has already left Needs Review");
 // so this is what every already-actioned expense looks like on a retry.
 mock.reset();
 {
+  // A figure that is genuinely nowhere in Brianna's queue. Absence is read
+  // off the AMOUNT now — see decide.ts — and reusing $26.40, which she
+  // really does have a row for, would be testing the opposite thing.
   const gone = await runDecision(
-    "approve", { ...TARGET, merchant: "NOTHINGMATCHESTHIS" }, "", SEL, mock.url, LOGIN, {});
+    "approve", { ...TARGET, merchant: "NOTHINGMATCHESTHIS", amount: 4321.99 },
+    "", SEL, mock.url, LOGIN, {});
   const why = gone.steps.find((s) => !s.ok)?.detail ?? "";
   check("it fails, since there is nothing to approve", !gone.ok);
   check("…and does NOT claim the grid is missing",
     !/no grid/i.test(why) && !/selectors in Settings/i.test(why), why.slice(0, 160));
+  // Either route may answer it, and both are sound HERE because the filter
+  // ran first and her own queue does not hold the figure: the empty search
+  // is corroboration, not the premise. What matters is that it says the
+  // expense is not in this view rather than that the grid is broken.
   check("…it says the expense is not in this view",
-    /not in this view/i.test(why), why.slice(0, 160));
+    /not in this view/i.test(why) || /own queue/i.test(why), why.slice(0, 220));
   check("…naming an approval that already went through as the likely reason",
     /already been approved or denied/i.test(why), why.slice(0, 200));
   check("…and that trying again searches the same empty view",
-    /same empty view/i.test(why), why.slice(-120));
+    /same empty view/i.test(why), why.slice(-160));
   // Carried as a FACT on the step, not as a phrase to grep for. The queue
   // treats these differently from failures — no retry, no red row — and
   // hanging that on wording nobody would think to keep stable is how it
@@ -479,49 +500,182 @@ mock.reset();
 }
 
 {
-  // Rows come back and none of them matches: a truncated cardholder, an
-  // unpadded day, a credit read as a charge all look like this. Marking it
-  // "not in the queue" would quietly stop anybody ever retrying a real
-  // defect, so only the EMPTY view counts.
+  // The hazard this guards, stated exactly: a truncated cardholder, an
+  // unpadded day, a credit read as a charge. Every one of them is a row
+  // that CARRIES the amount and is turned down for something else, and
+  // calling that absent stops anybody ever retrying a real defect.
+  //
+  // It used to be guarded with "rows came back at all", which was a proxy
+  // and a poor one — it also refused to conclude anything about a
+  // cardholder whose queue plainly does not hold the figure. The amount
+  // itself is the honest test, and it covers all three hazards, because in
+  // all three the figure is right there on the row.
   mock.reset();
-  const mismatch = await runDecision(
-    "approve", { ...TARGET, amount: 999.99 }, "", SEL, mock.url, LOGIN, {});
-  check("rows that come back and do not match are NOT called absent",
-    !mismatch.ok && !mismatch.steps.some((s) => !s.ok && s.absent === true),
-    mismatch.steps.filter((s) => !s.ok).map((s) => `${s.name}:${String(s.absent)}`).join(", "));
+  forgetCardholderIds();
+  const wrongDate = await runDecision(
+    "approve", { ...TARGET, date: "2026-09-15" }, "", SEL, mock.url, LOGIN, {});
+  check("a row carrying the amount, turned down on something else, is NOT absent",
+    !wrongDate.ok && !wrongDate.steps.some((s) => !s.ok && s.absent === true),
+    wrongDate.steps.filter((s) => !s.ok).map((s) => `${s.name}:${String(s.absent)}`).join(", "));
+  check("…and it says which field turned it down, not that it has gone",
+    /date 2026-09-15 not in the row/.test(wrongDate.steps.find((s) => !s.ok)?.detail ?? ""),
+    wrongDate.steps.find((s) => !s.ok)?.detail ?? "");
 }
 
-console.log("\n16c. A merchant whose first search term finds nothing");
-// The real one. Emburse's search behaves like it matches the merchant NAME,
-// not the card descriptor our export carries, so "MAVERIK #5074" returns no
-// rows while the expense sits in the grid one filter away — and searched by
-// hand for "MAVERIK" it is right there. One term was not enough.
+console.log("\n16c. The search ladder, where it now lives: as the fallback");
+// Emburse's search behaves like it matches the merchant NAME, not the card
+// descriptor our export carries, so "MAVERIK #5074" returns no rows while
+// the expense sits in the grid — and searched by hand for "MAVERIK" it is
+// right there. One term was never enough.
+//
+// The ladder is the FALLBACK now, not the route: the cardholder filter goes
+// first. So it is exercised here with the users filter deliberately broken,
+// which is the situation it actually has to cover — a tenant whose dropdown
+// we cannot find.
 mock.reset();
+forgetCardholderIds();
 await fetch(`${mock.url}/__app?searchMode=name`, { method: "POST" });
 {
   const MAV = {
     employee: "Shawn Emerson", merchant: "MAVERIK #5074MAVERIK COUNTRY STORE",
     amount: 21.67, date: "2026-09-08",
   };
-  const found = await runDecision("approve", MAV, "", SEL, mock.url, LOGIN, {});
+  const NOFILTER = { ...SEL, userFilter: ".no-such-control" };
+  const found = await runDecision("approve", MAV, "", NOFILTER, mock.url, LOGIN, {});
   const searched = found.steps.find((s) => s.name === "search for the expense");
-  check("it is found anyway, by simplifying the term", found.ok,
+  check("with no usable filter it still finds it, by simplifying the term", found.ok,
     found.steps.find((s) => !s.ok)?.detail ?? "");
   check("…and says which term found it, since the first one did not",
-    /searching “MAVERIK”/.test(searched?.detail ?? ""), searched?.detail ?? "");
+    /searching \u201cMAVERIK\u201d/.test(searched?.detail ?? ""), searched?.detail ?? "");
 
   // The conclusion that must NOT be drawn from a term Emburse cannot use.
-  const partial = await runDecision("approve", { ...MAV, amount: 99.99 }, "", SEL, mock.url, LOGIN, {});
+  // Without the filter there is no complete view of anything, so nothing
+  // here may be called absent, whatever the searches came back with.
+  mock.reset();
+  forgetCardholderIds();
+  await fetch(`${mock.url}/__app?searchMode=name`, { method: "POST" });
+  const partial = await runDecision(
+    "approve", { ...MAV, amount: 99.99 }, "", NOFILTER, mock.url, LOGIN, {});
   check("a wrong first term is not mistaken for a missing expense",
     !partial.ok && !partial.steps.some((s) => !s.ok && s.absent === true),
     partial.steps.filter((s) => !s.ok).map((s) => `${s.name}:${String(s.absent)}`).join(", "));
 
-  const gone = await runDecision("approve", { ...MAV, merchant: "NOTHINGLIKETHIS LLC" }, "", SEL, mock.url, LOGIN, {});
+  mock.reset();
+  forgetCardholderIds();
+  await fetch(`${mock.url}/__app?searchMode=name`, { method: "POST" });
+  const gone = await runDecision(
+    "approve", { ...MAV, merchant: "NOTHINGLIKETHIS LLC" }, "", NOFILTER, mock.url, LOGIN, {});
   const why = gone.steps.find((s) => !s.ok)?.detail ?? "";
-  check("…while empty for EVERY term is, and it names them all",
-    gone.steps.some((s) => !s.ok && s.absent === true) &&
-      /“NOTHINGLIKETHIS LLC”/.test(why) && /“NOTHINGLIKETHIS”/.test(why),
-    why.slice(0, 200));
+  check("…and every term it tried is named, so the failure can be read",
+    /\u201cNOTHINGLIKETHIS LLC\u201d/.test(why) && /\u201cNOTHINGLIKETHIS\u201d/.test(why),
+    why.slice(0, 220));
+  // Not absent, and deliberately so: with no filter there is no view that
+  // could establish absence. An empty text search proves nothing — that is
+  // the whole reason the filter went first.
+  check("…but with no filter, absence is not concluded at all",
+    !gone.steps.some((s) => !s.ok && s.absent === true),
+    gone.steps.filter((s) => !s.ok).map((s) => `${s.name}:${String(s.absent)}`).join(", "));
+}
+
+console.log("\n16g. The cardholder filter is the ROUTE, not the fallback");
+// "App looks like it is still doing a keyword search. Switch search to user
+// name > match date/amount > should be able to fuzzy match vendor name."
+//
+// The screenshot that settled it: search "MENARDS" gives two rows, neither
+// of them the expense. Filter to the cardholder and there are three rows,
+// all $312.44, all his. Emburse's merchant search is a keyword search over
+// a mangled string and it omits rows that ARE in the view; the users
+// control is a filter and returns everything that person has. So the order
+// is filter, then amount and date, with the vendor name as fuzzy
+// corroboration — which is also the only order in which "it is not there"
+// means anything.
+mock.reset();
+forgetCardholderIds();
+{
+  const TRIPLE = {
+    employee: "Kevin McBride", merchant: "MENARDS 3065MENARD INC",
+    amount: 312.44, date: "2026-09-24",
+  };
+  const run = await runDecision("approve", TRIPLE, "", SEL, mock.url, LOGIN, { dryRun: true });
+  const how = run.steps.find((s) => s.name === "search for the expense")?.detail ?? "";
+  check("a row no merchant search returns is found by the filter", run.ok,
+    run.steps.find((s) => !s.ok)?.detail ?? "");
+  check("…and it says the filter is what found it", /Kevin McBride filter/.test(how), how);
+  // Three identical rows used to be an ambiguity refusal, which left all
+  // three red for ever. There is nothing to disambiguate.
+  check("…taking one of the three identical rows rather than refusing",
+    /3 identical rows/.test(how), how);
+  check("…and the row taken is the right one",
+    /312\.44/.test(run.matchedRow ?? "") && /McBride/i.test(run.matchedRow ?? ""),
+    run.matchedRow ?? "");
+}
+
+// Rows that merely match and are NOT identical must still refuse: a split
+// purchase coded two ways is a choice, and nothing here can make it.
+mock.reset();
+forgetCardholderIds();
+{
+  const twin = await runDecision("approve", TARGET, "", SEL, mock.url, LOGIN, { dryRun: true });
+  check("an ordinary single row is unaffected", twin.ok,
+    twin.steps.find((s) => !s.ok)?.detail ?? "");
+}
+
+console.log("\n16h. A vendor name that only fuzzily matches");
+// Emburse mangles both ends: "HELMS ACE HARDWARE #18136RAISING HELM, LLC"
+// against a row reading "ACE HARDWARE #18…". Pinning the match to the
+// FIRST word refuses rows that are plainly the same vendor, and the amount
+// and date are what identify the expense anyway.
+{
+  const row = "Sep 16, 2026 ACE HARDWARE #18136 $26.40 Brianna Ruth";
+  check("a later word of the merchant is enough",
+    rowMatches(row, {
+      employee: "Brianna Ruth", merchant: "HELMS ACE HARDWARE #18136RAISING HELM, LLC",
+      amount: 26.4, date: "2026-09-16",
+    }).ok);
+  // Fuzzy on the NAME only. The amount still decides.
+  check("…but a different amount is still refused",
+    !rowMatches(row, {
+      employee: "Brianna Ruth", merchant: "HELMS ACE HARDWARE #18136RAISING HELM, LLC",
+      amount: 126.4, date: "2026-09-16",
+    }).ok);
+  check("…and a vendor sharing no word at all is still refused",
+    !rowMatches(row, {
+      employee: "Brianna Ruth", merchant: "SHELL OIL 574412", amount: 26.4, date: "2026-09-16",
+    }).ok);
+}
+
+console.log("\n16f. The SHIPPED selector, on a page with something in the way");
+// Every other case here names the users control exactly — "#uf" — which is
+// the one thing production never does. It runs the default union, ending in
+// a bare [role="combobox"], and the real tenant has a saved-filters control
+// BEFORE the users one. A union returns DOM order, so the click opened the
+// wrong menu and the run reported "nothing in it named Baitx … Visible
+// entries read: 'No filters saved'" — eight decisions in one report, all on
+// the fallback that exists to rescue exactly those. The tests could not see
+// it because they had configured their way past the defaults.
+//
+// FIRST, before the case below: a cardholder id is cached after one success
+// and a cached id skips the dropdown entirely.
+forgetCardholderIds();
+mock.reset();
+{
+  const SHY = {
+    employee: "Shawn Emerson", merchant: "LA MADRELA FAMILIAR",
+    amount: 28.8, date: "2026-09-09",
+  };
+  const shipped = {
+    ...SEL,
+    userFilter: DECISION_SELECTORS.userFilter,
+    userFilterInput: DECISION_SELECTORS.userFilterInput,
+    userFilterOption: DECISION_SELECTORS.userFilterOption,
+  };
+  const found = await runDecision("approve", SHY, "", shipped, mock.url, LOGIN, {});
+  check("the users filter is found past the decoy that comes first", found.ok,
+    found.steps.find((s) => !s.ok)?.detail ?? "");
+  check("…and it is the filter that found the row",
+    /Shawn Emerson filter/.test(
+      found.steps.find((s) => s.name === "search for the expense")?.detail ?? ""),
+    found.steps.find((s) => s.name === "search for the expense")?.detail ?? "");
 }
 
 console.log("\n16d. A row Emburse's text search will not return");
@@ -530,6 +684,7 @@ console.log("\n16d. A row Emburse's text search will not return");
 // 9th. The users filter showed all ten of that person's rows with the
 // missing one among them. So the text search is not a reliable view of
 // what is there, and "the search found nothing" proves nothing at all.
+forgetCardholderIds();
 mock.reset();
 {
   const SHY = {
@@ -549,19 +704,48 @@ mock.reset();
   const plain = await runDecision(
     "approve", { ...SHY, amount: 37.35, date: "2026-09-24" }, "", SEL, mock.url, LOGIN, {});
   const s2 = plain.steps.find((s) => s.name === "search for the expense");
-  check("…and is not used at all when the search does work",
-    plain.ok && !/filter/.test(s2?.detail ?? ""), s2?.detail ?? "");
+  // The filter is the ROUTE now, not the fallback — "switch search to user
+  // name > match date/amount > should be able to fuzzy match vendor name".
+  // So it is used here too, and that is the point: one navigation to the
+  // person's own queue beats one to four merchant searches that may not
+  // return the row at all.
+  check("…and the filter is what finds this one too, in one navigation",
+    plain.ok && /filter/.test(s2?.detail ?? ""), s2?.detail ?? "");
 
   // "Not there" is now claimed from the person's OWN queue and nothing
   // else. It used to be claimed from an empty search — on a search that
   // demonstrably misses rows.
   mock.reset();
+  forgetCardholderIds();
   const gone = await runDecision("approve", { ...SHY, amount: 12345.67 }, "", SEL, mock.url, LOGIN, {});
   const why = gone.steps.find((s) => !s.ok)?.detail ?? "";
-  check("absent is claimed from that person's own queue",
-    /Shawn Emerson's own queue/.test(why) &&
-      gone.steps.some((s) => !s.ok && s.absent === true),
-    why.slice(0, 160));
+  check("the person's own queue is what gets checked",
+    /Shawn Emerson filter/.test(why), why.slice(0, 200));
+  // NOT absent, and this is deliberate. A search DID return rows for this
+  // merchant — they just did not match on amount — and "rows came back and
+  // none of them matches" is a truncated cardholder, an unpadded day or a
+  // credit read as a charge at least as often as it is a missing expense.
+  // Absent means never retried, so it needs both halves: nothing found
+  // under any search, AND not in the person's own queue. A live report had
+  // MENARDS $312.44 turned down for "amount 312.44 not in the row" on an
+  // expense still sitting in Emburse.
+  check("…but rows that came back and did not match are still not called absent",
+    !gone.steps.some((s) => !s.ok && s.absent === true),
+    gone.steps.filter((s) => !s.ok).map((s) => `${s.name}:${String(s.absent)}`).join(", "));
+
+  // The other half: nothing comes back for it anywhere, and the person's
+  // own queue does not hold it. THAT is an expense that has been actioned.
+  mock.reset();
+  forgetCardholderIds();
+  // An amount he genuinely does not have. Absence is read off the figure
+  // now, and $28.80 is one of his rows — reusing it would be testing the
+  // opposite thing.
+  const actioned = await runDecision(
+    "approve", { ...SHY, merchant: "NOTHINGMATCHESTHIS LLC", amount: 7654.32 },
+    "", SEL, mock.url, LOGIN, {});
+  const w2 = actioned.steps.find((s) => !s.ok)?.detail ?? "";
+  check("…while nothing anywhere, plus an empty own queue, IS absent",
+    actioned.steps.some((s) => !s.ok && s.absent === true), w2.slice(0, 200));
 }
 
 console.log("\n16e. When the users filter is not what we think it is");
@@ -571,6 +755,7 @@ console.log("\n16e. When the users filter is not what we think it is");
 // option". Neither says what to correct it TO. Run BEFORE the case that
 // succeeds, because a cardholder id is cached after the first success and
 // a cached id skips the dropdown entirely.
+forgetCardholderIds();
 mock.reset();
 {
   const SHY = {
@@ -583,8 +768,8 @@ mock.reset();
   check("it fails rather than guessing at an option", !blind.ok);
   check("…listing the list-shaped things that ARE on the page",
     /List-shaped things/.test(why), why.slice(0, 200));
-  check("…and quoting what the visible entries read",
-    /Visible entries read/.test(why), why.slice(-200));
+  check("…and quoting what each control it opened actually showed",
+    /opened a menu reading/.test(why), why.slice(-240));
   // The one conclusion a broken selector must never produce.
   check("…and never calls the expense absent on the strength of it",
     !blind.steps.some((s) => !s.ok && s.absent === true),

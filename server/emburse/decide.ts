@@ -141,6 +141,23 @@ const money = (n: number) => n.toFixed(2);
  * the amount, though, is exact, unambiguous, and the thing that makes two
  * similar rows different.
  */
+/**
+ * Is this figure anywhere on the row, whatever sign the page gives it?
+ *
+ * Sign-blind and merchant-blind on purpose. It answers one question —
+ * "could this row be the expense?" — and it is the only thing allowed to
+ * conclude that an expense has LEFT Needs Review. A row carrying the amount
+ * but turned down on the cardholder's truncated name, an unpadded day or a
+ * credit written as "($47.56)" is OUR matching failing, not a missing
+ * expense, and marking that absent means nobody ever retries it.
+ */
+export function amountAppears(rowText: string, amount: number): boolean {
+  const text = rowText.replace(/\s+/g, " ").trim();
+  const abs = Math.abs(amount).toFixed(2);
+  return [abs, Number(abs).toLocaleString("en-US", { minimumFractionDigits: 2 })].some((n) =>
+    new RegExp(`(?<![\\d.,])${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\d])`).test(text));
+}
+
 export function rowMatches(rowText: string, t: Target): { ok: boolean; why: string } {
   const text = rowText.replace(/\s+/g, " ").trim();
   const lower = text.toLowerCase();
@@ -233,9 +250,17 @@ export function rowMatches(rowText: string, t: Target): { ok: boolean; why: stri
   // that in a row containing "U-HAUL" — so no expense from a merchant whose
   // first word carries punctuation could ever be matched. U-HAUL, 7-ELEVEN,
   // McDonald's, any of them.
-  const head = t.merchant.trim().split(/\s+/)[0]?.replace(/[^\w]/g, "") ?? "";
+  // ANY substantial word of it, not only the first. Emburse's merchant
+  // strings are mangled at both ends — "HELMS ACE HARDWARE #18136RAISING
+  // HELM, LLC" against a row reading "ACE HARDWARE #18…" — so pinning the
+  // match to the first word refuses rows that are plainly the same vendor.
+  // The amount and the date are what identify the expense; the vendor name
+  // is corroboration, and corroboration should be fuzzy.
   const flat = lower.replace(/[^a-z0-9]/g, "");
-  if (head.length >= 4 && !flat.includes(head.toLowerCase())) {
+  const words = t.merchant.trim().split(/\s+/)
+    .map((w) => w.replace(/[^\w]/g, "").toLowerCase())
+    .filter((w) => w.length >= 4);
+  if (words.length > 0 && !words.some((w) => flat.includes(w))) {
     return { ok: false, why: `merchant "${t.merchant}" not in the row` };
   }
 
@@ -523,6 +548,50 @@ const ROWS_EXAMINED = 250;
  */
 const cardholderIds = new Map<string, string>();
 
+/**
+ * Forget the cached cardholder ids.
+ *
+ * For tests, and it is not a convenience. A cached id skips the dropdown
+ * entirely, so whether a section exercises the users filter at all depends
+ * on whether an EARLIER section happened to succeed for the same person —
+ * which made the suite order-dependent in a way that hid a real fault: the
+ * case proving a broken option selector fails safely passed only because
+ * the section before it had cached the answer.
+ */
+export function forgetCardholderIds(): void {
+  cardholderIds.clear();
+}
+
+/**
+ * How many controls matching the users-filter selector are opened before
+ * giving up.
+ *
+ * Enough to get past a decoy or two, few enough that a wrong selector
+ * matching half the page does not spend a minute proving it. Each one
+ * after the first is only being ruled out, so it gets a short look.
+ */
+const MOST_FILTER_TRIES = 4;
+
+/**
+ * What an opened menu is showing, in a few words, for the error message.
+ *
+ * "opened a menu reading 'No filters saved'" is a diagnosis. "nothing in it
+ * named Baitx" is a symptom, and it was the only thing the failure report
+ * had to offer across eight decisions.
+ */
+async function readMenu(page: Page): Promise<string> {
+  const any = page.locator('[role="option"], [role="listbox"] li, li');
+  const n = await any.count().catch(() => 0);
+  const seen: string[] = [];
+  for (let i = 0; i < Math.min(n, 30) && seen.length < 4; i++) {
+    if (!(await any.nth(i).isVisible().catch(() => false))) continue;
+    const t = (await any.nth(i).innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+    if (t) seen.push(t.slice(0, 40));
+  }
+  if (seen.length === 0) return "nothing";
+  return `a menu reading ${seen.map((t) => `\u201c${t}\u201d`).join(", ")}`;
+}
+
 async function filterToCardholder(
   page: Page,
   sel: Record<string, string>,
@@ -543,8 +612,29 @@ async function filterToCardholder(
     return page.url();
   }
 
-  const control = await firstVisible(page, sel.userFilter!, 8_000);
-  if (!control) {
+  // EVERY control the selector matches, tried in turn — not just the first.
+  //
+  // Betting on the first is what broke this. The selector ends in a bare
+  // [role="combobox"], a union returns DOM ORDER, and the tenant has a
+  // saved-filters control sitting before the users one. So the click opened
+  // the wrong menu, the surname was typed into it, and the run reported
+  // "the users filter opened but nothing in it named Baitx … Visible
+  // entries read: 'No filters saved'" — eight decisions in one report,
+  // every one of them on the fallback that exists to rescue exactly those.
+  //
+  // A menu holding no name we asked for is not a reason to give up; it is a
+  // reason to try the next candidate. Which one is the users filter cannot
+  // be known from outside the tenant, and this is how it is found out:
+  // by opening them and looking.
+  const all = page.locator(sel.userFilter!);
+  const found = await all.count().catch(() => 0);
+  const candidates: Locator[] = [];
+  for (let i = 0; i < Math.min(found, 12) && candidates.length < MOST_FILTER_TRIES; i++) {
+    const one = all.nth(i);
+    if (await one.isVisible().catch(() => false)) candidates.push(one);
+  }
+
+  if (candidates.length === 0) {
     // What IS there, rather than only what was not. A selector guessed from
     // outside the tenant is wrong until proven otherwise, and the fix is to
     // correct it in settings — which needs to know what to correct it TO.
@@ -554,55 +644,73 @@ async function filterToCardholder(
     ]);
     const here = probes.filter((p) => p.n > 0).map((p) => `${p.sel} ×${p.n}`).join(", ");
     throw new Error(
-      `no users filter matched “${sel.userFilter}”. Control-shaped things on the page: ` +
+      `no users filter matched \u201c${sel.userFilter}\u201d. Control-shaped things on the page: ` +
       `${here || "none"}. Set the users filter selector in Export settings to whichever of ` +
-      `those is the dropdown reading “All users”.`);
+      `those is the dropdown reading \u201cAll users\u201d.`);
   }
-  await control.click();
-  await page.waitForTimeout(400);
 
-  // Typed into whatever the click FOCUSED, not into a box found by
-  // selector. The page has its own Search field sitting right beside this
-  // dropdown, and a union selector returns matches in DOM order, so
-  // "input[role=combobox], input[placeholder*=search]" put the cardholder's
-  // name into the page search box instead — which then filtered the grid to
-  // nothing and left the dropdown's list unnarrowed. Clicking a combobox
-  // focuses its own input; typing there cannot go anywhere else.
-  //
-  // A configured selector still wins, for a tenant where the click does not
-  // focus anything.
-  const box = sel.userFilterInput ? await firstVisible(page, sel.userFilterInput, 2_000) : null;
-  if (box) await box.fill(surname).catch(() => {});
-  else await page.keyboard.type(surname, { delay: 30 }).catch(() => {});
-
-  // The option that actually names this person, not merely the first one
-  // offered: a list narrowed by "Emerson" can still hold two Emersons, and
-  // picking the wrong one silently filters to somebody else's expenses.
-  //
-  // Waited for rather than read once. The list is fetched, so a fixed pause
-  // is a guess that is either wasted time or too short — and too short
-  // reads as "the name is not in the list", which is a different fault
-  // entirely and sent this looking in the wrong place once already.
-  const options = page.locator(sel.userFilterOption!);
-  const want = surname.toLowerCase();
+  const tried: string[] = [];
   let picked = false;
-  let total = 0;
-  const deadline = Date.now() + 6_000;
-  do {
-    total = await options.count().catch(() => 0);
-    for (let i = 0; i < Math.min(total, 60) && !picked; i++) {
-      const one = options.nth(i);
-      if (!(await one.isVisible().catch(() => false))) continue;
-      const text = (await one.innerText().catch(() => "")).toLowerCase();
-      if (!text.includes(want)) continue;
-      await one.click();
-      picked = true;
+  for (let c = 0; c < candidates.length && !picked; c++) {
+    const control = candidates[c]!;
+    const label = (await control.innerText().catch(() => ""))
+      .replace(/\s+/g, " ").trim().slice(0, 30) || "(no text)";
+    await control.click().catch(() => {});
+    await page.waitForTimeout(400);
+
+    // Typed into whatever the click FOCUSED, not into a box found by
+    // selector. The page has its own Search field sitting right beside this
+    // dropdown, and a union selector returns matches in DOM order, so
+    // "input[role=combobox], input[placeholder*=search]" put the cardholder's
+    // name into the page search box instead — which then filtered the grid to
+    // nothing and left the dropdown's list unnarrowed. Clicking a combobox
+    // focuses its own input; typing there cannot go anywhere else.
+    //
+    // A configured selector still wins, for a tenant where the click does not
+    // focus anything.
+    const box = sel.userFilterInput ? await firstVisible(page, sel.userFilterInput, 2_000) : null;
+    if (box) await box.fill(surname).catch(() => {});
+    else await page.keyboard.type(surname, { delay: 30 }).catch(() => {});
+
+    // The option that actually names this person, not merely the first one
+    // offered: a list narrowed by "Emerson" can still hold two Emersons, and
+    // picking the wrong one silently filters to somebody else's expenses.
+    //
+    // Waited for rather than read once. The list is fetched, so a fixed pause
+    // is a guess that is either wasted time or too short — and too short
+    // reads as "the name is not in the list", which is a different fault
+    // entirely and sent this looking in the wrong place once already.
+    const options = page.locator(sel.userFilterOption!);
+    const want = surname.toLowerCase();
+    // The first candidate gets the long look; the rest are being ruled out,
+    // and six seconds each over four of them is a minute of nothing.
+    const deadline = Date.now() + (c === 0 ? 6_000 : 2_500);
+    do {
+      const total = await options.count().catch(() => 0);
+      for (let i = 0; i < Math.min(total, 60) && !picked; i++) {
+        const one = options.nth(i);
+        if (!(await one.isVisible().catch(() => false))) continue;
+        const text = (await one.innerText().catch(() => "")).toLowerCase();
+        if (!text.includes(want)) continue;
+        await one.click();
+        picked = true;
+      }
+      if (!picked) await page.waitForTimeout(400);
+    } while (!picked && Date.now() < deadline);
+
+    if (!picked) {
+      tried.push(`\u201c${label}\u201d opened ${await readMenu(page)}`);
+      // Shut it and undo the typing before the next one, or the surname is
+      // still sitting in whatever took it — often the page's own search box,
+      // which filters the grid out from under the next attempt.
+      await page.keyboard.press("Escape").catch(() => {});
+      if (box) await box.fill("").catch(() => {});
+      await page.waitForTimeout(200);
     }
-    if (!picked) await page.waitForTimeout(400);
-  } while (!picked && Date.now() < deadline);
+  }
 
   if (!picked) {
-    // What the list actually holds, which is the only thing that says
+    // What the lists actually held, which is the only thing that says
     // whether the option selector is wrong, the typing went elsewhere, or
     // the name really is not there. "Nothing named Vigna, 1 option" says
     // none of the three.
@@ -610,19 +718,12 @@ async function filterToCardholder(
       sel.userFilterOption ?? "", '[role="option"]', '[role="listbox"] *',
       "li", '[class*="option" i]', '[class*="menu" i] li', "[data-value]",
     ]);
-    const counts = probes.filter((p) => p.n > 0).map((p) => `${p.sel} ×${p.n}`).join(", ");
-    const seen: string[] = [];
-    const any = page.locator('[role="option"], [role="listbox"] li, li');
-    const n = await any.count().catch(() => 0);
-    for (let i = 0; i < Math.min(n, 30) && seen.length < 6; i++) {
-      if (!(await any.nth(i).isVisible().catch(() => false))) continue;
-      const t = (await any.nth(i).innerText().catch(() => "")).replace(/\s+/g, " ").trim();
-      if (t) seen.push(t.slice(0, 40));
-    }
+    const counts = probes.filter((p) => p.n > 0).map((p) => `${p.sel} \u00d7${p.n}`).join(", ");
     throw new Error(
-      `the users filter opened but nothing in it named “${surname}” ` +
-      `(${total} matched “${sel.userFilterOption}”). List-shaped things on the page: ` +
-      `${counts || "none"}. Visible entries read: ${seen.length > 0 ? seen.map((t) => `“${t}”`).join(", ") : "(none)"}.`);
+      `none of the ${candidates.length} control(s) matching \u201c${sel.userFilter}\u201d is a users ` +
+      `filter holding \u201c${surname}\u201d. ${tried.join("; ")}. List-shaped things on the page: ` +
+      `${counts || "none"}. If one of those IS the users dropdown, name it exactly in Export ` +
+      `settings so it is tried first.`);
   }
   await page.waitForTimeout(1200);
   // What the dropdown put in the URL is the id, and the only way to get it.
@@ -845,10 +946,20 @@ async function whyNoGrid(page: Page, sel: Record<string, string>, asEmail?: stri
       "Test your Emburse connection to sign in again.";
   }
   if (EMPTY_GRID.test(text)) {
-    throw new NotInQueue(
-      `the grid loaded at ${where} and is empty — Emburse has no match for that search, ` +
-      `so this expense is not in this view. An expense that has already been approved or denied ` +
-      `leaves Needs Review, which is the commonest reason for this.`);
+    // Reported, NOT concluded. This used to throw NotInQueue — "already
+    // approved or denied, nothing to retry" — on the strength of one text
+    // search coming back empty, and that inference is the one this whole
+    // area exists to undo: Emburse's search demonstrably omits rows that
+    // ARE in the view (two LA MADRELA expenses, same person, same queue,
+    // one returned and one not). An expense written off here is never
+    // retried by anybody.
+    //
+    // Absence is decided in exactly one place now — the cardholder's own
+    // filtered queue, on the amount — and this is one of the observations
+    // that feeds it, not a verdict of its own.
+    return `the grid loaded at ${where} and is empty — Emburse returned nothing for that ` +
+      `search. Its text search is known to miss rows that ARE in the view, so this on its ` +
+      `own does not mean the expense has gone.`;
   }
 
   // Present in the DOM but never visible is a different fault from absent, and
@@ -904,12 +1015,13 @@ async function whyNoRows(
 ): Promise<string> {
   const text = (await page.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ").trim();
   if (EMPTY_GRID.test(text)) {
-    throw new NotInQueue(
-      `Emburse has no match for “${term}”, so this expense is not in this view. ` +
-      `An expense that has already been approved or denied leaves Needs Review, so the ` +
-      `commonest reason for an empty result here is that the decision already went through. ` +
-      `It will drop off this queue at the next import, which deletes whatever the newest ` +
-      `export no longer carries. Trying again will search the same empty view.`);
+    // Reported, not concluded — see whyNoGrid. One empty text search is not
+    // evidence that an expense has been actioned, because Emburse's search
+    // omits rows that are in the view. Absence is decided in one place: the
+    // cardholder's own filtered queue, on the amount.
+    return `Emburse returned nothing for “${term}”. Its text search is known to miss ` +
+      `rows that ARE in the view, so an empty result here says nothing on its own about ` +
+      `whether the expense is still in Needs Review.`;
   }
 
   const candidates = await countAll(page, [
@@ -1304,8 +1416,97 @@ async function applyOne(
     let matches: number[] = [];
     let term = terms[0] ?? target.merchant;
     let emptyEveryTime = true;
+    let filtered = false;
+    /**
+     * How many rows the CARDHOLDER'S OWN view held, kept apart from `count`.
+     *
+     * `count` is whatever the last grid read saw, and the text-search
+     * fallback runs after the filter — so reading the absence guard off it
+     * asks "did the last search return rows" when the question is "was this
+     * person's whole queue readable". A search coming back empty afterwards
+     * would wipe the one number that matters.
+     */
+    let filteredCount = 0;
+    /** Did any row we looked at carry this amount, whatever else was wrong? */
+    let sawAmount = false;
 
-    for (const candidate of terms) {
+    /** Read the grid in front of us: how many rows, which of them match. */
+    const readGrid = async (): Promise<void> => {
+      rows = page.locator(sel.resultRow!);
+      count = await rows.count();
+      // Narrow by the full match rather than by position: whichever row
+      // Emburse happens to put first is not evidence of anything.
+      const examined = Math.min(count, ROWS_EXAMINED);
+      matches = [];
+      for (let i = 0; i < examined; i++) {
+        const text = await rows.nth(i).innerText().catch(() => "");
+        if (amountAppears(text, target.amount)) sawAmount = true;
+        if (rowMatches(text, target).ok) matches.push(i);
+      }
+    };
+
+    // THE CARDHOLDER FILTER FIRST, and the text search only if it cannot be
+    // used. This is the right way round and it took a failure report to see
+    // it. Emburse's merchant search is a keyword search over a mangled
+    // string — "MENARDS 3065MENARD" returns nothing, "MENARDS" returns five
+    // rows belonging to other people — and it demonstrably omits rows that
+    // ARE in the view. The users control is a FILTER: it returns everything
+    // that person has, and their own queue is a handful of rows in which an
+    // amount and a date identify an expense exactly.
+    //
+    // Screenshot from the failure that settled it: search "MENARDS", two
+    // rows, neither $312.44. Filter to Dustin Suppi: three rows, all
+    // $312.44, all his. The expense was never missing.
+    if (target.employee.trim()) {
+      try {
+        // The grid page FIRST, because the users control lives on it. Moving
+        // the filter to the front of the ladder moved it ahead of the only
+        // navigation that put the dropdown on screen, and every decision
+        // reported "no users filter matched … Control-shaped things on the
+        // page: none" — on a page that simply was not the transactions page
+        // yet. A cached cardholder id skips straight past this.
+        if (!cardholderIds.get(target.employee.trim().toLowerCase())) {
+          await page.goto(gridUrl(emburseUrl, { path: sel.gridPath }), {
+            waitUntil: "domcontentloaded", timeout: env.emburseLogin.openTimeoutMs,
+          });
+        }
+        const where = await filterToCardholder(page, sel, target.employee, emburseUrl, sel.gridPath);
+        filtered = true;
+        if (!(await gridLoaded(page, sel as never))) throw await asError(whyNoGrid(page, sel, asEmail));
+        await readGrid();
+        filteredCount = count;
+        term = `the ${target.employee} filter`;
+        // The URL is worth recording: it carries whatever parameter Emburse
+        // uses, which is how this becomes one navigation instead of three
+        // clicks. Redacted, since a grid URL can carry a session token.
+        tried.push(`${safeUrl(where)} → ${count} row(s), ${matches.length} matching`);
+
+        // A cardholder with more rows than we read gets the merchant put
+        // back on — as a NARROWING of their own queue, not as a search of
+        // everybody's. Only then, because it reintroduces the unreliable
+        // part, and only when the honest alternative is reading 50 of 300.
+        const id = cardholderIds.get(target.employee.trim().toLowerCase());
+        if (matches.length === 0 && count > ROWS_EXAMINED && id) {
+          for (const candidate of terms) {
+            await page.goto(
+              gridUrl(emburseUrl, { userId: id, query: candidate, path: sel.gridPath }),
+              { waitUntil: "domcontentloaded", timeout: env.emburseLogin.openTimeoutMs });
+            if (!(await gridLoaded(page, sel as never))) break;
+            await readGrid();
+            filteredCount = count;
+            tried.push(`that filter + \u201c${candidate}\u201d \u2192 ${count} row(s), ${matches.length} matching`);
+            if (matches.length > 0) {
+              term = `the ${target.employee} filter narrowed by \u201c${candidate}\u201d`;
+              break;
+            }
+          }
+        }
+      } catch (err) {
+        tried.push(`the users filter could not be used (${err instanceof Error ? err.message : String(err)})`);
+      }
+    }
+
+    for (const candidate of matches.length > 0 ? [] : terms) {
       term = candidate;
       // Its own budget, like the first navigation. This was left on the
       // shared 30s step timeout while only the OPEN got 90s — and then the
@@ -1325,55 +1526,26 @@ async function applyOne(
         throw await asError(whyNoGrid(page, sel, asEmail));
       }
 
-      rows = page.locator(sel.resultRow!);
-      count = await rows.count();
-      // Narrow by the full match rather than by position: whichever row
-      // Emburse happens to put first is not evidence of anything.
-      const examined = Math.min(count, ROWS_EXAMINED);
-      matches = [];
-      for (let i = 0; i < examined; i++) {
-        const text = await rows.nth(i).innerText().catch(() => "");
-        if (rowMatches(text, target).ok) matches.push(i);
-      }
+      await readGrid();
       // Whether the page was genuinely empty, for the one conclusion that
       // must not be drawn from a bad search term: "this expense has already
       // been actioned". A term Emburse does not understand produces an empty
       // grid too, and calling THAT gone is how an expense that is sitting
       // there gets written off.
-      const emptyHere = count === 0 ||
+      //
+      // The PAGE's own words, not our row count. `count === 0` also counted
+      // as empty, and that conflates the two things this whole file exists
+      // to keep apart: a grid with nothing in it, and a row selector that
+      // does not describe this grid. With a stale selector every search
+      // looked empty, so a misconfiguration was reported as "Emburse
+      // returned nothing for this expense, whichever way it was searched
+      // for" — which sends somebody to look in Emburse for an expense that
+      // is sitting there, instead of at the selector that cannot see it.
+      const emptyHere =
         EMPTY_GRID.test((await page.locator("body").innerText().catch(() => "")).replace(/\s+/g, " "));
       if (!emptyHere) emptyEveryTime = false;
       tried.push(`“${candidate}” → ${emptyHere ? "no rows" : `${count} row(s), ${matches.length} matching`}`);
       if (matches.length > 0) break;
-    }
-
-    // Emburse's own users filter, once the text searches have failed.
-    //
-    // The text search is not reliable: it returned the LA MADRELA of the
-    // 24th and not the LA MADRELA of the 9th, both in Needs Review, both
-    // the same person. So a search that comes back empty proves nothing,
-    // and this filter — a filter, not a search — is the only view from
-    // which "the expense is not there" can honestly be concluded.
-    let filtered = false;
-    if (matches.length === 0 && target.employee.trim()) {
-      try {
-        const where = await filterToCardholder(page, sel, target.employee, emburseUrl, sel.gridPath);
-        filtered = true;
-        rows = page.locator(sel.resultRow!);
-        count = await rows.count();
-        const examined = Math.min(count, ROWS_EXAMINED);
-        matches = [];
-        for (let i = 0; i < examined; i++) {
-          if (rowMatches(await rows.nth(i).innerText().catch(() => ""), target).ok) matches.push(i);
-        }
-        term = `the ${target.employee} filter`;
-        // The URL is worth recording: it carries whatever parameter Emburse
-        // uses, which is how this becomes one navigation instead of three
-        // clicks. Redacted, since a grid URL can carry a session token.
-        tried.push(`${safeUrl(where)} → ${count} row(s), ${matches.length} matching`);
-      } catch (err) {
-        tried.push(`the users filter could not be used (${err instanceof Error ? err.message : String(err)})`);
-      }
     }
 
     if (matches.length === 0) {
@@ -1391,22 +1563,62 @@ async function applyOne(
       const spread = reasons.length > 0 ? ` The rows were turned down for: ${reasons.join("; ")}.` : "";
       const attempts = `Searched ${tried.join(", ")}.`;
 
-      // "It is not there" is claimed from the FILTER and nothing else.
+      // Nothing row-shaped matched our selector ANYWHERE — not in the
+      // cardholder's own filtered queue, not under any search. That is the
+      // row selector failing to describe this grid, and the answer is to
+      // say what IS row-shaped on the page so somebody can set it. Saying
+      // "none of the rows match" about zero rows is true and useless, and
+      // saying the expense is not there would be a lie about a page we
+      // cannot read.
+      // "It is not there" is claimed from the FILTER, and only on the
+      // amount.
       //
-      // It used to be claimed from an empty search, on the reasoning that an
-      // expense which has been approved leaves Needs Review. The reasoning
-      // was fine; the premise was not. Emburse's text search misses rows
-      // that are in the view — proven on two LA MADRELA expenses of the same
-      // person, one returned and one not — so an empty search says nothing
-      // about whether the expense is there, and writing it off on that basis
-      // buries an expense sitting in plain sight.
-      if (filtered) {
+      // It used to be claimed from an empty text search, on the reasoning
+      // that an expense which has been approved leaves Needs Review. The
+      // reasoning was fine; the premise was not. Emburse's text search
+      // misses rows that ARE in the view — proven on two LA MADRELA
+      // expenses of the same person, one returned and one not — so an empty
+      // search says nothing about whether the expense is there.
+      //
+      // Four conditions, and every one of them earned:
+      //
+      //   filtered      — the person's own queue is the only complete view.
+      //   count > 0     — rows came back. Nothing row-shaped means the row
+      //                   selector does not describe this grid, which is
+      //                   our configuration, not an empty queue.
+      //   within the cap— we read ALL of their rows. "Not in their queue"
+      //                   after reading 50 of 303 is a false statement
+      //                   about the other 253.
+      //   !sawAmount    — no row in their queue carries this figure at all.
+      //                   A row that DOES carry it and was turned down on a
+      //                   truncated cardholder, an unpadded day or a credit
+      //                   written "($47.56)" is OUR matching failing.
+      //
+      // That last one is the whole guard. NotInQueue means "already
+      // approved or denied, nothing to retry", so an expense written off
+      // this way is never tried again by anybody. A live report had MENARDS
+      // $312.44 turned down for "amount 312.44 not in the row" on three
+      // expenses that were sitting in Emburse the whole time.
+      if (filtered && filteredCount > 0 && filteredCount <= ROWS_EXAMINED && !sawAmount) {
         throw new NotInQueue(
-          `${target.employee}'s own queue in Emburse does not hold this expense. ` +
-          `${attempts} An expense that has already been approved or denied leaves Needs ` +
-          `Review, so the commonest reason for this is that the decision already went ` +
-          `through. It will drop off this queue at the next import.`);
+          `${target.employee}'s own queue in Emburse does not hold this expense \u2014 none of ` +
+          `the ${filteredCount} row(s) in it is for ${money(target.amount)}. ${attempts} An expense that ` +
+          `has already been approved or denied leaves Needs Review, so the commonest reason for ` +
+          `this is that the decision already went through \u2014 trying again searches the same ` +
+          `empty view. It will drop off this queue at the next import.`);
       }
+      // Nothing row-shaped matched our selector anywhere — not in the
+      // cardholder's own queue, not under any search. That is the row
+      // selector failing to describe this grid, and the answer is to say
+      // what IS row-shaped so somebody can set it. "None of the rows match"
+      // about zero rows is true and useless.
+      if (filteredCount === 0 && count === 0) {
+        // With everything that was tried appended. The diagnosis names the
+        // selector and what IS row-shaped; the attempts name the terms, and
+        // a failure report is only readable with both.
+        throw await asError(whyNoRows(page, sel, term).then((t) => `${t} ${attempts}`));
+      }
+
       if (emptyEveryTime) {
         throw new Error(
           `Emburse returned nothing for this expense, whichever way it was searched for, ` +
@@ -1440,14 +1652,32 @@ async function applyOne(
     // Hidden copies first: a grid that keeps them matches the same expense
     // more than once, and none of the copies is the row on screen.
     const chosen = matches.length > 1 ? await visibleOf(rows, matches) : matches;
+    let identical = 0;
     if (chosen.length > 1) {
-      // Two VISIBLE rows that agree on employee, merchant, amount AND date
-      // are a real possibility (a split purchase), and there is nothing here
-      // that could tell them apart. Guessing would approve an expense nobody
-      // chose.
-      throw new Error(
-        `${chosen.length} rows match this expense equally well; refusing to guess which one to ${decision}`,
-      );
+      // Rows that are INDISTINGUISHABLE from one another are a different
+      // case from rows that merely match the same expense, and the
+      // difference decides whether a choice is even being made.
+      //
+      // Dustin Suppi has three Menards charges of $312.44 on the same day
+      // with the same business purpose — real, and visible in Emburse as
+      // three identical rows. Three decisions are queued, one per expense.
+      // Refusing every one as ambiguous leaves all three red for ever, and
+      // there is nothing to disambiguate: approving “a $312.44 Menards
+      // charge of Dustin Suppi on Sep 24” is satisfied by any of them, and
+      // the other decisions take the others.
+      //
+      // Rows that DIFFER in any visible way are the case the refusal is
+      // for — a split purchase coded two ways, a credit beside its charge.
+      // There, picking one is picking an expense nobody chose.
+      const texts = await Promise.all(chosen.map((i) =>
+        rows.nth(i).innerText().catch(() => "").then((t) => t.replace(/\s+/g, " ").trim())));
+      if (!texts.every((t) => t === texts[0])) {
+        throw new Error(
+          `${chosen.length} rows match this expense equally well and they are not identical; ` +
+          `refusing to guess which one to ${decision}`,
+        );
+      }
+      identical = chosen.length;
     }
     if (chosen.length === 0) {
       throw new Error(
@@ -1461,7 +1691,11 @@ async function applyOne(
     // Which term found it, because the first one often does not and that is
     // the single most useful thing this step can report.
     return `matched 1 of ${count} rows searching “${term}”` +
-      (ghosts > 0 ? ` (${ghosts} hidden ${ghosts === 1 ? "copy" : "copies"} ignored)` : "");
+      (ghosts > 0 ? ` (${ghosts} hidden ${ghosts === 1 ? "copy" : "copies"} ignored)` : "") +
+      (identical > 1
+        ? ` (${identical} identical rows — took one; the others belong to the other ` +
+          `decisions queued for them)`
+        : "");
   }))) return false;
 
   if (!(await step("verify it is the right row", async () => {

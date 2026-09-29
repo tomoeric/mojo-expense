@@ -212,6 +212,16 @@ const ROWS = [
   // MADRELA of the 24th and not the LA MADRELA of the 9th, same person,
   // both sitting in Needs Review. Only the users filter showed it.
   { date: "9/9/2026", merchant: "LA MADRELA FAMILIAR", who: "Shawn Emerson", amount: "28.80", shy: true },
+  // Three identical charges, from the report that settled the search order.
+  // Emburse really does hold these: same person, same merchant, same day,
+  // same amount, three separate expenses with three decisions queued for
+  // them. Searching "MENARDS 3065MENARD" returns nothing and "MENARDS"
+  // returns other people's rows, so only the users filter finds them — and
+  // once found there is nothing to tell them apart, which is fine, because
+  // there is nothing that needs telling apart.
+  { date: "9/24/2026", merchant: "MENARDS 3065MENARD INC", who: "Kevin McBride", amount: "312.44", shy: true },
+  { date: "9/24/2026", merchant: "MENARDS 3065MENARD INC", who: "Kevin McBride", amount: "312.44", shy: true },
+  { date: "9/24/2026", merchant: "MENARDS 3065MENARD INC", who: "Kevin McBride", amount: "312.44", shy: true },
 ];
 
 /**
@@ -554,6 +564,15 @@ app.get(["/transactions", "/transactions/team"], (req, res) => {
     ${gridIsEmpty(state.search) ? "" : `<p>${count} items, $${total}</p>`}
     <div>
       <input id="pagesearch" type="text" placeholder="Search" />
+      <!-- The decoy, and it is not invented: the real tenant has a saved-filters
+           control sitting BEFORE the users one, it carries role="combobox", and
+           a union selector returns DOM order — so every attempt to filter by
+           cardholder opened this menu instead and reported "nothing in it named
+           Baitx … Visible entries read: 'No filters saved'". Eight decisions in
+           one report died here. It is only a decoy from our side; from the
+           page's side it is an ordinary control that happens to come first. -->
+      <div id="sf" role="combobox" tabindex="0" aria-label="Filters">Filters</div>
+      <div id="sfmenu" hidden><ul><li role="option">No filters saved</li></ul></div>
       <button id="uf" type="button">All users</button>
       <div id="ufmenu" hidden>
         <input id="ufq" type="text" placeholder="Search" />
@@ -562,6 +581,9 @@ app.get(["/transactions", "/transactions/team"], (req, res) => {
       </div>
     </div>
     <script>
+      document.getElementById("sf").addEventListener("click", function () {
+        document.getElementById("sfmenu").hidden = false;
+      });
       document.getElementById("uf").addEventListener("click", function () {
         document.getElementById("ufmenu").hidden = false;
         // A real combobox focuses its own input, which is what makes
