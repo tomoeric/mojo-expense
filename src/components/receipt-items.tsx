@@ -37,6 +37,7 @@ export type ReceiptDetail = {
   total: number | null;
   notes: string;
   error: string | null;
+  autoRereadAt: string | null;
   items: ReceiptItem[];
 };
 
@@ -99,6 +100,14 @@ export function ReceiptItems({
         | null;
       if (!res.ok) throw new Error(body?.error ?? "The receipt could not be read again.");
       await qc.invalidateQueries({ queryKey: ["receipt-items"] });
+      // AND the flags, which are computed from the reading that just
+      // changed. The server re-judges the expense on a re-read, so the
+      // stale one was only ever in this browser — but on screen there is no
+      // difference between a flag the server still believes and a flag
+      // React Query has not thrown away. A corrected total showed "Match"
+      // beside "Amounts Off — Receipt total $12.49 does not equal Amount
+      // $13.54" for exactly that reason.
+      await qc.invalidateQueries({ queryKey: ["reports"] });
       // Say what came of it, ALWAYS — including when nothing changed.
       // Pressing it and seeing the same figure is the one outcome that
       // looks identical to the button being broken, and that is exactly
@@ -192,6 +201,17 @@ export function ReceiptItems({
           same thing. */}
       <p className="text-xs text-muted-foreground">
         Read {readWhen(detail.extractedAt)}.
+        {/* A mismatch that survived a SECOND reading is worth more than a
+            first reading, and the reviewer has no way to know one happened
+            otherwise. It is also the promise that the app is not going to
+            keep spending on this image: once is once. */}
+        {detail.autoRereadAt && (
+          <>
+            {" "}
+            Re-read automatically {readWhen(detail.autoRereadAt)} because the total did not
+            match the charge{off !== null ? ", and it still does not" : ""}.
+          </>
+        )}
       </p>
 
       {/* What the receipt says it is and when, beside what was claimed. The

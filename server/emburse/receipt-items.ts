@@ -120,6 +120,16 @@ export type ReceiptDetail = {
   total: number | null;
   notes: string;
   error: string | null;
+  /**
+   * When the app re-read this image by itself because the total it had did
+   * not match the charge. Null means it never has.
+   *
+   * Shown to the reviewer, and that is most of the point: a mismatch that
+   * survived a second reading is evidence, where a first reading is only a
+   * guess that might be wrong. It also enforces "once" — a receipt whose
+   * re-read still disagrees is not read a third time.
+   */
+  autoRereadAt: string | null;
   items: ReceiptItem[];
 };
 
@@ -180,6 +190,13 @@ ALTER TABLE receipt_readings ADD COLUMN IF NOT EXISTS itemised boolean;
 -- reader spent hundreds of model calls re-failing on the same receipts with
 -- nothing being imported at all.
 ALTER TABLE receipt_readings ADD COLUMN IF NOT EXISTS attempts integer NOT NULL DEFAULT 0;
+-- When the app re-read this image of its own accord, because the total it
+-- had did not match what was charged. Set BEFORE the re-read, so a crash
+-- mid-read cannot turn "try once" into a loop, and never cleared: once is
+-- once. A null here is what makes a receipt a candidate.
+ALTER TABLE receipt_readings ADD COLUMN IF NOT EXISTS auto_reread_at timestamptz;
+CREATE INDEX IF NOT EXISTS receipt_readings_auto_reread_idx
+  ON receipt_readings (auto_reread_at) WHERE auto_reread_at IS NULL;
 `;
 
 let ready: Promise<void> | null = null;
@@ -567,7 +584,8 @@ export async function receiptDetail(sha256: string): Promise<ReceiptDetail | nul
   await ensure();
   const { rows } = await db().query<Record<string, never>>(
     `SELECT sha256, extracted_at, model, legible, merchant, purchased_at::text AS purchased_at,
-            currency, subtotal_cents, tax_cents, tip_cents, total_cents, notes, error
+            currency, subtotal_cents, tax_cents, tip_cents, total_cents, notes, error,
+            auto_reread_at
        FROM receipt_readings WHERE sha256 = $1`, [sha256]);
   const r = rows[0] as Record<string, string | number | boolean | Date | null> | undefined;
   if (!r) return null;
@@ -590,6 +608,7 @@ export async function receiptDetail(sha256: string): Promise<ReceiptDetail | nul
     total: dollars(r.total_cents as string | null),
     notes: (r.notes as string) ?? "",
     error: (r.error as string | null) ?? null,
+    autoRereadAt: (r.auto_reread_at as Date | null)?.toISOString() ?? null,
     items: (items as unknown as Record<string, string | number | null>[]).map((i) => ({
       lineNo: Number(i.line_no),
       description: String(i.description),

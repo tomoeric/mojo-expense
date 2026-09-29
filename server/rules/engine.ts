@@ -116,6 +116,17 @@ const tolerance = (a: number, b: number): number =>
   Math.max(MONEY_TOLERANCE_ABS, Math.abs(b || a) * MONEY_TOLERANCE_PCT);
 
 /**
+ * Do two money figures, in CENTS, differ by more than the slack allows?
+ *
+ * The same question the rules ask, exported so nothing has to ask it a
+ * second way. Every place this arithmetic got written out again is a place
+ * it later disagreed with the flag — the screen saying Match beside a flag
+ * saying Amounts Off started exactly like that.
+ */
+export const centsDiffer = (aCents: number, bCents: number): boolean =>
+  Math.abs(aCents - bCents) > tolerance(aCents / 100, bCents / 100) * 100;
+
+/**
  * Which figure to treat as "the receipt total" when an expense carries
  * several receipts.
  *
@@ -150,15 +161,13 @@ export function chosenReceiptTotal(
   if (totalsCents.length === 0) return null;
   if (totalsCents.length === 1) return totalsCents[0]!;
 
-  const slack = Math.round(tolerance(amountCents / 100, amountCents / 100) * 100);
   // The CLOSEST candidate within tolerance, not the first one found. Two
   // scans of one bill can read a penny apart, and picking whichever the sort
   // happened to put first made the figure on the flag depend on nothing.
   let covers: number | null = null;
   for (const c of totalsCents) {
-    const off = Math.abs(c - amountCents);
-    if (off > slack) continue;
-    if (covers === null || off < Math.abs(covers - amountCents)) covers = c;
+    if (centsDiffer(c, amountCents)) continue;
+    if (covers === null || Math.abs(c - amountCents) < Math.abs(covers - amountCents)) covers = c;
   }
   if (covers !== null) return covers;
 
