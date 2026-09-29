@@ -61,6 +61,23 @@ const Reading = z.object({
    * would have been saved by: receipts print what the card was charged
    * against the card itself.
    */
+  /**
+   * The summary block, transcribed rather than interpreted.
+   *
+   * Asking which figure is "the total" is a judgement, and it has now been
+   * got wrong twice in opposite directions. Asking for the lines as
+   * printed is transcription, which is the thing this model is reliable
+   * at — and then the choosing happens in code, where it can be read,
+   * argued with and tested.
+   */
+  totals: z.array(z.object({
+    label: z.string().describe("The label exactly as printed: “TOTAL”, “TOTAL SALE”, “Amount Paid”, “AMERICAN EXPRESS 1002”."),
+    amount: z.number().describe("The figure on that line."),
+  })).describe(
+    "Every money line at the foot of the receipt, in the order printed, including the payment or " +
+    "card line. Do not judge which is the real total, do not skip one because it repeats another, " +
+    "and do not reorder them.",
+  ),
   paid: z.number().nullable().describe(
     "The amount printed against the payment line — “AMERICAN EXPRESS 1002  13.54”, “Amount Paid”, " +
     "“TOTAL SALE”, “Total Paid”, “Charged”. This is what the card was actually charged, so give it " +
@@ -197,8 +214,9 @@ export const ensureReceiptItems = ensure;
  * makes the old readings wrong rather than merely better.
  *
  *   2 — the total is the amount CHARGED, not the line labelled "Total".
+ *   3 — the summary block is transcribed, so the choosing happens in code.
  */
-export const READER_VERSION = 2;
+export const READER_VERSION = 3;
 
 const cents = (n: number | null | undefined): number | null =>
   n === null || n === undefined || !Number.isFinite(n) ? null : Math.round(n * 100);
@@ -237,8 +255,17 @@ Reading 38.24 or 12.49 turns an ordinary purchase into an overclaim of
 exactly the tip, or exactly the tax.
 
 Give "paid" whenever a payment line prints an amount, and put the pre-tax
-figure in "subtotal" even where the receipt labels THAT one "TOTAL". The two
-together are what catch a misread.`;
+figure in "subtotal" even where the receipt labels THAT one "TOTAL".
+
+And transcribe the whole summary block into "totals", in printed order,
+labels exactly as they appear — TOTAL, TAX, TOTAL SALE, Tip, Amount Paid,
+and the card line. Do not decide which of them is the real total, do not
+drop one because it repeats the figure above it, and do not tidy the
+labels. Choosing is done elsewhere; getting the lines down accurately is
+the job here, and it is the job you are good at.
+
+Where a second image is given, it is the lower part of the SAME receipt,
+enlarged. Read the money off that one — it is the same print, bigger.`;
 
 /**
  * What the card was actually charged, which is often not the figure the
@@ -263,6 +290,32 @@ together are what catch a misread.`;
  * Nothing is changed unless one of those two proves it. A guess dressed as
  * a correction is worse than the fault, because it will be believed.
  */
+/** Labels that name what was actually paid, rather than a running figure. */
+const PAYMENT_LINE =
+  /amount\s*paid|total\s*(sale|charge|due|paid)|charged|balance\s*due|visa|master|amex|american\s*express|discover|debit|credit\s*card|card\s*\d/i;
+
+/** Labels that are not the purchase at all, and must never be taken for it. */
+const NOT_A_TOTAL = /change|tender|cash\s*back|rebate|savings|you\s*saved|points|balance\s*remaining/i;
+
+/**
+ * The charged figure read off the transcribed summary block.
+ *
+ * The block is the receipt's own words, so the choosing is done here where
+ * it can be read and tested: a line that names a payment wins, and failing
+ * that the largest line that is not change or a rebate — because a summary
+ * block runs upwards, subtotal to total to total-with-tip, and the end of
+ * that climb is what the card paid.
+ */
+function fromTotalsBlock(totals: { label: string; amount: number }[]): number | null {
+  const usable = totals.filter((t) => Number.isFinite(t.amount) && t.amount > 0 && !NOT_A_TOTAL.test(t.label));
+  if (usable.length === 0) return null;
+  // Last, not first: a card line repeats the figure below the total, and
+  // the later one is the one the receipt ends on.
+  const named = usable.filter((t) => PAYMENT_LINE.test(t.label));
+  if (named.length > 0) return named[named.length - 1]!.amount;
+  return usable.reduce((a, b) => (b.amount > a ? b.amount : a), 0) || null;
+}
+
 export function chargedTotal(r: ReceiptReading): ReceiptReading {
   const { subtotal, tax, tip, total, paid } = r;
   const near = (a: number, b: number) => Math.abs(a - b) <= 0.011;
@@ -280,6 +333,14 @@ export function chargedTotal(r: ReceiptReading): ReceiptReading {
   // charged, stated by the receipt itself, and it beats any arithmetic.
   if (paid !== null && paid > 0 && (total === null || !near(total, paid))) {
     return note(total, paid, "is not what the card paid");
+  }
+  // Failing that, the summary block as printed. This is what catches the
+  // receipt where the reading put 12.49 in `total`, nothing in `subtotal`
+  // and nothing in `paid` — leaving the arithmetic below with nothing to
+  // work from, while "TOTAL SALE 13.54" sat on the page in plain sight.
+  const printed = fromTotalsBlock(r.totals ?? []);
+  if (printed !== null && (total === null || (printed > total && !near(total, printed)))) {
+    return note(total, printed, "is not the last figure on the receipt");
   }
   if (total === null || subtotal === null) return r;
 
@@ -306,6 +367,14 @@ export function chargedTotal(r: ReceiptReading): ReceiptReading {
 
 /** Read one receipt image. Throws only for a failure worth retrying. */
 export async function readReceipt(image: Buffer, contentType = "image/jpeg"): Promise<ReceiptReading> {
+  // The same receipt again, lower part enlarged. The figures that matter are
+  // in the smallest type on the page; the item lines read fine and the
+  // totals are four smudges. Null when the image is too small to enlarge or
+  // could not be decoded — a second look is an improvement, not a
+  // requirement.
+  const { enlargeTotals } = await import("./receipt-zoom.js");
+  const zoom = enlargeTotals(image);
+
   const response = await callAnthropic((c) => c.messages.parse({
     model: env.audit.model,
     max_tokens: 8000,
@@ -333,7 +402,25 @@ export async function readReceipt(image: Buffer, contentType = "image/jpeg"): Pr
               data: image.toString("base64"),
             },
           },
-          { type: "text", text: "List everything purchased on this receipt." },
+          ...(zoom
+            ? [
+                {
+                  type: "image" as const,
+                  source: {
+                    type: "base64" as const,
+                    media_type: zoom.mediaType,
+                    data: zoom.data.toString("base64"),
+                  },
+                },
+              ]
+            : []),
+          {
+            type: "text",
+            text: zoom
+              ? "List everything purchased on this receipt. The second image is the lower part " +
+                "of the SAME receipt, enlarged — read the money lines off that one."
+              : "List everything purchased on this receipt.",
+          },
         ],
       },
     ],

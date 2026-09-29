@@ -31,7 +31,7 @@ const check = (label: string, ok: boolean, detail = "") => {
 const base: ReceiptReading = {
   legible: true, itemised: true, merchant: "Texas Roadhouse", purchasedAt: "2026-09-25",
   currency: "USD", items: [], subtotal: 35.37, tax: 2.87, tip: 7.65, total: 38.24,
-  paid: null, notes: "",
+  paid: null, totals: [], notes: "",
 };
 
 console.log("\n1. The real one");
@@ -82,6 +82,62 @@ console.log("\n2c. The payment line settles it outright");
     chargedTotal({ ...base, total: 45.89, paid: 45.89 }).total === 45.89);
   check("…a zero on the payment line is not an amount",
     chargedTotal({ ...base, total: 38.24, paid: 0 }).total === 45.89);
+}
+
+console.log("\n2d. The summary block, transcribed and chosen from in code");
+// The Menards receipt that survived every earlier fix: the reading put
+// 12.49 in `total`, NOTHING in `subtotal` and nothing in `paid`, so the
+// arithmetic had nothing to work from — while "TOTAL SALE 13.54" and
+// "AMERICAN EXPRESS 1002  13.54" sat on the page in plain sight.
+//
+// Asking which figure is "the total" is a judgement, and it has now been
+// got wrong twice in opposite directions. Asking for the lines as printed
+// is transcription, and the choosing happens here where it can be tested.
+{
+  const menards: ReceiptReading = {
+    ...base, merchant: "MENARDS - COTTAGE GROVE", subtotal: null, tax: 1.05, tip: null,
+    total: 12.49, paid: null,
+    totals: [
+      { label: "TOTAL", amount: 12.49 },
+      { label: "TAX WASHINGTON-MN 8.375%", amount: 1.05 },
+      { label: "TOTAL SALE", amount: 13.54 },
+      { label: "AMERICAN EXPRESS 1002", amount: 13.54 },
+    ],
+  };
+  const out = chargedTotal(menards);
+  check("the payment line in the block wins", out.total === 13.54, String(out.total));
+  check("…and says where it came from",
+    /not the last figure on the receipt/.test(out.notes), out.notes);
+
+  // The climb: subtotal, total, total-with-tip. The end of it is the charge.
+  const unlabelled = chargedTotal({
+    ...menards,
+    totals: [{ label: "TOTAL", amount: 12.49 }, { label: "TAX", amount: 1.05 }, { label: "", amount: 13.54 }],
+  });
+  check("…and with no payment label, the largest line is taken",
+    unlabelled.total === 13.54, String(unlabelled.total));
+
+  // A change line is bigger than the purchase and is not the purchase.
+  const withChange = chargedTotal({
+    ...menards,
+    totals: [
+      { label: "TOTAL SALE", amount: 13.54 },
+      { label: "CASH TENDERED", amount: 20.00 },
+      { label: "CHANGE", amount: 6.46 },
+    ],
+  });
+  check("…while change and cash tendered are never the purchase",
+    withChange.total === 13.54, String(withChange.total));
+
+  // A rebate receipt prints a total that is not what was paid for goods.
+  const rebate = chargedTotal({
+    ...menards,
+    totals: [{ label: "TOTAL SALE", amount: 13.54 }, { label: "REBATE RECEIPTS", amount: 50.05 }],
+  });
+  check("…nor is a rebate line", rebate.total === 13.54, String(rebate.total));
+
+  check("…and a block that agrees with the reading changes nothing",
+    chargedTotal({ ...menards, total: 13.54 }).total === 13.54);
 }
 
 console.log("\n3. A receipt with no tax");

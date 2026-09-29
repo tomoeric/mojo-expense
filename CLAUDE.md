@@ -292,6 +292,21 @@ Two separate things, and confusing them cost a queue full of failures.
   `TAX 1.05`, `TOTAL SALE 13.54` — the word TOTAL against the PRE-TAX figure,
   and the reading took it, reporting $1.05 of overclaiming. Same shape, same
   fix: the last money figure, on the payment line.
+- **Transcribe the summary block; choose in code.** Which figure is "the
+  total" is a judgement, and it was got wrong twice in opposite directions —
+  the tip line and the tax line. `totals` is now every money line at the foot
+  of the receipt, labels as printed, in order; `fromTotalsBlock` picks the one
+  naming a payment, or failing that the largest line that is not change, cash
+  tendered or a rebate. Transcription is what the model is reliable at.
+- **And it is shown the receipt twice: whole, and the lower part enlarged**
+  (`receipt-zoom.ts`, using mupdf, which is already a dependency). The reason
+  is arithmetic, not hope: a vision model scales to ~1568px on the LONG edge,
+  so a 2000×3000 photograph arrives at half size. Cutting the top off makes
+  the crop wider than it is tall, so the long edge becomes the width and the
+  same budget buys ~1.4× the detail on the figures. An earlier version refused
+  to touch anything it would have to shrink and therefore did nothing at all
+  for phone photographs — the exact images it was for. It fails silently: no
+  second look is the state of affairs it improves on, not a fault it adds.
 - **`paid` is the field that settles it.** Receipts print what the card was
   charged against the card itself (`AMERICAN EXPRESS 1002  13.54`), so the
   reader is asked for that line directly; where it exists it beats any
