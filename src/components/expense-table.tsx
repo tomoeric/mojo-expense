@@ -107,8 +107,17 @@ const COLUMNS: Column[] = [
   // Hidden by default: twelve columns already fill the width, and this one is
   // worth adding deliberately rather than shrinking everything else on its
   // behalf. It is what the Add column control has to offer on a fresh install.
-  { key: "location", label: "Location / Site", pct: 9, value: (r) => r.line.location },
-  { key: "note", label: "Note", pct: 10, value: (r) => r.line.note },
+  { key: "location", label: "Location / Site", pct: 7, value: (r) => r.line.location },
+  // WRAPPED, and wider. The note is the one column whose value is prose
+  // rather than a token, and truncating it lost the part that mattered:
+  // "Refund- drb suggested i…" is a refund somebody authorised, and the
+  // authorisation is past the ellipsis. Reading it meant opening the
+  // drawer on every row that had one.
+  { key: "note", label: "Note", pct: 14, wrap: true, value: (r) => r.line.note,
+    render: (r) =>
+      r.line.note
+        ? <span className="[overflow-wrap:anywhere]">{r.line.note}</span>
+        : <span className="text-muted-foreground">—</span> },
   { key: "receipt", label: "Receipt", pct: 6,
     value: (r) => (r.line.hasReceipt ? 1 : 0),
     render: (r) =>
