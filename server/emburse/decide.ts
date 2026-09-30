@@ -1487,6 +1487,15 @@ async function applyOne(
   asEmail?: string,
 ): Promise<boolean> {
   let row: ReturnType<Page["locator"]> | null = null;
+  /**
+   * How many visible rows matched the expense BEFORE the click.
+   *
+   * The confirmation needs it. "Has the expense left Needs Review" is not a
+   * question the grid can answer when a split receipt puts six identical
+   * rows in it — five are still there after a perfectly good approval. What
+   * the grid CAN answer is whether there is one fewer than there was.
+   */
+  let matchedRows = 1;
 
   if (!(await step("search for the expense", async () => {
     // The search box is a query parameter, so navigate to the filtered grid
@@ -1791,6 +1800,7 @@ async function applyOne(
       }
       several = chosen.length;
     }
+    matchedRows = chosen.length;
     if (chosen.length === 0) {
       throw new Error(
         `${matches.length} rows match this expense but none of them is visible — they are the ` +
@@ -1868,7 +1878,7 @@ async function applyOne(
     return step("approve", async () => {
       await (await controlForRow(page, row!, sel.approveButton!, "APPROVE button", ms)).click();
       await page.waitForTimeout(300);
-      return await confirmActioned(page, sel, target, "approved");
+      return await confirmActioned(page, sel, target, "approved", matchedRows);
     });
   }
 
@@ -1890,7 +1900,7 @@ async function applyOne(
     if (box) await box.fill(reason);
 
     await clickFirstVisible(page, sel.denyConfirm!, "Deny confirm button", ms);
-    const said = await confirmActioned(page, sel, target, "denied");
+    const said = await confirmActioned(page, sel, target, "denied", matchedRows);
     return reason ? `${said}, reason: ${reason}` : said;
   });
 }
@@ -1904,9 +1914,19 @@ async function applyOne(
  * failure on an audit-relevant action: the queue says applied, the expense
  * sits unapproved, and nobody looks again.
  *
- * The check is that the expense leaves the Needs Review grid, which is what
- * actioning it does. Polled rather than slept on, so a fast tenant is not
- * waited out and a slow one is not called a failure.
+ * The check is that there is ONE FEWER matching row than before the click,
+ * which is what actioning one does. Polled rather than slept on, so a fast
+ * tenant is not waited out and a slow one is not called a failure.
+ *
+ * Counting rather than asking "is it still there" is the whole of it, and
+ * the difference only shows on a split receipt. Jessica Kwan's one MENOS
+ * bill divided across six sites is six identical rows; approving one leaves
+ * five, every one of which matches the expense on employee, merchant,
+ * amount and date, because they ARE that expense six times over. Asked
+ * whether the expense is still in Needs Review, the grid says yes and is
+ * right — and four perfectly good approvals came back as "it may have gone
+ * through, go and look". For an ordinary expense the two readings are the
+ * same question: one row before, none after.
  *
  * When it does NOT disappear this throws, which marks the decision failed.
  * That is the safer of the two mistakes: a decision wrongly marked failed
@@ -1920,6 +1940,8 @@ async function confirmActioned(
   sel: Record<string, string>,
   target: Target,
   what: string,
+  /** Visible matching rows before the click. One, for an ordinary expense. */
+  before: number,
 ): Promise<string> {
   // Long enough for a slow link, and it costs nothing when things are
   // normal: the loop exits the moment the row goes, which is usually the
@@ -1936,7 +1958,7 @@ async function confirmActioned(
     // action, so the row that was nth(3) is a different expense now.
     const rows = page.locator(sel.resultRow!);
     const n = Math.min(await rows.count().catch(() => 0), 60);
-    let still = false;
+    let still = 0;
     for (let j = 0; j < n; j++) {
       const text = await rows.nth(j).innerText().catch(() => "");
       if (!rowMatches(text, target).ok) continue;
@@ -1946,14 +1968,21 @@ async function confirmActioned(
       // reported "still in Needs Review six seconds later", which sends
       // somebody to Emburse to check an approval that had already landed.
       if (!(await rows.nth(j).isVisible().catch(() => false))) continue;
-      still = true;
-      break;
+      still++;
     }
-    if (!still) return `${what} in Emburse — the row left Needs Review`;
+    if (still < before) {
+      return before > 1
+        ? `${what} in Emburse — ${before} rows matched this expense and ${still} ` +
+          `${still === 1 ? "remains" : "remain"}, so one left Needs Review`
+        : `${what} in Emburse — the row left Needs Review`;
+    }
   }
   throw new Error(
-    `clicked ${what === "approved" ? "APPROVE" : "Deny"}, but the expense is still in ` +
-    `Needs Review ${Math.round(CONFIRM_MS / 1000)} seconds later, so nothing confirms Emburse ` +
+    `clicked ${what === "approved" ? "APPROVE" : "Deny"}, but ` +
+    (before > 1
+      ? `all ${before} rows matching this expense are still in Needs Review `
+      : `the expense is still in Needs Review `) +
+    `${Math.round(CONFIRM_MS / 1000)} seconds later, so nothing confirms Emburse ` +
     `recorded it. It may have gone through — check the expense in Emburse before deciding it ` +
     `again.`);
 }

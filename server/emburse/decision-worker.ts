@@ -2,6 +2,7 @@ import { isDbConfigured } from "../db.js";
 import { readSettings } from "../import/settings.js";
 import { credentialForUser } from "./credentials.js";
 import { runDecisions, type BatchItem } from "./decide.js";
+import type { ChallengeHook } from "./auto-export.js";
 import { waitForCode } from "./challenge.js";
 import {
   cancelBecauseFlagged, flaggedNow, noteAttemptFailed, peersFor, pendingDecisions, settleDecision,
@@ -160,12 +161,29 @@ async function tick(): Promise<void> {
       }));
 
       console.log(`decisions: applying ${batch.length} as ${decider}`);
-      // A verification code CAN be asked here, unlike a 6am scheduled export:
-      // the decider clicked Approve moments ago, so there is somebody to ask.
-      // Without this a decision could not get past Emburse's device check at
-      // all — which is what happens the first time anybody decides from an
-      // account this browser has never signed in as, and it failed with no
-      // way to put it right.
+      /**
+       * Whether there is anybody to ask for a verification code.
+       *
+       * A code CAN be asked for here, unlike a 6am scheduled export — the
+       * decider clicked Approve moments ago, so somebody is at the screen.
+       * Without it a decision could not get past Emburse's device check at
+       * all, which is what happens the first time anybody decides from an
+       * account this browser has never signed in as.
+       *
+       * But "somebody clicked" is not true of an AUTOMATIC approval. The
+       * sweep queued it on a timer a quarter of an hour ago and nobody is
+       * watching. Parking there holds the browser, the profile lock and the
+       * whole rest of the batch for the full ten-minute wait, and then
+       * abandons the sign-in anyway — which is how a queue sat at "applying
+       * 10 of 12, 1080s so far" with nothing approved and no failure to
+       * show for it either.
+       *
+       * So a batch nobody is present for fails fast instead, exactly as the
+       * scheduled export does. The moment a person decides anything the
+       * prompt comes back, and answering it once re-trusts the device for
+       * everything that follows, automatic approvals included.
+       */
+      const somebodyIsHere = anybodyToAsk(batch);
       // Read once per batch, not per decision: it is the same answer for all
       // of them and this runs while a browser is held open.
       const tracing = await getFlag("traceDecisions").catch(() => false);
@@ -188,7 +206,9 @@ async function tick(): Promise<void> {
         );
 
       const results = await runDecisions(batch, settings.selectors, settings.emburseUrl, login, {
-        onChallenge: (ctx) => waitForCode({ ...ctx, owner: decider }),
+        ...(somebodyIsHere
+          ? { onChallenge: ((ctx) => waitForCode({ ...ctx, owner: decider })) as ChallengeHook }
+          : {}),
         // Pause has to reach the batch already running, or it only stops
         // work that had not started — which, mid-way through a hundred and
         // forty, is not what anybody means by stop.
@@ -252,6 +272,18 @@ async function tick(): Promise<void> {
     timer = setTimeout(() => void tick(), wanted ? 1_000 : IDLE_MS);
   }
 }
+
+/**
+ * Is there a person at the screen who could read a verification code?
+ *
+ * One line, but it decides whether a run may block for ten minutes, so it is
+ * named, exported and tested rather than inlined. A batch is attended when
+ * ANY of it came from somebody's click — the browser signs in once for the
+ * whole batch, so one person present is enough to clear the device check for
+ * everything in it.
+ */
+export const anybodyToAsk = (batch: readonly BatchItem[]): boolean =>
+  batch.some((b) => b.automatic !== true);
 
 export function startDecisionWorker(): void {
   if (started) return;

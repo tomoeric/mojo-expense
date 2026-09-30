@@ -156,6 +156,62 @@ try {
       run?.steps.find((s) => s.name === "search for the expense")?.detail ?? "");
   }
 
+  console.log("\n2c. Approving one of several identical rows is CONFIRMED");
+  // "Nothing gets approved." Four automatic approvals came back as "clicked
+  // APPROVE, but the expense is still in Needs Review 20 seconds later" —
+  // every one of them a split receipt, and every click perfectly good.
+  //
+  // The confirmation asked the grid whether the expense was still in Needs
+  // Review. Six shares of one MENOS bill are six rows that all match the
+  // expense on employee, merchant, amount and date, because they ARE that
+  // expense six times over. Approve one and five remain, so the grid says
+  // yes and is right — the question was wrong. It counts now.
+  //
+  // Not a dry run: this is the only check here that actually clicks, and
+  // the whole point is what happens AFTER the click.
+  mock.reset();
+  forgetCardholderIds();
+  await fetch(`${mock.url}/__app?twinRows=true&actions=live`, { method: "POST" });
+  {
+    const TARGET = {
+      employee: "Kevin McBride", merchant: "MENARDS 3065MENARD INC",
+      amount: 312.44, date: "2026-09-24",
+    };
+    const out = await runDecisions(
+      [{ id: 21, decision: "approve" as const, reason: "", target: TARGET,
+         automatic: true, peers: 9 }],
+      SEL, mock.url, LOGIN, {});
+    const run = out.get(21);
+    const approve = run?.steps.find((s) => s.name === "approve");
+    check("the approval is confirmed, not reported as unconfirmed",
+      run?.ok === true, approve?.detail?.slice(0, 200) ?? "no approve step");
+    check("…and it says how it knows",
+      /rows matched this expense and .* left Needs Review/.test(approve?.detail ?? ""),
+      approve?.detail ?? "");
+  }
+  await fetch(`${mock.url}/__app?twinRows=false`, { method: "POST" });
+
+  console.log("\n2d. A click that lands on nothing is still a failure");
+  // The fence the counting must not cost: with the buttons inert, no row
+  // leaves and the count does not drop, so it must still refuse to claim
+  // the approval reached Emburse.
+  mock.reset();
+  forgetCardholderIds();
+  await fetch(`${mock.url}/__app?actions=dead`, { method: "POST" });
+  {
+    const out = await runDecisions(
+      [{ id: 22, decision: "approve" as const, reason: "", target: {
+          employee: "Kevin McBride", merchant: "MENARDS 3065MENARD INC",
+          amount: 312.44, date: "2026-09-24",
+        }, automatic: true, peers: 9 }],
+      SEL, mock.url, LOGIN, {});
+    const run = out.get(22);
+    const why = run?.steps.find((s) => !s.ok)?.detail ?? "";
+    check("an inert click is not called an approval", run?.ok === false, why.slice(0, 120));
+    check("…and says it may have gone through", /may have gone through/.test(why), why.slice(0, 160));
+  }
+  await fetch(`${mock.url}/__app?actions=live`, { method: "POST" });
+
   console.log("\n3. The filter is the route, not the fallback");
   mock.reset();
   forgetCardholderIds();

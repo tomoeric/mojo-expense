@@ -257,6 +257,35 @@ wrong flag on a purchase that was perfectly ordinary:
   whichever answers the charge wins — never the arithmetic on its own, since
   that is what got the invoice above wrong.
 
+**Confirming a decision means one FEWER matching row, not none.** A split
+receipt puts several identical rows in Emburse — six shares of one lunch are
+six rows agreeing on employee, merchant, amount and date, because they are
+that expense six times over. Approving one leaves five, so "is the expense
+still in Needs Review?" answers yes and is right; the question was wrong. The
+run counts the matching visible rows before the click and requires one fewer
+after. For an ordinary expense that is the same question: one before, none
+after. A click that lands on nothing still fails, which is the fence this
+must not cost.
+
+**Nobody is watching an automatic approval.** Emburse asks an unrecognised
+browser for a verification code, and the decision worker offers that prompt to
+the reviewer — reasonable when somebody just clicked Approve, and false for a
+batch the sweep queued on a timer a quarter of an hour ago. Parking there
+holds the browser, the profile lock and the rest of the batch for the full
+ten-minute wait and then abandons the sign-in anyway. A batch with no human
+click in it now fails fast instead, exactly as the scheduled export does; the
+moment a person decides anything the prompt comes back, and answering it once
+re-trusts the device for everything after.
+
+**A profile lock outlives the Chromium that left it.** The browser takes an
+exclusive lock on its profile directory and drops it on a clean exit; a
+process killed instead leaves it behind, and every launch afterwards fails
+with "Failed to create a ProcessSingleton for your profile directory". On a
+container that rebuilt its filesystem each deploy this was self-clearing. On a
+VM the directory persists, so it is forever — every import, every approval,
+until somebody deletes a file nobody knows about. A launch that fails that way
+now clears the stale lock and tries once more.
+
 **An expense Emburse no longer has is not a failure.** Somebody approving or
 denying directly in Emburse is allowed and normal, and when a run reads that
 cardholder's whole Needs Review and finds no row for the amount, there is

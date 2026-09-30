@@ -302,12 +302,43 @@ export async function openBrowser(): Promise<{ context: BrowserContext; close: (
   const dir = env.emburseLogin.profileDir;
   if (dir) {
     await fs.mkdir(dir, { recursive: true }).catch(() => {});
-    const context = await chromium.launchPersistentContext(dir, {
+    const launch = (): Promise<BrowserContext> => chromium.launchPersistentContext(dir, {
       ...(executablePath ? { executablePath } : {}),
       args,
       viewport: { width: 1600, height: 1000 },
       acceptDownloads: true,
     });
+
+    /**
+     * A lock left behind by a Chromium that died is permanent until removed.
+     *
+     * Chromium takes an exclusive lock on its profile directory and drops it
+     * on a clean exit. A process killed instead — OOM, a container reclaimed,
+     * a restart in the middle of a run — leaves the lock files sitting there,
+     * and every launch afterwards fails with "Failed to create a
+     * ProcessSingleton for your profile directory". On a container that
+     * rebuilt its filesystem each deploy that was self-clearing. On a VM the
+     * directory persists, so it is forever: every import, every approval,
+     * every sign-in, until somebody deletes a file nobody knows about.
+     *
+     * Safe to clear because `withBrowser` already serialises every run in
+     * this process, and the profile is not shared with anything else — so
+     * reaching here means no browser of ours is using it. If some other
+     * Chromium genuinely holds it, the retry fails the same way and the
+     * error is reported as before.
+     */
+    let context: BrowserContext;
+    try {
+      context = await launch();
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err);
+      if (!/ProcessSingleton|already in use|SingletonLock/i.test(why)) throw err;
+      console.warn("browser: clearing a profile lock left by a Chromium that did not exit");
+      for (const name of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) {
+        await fs.rm(`${dir}/${name}`, { force: true, recursive: true }).catch(() => {});
+      }
+      context = await launch();
+    }
     // The profile directory carries trust between runs; the database carries
     // it between deployments, which rebuild that directory and would otherwise
     // lose the device every time the app ships.
