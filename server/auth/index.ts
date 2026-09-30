@@ -7,6 +7,8 @@ import {
   setSessionCookie,
   type SessionUser,
 } from "./session.js";
+import { isDbConfigured } from "../db.js";
+import { noteVisit, whileAway } from "../visits.js";
 
 /**
  * Microsoft SSO via Entra ID (OpenID Connect + PKCE), matching how
@@ -150,7 +152,13 @@ declare global {
 /** Populates `req.user` from the session cookie. Never rejects. */
 export function authMiddleware(req: Request, _res: Response, next: NextFunction): void {
   const user = readSession(req);
-  if (user) req.user = user;
+  if (user) {
+    req.user = user;
+    // "Still here", for the while-you-were-away count. Not awaited: it is a
+    // note in the margin, throttled to once a minute per person, and no page
+    // should wait on it or fail because of it.
+    if (isDbConfigured() && user.email) void noteVisit(user.email);
+  }
   next();
 }
 
@@ -177,6 +185,28 @@ authRouter.get("/auth/user", (req: Request, res: Response) => {
     // affordances behind a check the server is not making either.
     isAdmin: !isAuthConfigured() || (req.user ? isAdmin(req.user.email) : false),
   });
+});
+
+/**
+ * What the automation did while they were away.
+ *
+ * Its own endpoint rather than part of `/auth/user` because it reads two
+ * tables and `/auth/user` is fetched before anything else on the page; a
+ * count nobody has looked at yet must not be what makes the app slow to
+ * come up.
+ */
+authRouter.get("/auth/while-away", async (req: Request, res: Response) => {
+  if (!req.user?.email || !isDbConfigured()) {
+    res.json({ from: null, to: null, approved: 0, mine: 0 });
+    return;
+  }
+  try {
+    res.json(await whileAway(req.user.email));
+  } catch {
+    // Nothing here is worth an error on the page. A count that cannot be
+    // read is a count not shown.
+    res.json({ from: null, to: null, approved: 0, mine: 0 });
+  }
 });
 
 authRouter.get("/login", async (req: Request, res: Response) => {

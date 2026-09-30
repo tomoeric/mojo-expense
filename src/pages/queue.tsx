@@ -7,6 +7,7 @@ import { DecideButtons } from "@/components/decide-controls";
 import { approveMany, clearFailed, holdDecisions, retryAllFailed } from "@/lib/decisions";
 import { useDecisions } from "@/lib/decisions";
 import { CodePrompt } from "@/components/code-prompt";
+import { WhileAway } from "@/components/while-away";
 
 /**
  * The reviewer's landing page: one line per expense still awaiting a decision.
@@ -133,6 +134,10 @@ export function QueuePage({
           onAnswer={(code) => answerCode.mutate(code)}
         />
       )}
+
+      {/* Before the queue itself: the first question on coming back to a
+          shorter list is what happened to it. */}
+      <WhileAway />
 
       {!canDecide && (
         <p className="rounded-lg border border-border bg-muted/40 p-2.5 text-sm text-muted-foreground">

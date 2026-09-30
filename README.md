@@ -248,6 +248,23 @@ Safe because it is self-correcting in the direction that matters: if Emburse
 does still hold it, the next import carries it and the row comes straight
 back.
 
+**What it did while you were away** is reported once, at the top of the
+queue. The automation approves with nobody watching, which is the point of it
+and also the problem with it: a reviewer comes back to a queue forty rows
+shorter than they left it and nothing says why. Each person's last visit is
+recorded (`user_visits`), and returning after a gap of half an hour or more
+freezes the window they missed — so the count is a plain fact about a fixed
+period rather than a number creeping upwards as they read it. It names how
+many carry *their* Emburse login, because an automatic approval is made under
+a real person's account. It counts `applied_at`, not when the decision was
+queued: the claim is that these reached Emburse, so a decision that failed on
+the way is not an approval. Dismisses to nothing; nothing in it needs doing.
+
+A login is the wrong hinge for this and it is worth saying why: sessions are
+signed cookies renewed silently through Entra, so somebody can use the app for
+weeks without a login event ever happening. "Since I last logged in" means
+"since I was last here", and that is what a gap measures.
+
 **Why nothing is moving** is a question the Configuration card answers
 directly: every expense in the queue lands in the bucket of the first reason
 it does not qualify — flagged, decided, awaiting rules, awaiting receipt,
