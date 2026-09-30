@@ -760,17 +760,16 @@ function FailedStrip({
    * answered by reading every row. An empty strip is what makes the next
    * failure legible.
    */
-  clear?: { onRun: (onlyGone: boolean) => void; busy?: boolean };
+  clear?: { onRun: () => void; busy?: boolean };
 }) {
-  // Two different things were being counted as one, and the second was
-  // drowning the first: a decision that FAILED needs somebody, and one whose
-  // expense is simply not in Emburse's queue any more needs nothing at all.
-  // Forty of the second is how "46 did not go through" stopped meaning
-  // anything.
+  // Only real failures. A decision whose expense is simply not in Emburse's
+  // queue any more needs nobody — somebody approved or denied it there
+  // directly — so it is settled as cancelled when the run finds that out and
+  // the row leaves on its own. It was reported here for a while, and forty of
+  // them is how "46 did not go through" stopped meaning anything.
   const [why, setWhy] = useState(false);
   const failed = rows.filter((r) => r.decision?.state === "failed" && !r.decision.notInQueue);
-  const gone = rows.filter((r) => r.decision?.state === "failed" && r.decision.notInQueue);
-  if (failed.length === 0 && gone.length === 0 && !retry.note) return null;
+  if (failed.length === 0 && !retry.note) return null;
 
   return (
     <div className={`flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-xs ${
@@ -792,41 +791,21 @@ function FailedStrip({
         </span>
       )}
       {why && <WhyTheyFailed onClose={() => setWhy(false)} />}
-      {gone.length > 0 && (
-        <span className="text-muted-foreground">
-          <strong className="font-semibold tabular-nums">{gone.length.toLocaleString()}</strong>{" "}
-          {gone.length === 1 ? "is" : "are"} no longer in Emburse&rsquo;s queue — already approved or
-          denied there, so there is nothing to retry. They come off this list on their own.
-          {clear && (
-            <>
-              {" "}
-              <button
-                type="button"
-                disabled={clear.busy}
-                onClick={() => clear.onRun(true)}
-                className="underline underline-offset-2 hover:no-underline disabled:opacity-50"
-              >
-                Clear {gone.length === 1 ? "it" : "these"} now
-              </button>
-            </>
-          )}
-        </span>
-      )}
       {retry.note && <span className="text-emerald-700">{retry.note}</span>}
       <span className="ml-auto flex items-center gap-2">
         {/* Clearing changes nothing in Emburse and cancels nothing on its
             way there — it only puts down the failures on this screen, so
             the rows go back to offering Approve and Deny. */}
-        {clear && failed.length + gone.length > 0 && (
+        {clear && failed.length > 0 && (
           <button
             type="button"
             disabled={clear.busy}
-            onClick={() => clear.onRun(false)}
+            onClick={() => clear.onRun()}
             title="Put these down. Nothing is sent to Emburse; the rows go back to Approve and Deny."
             className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1 font-semibold hover:bg-muted disabled:opacity-50"
           >
             {clear.busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
-            Clear all {(failed.length + gone.length).toLocaleString()}
+            Clear all {failed.length.toLocaleString()}
           </button>
         )}
         {failed.length > 0 && (
@@ -885,7 +864,7 @@ export function ExpenseTable({
   };
   /** Putting the failures down, so the next one to appear is visibly new. */
   clearFailed?: {
-    onRun: (onlyGone: boolean) => void;
+    onRun: () => void;
     busy?: boolean;
   };
 }) {

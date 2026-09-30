@@ -127,6 +127,20 @@ ALTER TABLE expense_decisions ADD COLUMN IF NOT EXISTS automatic boolean NOT NUL
 -- import — and because forty of them in one list buries the handful that do
 -- need somebody.
 ALTER TABLE expense_decisions ADD COLUMN IF NOT EXISTS not_in_queue boolean NOT NULL DEFAULT false;
+
+-- Rows settled before not-in-queue stopped counting as a failure.
+--
+-- Idempotent and a no-op once clean, which is why it can sit here and run
+-- on every boot: without it the ones already in the table would keep
+-- reporting themselves in the queue's strip forever, since nothing settles
+-- them a second time.
+UPDATE expense_decisions SET state = 'cancelled'
+ WHERE state = 'failed' AND not_in_queue = true;
+-- And the expenses they belong to come off the list, same as a fresh one.
+UPDATE expenses e SET in_inbox = false
+ WHERE e.in_inbox
+   AND EXISTS (SELECT 1 FROM expense_decisions d
+                WHERE d.dedupe_key = e.dedupe_key AND d.not_in_queue = true);
 -- WHEN it failed, which is not when it was decided.
 --
 -- A decision queued on Monday and attempted on Thursday carried Monday's
@@ -413,21 +427,19 @@ export async function retryFailedDecisions(
  * Emburse — or one that already landed — is a different and much worse
  * thing to do by accident.
  *
- * `onlyGone` clears just the ones Emburse no longer has in Needs Review:
- * the failures that are not faults, need nobody, and are only in the way.
+ * There used to be an `onlyGone` half of this, for the failures that were
+ * not faults — an expense Emburse no longer had. Those are settled as
+ * cancelled the moment the run establishes it now, so there is never a pile
+ * of them to clear and nothing to offer a button for.
  */
-export async function clearFailedDecisions(
-  by: string,
-  opts: { onlyGone?: boolean } = {},
-): Promise<number> {
+export async function clearFailedDecisions(by: string): Promise<number> {
   await ensure();
   const { rowCount } = await db().query(
     `UPDATE expense_decisions
         SET state = 'cancelled',
             error = coalesce(error, 'It did not go through.')
                     || ' — cleared by ' || $1 || ' on ' || to_char(now(), 'YYYY-MM-DD HH24:MI')
-      WHERE state = 'failed'
-        ${opts.onlyGone ? "AND not_in_queue = true" : ""}`,
+      WHERE state = 'failed'`,
     [by || "somebody"]);
   return rowCount ?? 0;
 }
@@ -704,6 +716,18 @@ export async function settleDecision(
   shot?: string | null,
 ): Promise<void> {
   await ensure();
+  // An expense Emburse no longer has in Needs Review is not a failure.
+  //
+  // Nothing went wrong, nothing can be retried, and nobody has anything to
+  // do about it — somebody approved or denied it in Emburse directly, which
+  // is allowed and normal. Recording it as `failed` put it in front of a
+  // person twice: once in the queue's amber strip ("3 are no longer in
+  // Emburse's queue…") and again in a Clear button for a thing that needs
+  // no clearing. It is settled as `cancelled` instead — the record is kept,
+  // `not_in_queue` still says which kind it was, and every reader in the app
+  // already ignores cancelled. The expense then comes off the list on its
+  // own, silently, which is the only thing anybody wanted.
+  const gone = !outcome.ok && outcome.notInQueue === true;
   await db().query(
     `UPDATE expense_decisions
         SET state      = $2,
@@ -721,7 +745,7 @@ export async function settleDecision(
       WHERE id = $1`,
     [
       id,
-      outcome.ok ? "applied" : "failed",
+      outcome.ok ? "applied" : gone ? "cancelled" : "failed",
       outcome.ok ? outcome.matchedRow : null,
       outcome.ok ? null : outcome.error.slice(0, 1000),
       steps && steps.length > 0 ? JSON.stringify(steps) : null,
@@ -733,7 +757,7 @@ export async function settleDecision(
   );
 
   // And off the queue it comes, now rather than at the next import.
-  if (!outcome.ok && outcome.notInQueue === true) {
+  if (gone) {
     const { rows } = await db().query<{ dedupe_key: string }>(
       "SELECT dedupe_key FROM expense_decisions WHERE id = $1", [id]);
     if (rows[0]) await dropFromInbox(rows[0].dedupe_key);

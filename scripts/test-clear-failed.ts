@@ -80,9 +80,17 @@ try {
 
   console.log("\n1. Before clearing");
   check("the broken one is failed", await stateOf(BROKE) === "failed");
-  check("the missing one is failed too", await stateOf(GONE) === "failed");
-  check("…and marked as not in the queue",
-    (await decisionsFor([GONE])).get(GONE)?.notInQueue === true);
+  // NOT failed. Nothing went wrong: somebody approved or denied it in
+  // Emburse directly, which is allowed. It used to be recorded as a failure
+  // and then reported twice on screen — an amber line saying there was
+  // nothing to retry, and a button to clear a thing needing no clearing.
+  check("the missing one is cancelled, not failed", await stateOf(GONE) === "cancelled");
+  check("…and still says which kind it was",
+    (await db().query<{ not_in_queue: boolean }>(
+      "SELECT not_in_queue FROM expense_decisions WHERE dedupe_key = $1", [GONE])
+    ).rows[0]?.not_in_queue === true);
+  check("…and the queue offers it nothing to act on",
+    (await decisionsFor([GONE])).get(GONE) === undefined);
   check("one is still on its way", await stateOf(SENT) === "pending");
   check("one already landed", await stateOf(DONE) === "applied");
   // ONE, not two. The failure summary counts only expenses still in the
@@ -128,13 +136,15 @@ try {
   check("…and one that landed is left to the import as before",
     await inbox(DONE) === true);
 
-  console.log("\n3. Clearing only the ones Emburse no longer has");
-  const goneOnly = await clearFailedDecisions("eric@example.invalid", { onlyGone: true });
-  check("one is cleared", goneOnly === 1, String(goneOnly));
-  check("…it is cancelled, not deleted", await stateOf(GONE) === "cancelled");
-  check("…and the real failure is untouched", await stateOf(BROKE) === "failed");
+  console.log("\n3. There is nothing left to clear separately");
+  // The "Clear these now" button is gone, and so is the half of
+  // clearFailedDecisions behind it: an expense Emburse no longer has never
+  // reaches the failed pile, so no pile of them can build up.
+  check("the missing one was never a failure to clear",
+    await stateOf(GONE) === "cancelled");
+  check("…and the real failure is still waiting", await stateOf(BROKE) === "failed");
 
-  console.log("\n4. Clearing the rest");
+  console.log("\n4. Clearing the failures");
   const all = await clearFailedDecisions("eric@example.invalid");
   check("the real failure clears too", all === 1, String(all));
   check("…and is cancelled", await stateOf(BROKE) === "cancelled");

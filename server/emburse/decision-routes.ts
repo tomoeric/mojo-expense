@@ -278,15 +278,12 @@ decisionRouter.post("/decisions/retry-failed", requireAuth, async (req: Request,
  * Put the failures down, so the next one that appears is visibly new.
  *
  * No Emburse login needed and nothing reaches Emburse: this only changes
- * what our own queue shows. `gone=1` clears just the ones Emburse no longer
- * has in Needs Review — the failures that were never faults.
+ * what our own queue shows.
  */
 decisionRouter.post("/decisions/clear-failed", requireAuth, async (req: Request, res: Response) => {
   if (!guard(res)) return;
   try {
-    const cleared = await clearFailedDecisions(
-      req.user?.email ?? "unknown",
-      { onlyGone: (req.query as { gone?: string }).gone === "1" });
+    const cleared = await clearFailedDecisions(req.user?.email ?? "unknown");
     res.json({ cleared });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });

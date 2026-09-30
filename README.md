@@ -141,13 +141,19 @@ never served to an anonymous caller — even if sign-in was never wired up.
 
 ## What runs on its own
 
-Three loops, all started at boot in `server/index.ts`, all continuous:
+Four loops, all started at boot in `server/index.ts`, all continuous:
 
 | Loop | Cadence | What it does |
 | --- | --- | --- |
 | `startExportScheduler` | the slots in Export settings | signs into Emburse, exports Needs Review, imports it |
 | `startReceiptReader` | 30s while there is work, 30 min idle, 10s after an import brings new images | reads receipt images, re-reads the ones whose total does not match, re-judges and re-queues |
+| `startAutoApprove` | 15 min, first sweep 3 min after boot | queues approvals for expenses no rule flagged — **the automation that approves** |
 | `startDecisionWorker` | 1s while there is work, 5 min idle | signs in as the decider and clicks approve or deny in Emburse |
+
+Approving and applying are two different loops on purpose. The sweep only ever
+writes a row to `expense_decisions`; the worker is the only thing that touches
+Emburse. So pausing stops the clicking without losing the decisions, and a
+flag that lands in between still gets its say (below).
 
 Reading and deciding were always continuous. The import was not: its slots
 were **retries**, so the first one that succeeded closed the day and the queue
@@ -164,6 +170,92 @@ distinguishes a live queue from a dead importer. Overnight, when no slot is
 due, nothing is reported. Frequency is safe against a truncated export: the
 import already refuses one that would delete more than four in five of the
 waiting expenses without a decision of ours to explain it.
+
+## Automatic approval
+
+`server/rules/auto-approve.ts`. This is the only path in the app that approves
+somebody's spending with nobody looking, so most of it is fences. It is **off
+until switched on** (Configuration → Automatic approvals), and switching it on
+attaches it to the person who did: approvals are made in Emburse under *their*
+login, because Emburse records an approval against whoever signed in. Never a
+shared login, and never a fallback to one.
+
+**Before a pass runs at all**, in this order — the first that holds is the one
+reported, and the page shows the sentence rather than just doing nothing:
+
+1. the switch is off
+2. everything is paused (the Pause button on the queue)
+3. an import is in flight — it adds and removes expenses underneath the very
+   queue this reads, so approvals wait for it to finish and the rules to run
+4. nobody owns the automation, so there is no login to make approvals under
+5. the owner has no Emburse password stored
+6. no rules are enabled — "nothing was flagged" is vacuously true of an
+   expense nothing checked
+
+**Then, per expense, four tests.** All four must pass, and they are written
+once and shared by the pass and by the "why is nothing moving" report, so the
+page cannot explain one rule while the automation applies another:
+
+| Test | An expense is skipped when |
+| --- | --- |
+| `flagged` | any enabled rule caught it |
+| `awaitingRules` | some enabled rule has not run since it arrived — *not* "it has no hit row", because a rule that does not apply writes no row at all |
+| `decided` | it is already pending, applied, or failed and waiting on a person |
+| `awaitingReceipt` | any receipt on it has not been read, and some enabled rule depends on a reading |
+
+That fourth one is the fence that is easy to miss, and the reason this is not
+simply "flags is empty". **An expense whose receipt has not been read is
+unflagged because nothing has been checked, not because everything passed** —
+rules about alcohol, receipt totals and merchant names all return UNKNOWN with
+no reading, so the newest expenses look cleanest of all. Approving on that
+basis would systematically approve exactly the expenses nothing had examined,
+and it would look like it was working perfectly. It is *every* image on the
+expense, not one: an expense with the bar tab on page two must not pass on the
+strength of page one. A receipt the reader gave up on after three tries stays
+unread for this purpose, deliberately — that is a reason for a person to look,
+not a reason to wave it through.
+
+Qualifying expenses are queued in date order, up to the per-run limit
+(default 10, hard ceiling 100), **through the same `queueApprovalFor` a
+person's click uses**. A machine does not get a shorter path to somebody
+else's money than a human does. Each row is stamped `automatic`, so the queue
+can always say which approvals nobody looked at.
+
+**A flag still beats a queued approval, right up to the last moment.** The
+receipt is often read minutes after the approval is queued, the rules run
+again on what it said, and the expense is flagged *after* it is already in the
+queue. So the decision worker re-checks every automatic approval against the
+current flags immediately before signing in, and cancels the ones now flagged
+— "a rule flagged this after the approval was queued, so it was not sent."
+Only the machine's are stopped. A person who clicks Approve on a flagged
+expense means it, and often should: a flag is a prompt to look, not a
+prohibition.
+
+**At the browser**, one more rule, because Emburse can show several rows that
+match an expense equally well — one purchase split across sites is seven
+identical rows. The automation may take one of them only if the queue holds a
+decision for *every* matching row, in which case the choice is bookkeeping and
+all seven get approved anyway. Holding fewer, it refuses and says so rather
+than guessing.
+
+**An expense Emburse no longer has is not a failure.** Somebody approving or
+denying directly in Emburse is allowed and normal, and when a run reads that
+cardholder's whole Needs Review and finds no row for the amount, there is
+nothing to fix and nothing to retry. The decision is settled as *cancelled*
+(the record stays, `not_in_queue` still says which kind it was) and the
+expense comes off the list on the spot — silently, with nothing reported.
+Safe because it is self-correcting in the direction that matters: if Emburse
+does still hold it, the next import carries it and the row comes straight
+back.
+
+**Why nothing is moving** is a question the Configuration card answers
+directly: every expense in the queue lands in the bucket of the first reason
+it does not qualify — flagged, decided, awaiting rules, awaiting receipt,
+eligible — and the buckets sum to the queue. A total that does not add up is a
+reason to distrust the whole card. The sweep exists for the same reason: it
+used to ride on the import and the receipt reader, both of which are silent on
+a settled queue, so switching the automation on did nothing observable for
+hours — indistinguishable from a broken feature.
 
 ## Importing the daily export
 

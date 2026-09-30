@@ -274,12 +274,12 @@ export async function retryAllFailed(): Promise<{ queued: number; refused: strin
  * Put the failures down.
  *
  * Nothing reaches Emburse — this only clears what our own queue shows, so
- * the next failure to appear is visibly a new one. `onlyGone` clears just
- * the ones Emburse no longer has in Needs Review.
+ * the next failure to appear is visibly a new one. An expense Emburse no
+ * longer has in Needs Review never gets here: it is settled as cancelled on
+ * the spot and comes off the list by itself.
  */
-export async function clearFailed(onlyGone = false): Promise<number> {
-  const res = await fetch(`/api/decisions/clear-failed${onlyGone ? "?gone=1" : ""}`,
-    { method: "POST" });
+export async function clearFailed(): Promise<number> {
+  const res = await fetch("/api/decisions/clear-failed", { method: "POST" });
   const body = await readJson<{ cleared?: number; error?: string }>(res);
   if (!res.ok) throw new Error(body.error ?? "Could not clear them.");
   return body.cleared ?? 0;

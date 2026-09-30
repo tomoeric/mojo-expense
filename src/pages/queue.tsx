@@ -238,11 +238,11 @@ export function QueuePage({
         }}
         clearFailed={{
           busy: clearBusy,
-          onRun: (onlyGone: boolean) => {
+          onRun: () => {
             setError("");
             setRetryNote(null);
             setClearBusy(true);
-            clearFailed(onlyGone)
+            clearFailed()
               .then((n) => {
                 setRetryNote(
                   n === 0
