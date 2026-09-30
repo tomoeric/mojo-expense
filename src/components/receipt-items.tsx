@@ -38,6 +38,14 @@ export type ReceiptDetail = {
   notes: string;
   error: string | null;
   autoRereadAt: string | null;
+  /** The amount printed against the payment card. */
+  paid: number | null;
+  /** The currency the receipt named, when it named one. */
+  currency: string | null;
+  /** Every money line at the foot of the receipt, labelled as printed. */
+  totals: { label: string; amount: number }[];
+  /** Which generation of the reader produced this. */
+  readerVersion: number;
   items: ReceiptItem[];
 };
 
@@ -269,6 +277,19 @@ export function ReceiptItems({
           ),
         )}
 
+        {/* The card line. The receipt states what was charged — "AMERICAN
+            EXPRESS ****1003  $8.12  Approved" — and that figure was being
+            stored and never shown, which is half the value of having it:
+            it settles what arithmetic can only infer. Only when it differs
+            from the total, or it is the same number twice. */}
+        {detail.paid !== null && detail.total !== null
+          && Math.abs(detail.paid - detail.total) > 0.005 && (
+          <li className="flex items-baseline justify-between gap-3 px-2.5 py-1 text-xs text-muted-foreground">
+            <span>Charged to the card</span>
+            <span className="tnum">{moneyExact(detail.paid)}</span>
+          </li>
+        )}
+
         {detail.total !== null && (
           <li className="flex items-baseline justify-between gap-3 bg-muted/40 px-2.5 py-1.5 font-semibold">
             <span>Receipt total</span>
@@ -276,6 +297,28 @@ export function ReceiptItems({
           </li>
         )}
       </ul>
+
+      {/* The summary block exactly as printed, which is the answer to the
+          one question a wrong total always raises: where did it get that
+          figure from. The reader has always transcribed this — choosing the
+          charged total happens in code, off these lines — and it was used
+          once and thrown away, so the only way to check was to open the
+          image and squint. */}
+      {detail.totals.length > 0 && (
+        <details className="text-xs">
+          <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+            The money lines as printed ({detail.totals.length})
+          </summary>
+          <ul className="mt-1 divide-y divide-border rounded-lg border border-border">
+            {detail.totals.map((t, i) => (
+              <li key={`${t.label}-${i}`} className="flex items-baseline justify-between gap-3 px-2.5 py-1">
+                <span className="min-w-0 break-words text-muted-foreground">{t.label}</span>
+                <span className="tnum shrink-0">{moneyExact(t.amount)}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
 
       {off !== null && (
         <p className="text-xs text-amber-600">
@@ -286,6 +329,16 @@ export function ReceiptItems({
       )}
 
       {detail.notes && <p className="text-xs text-muted-foreground">{detail.notes}</p>}
+
+      {/* Which reader produced this, and whether it could make the image
+          out at all. Small, and at the bottom, because it only matters when
+          a reading looks wrong — at which point "reader 3" versus "reader
+          4" is the first thing worth knowing. */}
+      <p className="text-[11px] text-muted-foreground/70">
+        Reader v{detail.readerVersion}
+        {detail.legible ? "" : " · the image could not be made out clearly"}
+        {detail.currency && detail.currency !== "USD" ? ` · ${detail.currency}` : ""}
+      </p>
     </div>
   );
 }

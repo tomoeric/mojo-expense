@@ -121,6 +121,25 @@ export type ReceiptDetail = {
   notes: string;
   error: string | null;
   /**
+   * The amount printed against the payment card — "AMERICAN EXPRESS
+   * ****1003 $8.12 Approved".
+   *
+   * Stored since the two receipts that were read off the wrong line, and
+   * never shown, which was half the value of having it: it is the figure
+   * the receipt itself states was charged, and it settles what arithmetic
+   * can only infer.
+   */
+  paid: number | null;
+  /**
+   * Every money line at the foot of the receipt, labelled as printed.
+   *
+   * The evidence behind whichever figure ended up as the total. "Where did
+   * it get $8.12 from" is otherwise a question only the image can answer.
+   */
+  totals: { label: string; amount: number }[];
+  /** Which generation of the reader produced this. */
+  readerVersion: number;
+  /**
    * When the app re-read this image by itself because the total it had did
    * not match the charge. Null means it never has.
    *
@@ -195,6 +214,15 @@ ALTER TABLE receipt_readings ADD COLUMN IF NOT EXISTS attempts integer NOT NULL 
 -- mid-read cannot turn "try once" into a loop, and never cleared: once is
 -- once. A null here is what makes a receipt a candidate.
 ALTER TABLE receipt_readings ADD COLUMN IF NOT EXISTS auto_reread_at timestamptz;
+-- The summary block, transcribed: every money line at the foot of the
+-- receipt, labelled as printed, in printed order.
+--
+-- The reader has always produced this — it is how the charged total is
+-- chosen, in code, rather than asked of the model — and it was used once
+-- and thrown away. Which meant the one question a reviewer keeps asking,
+-- "where did it get that figure from", could only be answered by opening
+-- the image and squinting. Kept now, and shown.
+ALTER TABLE receipt_readings ADD COLUMN IF NOT EXISTS totals jsonb;
 CREATE INDEX IF NOT EXISTS receipt_readings_auto_reread_idx
   ON receipt_readings (auto_reread_at) WHERE auto_reread_at IS NULL;
 `;
@@ -524,9 +552,9 @@ export async function extractReceipt(
       `INSERT INTO receipt_readings
          (sha256, extracted_at, model, legible, merchant, purchased_at, currency,
           subtotal_cents, tax_cents, tip_cents, total_cents, paid_cents, notes, error,
-          itemised, attempts, reader_version)
+          itemised, attempts, reader_version, totals)
        VALUES ($1, now(), $2, $3, $4, NULLIF($5,'')::date, $6, $7, $8, $9, $10, $15, $11, $12,
-               $13, $14, ${READER_VERSION})
+               $13, $14, ${READER_VERSION}, $16::jsonb)
        ON CONFLICT (sha256) DO UPDATE SET
          extracted_at = now(), model = EXCLUDED.model, legible = EXCLUDED.legible,
          merchant = EXCLUDED.merchant, purchased_at = EXCLUDED.purchased_at,
@@ -535,6 +563,7 @@ export async function extractReceipt(
          total_cents = EXCLUDED.total_cents, paid_cents = EXCLUDED.paid_cents,
          notes = EXCLUDED.notes, error = EXCLUDED.error,
          itemised = EXCLUDED.itemised, reader_version = EXCLUDED.reader_version,
+         totals = EXCLUDED.totals,
          -- Counted on the row rather than passed in, so a retry increments
          -- whatever is already there. A success resets it to zero: the next
          -- time this image is re-read, for a new extracted field say, it
@@ -551,7 +580,8 @@ export async function extractReceipt(
        cents(reading?.subtotal), cents(reading?.tax), cents(reading?.tip), cents(reading?.total),
        reading?.notes ?? "", error, reading ? reading.itemised === true : null,
        error === null ? 0 : permanent ? MAX_ATTEMPTS : 1,
-       cents(reading?.paid)],
+       cents(reading?.paid),
+       reading?.totals && reading.totals.length > 0 ? JSON.stringify(reading.totals) : null],
     );
 
     // Replaced wholesale rather than merged: a re-read is a new opinion about
@@ -585,7 +615,7 @@ export async function receiptDetail(sha256: string): Promise<ReceiptDetail | nul
   const { rows } = await db().query<Record<string, never>>(
     `SELECT sha256, extracted_at, model, legible, merchant, purchased_at::text AS purchased_at,
             currency, subtotal_cents, tax_cents, tip_cents, total_cents, notes, error,
-            auto_reread_at
+            auto_reread_at, paid_cents, totals, reader_version
        FROM receipt_readings WHERE sha256 = $1`, [sha256]);
   const r = rows[0] as Record<string, string | number | boolean | Date | null> | undefined;
   if (!r) return null;
@@ -609,6 +639,11 @@ export async function receiptDetail(sha256: string): Promise<ReceiptDetail | nul
     notes: (r.notes as string) ?? "",
     error: (r.error as string | null) ?? null,
     autoRereadAt: (r.auto_reread_at as Date | null)?.toISOString() ?? null,
+    paid: dollars(r.paid_cents as string | null),
+    totals: Array.isArray(r.totals)
+      ? (r.totals as unknown as { label: string; amount: number }[])
+      : [],
+    readerVersion: Number(r.reader_version ?? 1),
     items: (items as unknown as Record<string, string | number | null>[]).map((i) => ({
       lineNo: Number(i.line_no),
       description: String(i.description),

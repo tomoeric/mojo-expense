@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Plus, X, Loader2, AlertTriangle, CheckCircle2, ArrowLeftRight } from "lucide-react";
-import { money } from "@/lib/format";
+import { moneyExact } from "@/lib/format";
 import { SegmentedControl } from "@/components/ui";
 import { preview, type Action, type Condition, type Field, type Op, type Options, type Preview, type RuleBody } from "@/lib/rules";
 
@@ -405,7 +405,7 @@ function PreviewPanel({ preview: p, checking, action }: { preview: Preview | nul
                 </td>
                 <td className="px-2 py-1.5">{r.employee}</td>
                 <td className="max-w-40 truncate px-2 py-1.5">{r.merchant}</td>
-                <td className="tnum px-2 py-1.5 text-right">{money(r.amountCents / 100)}</td>
+                <td className="tnum px-2 py-1.5 text-right">{moneyExact(r.amountCents / 100)}</td>
                 <td className="max-w-56 truncate px-2 py-1.5 text-muted-foreground">
                   {r.detail || r.category || r.note}
                 </td>

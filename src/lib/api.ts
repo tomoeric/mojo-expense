@@ -40,6 +40,12 @@ export type ExpenseLine = {
    * reads as "nothing wrong with this one".
    */
   receiptUnread?: boolean;
+  /** Emburse's own Receipt column — "Receipt 1 of 2". */
+  receiptLabel?: string;
+  /** How many receipt images we actually hold for it. */
+  receiptCount?: number;
+  /** When this expense first appeared in an import. */
+  firstSeenAt?: string | null;
   receiptId: string;
   receiptUrl: string;
   glCode: string;

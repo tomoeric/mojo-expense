@@ -5,7 +5,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { inspectEditForm, retryDecision, testDecision, type QueuedDecision } from "@/lib/decisions";
 import { useConfig } from "@/lib/api";
-import { money } from "@/lib/format";
+import { moneyExact } from "@/lib/format";
 
 /**
  * Approve or deny one expense, from the row it is on.
@@ -512,7 +512,7 @@ function DenyDialog({
               mistake worth making impossible to make quietly. */}
           <p className="mt-1 text-sm text-muted-foreground">
             <strong className="text-foreground">{expense.employee}</strong> · {expense.merchant} ·{" "}
-            <strong className="text-foreground">{money(expense.amount)}</strong>
+            <strong className="text-foreground">{moneyExact(expense.amount)}</strong>
             {expense.date ? ` · ${expense.date}` : ""}
           </p>
         </div>

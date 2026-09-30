@@ -133,6 +133,33 @@ try {
     await unreadFor(WAITING) === false);
   check("…without disturbing the ones that were already settled",
     await unreadFor(READ) === false && await unreadFor(GAVEUP) === false);
+  console.log("\n4. Everything the reader captured is handed to the screen");
+  // "Need all receipt details available in this view container." Three
+  // fields were being stored and never returned: the amount printed against
+  // the card, the transcribed summary block, and which reader produced the
+  // reading. The card line is the figure the receipt itself states was
+  // charged, and the block is the answer to "where did it get that total
+  // from" — both used internally and then dropped on the floor.
+  const { receiptDetail } = await import("../server/emburse/receipt-items.js");
+  await db().query(
+    `UPDATE receipt_readings
+        SET paid_cents = 812, subtotal_cents = 750, tax_cents = 62, total_cents = 812,
+            totals = $2::jsonb, reader_version = 4, currency = 'USD'
+      WHERE sha256 = $1`,
+    [`${TAG}-b`, JSON.stringify([
+      { label: "Sub Total", amount: 7.5 },
+      { label: "SALES TAX", amount: 0.62 },
+      { label: "Total", amount: 8.12 },
+      { label: "AMERICAN EXPRESS", amount: 8.12 },
+    ])]);
+  const d = await receiptDetail(`${TAG}-b`);
+  check("the card line comes back", d?.paid === 8.12, String(d?.paid));
+  check("…the money lines come back, in printed order",
+    d?.totals.length === 4 && d.totals[0]?.label === "Sub Total",
+    JSON.stringify(d?.totals));
+  check("…and which reader produced it", d?.readerVersion === 4, String(d?.readerVersion));
+  check("…while a reading with no block is an empty list, not a crash",
+    (await receiptDetail(`${TAG}-a`))?.totals.length === 0);
 } finally {
   await clean();
   await db().end();

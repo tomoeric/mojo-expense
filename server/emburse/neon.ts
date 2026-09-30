@@ -34,6 +34,7 @@ type Row = {
   left_inbox_at: Date | null;
   section: string | null;
   receipt_count: string;
+  receipt_label: string | null;
   receipt_unread: boolean;
   changes: { field: string; before_value: string | null; after_value: string | null }[] | null;
 };
@@ -46,7 +47,7 @@ export class NeonProvider implements EmburseProvider {
     const { rows } = await db().query<Row>(
       `SELECT e.dedupe_key, e.employee, e.expense_date, e.merchant, e.amount_cents,
               e.category, e.department, e.location, e.note, e.method,
-              e.in_inbox, e.first_seen_at, e.left_inbox_at, e.section,
+              e.in_inbox, e.first_seen_at, e.left_inbox_at, e.section, e.receipt_label,
               (SELECT count(*) FROM expense_receipts r WHERE r.dedupe_key = e.dedupe_key) AS receipt_count,
               -- A receipt attached that nobody has managed to read yet.
               --
@@ -145,6 +146,13 @@ function toReport(key: string, group: Row[], hits: Map<string, Hit[]>): ExpenseR
     // Attached, and still waiting for its first reading.
     receiptUnread: r.receipt_unread === true,
     receiptId: Number(r.receipt_count) > 0 ? r.dedupe_key : "",
+    // What the export's Receipt column said — "Receipt 1 of 2". Imported
+    // since the beginning and never shown, which mattered: it is Emburse's
+    // own count, and an expense whose receipt column says 2 while we hold
+    // one image is a different problem from one with none.
+    receiptLabel: r.receipt_label ?? "",
+    receiptCount: Number(r.receipt_count),
+    firstSeenAt: r.first_seen_at instanceof Date ? r.first_seen_at.toISOString() : null,
     receiptUrl: "",
     glCode: "",
     note: r.note ?? "",

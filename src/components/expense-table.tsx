@@ -4,7 +4,7 @@ import {
   Columns3, ChevronLeft, ChevronRight, RotateCcw, X, Sparkles, Plus, Check, Loader2,
 } from "lucide-react";
 import type { ExpenseReport, ExpenseLine, ReportsResponse } from "@/lib/api";
-import { money, shortDate, daysAgo } from "@/lib/format";
+import { moneyExact, shortDate, daysAgo } from "@/lib/format";
 import { useQuery } from "@tanstack/react-query";
 import { Empty } from "@/components/ui";
 import { failureGroups } from "@/lib/decisions";
@@ -150,7 +150,11 @@ const COLUMNS: Column[] = [
       ) },
   { key: "amount", label: "Amount", pct: 7, numeric: true,
     value: (r) => r.line.amount,
-    render: (r) => <span className="font-semibold">{money(r.line.amount)}</span> },
+    // To the CENT, here and everywhere else on this screen. A queue that
+    // rounds shows three identical "$312" rows for charges of $312.44, and
+    // a $2.71 DollarTree expense as "$3" — which is the figure the whole
+    // Amounts Off check turns on, rendered unusable for checking anything.
+    render: (r) => <span className="font-semibold">{moneyExact(r.line.amount)}</span> },
   // Last by default, and sortable by state so everything still waiting to
   // reach Emburse can be brought together.
   { key: "decide", label: "Decision", pct: 14, wrap: true,
@@ -406,7 +410,7 @@ function BandRows({
                 {band.rows.length} receipt{band.rows.length === 1 ? "" : "s"}
               </span>
               <span className="text-muted-foreground">\u00b7</span>
-              <strong className="tnum font-semibold">{money(band.total)}</strong>
+              <strong className="tnum font-semibold">{moneyExact(band.total)}</strong>
               {said && <span className="text-amber-700 dark:text-amber-400">{said}</span>}
             </span>
           </td>
@@ -1005,7 +1009,7 @@ export function ExpenseTable({
           <span>
             Showing what was flagged for <strong>{group.employee}</strong> on{" "}
             <strong>{group.date}</strong> — {filtered.length}{" "}
-            {filtered.length === 1 ? "expense" : "expenses"}, {money(groupTotal)}.
+            {filtered.length === 1 ? "expense" : "expenses"}, {moneyExact(groupTotal)}.
           </span>
           <button
             type="button"
@@ -1053,7 +1057,7 @@ export function ExpenseTable({
         </div>
 
         <span className="tnum text-sm text-muted-foreground">
-          {sorted.length.toLocaleString()} {sorted.length === 1 ? "expense" : "expenses"} · {money(total)}
+          {sorted.length.toLocaleString()} {sorted.length === 1 ? "expense" : "expenses"} · {moneyExact(total)}
         </span>
 
         <button
@@ -1124,7 +1128,7 @@ export function ExpenseTable({
       {bulk && chosen.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-sky-500/30 bg-sky-500/5 p-2.5 text-xs">
           <span className="font-semibold">
-            {chosen.length.toLocaleString()} selected · {money(chosenTotal)}
+            {chosen.length.toLocaleString()} selected · {moneyExact(chosenTotal)}
           </span>
           {bulk.note && <span className="text-emerald-700">{bulk.note}</span>}
           <button
@@ -1304,7 +1308,7 @@ function ChangeDialog({ row, onClose }: { row: Row; onClose: () => void }) {
         </h3>
         <p className="mt-1 text-xs text-muted-foreground">
           {row.line.merchant} · {row.employee} · {row.line.date ? shortDate(row.line.date) : "no date"} ·{" "}
-          {money(row.line.amount)}
+          {moneyExact(row.line.amount)}
         </p>
 
         <div className="mt-4 space-y-3">

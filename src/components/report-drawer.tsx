@@ -277,6 +277,21 @@ export function ReportDrawer({
  * click: the picture is the thing being reviewed, and a reviewer who has to
  * ask for it will sometimes not bother.
  */
+/**
+ * What Emburse said about the receipt, beside what we actually hold.
+ *
+ * Two different facts that were both invisible: the export's own Receipt
+ * column ("Receipt 1 of 2") and the number of images stored against the
+ * expense. They usually agree; when they do not, that is the finding.
+ */
+function receiptFact(line: ExpenseLine): string {
+  const label = (line.receiptLabel ?? "").trim();
+  const held = line.receiptCount ?? 0;
+  if (!label && held === 0) return line.hasReceipt ? "Yes" : "None";
+  if (!label) return `${held} stored`;
+  return held > 0 ? `${label} · ${held} stored` : `${label} · none stored`;
+}
+
 function LineCard({
   line, department, flagged, audit, items, itemsLoading, itemsEnabled, onShow, isShowing, decide,
 }: {
@@ -293,10 +308,33 @@ function LineCard({
   decide: React.ReactNode;
 }) {
 
+  // EVERYTHING the export gave us about this expense, not the four fields
+  // that happened to be picked first. The rest were imported, stored, and
+  // never shown — so the only way to see what Emburse actually said about a
+  // row was to go and open it in Emburse, which is the errand this drawer
+  // exists to save.
+  //
+  // The five columns below are all the export PDF carries. Business
+  // Purpose, Card Details, Card Holder, Posted Date, Batch Id, Accounting
+  // Export Status and Trip are on Emburse's web grid and NOT in the export,
+  // so they are not ours to show; adding them means adding them to the
+  // export's column selection, which moves the columns this parser reads by
+  // x-position.
   const facts: [string, string][] = [
     ["Location / Site", line.location],
     ["Department", department],
+    ["Category", line.category],
     ["Paid with", line.method],
+    ["Section", line.section ?? ""],
+    // Emburse's own count beside ours. "Receipt 1 of 2" against one stored
+    // image is a different problem from an expense with no receipt at all,
+    // and neither was visible.
+    ["Receipt", receiptFact(line)],
+    ["First imported", line.firstSeenAt ? shortDate(line.firstSeenAt) : ""],
+    ["Currency", line.currency && line.currency !== "USD" ? line.currency : ""],
+    ["Reimbursable", line.reimbursable ? "Yes" : ""],
+    ["Billable", line.billable ? "Yes" : ""],
+    ["GL code", line.glCode],
     ["Note", line.note],
   ];
   const shown = facts.filter(([, v]) => v && v.trim());
@@ -316,7 +354,12 @@ function LineCard({
           {shown.map(([label, value]) => (
             <div key={label} className="flex gap-2">
               <dt className="shrink-0 text-xs text-muted-foreground">{label}</dt>
-              <dd className="ml-auto min-w-0 truncate text-right" title={value}>{value}</dd>
+              {/* Wrapped, not truncated. This is the DETAIL view: the note
+                  is the field most likely to be long and most likely to
+                  matter — "Refund- drb suggested i…" is exactly the thing
+                  somebody opened the drawer to read — and it was being cut
+                  off here as well as in the table. */}
+              <dd className="ml-auto min-w-0 text-right [overflow-wrap:anywhere]">{value}</dd>
             </div>
           ))}
         </dl>
