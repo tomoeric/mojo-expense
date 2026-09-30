@@ -240,8 +240,19 @@ function RuleRow({
           <p className={`tnum text-base leading-none font-extrabold ${rule.stats.fail > 0 ? "text-amber-600" : "text-muted-foreground"}`}>
             {rule.stats.fail.toLocaleString()}
           </p>
+          {/* "In queue" has to mean what the QUEUE means, or the two pages
+              disagree and nobody can tell which is lying. An expense stays
+              in Emburse's inbox after it has been approved here, so a new
+              rule could report "2 in queue" while the queue's flag chips
+              had no such bucket at all — both of its catches were sitting
+              under Approved. Said separately now, because "caught 2, both
+              already decided" is worth being told rather than hidden. */}
           <p className="mt-1 text-muted-foreground">
             caught{rule.stats.waiting > 0 ? ` · ${rule.stats.waiting} in queue` : ""}
+            {rule.stats.decided > 0 ? ` · ${rule.stats.decided} already decided` : ""}
+            {rule.stats.fail > 0 && rule.stats.waiting === 0 && rule.stats.decided === 0
+              ? " · none in the queue now"
+              : ""}
           </p>
         </div>
 

@@ -46,7 +46,7 @@ export type Rule = RuleBody & {
   lastRunAt: string | null;
   summary: string;
   problems: string[];
-  stats: { fail: number; pass: number; waiting: number };
+  stats: { fail: number; pass: number; waiting: number; decided: number };
   /** False when a deciding rule's owner has no Emburse login, so it cannot act. */
   ownerCanDecide: boolean;
 };

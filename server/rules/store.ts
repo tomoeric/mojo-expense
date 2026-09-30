@@ -477,21 +477,43 @@ export async function hitsFor(keys: string[]): Promise<Map<string, Hit[]>> {
 }
 
 /** One line per rule for the Rules page: how many it is currently catching. */
-export async function ruleStats(): Promise<Map<number, { fail: number; pass: number; waiting: number }>> {
+export async function ruleStats(): Promise<
+  Map<number, { fail: number; pass: number; waiting: number; decided: number }>
+> {
   await ensureRules();
-  const { rows } = await db().query<{ rule_id: string; verdict: string; n: string; waiting: string }>(
+  // "Waiting" has to mean what the QUEUE means by it, or the two pages
+  // disagree in a way nobody can resolve.
+  //
+  // It used to mean `in_inbox` alone, and an expense stays in the inbox
+  // after it has been approved here — Emburse only drops it at the next
+  // import. So a new rule could report "2 in queue" while the queue's flag
+  // chips showed no such bucket at all, because both of its catches were
+  // sitting under Approved. The rule was working perfectly and the page
+  // was asking a different question from the one the reader had in mind.
+  //
+  // Counted apart rather than merged: "caught 2, both already decided" is
+  // a useful thing to be told, and hiding it would just move the confusion.
+  const { rows } = await db().query<{
+    rule_id: string; verdict: string; n: string; waiting: string; decided: string;
+  }>(
     `SELECT h.rule_id, h.verdict, count(*) AS n,
-            count(*) FILTER (WHERE e.in_inbox) AS waiting
+            count(*) FILTER (WHERE e.in_inbox AND NOT d.applied) AS waiting,
+            count(*) FILTER (WHERE e.in_inbox AND d.applied) AS decided
        FROM expense_rule_hits h
        JOIN expenses e ON e.dedupe_key = h.dedupe_key
+       CROSS JOIN LATERAL (
+         SELECT EXISTS (
+           SELECT 1 FROM expense_decisions x
+            WHERE x.dedupe_key = h.dedupe_key AND x.state = 'applied') AS applied) d
       GROUP BY h.rule_id, h.verdict`);
-  const out = new Map<number, { fail: number; pass: number; waiting: number }>();
+  const out = new Map<number, { fail: number; pass: number; waiting: number; decided: number }>();
   for (const r of rows) {
     const id = Number(r.rule_id);
-    const cur = out.get(id) ?? { fail: 0, pass: 0, waiting: 0 };
+    const cur = out.get(id) ?? { fail: 0, pass: 0, waiting: 0, decided: 0 };
     if (r.verdict === "fail") {
       cur.fail += Number(r.n);
       cur.waiting += Number(r.waiting);
+      cur.decided += Number(r.decided);
     } else {
       cur.pass += Number(r.n);
     }
