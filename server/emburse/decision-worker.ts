@@ -140,7 +140,7 @@ async function tick(): Promise<void> {
         // a decision never moves, and it used to be visible only in a log.
         await noteAttemptFailed(items.map((d) => d.id),
           `${decider} has no Emburse login stored, so this cannot be applied. ` +
-          `Add one under Your Emburse login, then press Send now.`);
+          `Add one under Your Emburse login and it goes on the next pass, within a few minutes.`);
         continue;
       }
 
