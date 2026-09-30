@@ -120,6 +120,15 @@ type State = {
    */
   hangAll: boolean;
   /**
+   * Sign in through an auto-submitting OAuth assertion page.
+   *
+   * What Emburse really does, and the shape that broke fourteen sign-ins:
+   * a document whose only job is to be replaced by JavaScript the moment
+   * it loads. Anything that decides what is on the page while standing
+   * here is deciding about a page that is leaving.
+   */
+  oidcHop: boolean;
+  /**
    * How the export dialog offers a format.
    *
    *   "links"  — a link that opens a page of choices.
@@ -197,6 +206,7 @@ const state: State = {
   userFilter: "",
   hangOpens: 0,
   hangAll: false,
+  oidcHop: false,
   formatControl: "links",
   chipsUnmatchable: false,
   chipState: "aria",
@@ -425,6 +435,26 @@ const grid = (search: string) => {
 
 const page = (body: string) => `<!doctype html><html><body style="font-family:sans-serif">${body}</body></html>`;
 
+/**
+ * The auto-submitting assertion page, as the real OAuth chain ends with.
+ *
+ * It renders NOTHING useful and navigates itself away a moment later. A
+ * run that reads the page here finds no sign-in form and no app, and both
+ * conclusions are about a document that no longer exists by the time they
+ * are reported.
+ */
+app.get("/login/oidc/assertion", (_req, res) => {
+  res.send(page(`<p>Signing you in…</p>
+    <script>setTimeout(function () { window.location.href = "/home"; }, 900);</script>`));
+});
+
+app.get("/home", (_req, res) => {
+  if (!state.signedIn) { res.redirect("/identity"); return; }
+  res.send(page(
+    `<a href="/admin">MANAGER</a> <a href="/personal">PERSONAL</a> ` +
+    `<a href="/transactions">Transactions</a>`));
+});
+
 app.get("/", (req, res) => {
   // Hang without answering — what a wedged browser looks like from the
   // outside: the navigation never completes.
@@ -440,6 +470,7 @@ app.get("/", (req, res) => {
     state.hangOpens--;
     return;
   }
+  if (state.oidcHop) { res.redirect("/login/oidc/assertion"); return; }
   if (!state.signedIn) {
     // Email first, password on the next screen — the shape account.emburse.app
     // actually uses, and the one that defeats filling both at once.
@@ -857,6 +888,7 @@ app.post("/__app", (req, res) => {
   if ("paintMs" in q) state.appPaintMs = Number(q["paintMs"]) || 0;
   if ("hangOpens" in q) state.hangOpens = Math.max(0, Number(q["hangOpens"]) || 0);
   if ("hangAll" in q) state.hangAll = q["hangAll"] === "true";
+  if ("oidcHop" in q) state.oidcHop = q["oidcHop"] === "true";
   if ("nav" in q) state.showNavLabel = q["nav"] !== "false";
   if ("grid" in q) state.gridShape = q["grid"] as State["gridShape"];
   if ("pad" in q) state.padRows = Math.max(0, Math.min(500, Number(q["pad"]) || 0));
@@ -893,7 +925,7 @@ const reset = () =>
     // one that then failed looked like a regression in whatever it was
     // actually testing, rather than leftover state from three tests ago.
     gridShape: "table", padRows: 0, actionsWork: true, ghostButtons: false, ghostRows: false, twinRows: false, searchMode: "substring",
-    hiddenFromSearch: false, userFilter: "", hangOpens: 0, hangAll: false,
+    hiddenFromSearch: false, userFilter: "", hangOpens: 0, hangAll: false, oidcHop: false,
     formatControl: "links",
     chipsUnmatchable: false, appPaintMs: 0, showNavLabel: true,
     sections: {

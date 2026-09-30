@@ -660,6 +660,15 @@ async function chooseFormatByRole(page: Page): Promise<string | null> {
  * since either arriving is the answer.
  */
 /**
+ * A URL that is part of the sign-in journey rather than a destination.
+ *
+ * The assertion hop is the one that matters: a document whose only job is
+ * to be replaced by JavaScript the moment it loads. Deciding anything on
+ * that page is deciding about a page that is leaving.
+ */
+const MID_SIGN_IN = /\/(?:login|oidc|assertion|authorize|callback|sso)\b/i;
+
+/**
  * How a grid says it has nothing in it.
  *
  * Emburse writes "No rows". That wording was in neither of the two places
@@ -728,11 +737,27 @@ export async function signIn(
   // race times out, and the run used to die claiming the loginEmail selector
   // was wrong while a code box sat on screen waiting to be filled in.
   const codeBoxEarly = page.locator(sel.mfaCode).first();
-  await Promise.race([
-    emailBox.waitFor({ state: "visible" }),
-    loggedIn.waitFor({ state: "visible" }),
-    codeBoxEarly.waitFor({ state: "visible" }),
-  ]).catch(() => {});
+  const settle = async (): Promise<void> => {
+    await Promise.race([
+      emailBox.waitFor({ state: "visible" }),
+      loggedIn.waitFor({ state: "visible" }),
+      codeBoxEarly.waitFor({ state: "visible" }),
+    ]).catch(() => {});
+  };
+  await settle();
+
+  // A second look, if we are still standing in the middle of the sign-in
+  // chain. Emburse's OAuth ends on an auto-submitting assertion page, and
+  // a race that begins there can be cut short by the navigation it is
+  // waiting through — leaving "no sign-in form and the app is not loaded"
+  // about a page that was on its way somewhere. Belt to the load state's
+  // braces: it costs nothing when we are already where we are going.
+  if (MID_SIGN_IN.test(page.url())
+      && !(await emailBox.isVisible().catch(() => false))
+      && !(await loggedIn.isVisible().catch(() => false))) {
+    await page.waitForURL((u) => !MID_SIGN_IN.test(u.toString()), { timeout: 20_000 }).catch(() => {});
+    await settle();
+  }
 
   if (!(await emailBox.isVisible().catch(() => false))) {
     if (await loggedIn.isVisible().catch(() => false)) return "already signed in";
@@ -1136,19 +1161,25 @@ export async function openEmburse(page: Page, url: string): Promise<string> {
   const open = async (): Promise<void> => {
     const from = Date.now();
     try {
-      // "commit", not "domcontentloaded". This waits only for the navigation
-      // to be accepted and the first bytes to arrive; it does NOT wait for
-      // the document to parse. That matters on a slow link, which is what
-      // the failures actually are: twenty-five decisions died here while a
-      // plain HEAD to the same host took fourteen seconds, so the app shell
-      // had no hope of parsing inside ninety.
+      // "domcontentloaded", and NOT "commit". I tried commit — it returns as
+      // soon as the navigation is accepted, before a single byte of script
+      // has run — on the reasoning that every caller waits for something
+      // real afterwards. That reasoning was wrong in one specific way, and
+      // it cost fourteen sign-ins.
       //
-      // Nothing is lost by it. Every caller immediately waits for something
-      // real — the sign-in field, the team tab, the grid — each with its own
-      // budget and its own diagnosis. So a page that commits and then never
-      // renders fails at the step that can say what was on it, instead of
-      // here, where all it can say is "did not load".
-      await page.goto(url, { waitUntil: "commit", timeout: env.emburseLogin.openTimeoutMs });
+      // Emburse signs in through an OAuth chain that ends in an
+      // auto-submitting assertion page: a document whose whole job is to be
+      // replaced by JavaScript the moment it loads. Committing returns ON
+      // that page, so the sign-in check started racing for a form and an
+      // app on a hop that was about to navigate away — and reported "no
+      // sign-in form and the app is not loaded" at
+      // /login/oidc/assertion, and at /home before the shell had drawn.
+      //
+      // domcontentloaded does not wait for subresources either, so it was
+      // never the thing making a slow link slow; the redirects and the TLS
+      // were. It only waits for the document to parse, which is the point
+      // at which the page is a page.
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: env.emburseLogin.openTimeoutMs });
       spent.push(`${((Date.now() - from) / 1000).toFixed(1)}s`);
     } catch (err) {
       spent.push(`timed out after ${((Date.now() - from) / 1000).toFixed(1)}s`);
