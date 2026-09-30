@@ -4,7 +4,7 @@ import { credentialForUser } from "./credentials.js";
 import { runDecisions, type BatchItem } from "./decide.js";
 import { waitForCode } from "./challenge.js";
 import {
-  cancelBecauseFlagged, flaggedNow, noteAttemptFailed, pendingDecisions, settleDecision,
+  cancelBecauseFlagged, flaggedNow, noteAttemptFailed, peersFor, pendingDecisions, settleDecision,
 } from "./decisions.js";
 import { getFlag } from "../flags.js";
 
@@ -144,13 +144,19 @@ async function tick(): Promise<void> {
         continue;
       }
 
+      // How many expenses we hold that are indistinguishable from each of
+      // these. It decides whether the automation may take one of several
+      // matching rows: it may when we hold a decision for every one of
+      // them, because then each decision takes a row and the choice is
+      // bookkeeping rather than a guess.
+      const peers = await peersFor(items.map((d) => d.dedupeKey));
+
       const batch: BatchItem[] = items.map((d) => ({
         id: d.id, decision: d.decision, target: d.target, reason: d.reason,
         // Carried through because it changes what the run is allowed to do
-        // when several rows match the expense equally well: a person who
-        // clicked Approve may have one of them picked for them, the
-        // automation may not.
+        // when several rows match the expense equally well.
         automatic: d.automatic,
+        peers: peers.get(d.dedupeKey) ?? 1,
       }));
 
       console.log(`decisions: applying ${batch.length} as ${decider}`);

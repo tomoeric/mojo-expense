@@ -297,7 +297,7 @@ export async function runDecision(
   selectors: Record<string, string>,
   emburseUrl: string,
   login: Login,
-  opts: { dryRun?: boolean; onChallenge?: ChallengeHook; automatic?: boolean } = {},
+  opts: { dryRun?: boolean; onChallenge?: ChallengeHook; automatic?: boolean; peers?: number } = {},
 ): Promise<DecisionRun> {
   const steps: StepResult[] = [];
   const step = makeStepper(steps);
@@ -454,7 +454,7 @@ export async function runDecisions(
         let matchedRow: string | null = null;
         const ok = await applyOne(
           page, it.decision, it.target, it.reason ?? "", sel, emburseUrl, step,
-          { ...opts, automatic: it.automatic === true },
+          { ...opts, automatic: it.automatic === true, peers: it.peers ?? 1 },
           (t) => (matchedRow = t), login.email,
         );
         const run: DecisionRun = {
@@ -1363,6 +1363,15 @@ export type BatchItem = {
    * one of them pick and not the other.
    */
   automatic?: boolean;
+  /**
+   * How many expenses we hold that are indistinguishable from this one.
+   *
+   * Same person, merchant, amount and day, still in Emburse's inbox. One
+   * purchase divided across sites gives several, and each has its own
+   * decision queued — which is what lets the automation take one of
+   * several matching rows without guessing.
+   */
+  peers?: number;
 };
 
 async function drive(
@@ -1374,7 +1383,7 @@ async function drive(
   emburseUrl: string,
   login: Login,
   step: (name: string, fn: () => Promise<string>) => Promise<boolean>,
-  opts: { dryRun?: boolean; onChallenge?: ChallengeHook; automatic?: boolean },
+  opts: { dryRun?: boolean; onChallenge?: ChallengeHook; automatic?: boolean; peers?: number },
   setRow: (text: string) => void,
 ): Promise<boolean> {
   if (!(await signInOnce(page, sel, emburseUrl, login, step, opts.onChallenge))) return false;
@@ -1473,7 +1482,7 @@ async function applyOne(
   sel: Record<string, string>,
   emburseUrl: string,
   step: (name: string, fn: () => Promise<string>) => Promise<boolean>,
-  opts: { dryRun?: boolean; automatic?: boolean },
+  opts: { dryRun?: boolean; automatic?: boolean; peers?: number },
   setRow: (text: string) => void,
   asEmail?: string,
 ): Promise<boolean> {
@@ -1759,11 +1768,25 @@ async function applyOne(
       //   does not matter whether the rows read alike: unattended, the
       //   question is not "can these be told apart" but "is there anybody
       //   here to take responsibility for picking". There is not.
-      if (opts.automatic) {
+      //
+      // The automation may take one when OUR QUEUE ACCOUNTS FOR THEM ALL.
+      //
+      // Six rows in Emburse, six expenses of ours, six decisions queued:
+      // each decision takes a row and all six are approved, so which one
+      // goes first is bookkeeping. That is the shape a split receipt makes
+      // — seven shares of a lunch, three of a Menards run — and refusing
+      // every one of them left the whole set stuck while the rules had
+      // already found the split sound and cleared it.
+      //
+      // Fewer of ours than rows is the case to refuse: something is there
+      // that we do not hold a decision for, and picking blind among them
+      // is guessing with somebody else's money.
+      const held = opts.peers ?? 1;
+      if (opts.automatic && held < chosen.length) {
         throw new Error(
-          `${chosen.length} rows match this expense equally well, and this was decided by the ` +
-          `automation rather than by a person; refusing to guess which one to ${decision}. ` +
-          `Approve it yourself if any of them will do.`,
+          `${chosen.length} rows match this expense equally well and we hold only ${held} like ` +
+          `it, so the automation cannot say which is which; refusing to guess which one to ` +
+          `${decision}. Approve it yourself if any of them will do.`,
         );
       }
       several = chosen.length;

@@ -115,15 +115,31 @@ try {
       employee: "Kevin McBride", merchant: "MENARDS 3065MENARD INC",
       amount: 312.44, date: "2026-09-24",
     };
-    // The automation did not look at the expense, so it still refuses.
+    // The automation holding only ONE like it cannot say which is which.
     const auto = await runDecisions(
-      [{ id: 1, decision: "approve" as const, reason: "", target: TRIPLE, automatic: true }],
+      [{ id: 1, decision: "approve" as const, reason: "", target: TRIPLE,
+         automatic: true, peers: 1 }],
       SEL, mock.url, LOGIN, { dryRun: true });
     const autoWhy = auto.get(1)?.steps.find((s) => !s.ok)?.detail ?? "";
-    check("the automation still refuses to choose between them",
-      auto.get(1)?.ok === false && /equally well/.test(autoWhy), autoWhy.slice(0, 140));
+    check("the automation refuses when our queue does not account for them all",
+      auto.get(1)?.ok === false && /we hold only 1 like it/.test(autoWhy), autoWhy.slice(0, 160));
     check("…and says to approve it by hand if any of them will do",
       /Approve it yourself/.test(autoWhy), autoWhy.slice(0, 200));
+
+    // Holding one for every row, it may take one: each decision takes a
+    // row and the whole set is approved, so which goes first is
+    // bookkeeping. This is the split-receipt shape — seven shares of a
+    // lunch, three of a Menards run — and refusing every one of them left
+    // the set stuck while the rules had already found the split sound.
+    mock.reset();
+    forgetCardholderIds();
+    const covered = await runDecisions(
+      [{ id: 9, decision: "approve" as const, reason: "", target: TRIPLE,
+         automatic: true, peers: 3 }],
+      SEL, mock.url, LOGIN, { dryRun: true });
+    check("…but takes one when we hold a decision for every row",
+      covered.get(9)?.ok === true,
+      covered.get(9)?.steps.find((s) => !s.ok)?.detail?.slice(0, 160) ?? "no run");
 
     // A person clicked Approve. They looked at it and meant it.
     mock.reset();

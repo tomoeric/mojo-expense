@@ -620,6 +620,38 @@ export async function cancelBecauseFlagged(ids: number[]): Promise<number> {
   return rowCount ?? 0;
 }
 
+/**
+ * How many expenses we hold that are indistinguishable from each of these.
+ *
+ * Same person, merchant, amount and day — the four fields a row is matched
+ * on — and still in Emburse's inbox. One purchase divided across sites
+ * gives several: seven shares of a lunch, three shares of a Menards run.
+ *
+ * The browser needs it to answer a question it cannot answer alone. Six
+ * rows in Emburse match the expense equally well; may the automation take
+ * one? It may if we hold a decision for every one of them, because then
+ * the choice is bookkeeping — each decision takes a row and all six get
+ * approved. It may not if we hold fewer, because then it would be picking.
+ */
+export async function peersFor(keys: string[]): Promise<Map<string, number>> {
+  await ensure();
+  const out = new Map<string, number>();
+  if (keys.length === 0) return out;
+  const { rows } = await db().query<{ dedupe_key: string; peers: string }>(
+    `SELECT e.dedupe_key,
+            (SELECT count(*) FROM expenses p
+              WHERE p.in_inbox
+                AND lower(btrim(p.employee)) = lower(btrim(e.employee))
+                AND lower(btrim(p.merchant)) = lower(btrim(e.merchant))
+                AND p.amount_cents = e.amount_cents
+                AND p.expense_date IS NOT DISTINCT FROM e.expense_date) AS peers
+       FROM expenses e
+      WHERE e.dedupe_key = ANY($1::text[])`,
+    [keys]);
+  for (const r of rows) out.set(r.dedupe_key, Number(r.peers));
+  return out;
+}
+
 /** How many expenses still held locally have already been actioned. */
 export async function appliedCount(): Promise<number> {
   await ensure();
