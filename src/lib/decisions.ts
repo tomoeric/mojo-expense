@@ -298,7 +298,14 @@ export async function approveMany(dedupeKeys: string[]): Promise<{ queued: numbe
 }
 
 /** Look at Emburse's edit form for a queued expense, changing nothing. */
-export async function inspectEditForm(id: number): Promise<{
+/**
+ * Look at Emburse's edit form for an expense, without saving anything.
+ *
+ * Takes a queued decision's id OR an expense's own key: the rows this is
+ * most needed for are the ones nobody wants to approve yet, which by
+ * definition have no decision queued against them.
+ */
+export async function inspectEditForm(id: number | string): Promise<{
   ok: boolean;
   steps: { name: string; ok: boolean; detail: string; ms: number }[];
   fields: string[];

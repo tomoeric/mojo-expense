@@ -488,23 +488,58 @@ decisionRouter.post("/decisions/:id/test", requireAuth, async (req: Request, res
  * pinned Action column. One click here reports what the form really
  * contains, and the change gets written against that.
  */
+
+/** One expense, in the shape the browser verifies a row against. */
+async function targetForExpense(dedupeKey: string): Promise<Target | null> {
+  if (!dedupeKey) return null;
+  const { db } = await import("../db.js");
+  const { rows } = await db().query<{
+    employee: string; merchant: string; amount_cents: string; expense_date: string | null;
+  }>(
+    `SELECT employee, merchant, amount_cents,
+            to_char(expense_date, 'YYYY-MM-DD') AS expense_date
+       FROM expenses WHERE dedupe_key = $1`, [dedupeKey]);
+  const r = rows[0];
+  return r
+    ? {
+        employee: r.employee ?? "",
+        merchant: r.merchant ?? "",
+        amount: Number(r.amount_cents) / 100,
+        date: r.expense_date,
+      }
+    : null;
+}
+
 decisionRouter.post("/decisions/:id/edit-form", requireAuth, async (req: Request, res: Response) => {
   if (!guard(res)) return;
-  const queued = (await pendingDecisions()).find((d) => d.id === Number(req.params.id));
-  if (!queued) {
-    res.status(404).json({ error: "No decision is waiting with that id." });
+  // Any EXPENSE, not only one with a decision already queued.
+  //
+  // It took a decision id, which meant the only rows whose form could be
+  // looked at were ones somebody had already decided to approve — and the
+  // rows this exists for are the opposite: the ones nobody wants to approve
+  // yet because the category is wrong. So a queued decision id still works,
+  // and an expense's own key works too.
+  const raw = String(req.params.id ?? "");
+  const queued = /^\d+$/.test(raw)
+    ? (await pendingDecisions()).find((d) => d.id === Number(raw))
+    : undefined;
+  const target = queued?.target ?? (await targetForExpense(raw));
+  if (!target) {
+    res.status(404).json({ error: "No decision or expense with that id." });
     return;
   }
-  // As the person whose decision it is, like everything else that touches
-  // their Emburse account.
-  const login = await credentialForUser(queued.decidedBy);
+  // As the person whose decision it is where there is one, and as the
+  // signed-in reviewer otherwise — it is their Emburse account either way,
+  // and this reads a form rather than writing anything.
+  const owner = queued?.decidedBy ?? req.user?.email ?? "";
+  const login = await credentialForUser(owner);
   if (!login) {
-    res.status(400).json({ error: `${queued.decidedBy} has no Emburse login stored.` });
+    res.status(400).json({ error: `${owner || "you"} has no Emburse login stored.` });
     return;
   }
   try {
     const settings = await readSettings();
-    const run = await inspectEditForm(queued.target, settings.selectors, settings.emburseUrl, login);
+    const run = await inspectEditForm(target, settings.selectors, settings.emburseUrl, login);
     res.json({ ok: run.ok, steps: run.steps, fields: run.fields, screenshot: run.screenshot });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Could not look at the form." });

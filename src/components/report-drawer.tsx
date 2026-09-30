@@ -8,7 +8,7 @@ import { StatusPill } from "./ui";
 import { ReceiptPane, ReceiptViewer } from "./receipt-viewer";
 import { ReceiptItems, useReceiptItems, type ReceiptDetail } from "./receipt-items";
 import { AuditBadge } from "./audit-badge";
-import { DecideButtons } from "./decide-controls";
+import { DecideButtons, InspectEditForm } from "./decide-controls";
 
 /** Line-level detail for one report — what a reviewer actually reads before approving. */
 export function ReportDrawer({
@@ -231,6 +231,7 @@ export function ReportDrawer({
                     isShowing={showing?.id === l.id}
                     decide={
                       !canDecide ? null : (
+                      <>
                       <DecideButtons
                         canDecide={canDecide}
                         expense={{
@@ -252,6 +253,16 @@ export function ReportDrawer({
                         onCancel={(id) =>
                           cancel.mutate(id, { onError: (e) => setDecideError((e as Error).message) })}
                       />
+                      {/* Reconnaissance for correcting a field in Emburse.
+                          It opens this row's edit form, reports every
+                          control on it and closes without saving — which
+                          is how the next change gets written against what
+                          is really there rather than guessed at. Here
+                          rather than only on a queued decision, because
+                          the rows that need a correction are precisely the
+                          ones nobody wants to approve yet. */}
+                      <InspectEditForm id={l.id} />
+                      </>
                       )
                     }
                   />

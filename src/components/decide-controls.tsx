@@ -575,7 +575,7 @@ function DenyDialog({
  * really contains so the change can be written against it rather than
  * guessed at.
  */
-export function InspectEditForm({ id }: { id: number }) {
+export function InspectEditForm({ id }: { id: number | string }) {
   const [state, setState] = useState<
     { phase: "idle" } | { phase: "running" } | { phase: "done"; ok: boolean; fields: string[]; detail: string }
   >({ phase: "idle" });
