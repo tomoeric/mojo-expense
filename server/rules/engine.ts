@@ -164,17 +164,41 @@ export function chosenReceiptTotal(
   totalsCents: readonly number[],
 ): number | null {
   if (totalsCents.length === 0) return null;
-  if (totalsCents.length === 1) return totalsCents[0]!;
+
+  // A REFUND prints as a positive total against a negative charge.
+  //
+  // Best Buy: "RETURN" at the top, three items handed back, "Total 136.36",
+  // "REFUND AMEX 136.36" — and the expense is a credit of -$136.36. Harbor
+  // Freight the same, at -$108.49. The receipt and the charge are the same
+  // transaction seen from the two ends of it, and both were being reported
+  // as "Receipt total $136.36 does not equal Amount $-136.36", which is
+  // true as arithmetic and wrong about the world. The reader had even
+  // written "this is a return receipt" in its notes.
+  //
+  // One direction only. A CREDIT may be answered by a positive receipt,
+  // because that is what a returns slip prints; a CHARGE is still compared
+  // strictly, so a refund slip attached to a purchase is not waved through.
+  const refund = amountCents < 0;
+  const answers = (c: number): boolean =>
+    refund ? !centsDiffer(Math.abs(c), Math.abs(amountCents)) : !centsDiffer(c, amountCents);
+  /** Signed the way the charge is, once it is established they are the same. */
+  const asCharged = (c: number): number => (refund ? -Math.abs(c) : c);
+
+  if (totalsCents.length === 1) {
+    const only = totalsCents[0]!;
+    return answers(only) ? asCharged(only) : only;
+  }
 
   // The CLOSEST candidate within tolerance, not the first one found. Two
   // scans of one bill can read a penny apart, and picking whichever the sort
   // happened to put first made the figure on the flag depend on nothing.
   let covers: number | null = null;
   for (const c of totalsCents) {
-    if (centsDiffer(c, amountCents)) continue;
-    if (covers === null || Math.abs(c - amountCents) < Math.abs(covers - amountCents)) covers = c;
+    if (!answers(c)) continue;
+    const off = Math.abs(Math.abs(c) - Math.abs(amountCents));
+    if (covers === null || off < Math.abs(Math.abs(covers) - Math.abs(amountCents))) covers = c;
   }
-  if (covers !== null) return covers;
+  if (covers !== null) return asCharged(covers);
 
   let sum = 0;
   for (const c of new Set(totalsCents)) sum += c;

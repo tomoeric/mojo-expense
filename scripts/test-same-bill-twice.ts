@@ -161,6 +161,39 @@ try {
   check("…and both receipts are named", many.includes("$66.98") && many.includes("$30.00"), many);
   check("…and it says how many there are", many.includes("carries 2 receipts"), many);
 
+  console.log("\n2c. A refund: the receipt is positive, the charge is a credit");
+  // Best Buy prints "RETURN" at the top, three items handed back, "Total
+  // 136.36", "REFUND AMEX 136.36" — and the expense is a credit of
+  // -$136.36. Harbor Freight the same at -$108.49. Both were reported as
+  // "Receipt total $136.36 does not equal Amount $-136.36": true as
+  // arithmetic, wrong about the world. They are the same transaction seen
+  // from the two ends of it.
+  const REFUND = `${TAG}-refund`;
+  await addExpense(REFUND, -13636);
+  await addReceipt(REFUND, `${TAG}-r`, 13636);
+  await runRules({ keys: [REFUND], decide: false });
+  check("the returns slip answers the credit", await totalFor(REFUND) === -13636,
+    `${await totalFor(REFUND)}`);
+  check("…so it is not flagged", !(await store.hitsFor([REFUND])).has(REFUND),
+    (await store.hitsFor([REFUND])).get(REFUND)?.[0]?.detail ?? "");
+
+  // One direction only. A returns slip against a PURCHASE is not waved
+  // through: that is a receipt for the opposite of what was claimed.
+  const WRONGWAY = `${TAG}-wrongway`;
+  await addExpense(WRONGWAY, 13636);
+  await addReceipt(WRONGWAY, `${TAG}-w`, -13636);
+  await runRules({ keys: [WRONGWAY], decide: false });
+  check("a credit receipt against a charge is still flagged",
+    (await store.hitsFor([WRONGWAY])).has(WRONGWAY));
+
+  // And a refund whose figure simply does not match still is.
+  const OFFREFUND = `${TAG}-offrefund`;
+  await addExpense(OFFREFUND, -5000);
+  await addReceipt(OFFREFUND, `${TAG}-o`, 13636);
+  await runRules({ keys: [OFFREFUND], decide: false });
+  check("…and so is a refund for the wrong figure",
+    (await store.hitsFor([OFFREFUND])).has(OFFREFUND));
+
   console.log("\n3c. The screen and the rules answer with the same number");
   // They did not, and that is the whole complaint: a green tick reading
   // Match beside a flag reading Amounts Off, on one row, at one moment.
@@ -172,6 +205,11 @@ try {
     { claim: 19793, totals: [6698, 3000] },
     { claim: 1000,  totals: [2500] },
     { claim: 1000,  totals: [] },
+    // Refunds, both ways round.
+    { claim: -13636, totals: [13636] },
+    { claim: -13636, totals: [13636, 13636] },
+    { claim: 13636,  totals: [-13636] },
+    { claim: -5000,  totals: [13636] },
   ];
   const disagreed = cases.filter(({ claim, totals }) => {
     const server = chosenReceiptTotal(claim, totals);

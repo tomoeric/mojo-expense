@@ -89,19 +89,31 @@ export function receiptTotalOf(
     cents.push(Math.round(d.total * 100));
   }
   if (cents.length === 0) return null;
-  if (cents.length === 1) return cents[0]! / 100;
-
+  // A refund prints as a positive total against a negative charge — see
+  // chosenReceiptTotal in server/rules/engine.ts, which this mirrors. A
+  // credit may be answered by a positive receipt; a charge may not be
+  // answered by a negative one.
   const want = Math.round(claimed * 100);
+  const refund = want < 0;
+  const answers = (c: number): boolean =>
+    Math.abs(refund ? Math.abs(c) - Math.abs(want) : c - want)
+      <= Math.max(2, Math.round(Math.abs(want) * 0.01));
+  const asCharged = (c: number): number => (refund ? -Math.abs(c) : c);
+
+  if (cents.length === 1) {
+    const only = cents[0]!;
+    return (answers(only) ? asCharged(only) : only) / 100;
+  }
+
   // The same slack the rules use: two cents, or one percent, whichever is
   // larger. Kept in step with MONEY_TOLERANCE_* in server/rules/engine.ts.
-  const slack = Math.max(2, Math.round(Math.abs(want) * 0.01));
   let covers: number | null = null;
   for (const c of cents) {
-    const off = Math.abs(c - want);
-    if (off > slack) continue;
-    if (covers === null || off < Math.abs(covers - want)) covers = c;
+    if (!answers(c)) continue;
+    const off = Math.abs(Math.abs(c) - Math.abs(want));
+    if (covers === null || off < Math.abs(Math.abs(covers) - Math.abs(want))) covers = c;
   }
-  if (covers !== null) return covers / 100;
+  if (covers !== null) return asCharged(covers) / 100;
 
   let sum = 0;
   for (const c of new Set(cents)) sum += c;
