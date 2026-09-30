@@ -743,7 +743,31 @@ export async function gridLoaded(page: Page, sel: Selectors): Promise<string | n
   // configured selector spent the whole step budget failing. A last resort
   // that is only tried when there is no time left is not a last resort.
   const aria = await firstVisible(page, '[role="grid"], [role="table"]', ms);
-  return aria ? "the grid is on screen" : null;
+  if (aria) return "the grid is on screen";
+
+  /**
+   * One more look when the page says it is still working.
+   *
+   * A real failure reported "Nothing table-like is on the page at all, so
+   * either it had not finished rendering or /transactions/team is not where
+   * this tenant keeps its transactions" — and the page text it quoted began
+   * "Eric Schlicht Mammoth Holdings Loading...". It had not finished
+   * rendering. The first half of that sentence was right and the message
+   * sent somebody to check the second half, which is configuration that was
+   * working.
+   *
+   * So a page still saying "Loading" is given one more full budget rather
+   * than being reported as a selector problem. It costs nothing on a page
+   * that is merely empty — EMPTY_GRID has already answered that above — and
+   * on a slow link it is the difference between an approval and a wrong
+   * diagnosis.
+   */
+  if (!/\bloading\b/i.test(body)) return null;
+  const late = await Promise.all([
+    firstVisible(page, sel.grid, ms),
+    firstVisible(page, '[role="grid"], [role="table"]', ms),
+  ]);
+  return late.some(Boolean) ? "the grid is on screen, after a slow render" : null;
 }
 
 export async function signIn(

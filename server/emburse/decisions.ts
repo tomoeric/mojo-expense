@@ -1,4 +1,5 @@
 import { db, ensureSchema } from "../db.js";
+import { merchantAlike } from "./decide.js";
 import type { Decision, Target } from "./decide.js";
 
 /**
@@ -649,18 +650,44 @@ export async function peersFor(keys: string[]): Promise<Map<string, number>> {
   await ensure();
   const out = new Map<string, number>();
   if (keys.length === 0) return out;
-  const { rows } = await db().query<{ dedupe_key: string; peers: string }>(
-    `SELECT e.dedupe_key,
-            (SELECT count(*) FROM expenses p
-              WHERE p.in_inbox
-                AND lower(btrim(p.employee)) = lower(btrim(e.employee))
-                AND lower(btrim(p.merchant)) = lower(btrim(e.merchant))
-                AND p.amount_cents = e.amount_cents
-                AND p.expense_date IS NOT DISTINCT FROM e.expense_date) AS peers
+
+  // Employee, amount and day in SQL; the merchant in TypeScript, through the
+  // very function the browser matches rows with.
+  //
+  // It used to demand identical merchant strings here while the grid
+  // accepted any row sharing one long word, so the guard weighed a strict
+  // count against a loose one and refused whenever they disagreed. Paul
+  // Deaux II's three $29.99 car washes on 28 August are three rows to the
+  // browser and were one peer to this — "3 rows match this expense equally
+  // well and we hold only 1 like it", for ever, on all three.
+  //
+  // Same predicate on both sides now. Widening it is safe for exactly the
+  // reason the coverage rule exists: what it permits is taking ONE row when
+  // we hold a decision for every row that matches, so each decision takes a
+  // row and all of them are actioned. It never permits acting on a row we
+  // do not have a decision for.
+  const { rows } = await db().query<{
+    dedupe_key: string; merchant: string | null; peer: string | null;
+  }>(
+    `SELECT e.dedupe_key, e.merchant, p.merchant AS peer
        FROM expenses e
+       JOIN expenses p
+         ON p.in_inbox
+        AND lower(btrim(p.employee)) = lower(btrim(e.employee))
+        AND p.amount_cents = e.amount_cents
+        AND p.expense_date IS NOT DISTINCT FROM e.expense_date
       WHERE e.dedupe_key = ANY($1::text[])`,
     [keys]);
-  for (const r of rows) out.set(r.dedupe_key, Number(r.peers));
+
+  for (const key of keys) out.set(key, 0);
+  for (const r of rows) {
+    if (!merchantAlike(r.merchant ?? "", r.peer ?? "")) continue;
+    out.set(r.dedupe_key, (out.get(r.dedupe_key) ?? 0) + 1);
+  }
+  // An expense is always one of its own peers; a key we know nothing about
+  // is still worth one, so the guard never reads zero and refuses a row it
+  // was asked to action.
+  for (const key of keys) if ((out.get(key) ?? 0) === 0) out.set(key, 1);
   return out;
 }
 

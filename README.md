@@ -257,6 +257,16 @@ wrong flag on a purchase that was perfectly ordinary:
   whichever answers the charge wins — never the arithmetic on its own, since
   that is what got the invoice above wrong.
 
+**Both sides of the ambiguity guard mean the same thing.** The guard reads:
+several rows match this expense equally well, so the automation may take one
+only when the queue holds a decision for every one of them. That reasoning
+needs "matching row" and "one like it" to be the same relation, and they were
+not — the browser accepted any row sharing a long word of the merchant, while
+`peersFor` counted our own expenses alike only when the strings were
+identical. Every Mammoth descriptor ends "MAMMOTH HOLDINGS LLC", so three
+$29.99 car washes on one day were three rows on one side and one peer on the
+other, refused for ever. Both now go through `merchantAlike`.
+
 **Forgiving about the vendor when FINDING a row, strict when telling two
 apart.** The amount and date identify an expense and the name is
 corroboration, so one word in common is enough to stop the run refusing

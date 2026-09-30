@@ -159,10 +159,38 @@ export function amountAppears(rowText: string, amount: number): boolean {
 }
 
 /** The parts of a merchant name worth matching on: its long-enough words. */
-const merchantWords = (merchant: string): string[] =>
+export const merchantWords = (merchant: string): string[] =>
   merchant.trim().split(/\s+/)
     .map((w) => w.replace(/[^\w]/g, "").toLowerCase())
     .filter((w) => w.length >= 4);
+
+/**
+ * Would the row matcher accept one of these merchants for the other?
+ *
+ * Exported because two places need the SAME answer and had different ones.
+ * The browser accepts a row when any long word of the expense's merchant
+ * appears in it; `peersFor` counted our own expenses alike only when the
+ * merchant strings were identical. The ambiguity guard then weighed one
+ * against the other — "3 rows match equally well and we hold only 1 like
+ * it" — and was comparing a loose count with a strict one.
+ *
+ * Paul Deaux II's 28 August car washes are the case: BUSY BEE CARWASH -
+ * KENDA…, PITSTOP CARWASH - FAIRHO… and PITSTOP CARWASH - GULFPO…, all
+ * $29.99, all sharing "carwash", and every Mammoth descriptor sharing
+ * "holdings" besides. Three rows, three expenses, three queued approvals —
+ * and a guard that saw three of one and one of the other, so all three sat
+ * refused for ever.
+ *
+ * Symmetric, because "alike" has to be: either name vouching for the other
+ * is the same relation the grid applies in whichever direction it is read.
+ */
+export function merchantAlike(a: string, b: string): boolean {
+  const flat = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const [fa, fb] = [flat(a), flat(b)];
+  const [wa, wb] = [merchantWords(a), merchantWords(b)];
+  if (wa.length === 0 || wb.length === 0) return true;
+  return wa.some((w) => fb.includes(w)) || wb.some((w) => fa.includes(w));
+}
 
 /**
  * How WELL a row's merchant matches, not merely whether it does.
@@ -1099,8 +1127,12 @@ async function whyNoGrid(page: Page, sel: Record<string, string>, asEmail?: stri
       ? `What IS on the page: ${found.map((p) => `${p.sel} ×${p.n}`).join(", ")} — ` +
         `so the page loaded and one of those is the grid. Set the grid and row selectors in ` +
         `Settings to match, rather than changing anything about the account.`
-      : `Nothing table-like is on the page at all, so either it had not finished ` +
-        `rendering or “${sel.gridPath}” is not where this tenant keeps its transactions.`) +
+      : /\bloading\b/i.test(text)
+        ? `Nothing table-like is on the page and it still says "Loading", so it had not ` +
+          `finished rendering — twice over the step budget. That is the link being slow, not ` +
+          `the selectors: nothing here needs changing, and the next run will usually find it.`
+        : `Nothing table-like is on the page at all, so either it had not finished ` +
+          `rendering or “${sel.gridPath}” is not where this tenant keeps its transactions.`) +
     ` The page says: ${text.slice(0, 200) || "(nothing readable)"}`;
 }
 
