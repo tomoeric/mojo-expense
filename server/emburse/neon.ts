@@ -35,6 +35,8 @@ type Row = {
   section: string | null;
   receipt_count: string;
   receipt_label: string | null;
+  share_peers: string | null;
+  share_total_cents: string | null;
   receipt_unread: boolean;
   changes: { field: string; before_value: string | null; after_value: string | null }[] | null;
 };
@@ -49,6 +51,19 @@ export class NeonProvider implements EmburseProvider {
               e.category, e.department, e.location, e.note, e.method,
               e.in_inbox, e.first_seen_at, e.left_inbox_at, e.section, e.receipt_label,
               (SELECT count(*) FROM expense_receipts r WHERE r.dedupe_key = e.dedupe_key) AS receipt_count,
+              -- One receipt divided across expenses, and whether the shares
+              -- add up to it. Identified by content hash, so this is proven
+              -- rather than inferred from a matching merchant and date.
+              (SELECT count(DISTINCT er2.dedupe_key)
+                 FROM expense_receipts er
+                 JOIN expense_receipts er2 ON er2.sha256 = er.sha256
+                WHERE er.dedupe_key = e.dedupe_key) AS share_peers,
+              (SELECT sum(x.amount_cents) FROM (
+                 SELECT DISTINCT er2.dedupe_key, e2.amount_cents
+                   FROM expense_receipts er
+                   JOIN expense_receipts er2 ON er2.sha256 = er.sha256
+                   JOIN expenses e2 ON e2.dedupe_key = er2.dedupe_key
+                  WHERE er.dedupe_key = e.dedupe_key) x) AS share_total_cents,
               -- A receipt attached that nobody has managed to read yet.
               --
               -- Never read, not "not read by the CURRENT reader": bumping
@@ -153,6 +168,8 @@ function toReport(key: string, group: Row[], hits: Map<string, Hit[]>): ExpenseR
     receiptLabel: r.receipt_label ?? "",
     receiptCount: Number(r.receipt_count),
     firstSeenAt: r.first_seen_at instanceof Date ? r.first_seen_at.toISOString() : null,
+    sharedWith: Number(r.share_peers ?? 1),
+    shareTotal: r.share_total_cents === null ? null : Number(r.share_total_cents) / 100,
     receiptUrl: "",
     glCode: "",
     note: r.note ?? "",

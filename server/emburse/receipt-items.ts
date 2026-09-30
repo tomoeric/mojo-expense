@@ -25,11 +25,14 @@ import { callAnthropic, describeAiConfig, supportsEffort } from "../ai.js";
 const Item = z.object({
   description: z.string().describe("The line as printed, tidied of obvious OCR noise but not reworded."),
   alcohol: z.boolean().describe(
-    "True when this line is an alcoholic drink. Judge the product, not the words: MODELO ESP 12PK, " +
+    "True ONLY when the line is a drink that CONTAINS alcohol: beer, wine, spirits, cider, hard " +
+    "seltzer, a liqueur, a cocktail. Judge the product, not the words: MODELO ESP 12PK, " +
     "CAB SAUV GLS, TITOS, LAGUNITAS IPA and BUD LT are all alcohol even though none of them says so. " +
-    "Non-alcoholic drinks that sound alcoholic are not: ginger beer, root beer, O'Doul's, a mocktail, " +
-    "non-alcoholic wine. When a line is too faded to tell what the product is, say false and mention " +
-    "it in notes rather than guessing.",
+    "ENERGY DRINKS ARE NOT ALCOHOL, and this is the mistake to avoid: RED BULL, RDBUL APL ED 12Z, " +
+    "RED BULL SUDACHI LIME, MM 71 Red Bull 12oz, MONSTER, ROCKSTAR, CELSIUS and BANG are soft " +
+    "drinks, whatever they are mixed with elsewhere. Nor are other non-alcoholic drinks that sound " +
+    "alcoholic: ginger beer, root beer, O'Doul's, a mocktail, non-alcoholic wine. When a line is " +
+    "too faded to tell what the product is, say false and mention it in notes rather than guessing.",
   ),
   quantity: z.number().nullable().describe("Units, when the line states one. Null otherwise."),
   unitPrice: z.number().nullable().describe("Price per unit when printed separately. Null otherwise."),
@@ -262,8 +265,37 @@ export const ensureReceiptItems = ensure;
  *   3 — the summary block is transcribed, so the choosing happens in code.
  *   4 — handwritten tips and totals are read, and the lower part of the
  *       receipt is sent again enlarged so the pen is legible.
+ *   5 — an energy drink is not alcohol. Every Red Bull on a fuel-stop
+ *       receipt was coming back flagged as a drink.
  */
-export const READER_VERSION = 4;
+export const READER_VERSION = 5;
+
+/**
+ * Lines that are never alcohol, whatever the model decides.
+ *
+ * A belt to go with the prompt's braces, and narrow on purpose. Every one
+ * of these is a soft drink under every spelling a receipt gives it —
+ * "RDBUL APL ED 12Z", "RED BULL SUDACHI LIME 12", "MM 71 Red Bull 12oz" —
+ * and none of them is ever an alcoholic product, so overriding the model
+ * here cannot hide a real drink. It can only stop the one false positive
+ * that turned every fuel stop with a Red Bull in it into an alcohol flag.
+ *
+ * Anything requiring a judgement stays the model's to make. This list is
+ * for cases where there is no judgement involved.
+ */
+const NEVER_ALCOHOL =
+  /\b(?:red\s?bull|redbull|rdbul|monster\s+energy|rockstar\s+energy|celsius|bang\s+energy|5[-\s]?hour)\b/i;
+
+/**
+ * Whether a line is alcohol: the model's answer, floored by the list above.
+ *
+ * One function so the decision is in one place and can be tested without a
+ * vision call — which matters, because the failure it fixes was silent and
+ * only visible three screens away, as "Receipt shows alcohol is yes" on a
+ * receipt whose strongest drink was a Fiji water.
+ */
+export const isAlcohol = (description: string, modelSaid: boolean): boolean =>
+  modelSaid && !NEVER_ALCOHOL.test(description ?? "");
 
 const cents = (n: number | null | undefined): number | null =>
   n === null || n === undefined || !Number.isFinite(n) ? null : Math.round(n * 100);
@@ -595,7 +627,8 @@ export async function extractReceipt(
         `INSERT INTO receipt_items (sha256, line_no, description, quantity, unit_cents, amount_cents, alcohol)
          VALUES ($1,$2,$3,$4,$5,$6,$7)`,
         [sha256, ++n, item.description.trim().slice(0, 300), item.quantity,
-         cents(item.unitPrice), cents(item.amount), item.alcohol === true],
+         cents(item.unitPrice), cents(item.amount),
+         isAlcohol(item.description ?? "", item.alcohol === true)],
       );
     }
     await client2.query("COMMIT");

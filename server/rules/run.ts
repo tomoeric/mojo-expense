@@ -170,6 +170,17 @@ function groupsFor(rows: Subject[], rule: RuleBody): Map<string, Group> {
   const out = new Map<string, Group>();
   for (const s of rows) {
     if (!applies(s, rule)) continue;
+    // A purchase divided across sites is not this person's day.
+    //
+    // Lunch for seven sites on one card, the same receipt on all seven
+    // expenses, shares that add up to it exactly: that counted as seven
+    // meals totalling $86.60 and tripped both day rules on all seven rows.
+    // There was one meal purchase, and it was not the buyer's lunch.
+    //
+    // Only when the shares RECONCILE and go to different sites — see
+    // splitAware in store.ts. A split that does not add up, or one divided
+    // within a single site, counts exactly as it always did.
+    if (!s.countsTowardsDay) continue;
     const k = dayKey(s);
     const g = out.get(k) ?? { count: 0, totalCents: 0 };
     g.count += 1;

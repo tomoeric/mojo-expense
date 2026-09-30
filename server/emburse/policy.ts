@@ -85,7 +85,31 @@ export function flagsForReport(report: Omit<ExpenseReport, "flags">): PolicyFlag
     });
   }
 
-  const dupes = duplicateLineIds(report.lines);
+  // One receipt divided across sites, named as such.
+  //
+  // Seven lines sharing a merchant, amount and date used to read as seven
+  // possible duplicates — the most alarming thing on the row — when it was
+  // one purchase entered seven times: lunch for seven sites on one card,
+  // the same image on all of them, shares adding to the receipt exactly.
+  // Said plainly, and only where the arithmetic holds, so it never explains
+  // away a split that does not.
+  const split = report.lines.filter(
+    (l) => (l.sharedWith ?? 1) > 1 && l.shareTotal !== null && l.shareTotal !== undefined);
+  const settled = new Set<string>();
+  if (split.length > 0) {
+    const ways = Math.max(...split.map((l) => l.sharedWith ?? 1));
+    const total = split[0]!.shareTotal!;
+    for (const l of split) settled.add(l.id);
+    flags.push({
+      code: "shared-receipt",
+      label: `One receipt divided ${ways} ways — the shares add up to ${total.toFixed(2)}`,
+      severity: "info",
+      lineIds: split.map((l) => l.id),
+    });
+  }
+
+  // Duplicates, minus anything already explained as a share of one receipt.
+  const dupes = duplicateLineIds(report.lines).filter((id) => !settled.has(id));
   if (dupes.length > 0) {
     flags.push({
       code: "possible-duplicate",

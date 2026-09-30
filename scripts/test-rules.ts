@@ -32,6 +32,7 @@ const expense = (over: Partial<Subject> = {}): Subject => ({
   department: "Operations and Field", method: "Corporate card", amountCents: 4512,
   hasReceipt: true, receiptItems: "UNLEADED REGULAR | MONSTER ENERGY", inInbox: true,
   receiptTotalCents: 4512, receiptTotalsCents: [4512], receiptAlcohol: false, receiptReadable: true,
+  receiptSharedWith: 1, receiptSplitAddsUp: false, countsTowardsDay: true,
   receiptDate: "2026-09-18", receiptMerchant: "RaceTrac",
   date: "2026-09-18", ...over,
 });

@@ -501,6 +501,7 @@ const BUILT_IN_GROUP: Record<string, string> = {
   "large-line": "Large amount",
   "weekend-spend": "Weekend",
   "possible-duplicate": "Possible duplicate",
+  "shared-receipt": "Shared receipt",
   ageing: "Waiting too long",
 };
 

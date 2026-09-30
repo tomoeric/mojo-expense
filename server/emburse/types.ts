@@ -21,6 +21,7 @@ export type PolicyFlagCode =
   | "large-line"
   | "weekend-spend"
   | "possible-duplicate"
+  | "shared-receipt"
   | "ageing"
   | "rule-mismatch";
 
@@ -79,6 +80,10 @@ export type ExpenseLine = {
   receiptCount?: number;
   /** When this expense first appeared in an import. */
   firstSeenAt?: string | null;
+  /** How many expenses share this one's receipt image, itself included. */
+  sharedWith?: number;
+  /** What all those shares add up to — compare it with the receipt total. */
+  shareTotal?: number | null;
   /** Tenant's own receipt id, when the line exposes one. */
   receiptId: string;
   /**

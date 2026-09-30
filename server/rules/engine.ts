@@ -27,6 +27,7 @@ export const FIELDS = [
   "note", "merchant", "category", "location", "department", "employee",
   "amount", "method", "receipt", "receiptItems", "receiptTotal",
   "receiptAlcohol", "receiptReadable", "date", "receiptDate", "receiptMerchant",
+  "receiptShared", "receiptSplitAddsUp",
   "dayCount", "dayTotal",
 ] as const;
 export type Field = (typeof FIELDS)[number];
@@ -48,6 +49,8 @@ export const FIELD_LABEL: Record<Field, string> = {
   receiptDate: "Date on the receipt",
   receiptMerchant: "Business name on the receipt",
   receiptTotal: "Receipt total (read off the image)",
+  receiptShared: "Receipt is shared with other expenses",
+  receiptSplitAddsUp: "The shares on that receipt add up",
   dayCount: "Matching expenses that day",
   dayTotal: "Matching total that day",
 };
@@ -63,6 +66,8 @@ export const FIELD_LABEL: Record<Field, string> = {
  */
 const SHORT_LABEL: Partial<Record<Field, string>> = {
   receiptTotal: "Receipt total",
+  receiptShared: "Shared receipt",
+  receiptSplitAddsUp: "The shares add up",
   receiptMerchant: "Receipt business name",
   receiptItems: "Receipt lines",
 };
@@ -230,7 +235,8 @@ export function comparableTo(field: Field): Field[] {
 
 /** Fields whose values come from a permanent list, so the UI offers a dropdown. */
 /** Fields whose values are a fixed yes/no, so the UI offers exactly those. */
-export const YES_NO: ReadonlySet<Field> = new Set<Field>(["receiptAlcohol", "receiptReadable"]);
+export const YES_NO: ReadonlySet<Field> = new Set<Field>(
+  ["receiptAlcohol", "receiptReadable", "receiptShared", "receiptSplitAddsUp"]);
 
 export const FIELD_LIST: Partial<Record<Field, "category" | "location" | "department">> = {
   category: "category",
@@ -387,6 +393,26 @@ export type Subject = {
    * finding, it is a riddle.
    */
   receiptTotalsCents: number[];
+  /**
+   * How many expenses share this expense's receipt image, itself included.
+   *
+   * One means it is nobody else's. More means a purchase was divided —
+   * lunch for seven sites on one card, the same image on all seven.
+   */
+  receiptSharedWith: number;
+  /**
+   * Whether those shares add up to the receipt. Null when it is not shared,
+   * so "no" keeps its meaning: a split that does NOT reconcile.
+   */
+  receiptSplitAddsUp: boolean | null;
+  /**
+   * Whether this expense counts towards its owner's own day.
+   *
+   * False for a reconciling receipt split across several sites: that is
+   * food bought FOR sites, and counting it as one person's lunch is what
+   * made "7 meals, $86.60" out of one purchase.
+   */
+  countsTowardsDay: boolean;
   inInbox: boolean;
   /** The expense's own date, and what a receipt's date is checked against. */
   date: string | null;
@@ -489,6 +515,9 @@ function textOf(subject: Subject, field: Field): string {
       return subject.receiptAlcohol === null ? "" : subject.receiptAlcohol ? "yes" : "no";
     case "receiptReadable":
       return subject.receiptReadable === null ? "" : subject.receiptReadable ? "yes" : "no";
+    case "receiptShared": return subject.receiptSharedWith > 1 ? "yes" : "no";
+    case "receiptSplitAddsUp":
+      return subject.receiptSplitAddsUp === null ? "" : subject.receiptSplitAddsUp ? "yes" : "no";
     case "date": return subject.date ?? "";
     case "receiptDate": return subject.receiptDate ?? "";
     case "receiptMerchant": return subject.receiptMerchant;

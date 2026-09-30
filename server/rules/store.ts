@@ -2,7 +2,8 @@ import type pg from "pg";
 import { db, ensureSchema } from "../db.js";
 import { ensureReceiptItems } from "../emburse/receipt-items.js";
 import {
-  ACTIONS, FIELDS, OPS, chosenReceiptTotal, comparableTo, isGroupField, opsFor, problems, summarise,
+  ACTIONS, FIELDS, OPS, centsDiffer, chosenReceiptTotal, comparableTo, isGroupField, opsFor,
+  problems, summarise,
   type Action, type Condition, type Field, type Op, type RuleBody, type Subject,
 } from "./engine.js";
 
@@ -225,6 +226,76 @@ export async function setEnabled(id: number, enabled: boolean, by: string): Prom
  * one has "· Site: Richland" appended for the screen, and a rule written
  * against what is on screen would match the site by accident.
  */
+/**
+ * What a shared receipt means for the figures a rule sees.
+ *
+ * Somebody buys lunch for seven sites on one card, attaches the SAME
+ * receipt to seven expenses and divides the cost: six shares of $12.37 and
+ * one of $12.38, which is $86.60 — the receipt, to the cent. Three rules
+ * fired on every one of the seven, and all three were wrong about it:
+ *
+ *   "Receipt total $86.60 does not equal Amount $12.37" — of course it
+ *   does not; $12.37 is a seventh of it, and the seven add up.
+ *
+ *   "Matching expenses that day is at most 3 — found 7" — there were not
+ *   seven meals, there was one, entered seven times.
+ *
+ *   "Matching total that day is at most $75 — found $86.60" — true as
+ *   arithmetic, and not what the limit is about: this is food bought FOR
+ *   sites, not one person's lunch.
+ *
+ * So when the shares reconcile against the receipt, this expense's receipt
+ * total becomes its own SHARE, and the expense stops counting towards the
+ * person's own day.
+ *
+ * Two things hold it honest. The receipt is identified by content hash, so
+ * "they share a receipt" is proven rather than inferred from a matching
+ * merchant and date. And the shares have to ADD UP: a split that does not
+ * reconcile gets none of this and flags exactly as loudly as before, which
+ * is the case worth catching.
+ *
+ * The different-sites test is the third. One purchase divided among
+ * several sites is a distribution; the same purchase divided within one
+ * site is a split ledger entry, and a person's daily limits should go on
+ * applying to it — otherwise a large dinner could be split into shares to
+ * walk under the limit.
+ */
+function splitAware(
+  amountCents: number,
+  totalsCents: number[],
+  peers: number,
+  shareTotalCents: number | null,
+  sites: number,
+): {
+  receiptTotalCents: number | null;
+  receiptSharedWith: number;
+  receiptSplitAddsUp: boolean | null;
+  countsTowardsDay: boolean;
+} {
+  const whole = chosenReceiptTotal(amountCents, totalsCents);
+  const shared = peers > 1;
+  if (!shared || whole === null || shareTotalCents === null) {
+    return {
+      receiptTotalCents: whole,
+      receiptSharedWith: peers,
+      receiptSplitAddsUp: shared ? null : false,
+      countsTowardsDay: true,
+    };
+  }
+
+  const addsUp = !centsDiffer(shareTotalCents, whole);
+  const distributed = addsUp && sites > 1;
+  return {
+    // The part of the receipt that belongs to THIS expense, once the split
+    // is shown to be sound. Left as the whole receipt when it is not, so
+    // the mismatch is flagged in the one case that deserves it.
+    receiptTotalCents: addsUp ? amountCents : whole,
+    receiptSharedWith: peers,
+    receiptSplitAddsUp: addsUp,
+    countsTowardsDay: !distributed,
+  };
+}
+
 export async function subjects(
   client: Pick<pg.PoolClient, "query">,
   keys?: string[],
@@ -234,6 +305,7 @@ export async function subjects(
     category: string | null; location: string | null; department: string | null;
     method: string | null; amount_cents: string; receipts: string; items: string | null;
     in_inbox: boolean; expense_date: string | null; receipt_totals: string[] | null;
+    share_peers: string; share_total_cents: string | null; share_sites: string;
     alcohol: boolean | null; readable: boolean | null;
     receipt_date: string | null; receipt_merchant: string | null;
   }>(
@@ -251,6 +323,32 @@ export async function subjects(
             -- "$937.32 does not equal $312.44" on an expense carrying the same
             -- $312.44 bill three times, so it belongs somewhere it can be read
             -- and tested rather than buried in an aggregate.
+            -- A receipt shared with other expenses, and what they add up to.
+            --
+            -- One purchase split across sites is ordinary: somebody buys
+            -- lunch for seven sites, attaches the same receipt to seven
+            -- expenses and divides the cost. The evidence is not a guess —
+            -- it is the SAME IMAGE, by content hash, on all of them.
+            (SELECT count(DISTINCT er2.dedupe_key)
+               FROM expense_receipts er
+               JOIN expense_receipts er2 ON er2.sha256 = er.sha256
+              WHERE er.dedupe_key = e.dedupe_key) AS share_peers,
+            (SELECT sum(x.amount_cents) FROM (
+               SELECT DISTINCT er2.dedupe_key, e2.amount_cents
+                 FROM expense_receipts er
+                 JOIN expense_receipts er2 ON er2.sha256 = er.sha256
+                 JOIN expenses e2 ON e2.dedupe_key = er2.dedupe_key
+                WHERE er.dedupe_key = e.dedupe_key) x) AS share_total_cents,
+            -- How many DIFFERENT sites the shares went to. One purchase
+            -- divided across several sites is a distribution; the same
+            -- purchase divided within one site is just a split ledger
+            -- entry, and the limits that apply to a person's own day
+            -- should go on applying to it.
+            (SELECT count(DISTINCT coalesce(nullif(btrim(e2.location), ''), er2.dedupe_key))
+               FROM expense_receipts er
+               JOIN expense_receipts er2 ON er2.sha256 = er.sha256
+               JOIN expenses e2 ON e2.dedupe_key = er2.dedupe_key
+              WHERE er.dedupe_key = e.dedupe_key) AS share_sites,
             (SELECT array_agg(rr.total_cents ORDER BY rr.total_cents)
                FROM expense_receipts r
                JOIN receipt_readings rr ON rr.sha256 = r.sha256
@@ -303,7 +401,13 @@ export async function subjects(
     hasReceipt: Number(r.receipts) > 0,
     receiptItems: r.items ?? "",
     receiptTotalsCents: (r.receipt_totals ?? []).map(Number),
-    receiptTotalCents: chosenReceiptTotal(Number(r.amount_cents), (r.receipt_totals ?? []).map(Number)),
+    ...splitAware(
+      Number(r.amount_cents),
+      (r.receipt_totals ?? []).map(Number),
+      Number(r.share_peers ?? 1),
+      r.share_total_cents === null ? null : Number(r.share_total_cents),
+      Number(r.share_sites ?? 1),
+    ),
     receiptAlcohol: r.alcohol,
     receiptReadable: r.readable,
     receiptDate: r.receipt_date,

@@ -5,6 +5,7 @@ export type ReportStatus = "draft" | "submitted" | "approved" | "processed" | "r
 export type PolicyFlag = {
   code:
     | "missing-receipt" | "large-line" | "weekend-spend" | "possible-duplicate"
+    | "shared-receipt"
     | "ageing" | "rule-mismatch";
   label: string;
   /** What to bucket it under on the queue — a rule's name, for a rule flag. */
@@ -46,6 +47,10 @@ export type ExpenseLine = {
   receiptCount?: number;
   /** When this expense first appeared in an import. */
   firstSeenAt?: string | null;
+  /** How many expenses share this one's receipt image, itself included. */
+  sharedWith?: number;
+  /** What all those shares add up to — compare it with the receipt total. */
+  shareTotal?: number | null;
   receiptId: string;
   receiptUrl: string;
   glCode: string;
