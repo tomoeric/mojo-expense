@@ -29,6 +29,7 @@ pnpm exec tsx scripts/test-receipt-cleanup.ts  # releasing finished receipts (ne
 pnpm exec tsx scripts/test-release-on-import.ts # what an import reclaims (needs DATABASE_URL)
 pnpm exec tsx scripts/test-decisions.ts        # the decision queue (needs DATABASE_URL + a browser)
 pnpm exec tsx scripts/test-settings-check.ts   # the export-scope warning
+pnpm exec tsx scripts/test-receipt-totals.ts   # four real receipts flagged wrongly (DB half needs DATABASE_URL)
 pnpm exec tsx scripts/test-while-away.ts       # what the automation did since your last visit (needs DATABASE_URL)
 pnpm exec tsx scripts/test-taxonomy.ts         # the permanent lists (DB half needs DATABASE_URL)
 pnpm exec tsx scripts/test-rules.ts            # rules + the fences on deciding (DB half needs DATABASE_URL)

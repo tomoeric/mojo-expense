@@ -132,8 +132,24 @@ try {
   check("and it never ADDS alcohol the model did not see",
     items.isAlcohol("LAGUNITAS IPA 6PK", false) === false);
 
-  console.log("\n5. The reader was bumped, so stored readings are done again");
-  check("reader version is 5", items.READER_VERSION === 5, String(items.READER_VERSION));
+  console.log("\n5. Fountain drinks are not alcohol either");
+  // Chipotle, Sep 23: Chicken Quesadilla, White Rice, Chips, "22 fl oz
+  // Soda/Iced Tea" — and the expense came back flagged for alcohol.
+  for (const d of ["22 FL OZ SODA/ICED TEA", "FOUNTAIN DRINK LG", "SWEET TEA",
+                   "LEMONADE", "GATORADE 20OZ", "DR PEPPER 2L", "ICED COFFEE",
+                   "OJ JUICE", "BOTTLED WATER"]) {
+    check(`“${d}” is not alcohol`, items.isAlcohol(d, true) === false);
+  }
+  // Widening the floor must not excuse the thing the rule is FOR. Each of
+  // these contains a word from the list above and is still a drink.
+  for (const d of ["VODKA SODA", "HARD ICED TEA", "TWISTED TEA 6PK",
+                   "SPIKED LEMONADE", "WHITE CLAW SELTZER", "HARD CIDER",
+                   "IRISH COFFEE", "RUM & COLA"]) {
+    check(`“${d}” still is`, items.isAlcohol(d, true) === true);
+  }
+
+  console.log("\n6. The reader was bumped, so stored readings are done again");
+  check("reader version is 6", items.READER_VERSION === 6, String(items.READER_VERSION));
 } finally {
   await clean();
   await db().end();

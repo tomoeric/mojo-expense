@@ -238,6 +238,25 @@ decision for *every* matching row, in which case the choice is bookkeeping and
 all seven get approved anyway. Holding fewer, it refuses and says so rather
 than guessing.
 
+**What may be believed about a receipt.** Three rules, each learned from a
+wrong flag on a purchase that was perfectly ordinary:
+
+- **An illegible reading is evidence of nothing.** The reader answers
+  `legible` separately from `error`, and a reading that says "too faded to
+  read" can still return a total. It is a guess. Its total, date, merchant
+  and lines are all excluded from the rules; the only thing it establishes is
+  that the receipt could not be read, which is its own flag.
+- **A payment line settles the total, in both directions.** Where the card
+  line agrees with the printed total, the receipt has answered the question
+  and no arithmetic may reopen it — an invoice whose "Subtotal" already
+  includes the tax was otherwise "corrected" upward by exactly the tax.
+- **The charge decides between the print and the arithmetic.** A receipt can
+  be internally inconsistent and still honest: a crumpled slip whose 6 read
+  as a 5 in all three places it was printed, while its own items and tax add
+  to exactly what was charged. Both figures are offered as candidates and
+  whichever answers the charge wins — never the arithmetic on its own, since
+  that is what got the invoice above wrong.
+
 **An expense Emburse no longer has is not a failure.** Somebody approving or
 denying directly in Emburse is allowed and normal, and when a run reads that
 cardholder's whole Needs Review and finds no row for the amount, there is

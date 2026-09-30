@@ -162,6 +162,26 @@ export const centsDiffer = (aCents: number, bCents: number): boolean =>
 export function chosenReceiptTotal(
   amountCents: number,
   totalsCents: readonly number[],
+  /**
+   * The same receipts read a second way: subtotal + tax + tip, off the
+   * receipt's own figures.
+   *
+   * A receipt can be internally inconsistent and still be perfectly honest,
+   * because the print is what fails, not the purchase. A crumpled Dollar
+   * Tree slip listed four items at 1.50, tax 0.37, and a smudged total that
+   * read 5.37 in all three places it appeared — while 6.00 + 0.37 = 6.37 is
+   * both the arithmetic and the charge. Asserting 5.37 as "the receipt
+   * total" and flagging a dollar of overclaim is a confident statement
+   * built on the one figure that could not be read.
+   *
+   * These are candidates, never a replacement: an arithmetic figure is only
+   * ever preferred when it ANSWERS THE CHARGE and the printed one does not.
+   * An Airline Hydraulics invoice prints Subtotal 159.61 with tax already in
+   * it and a Stripe payment of 159.61 — arithmetic says 171.44, and it is
+   * wrong. The charge decides between them, which is the only thing that
+   * can.
+   */
+  arithmeticCents: readonly number[] = [],
 ): number | null {
   if (totalsCents.length === 0) return null;
 
@@ -184,9 +204,16 @@ export function chosenReceiptTotal(
   /** Signed the way the charge is, once it is established they are the same. */
   const asCharged = (c: number): number => (refund ? -Math.abs(c) : c);
 
+  /** An arithmetic reading that answers the charge, when nothing else did. */
+  const byArithmetic = (): number | null => {
+    for (const c of arithmeticCents) if (answers(c)) return asCharged(c);
+    return null;
+  };
+
   if (totalsCents.length === 1) {
     const only = totalsCents[0]!;
-    return answers(only) ? asCharged(only) : only;
+    if (answers(only)) return asCharged(only);
+    return byArithmetic() ?? only;
   }
 
   // The CLOSEST candidate within tolerance, not the first one found. Two
@@ -199,6 +226,9 @@ export function chosenReceiptTotal(
     if (covers === null || off < Math.abs(Math.abs(covers) - Math.abs(amountCents))) covers = c;
   }
   if (covers !== null) return asCharged(covers);
+
+  const arithmetic = byArithmetic();
+  if (arithmetic !== null) return arithmetic;
 
   let sum = 0;
   for (const c of new Set(totalsCents)) sum += c;

@@ -268,7 +268,7 @@ export const ensureReceiptItems = ensure;
  *   5 — an energy drink is not alcohol. Every Red Bull on a fuel-stop
  *       receipt was coming back flagged as a drink.
  */
-export const READER_VERSION = 5;
+export const READER_VERSION = 6;
 
 /**
  * Lines that are never alcohol, whatever the model decides.
@@ -284,7 +284,18 @@ export const READER_VERSION = 5;
  * for cases where there is no judgement involved.
  */
 const NEVER_ALCOHOL =
-  /\b(?:red\s?bull|redbull|rdbul|monster\s+energy|rockstar\s+energy|celsius|bang\s+energy|5[-\s]?hour)\b/i;
+  /\b(?:red\s?bull|redbull|rdbul|monster\s+energy|rockstar\s+energy|celsius|bang\s+energy|5[-\s]?hour|soda|soft\s*drink|fountain\s*drink|iced\s*tea|sweet\s*tea|lemonade|gatorade|powerade|coca[-\s]?cola|cola|sprite|pepsi|dr\.?\s*pepper|mtn\s*dew|mountain\s*dew|root\s*beer|ginger\s*ale|coffee|latte|cappuccino|espresso|juice|milk|water)\b/i;
+
+/**
+ * Words that put a drink back on the list whatever else the line says.
+ *
+ * The floor above is a list of things that are not alcohol, and half of
+ * them become alcohol with one word in front: a vodka soda, a hard iced
+ * tea, a spiked lemonade, a Twisted Tea. Without this, widening the floor
+ * to cover a Chipotle fountain drink would quietly excuse a bar tab.
+ */
+const ALCOHOL_ANYWAY =
+  /\b(?:hard|spiked|boozy|twisted\s*tea|irish\s*coffee|baileys|kahlua|amaretto|vodka|whisk(?:e)?y|bourbon|scotch|rum|gin|tequila|mezcal|brandy|cognac|liqueur|schnapps|aperol|campari|sangria|mimosa|margarita|mojito|martini|cocktail|beer|lager|ale|ipa|stout|pilsner|cider|wine|prosecco|champagne|seltzer)\b/i;
 
 /**
  * Whether a line is alcohol: the model's answer, floored by the list above.
@@ -294,8 +305,14 @@ const NEVER_ALCOHOL =
  * only visible three screens away, as "Receipt shows alcohol is yes" on a
  * receipt whose strongest drink was a Fiji water.
  */
-export const isAlcohol = (description: string, modelSaid: boolean): boolean =>
-  modelSaid && !NEVER_ALCOHOL.test(description ?? "");
+export const isAlcohol = (description: string, modelSaid: boolean): boolean => {
+  const d = description ?? "";
+  if (!modelSaid) return false;
+  // The qualifier wins over the floor, so widening the floor to cover
+  // fountain drinks cannot wave through a vodka soda.
+  if (ALCOHOL_ANYWAY.test(d)) return true;
+  return !NEVER_ALCOHOL.test(d);
+};
 
 const cents = (n: number | null | undefined): number | null =>
   n === null || n === undefined || !Number.isFinite(n) ? null : Math.round(n * 100);
@@ -342,6 +359,23 @@ and the card line. Do not decide which of them is the real total, do not
 drop one because it repeats the figure above it, and do not tidy the
 labels. Choosing is done elsewhere; getting the lines down accurately is
 the job here, and it is the job you are good at.
+
+A DISCOUNT LINE BREAKS THE CLIMB. Where a promotion is deducted, the
+figure above it is a pre-discount running total and not the answer:
+
+    Bag Total    14.70    <- before the promotion, NOT the answer
+    FREE CHIPS   -1.95
+    Subtotal     12.75
+    Tax           1.07
+    Total        13.82    <- charged
+
+Transcribe every line of that block, the negative one included, and put
+the figure the card was charged in "total".
+
+ALCOHOL IS DRINK WITH ALCOHOL IN IT. A fountain soda, iced tea, lemonade,
+coffee, juice or energy drink is not alcohol, however it is abbreviated.
+Mark alcohol true only where the line names a drink that actually is one —
+beer, wine, a spirit, a cocktail, a hard seltzer or a hard tea.
 
 Where a second image is given, it is the lower part of the SAME receipt,
 enlarged. Read the money off that one — it is the same print, bigger.
@@ -434,9 +468,34 @@ export function chargedTotal(r: ReceiptReading): ReceiptReading {
   });
 
   // The payment line, when there is one. It is the figure the card was
-  // charged, stated by the receipt itself, and it beats any arithmetic.
+  // charged, stated by the receipt itself, and it beats any arithmetic —
+  // in BOTH directions.
+  //
+  // Agreeing has to stop the search, not merely fail to start a correction.
+  // An Airline Hydraulics invoice prints Freight 10.68, Tax Amount 11.83,
+  // Subtotal 159.61, Stripe Payment 159.61 — tax is already inside that
+  // subtotal. The card and the total agreed on 159.61 and the code read on,
+  // found total == subtotal, decided the total was "before the tax" and
+  // added 11.83 to it. An invoice that states what it was paid, twice, was
+  // reported as $11.83 of underclaiming.
+  if (paid !== null && paid > 0 && total !== null && near(total, paid)) return r;
   if (paid !== null && paid > 0 && (total === null || !near(total, paid))) {
     return note(total, paid, "is not what the card paid");
+  }
+
+  // The receipt's own parts already add up to its printed total, so there is
+  // nothing to correct and — this is the part that matters — nothing to look
+  // for in the summary block either.
+  //
+  // Chipotle: Bag Total 14.70, FREE CHIPS -1.95, Subtotal 12.75, Tax 1.07,
+  // Total 13.82. The reader had 13.82 right. The block rule below takes the
+  // largest line when no payment line is named, on the reasoning that a
+  // summary climbs upwards — which a promotion breaks, because the pile
+  // starts ABOVE the discount. 14.70 won, and a receipt that reconciled
+  // perfectly was reported as 88 cents of overclaiming.
+  if (total !== null && subtotal !== null
+      && near(total, Number((subtotal + (tax ?? 0) + (tip ?? 0)).toFixed(2)))) {
+    return r;
   }
   // Failing that, the summary block as printed. This is what catches the
   // receipt where the reading put 12.49 in `total`, nothing in `subtotal`

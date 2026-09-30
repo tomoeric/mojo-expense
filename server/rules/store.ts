@@ -263,6 +263,8 @@ export async function setEnabled(id: number, enabled: boolean, by: string): Prom
 function splitAware(
   amountCents: number,
   totalsCents: number[],
+  /** The same receipts read as subtotal + tax + tip. See `chosenReceiptTotal`. */
+  arithmeticCents: number[],
   peers: number,
   shareTotalCents: number | null,
   sites: number,
@@ -272,7 +274,7 @@ function splitAware(
   receiptSplitAddsUp: boolean | null;
   countsTowardsDay: boolean;
 } {
-  const whole = chosenReceiptTotal(amountCents, totalsCents);
+  const whole = chosenReceiptTotal(amountCents, totalsCents, arithmeticCents);
   const shared = peers > 1;
   if (!shared || whole === null || shareTotalCents === null) {
     return {
@@ -305,6 +307,7 @@ export async function subjects(
     category: string | null; location: string | null; department: string | null;
     method: string | null; amount_cents: string; receipts: string; items: string | null;
     in_inbox: boolean; expense_date: string | null; receipt_totals: string[] | null;
+    receipt_arithmetic: string[] | null;
     share_peers: string; share_total_cents: string | null; share_sites: string;
     alcohol: boolean | null; readable: boolean | null;
     receipt_date: string | null; receipt_merchant: string | null;
@@ -349,17 +352,31 @@ export async function subjects(
                JOIN expense_receipts er2 ON er2.sha256 = er.sha256
                JOIN expenses e2 ON e2.dedupe_key = er2.dedupe_key
               WHERE er.dedupe_key = e.dedupe_key) AS share_sites,
+            -- ONE PER RECEIPT, so a flag saying "this expense carries 3
+            -- receipts" is counting receipts and not candidates.
             (SELECT array_agg(rr.total_cents ORDER BY rr.total_cents)
                FROM expense_receipts r
                JOIN receipt_readings rr ON rr.sha256 = r.sha256
               WHERE r.dedupe_key = e.dedupe_key
-                AND rr.error IS NULL
+                AND rr.error IS NULL AND rr.legible
                 AND rr.total_cents IS NOT NULL) AS receipt_totals,
+            -- The same receipts read a second way, off their own parts.
+            -- Never the answer on its own; only ever preferred over the
+            -- printed figure when it is the one that answers the charge.
+            -- See chosenReceiptTotal for why the charge has to decide.
+            (SELECT array_agg(DISTINCT rr.subtotal_cents
+                              + coalesce(rr.tax_cents, 0) + coalesce(rr.tip_cents, 0))
+               FROM expense_receipts r
+               JOIN receipt_readings rr ON rr.sha256 = r.sha256
+              WHERE r.dedupe_key = e.dedupe_key
+                AND rr.error IS NULL AND rr.legible
+                AND rr.subtotal_cents IS NOT NULL) AS receipt_arithmetic,
             -- Alcohol on any line the reader saw. NULL when no reading with
             -- usable lines exists, so "cannot say" stays distinct from "no".
             (SELECT bool_or(i.alcohol)
                FROM expense_receipts r
-               JOIN receipt_readings rr ON rr.sha256 = r.sha256 AND rr.error IS NULL
+               JOIN receipt_readings rr ON rr.sha256 = r.sha256
+                    AND rr.error IS NULL AND rr.legible
                JOIN receipt_items i ON i.sha256 = r.sha256
               WHERE r.dedupe_key = e.dedupe_key) AS alcohol,
             -- Did the reader get anything usable at all: legible AND listing
@@ -375,12 +392,14 @@ export async function subjects(
             -- happened to reach first.
             (SELECT min(to_char(rr.purchased_at, 'YYYY-MM-DD'))
                FROM expense_receipts r
-               JOIN receipt_readings rr ON rr.sha256 = r.sha256 AND rr.error IS NULL
+               JOIN receipt_readings rr ON rr.sha256 = r.sha256
+                    AND rr.error IS NULL AND rr.legible
               WHERE r.dedupe_key = e.dedupe_key
                 AND rr.purchased_at IS NOT NULL) AS receipt_date,
             (SELECT min(rr.merchant)
                FROM expense_receipts r
-               JOIN receipt_readings rr ON rr.sha256 = r.sha256 AND rr.error IS NULL
+               JOIN receipt_readings rr ON rr.sha256 = r.sha256
+                    AND rr.error IS NULL AND rr.legible
               WHERE r.dedupe_key = e.dedupe_key
                 AND rr.merchant IS NOT NULL AND rr.merchant <> '') AS receipt_merchant
        FROM expenses e
@@ -404,6 +423,7 @@ export async function subjects(
     ...splitAware(
       Number(r.amount_cents),
       (r.receipt_totals ?? []).map(Number),
+      (r.receipt_arithmetic ?? []).map(Number),
       Number(r.share_peers ?? 1),
       r.share_total_cents === null ? null : Number(r.share_total_cents),
       Number(r.share_sites ?? 1),
