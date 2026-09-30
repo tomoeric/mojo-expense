@@ -156,6 +156,58 @@ try {
       run?.steps.find((s) => s.name === "search for the expense")?.detail ?? "");
   }
 
+  console.log("\n2e. Sibling sites are not interchangeable rows");
+  // Paul Deaux II, 28 August: BUSY BEE CARWASH - KENDA, PITSTOP CARWASH -
+  // FAIRHO and PITSTOP CARWASH - GULFPO, all $29.99. Every one shares the
+  // word "CARWASH" with every other, so the loose vendor test passed all
+  // three against each other and the automation refused them as "3 rows
+  // match this expense equally well". A person reading the grid can tell
+  // them apart instantly — the site is in the name.
+  //
+  // The refusal was the visible half. The dangerous half is that the guard
+  // compares these fuzzy row matches against a peer count taken on the
+  // EXACT merchant, so two notions of "alike" sat on either side of a rule
+  // about which row to approve.
+  mock.reset();
+  forgetCardholderIds();
+  {
+    const one = await runDecision("approve", {
+      employee: "Kevin McBride", merchant: "PITSTOP CARWASH - FAIRHOMAMMOTH HOLDINGS LLC",
+      amount: 29.99, date: "2026-08-28",
+    }, "", SEL, mock.url, LOGIN, { dryRun: true, automatic: true, peers: 1 });
+    check("the automation takes the row naming ITS site, with one peer",
+      one.ok, why(one));
+    check("…and says the siblings were set aside",
+      /shares a word of the vendor name but not the site|share a word of the vendor name but not the site/
+        .test(how(one)), how(one));
+    check("…and it is the Fairhope row", /Fairhope/.test(one.matchedRow ?? ""),
+      one.matchedRow ?? "");
+  }
+  {
+    // The other one, to prove it is choosing rather than always taking the
+    // first of the three.
+    mock.reset();
+    forgetCardholderIds();
+    const other = await runDecision("approve", {
+      employee: "Kevin McBride", merchant: "PITSTOP CARWASH - GULFPOMAMMOTH HOLDINGS LLC",
+      amount: 29.99, date: "2026-08-28",
+    }, "", SEL, mock.url, LOGIN, { dryRun: true, automatic: true, peers: 1 });
+    check("…and the Gulfport expense takes the Gulfport row",
+      other.ok && /Gulfport/.test(other.matchedRow ?? ""), other.matchedRow ?? why(other));
+  }
+  {
+    // What must NOT change: rows that really are alike stay a tie, so the
+    // peers rule still decides them.
+    mock.reset();
+    forgetCardholderIds();
+    const twins = await runDecision("approve", {
+      employee: "Kevin McBride", merchant: "MENARDS 3065MENARD INC",
+      amount: 312.44, date: "2026-09-24",
+    }, "", SEL, mock.url, LOGIN, { dryRun: true, automatic: true, peers: 1 });
+    check("a genuine three-way tie is still refused when we hold one",
+      twins.ok === false && /we hold only 1 like it/.test(why(twins)), why(twins).slice(0, 140));
+  }
+
   console.log("\n2c. Approving one of several identical rows is CONFIRMED");
   // "Nothing gets approved." Four automatic approvals came back as "clicked
   // APPROVE, but the expense is still in Needs Review 20 seconds later" —

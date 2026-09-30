@@ -158,6 +158,43 @@ export function amountAppears(rowText: string, amount: number): boolean {
     new RegExp(`(?<![\\d.,])${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\d])`).test(text));
 }
 
+/** The parts of a merchant name worth matching on: its long-enough words. */
+const merchantWords = (merchant: string): string[] =>
+  merchant.trim().split(/\s+/)
+    .map((w) => w.replace(/[^\w]/g, "").toLowerCase())
+    .filter((w) => w.length >= 4);
+
+/**
+ * How WELL a row's merchant matches, not merely whether it does.
+ *
+ * `rowMatches` is deliberately forgiving about the vendor — the amount and
+ * the date identify the expense and the name is corroboration, so one word
+ * in common is enough to stop it refusing "ACE HARDWARE #18…" for
+ * "ACE HARDWARE HELM, LLC".
+ *
+ * Forgiving is right for FINDING a row and wrong for telling two rows
+ * apart. Paul Deaux II has three car washes at $29.99 on 28 August:
+ * BUSY BEE CARWASH - KENDA, PITSTOP CARWASH - FAIRHO and PITSTOP CARWASH -
+ * GULFPO. Every one of them shares the word "carwash" with every other, so
+ * all three "matched equally well" and the automation refused all three as
+ * indistinguishable — while a person reading the grid can tell them apart
+ * instantly, because the site is right there in the name.
+ *
+ * Worse than the refusal is what the refusal was protecting against. The
+ * ambiguity guard compares these fuzzy row matches against `peersFor`,
+ * which counts our expenses by EXACT merchant. Two different notions of
+ * "alike" on either side of a rule about which row to approve is how the
+ * automation would eventually take a row belonging to another site.
+ *
+ * So: count the words that actually appear. The rows that score highest are
+ * the ones this expense is really about, and where one row beats the rest
+ * there is nothing ambiguous to refuse.
+ */
+export function merchantScore(rowText: string, merchant: string): number {
+  const flat = rowText.replace(/\s+/g, " ").toLowerCase().replace(/[^a-z0-9]/g, "");
+  return merchantWords(merchant).filter((w) => flat.includes(w)).length;
+}
+
 export function rowMatches(rowText: string, t: Target): { ok: boolean; why: string } {
   const text = rowText.replace(/\s+/g, " ").trim();
   const lower = text.toLowerCase();
@@ -257,9 +294,7 @@ export function rowMatches(rowText: string, t: Target): { ok: boolean; why: stri
   // The amount and the date are what identify the expense; the vendor name
   // is corroboration, and corroboration should be fuzzy.
   const flat = lower.replace(/[^a-z0-9]/g, "");
-  const words = t.merchant.trim().split(/\s+/)
-    .map((w) => w.replace(/[^\w]/g, "").toLowerCase())
-    .filter((w) => w.length >= 4);
+  const words = merchantWords(t.merchant);
   if (words.length > 0 && !words.some((w) => flat.includes(w))) {
     return { ok: false, why: `merchant "${t.merchant}" not in the row` };
   }
@@ -1751,7 +1786,33 @@ async function applyOne(
 
     // Hidden copies first: a grid that keeps them matches the same expense
     // more than once, and none of the copies is the row on screen.
-    const chosen = matches.length > 1 ? await visibleOf(rows, matches) : matches;
+    const visible = matches.length > 1 ? await visibleOf(rows, matches) : matches;
+
+    /**
+     * Then the CLOSEST vendor name, which is what separates a sibling site
+     * from a genuine twin.
+     *
+     * Three car washes at $29.99 on one day all share the word "carwash",
+     * so the loose vendor test in `rowMatches` passes every one of them
+     * against every other — and three rows that a person can tell apart at
+     * a glance became "3 rows match this expense equally well". Scoring the
+     * name puts the row whose site actually matches ahead of its siblings,
+     * and leaves the tie only where the names really are the same, which is
+     * the split-receipt case the peers rule below is for.
+     */
+    let chosen = visible;
+    let sharpened = 0;
+    if (visible.length > 1) {
+      const scores = await Promise.all(visible.map(async (i) =>
+        merchantScore(await rows.nth(i).innerText().catch(() => ""), target.merchant)));
+      const best = Math.max(...scores);
+      const closest = visible.filter((_, k) => scores[k] === best);
+      if (closest.length < visible.length) {
+        sharpened = visible.length - closest.length;
+        chosen = closest;
+      }
+    }
+
     let several = 0;
     if (chosen.length > 1) {
       // Several rows match the expense on employee, merchant, amount AND
@@ -1809,11 +1870,18 @@ async function applyOne(
     }
 
     row = rows.nth(chosen[0]!);
-    const ghosts = matches.length - chosen.length;
+    // Against the VISIBLE set, not the chosen one: a row set aside for
+    // naming a different site is not a hidden copy, and counting it as one
+    // would report the grid's own duplication wrongly.
+    const ghosts = matches.length - visible.length;
     // Which term found it, because the first one often does not and that is
     // the single most useful thing this step can report.
     return `matched 1 of ${count} rows searching “${term}”` +
       (ghosts > 0 ? ` (${ghosts} hidden ${ghosts === 1 ? "copy" : "copies"} ignored)` : "") +
+      (sharpened > 0
+        ? ` (${sharpened} other ${sharpened === 1 ? "row shares" : "rows share"} a word of the ` +
+          `vendor name but not the site, and ${sharpened === 1 ? "was" : "were"} set aside)`
+        : "") +
       (several > 1
         ? ` (${several} rows matched equally well — took one; they are interchangeable for ` +
           `this decision, and the others belong to the other decisions queued for them)`

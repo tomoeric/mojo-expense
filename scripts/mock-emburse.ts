@@ -254,6 +254,15 @@ const ROWS = [
   { date: "9/24/2026", merchant: "MENARDS 3065MENARD INC", who: "Kevin McBride", amount: "312.44", shy: true, site: "York" },
   { date: "9/24/2026", merchant: "MENARDS 3065MENARD INC", who: "Kevin McBride", amount: "312.44", shy: true, site: "Maintenance" },
   { date: "9/24/2026", merchant: "MENARDS 3065MENARD INC", who: "Kevin McBride", amount: "312.44", shy: true, site: "Ashland" },
+  // Three car washes, one person, one day, one amount — and DIFFERENT
+  // vendors. The loose vendor test passes all three against each other on
+  // the shared word "CARWASH", so they looked as interchangeable as the
+  // Menards rows above and were refused as such. They are nothing of the
+  // kind: approving the wrong one approves another site's expense. The
+  // site is right there in the name, which is what tells them apart.
+  { date: "8/28/2026", merchant: "BUSY BEE CARWASH - KENDAMAMMOTH HOLDINGS, LLC", who: "Kevin McBride", amount: "29.99", shy: true, site: "Kendall" },
+  { date: "8/28/2026", merchant: "PITSTOP CARWASH - FAIRHOMAMMOTH HOLDINGS LLC", who: "Kevin McBride", amount: "29.99", shy: true, site: "Fairhope" },
+  { date: "8/28/2026", merchant: "PITSTOP CARWASH - GULFPOMAMMOTH HOLDINGS LLC", who: "Kevin McBride", amount: "29.99", shy: true, site: "Gulfport" },
 ];
 
 /**

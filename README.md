@@ -257,6 +257,19 @@ wrong flag on a purchase that was perfectly ordinary:
   whichever answers the charge wins — never the arithmetic on its own, since
   that is what got the invoice above wrong.
 
+**Forgiving about the vendor when FINDING a row, strict when telling two
+apart.** The amount and date identify an expense and the name is
+corroboration, so one word in common is enough to stop the run refusing
+"ACE HARDWARE #18…" for "ACE HARDWARE HELM, LLC". That same looseness made
+three car washes at $29.99 on one day — BUSY BEE CARWASH - KENDA, PITSTOP
+CARWASH - FAIRHO, PITSTOP CARWASH - GULFPO — all match each other on the word
+"carwash", so the automation called them interchangeable and refused all
+three. They are nothing of the kind: approving the wrong one approves another
+site's expense, and the ambiguity guard was comparing these fuzzy row matches
+against a peer count taken on the exact merchant. The run now scores the
+vendor name and keeps only the closest rows, so a sibling site is set aside
+and a genuine twin still ties.
+
 **Confirming a decision means one FEWER matching row, not none.** A split
 receipt puts several identical rows in Emburse — six shares of one lunch are
 six rows agreeing on employee, merchant, amount and date, because they are

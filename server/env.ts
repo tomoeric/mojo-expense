@@ -221,7 +221,18 @@ export const env = {
      * thing the container does all night — timed out at 30s morning after
      * morning while every manual run looked fine.
      */
-    openTimeoutMs: int("EMBURSE_OPEN_TIMEOUT_MS", 90_000),
+    /*
+     * Raised from 90s. Six approvals in one batch died on it in a single bad
+     * minute, and the diagnosis in their own error was right: a plain
+     * request from the container reached Emburse but took 13.2 SECONDS for
+     * one redirect, and a page that fetches dozens of things cannot finish
+     * in 90s over a link like that. Nothing was wrong with any of them.
+     *
+     * The cost of the larger number is only paid when something is already
+     * failing — a run that opens normally is unaffected — and the container
+     * is now a VM that stays up rather than one racing a request timeout.
+     */
+    openTimeoutMs: int("EMBURSE_OPEN_TIMEOUT_MS", 180_000),
     /** How long to keep polling for the queued export to finish. */
     exportWaitMs: int("EMBURSE_EXPORT_WAIT_MS", 15 * 60_000),
     /**
