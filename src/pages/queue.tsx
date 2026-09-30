@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Loader2, Pause, Play, Send } from "lucide-react";
+import { Loader2, Pause, Play } from "lucide-react";
 import type { ExpenseReport, ReportsResponse } from "@/lib/api";
 import { ExpenseTable, buildRows, type Row } from "@/components/expense-table";
-import { DecideButtons, InspectEditForm, TestDecision } from "@/components/decide-controls";
+import { DecideButtons } from "@/components/decide-controls";
 import { approveMany, clearFailed, holdDecisions, retryAllFailed } from "@/lib/decisions";
 import { useDecisions } from "@/lib/decisions";
 import { CodePrompt } from "@/components/code-prompt";
@@ -34,11 +34,10 @@ export function QueuePage({
 
   const keys = useMemo(() => waiting.map((r) => r.line.id), [waiting]);
   const {
-    byExpense, pending, browser, canDecide, challenge, decide, cancel, applyNow, answerCode, trace,
+    byExpense, pending, browser, canDecide, challenge, decide, cancel, answerCode,
     held, importing,
   } = useDecisions(keys);
   const [error, setError] = useState("");
-  const [sendNote, setSendNote] = useState<string | null>(null);
   const [bulkNote, setBulkNote] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [retryBusy, setRetryBusy] = useState(false);
@@ -178,12 +177,6 @@ export function QueuePage({
                   : "Sent together in one sign-in, shortly."}
             {!held && importing && " An import is running, so automatic approvals are waiting for it."}
           </span>
-          {/* Pressing it has to visibly do something. It used to produce no
-              change at all — no spinner, no word — while the run it started
-              was twenty seconds away, so the only reading available was
-              "the button is broken", and pressing again pushed the run
-              further out. */}
-          {sendNote && <span className="text-emerald-700">{sendNote}</span>}
           {/* Stop, without losing anything. The automatic-approvals switch
               stops new ones being QUEUED and says nothing about the hundred
               already waiting — and those are what stands between the
@@ -213,27 +206,6 @@ export function QueuePage({
               : held ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
             {held ? "Resume" : "Pause"}
           </button>
-          <button
-            type="button"
-            disabled={applyNow.isPending || held}
-            onClick={() => {
-              setSendNote(null);
-              applyNow.mutate(undefined, {
-                onSuccess: (m) => setSendNote(m),
-                onError: (e) => setError((e as Error).message),
-              });
-            }}
-            className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1 font-semibold hover:bg-muted disabled:opacity-40"
-          >
-            {applyNow.isPending
-              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              : <Send className="h-3.5 w-3.5" />}
-            Send now
-          </button>
-          {/* One test is enough to trust the matching; offering it per row
-              would invite twenty browser sessions. */}
-          {pending.length > 0 && <TestDecision id={pending[0]!.id} trace={trace} />}
-          {canDecide && pending.length > 0 && <InspectEditForm id={pending[0]!.id} />}
         </div>
       )}
 

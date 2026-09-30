@@ -139,6 +139,32 @@ through Entra, which is silent while their Microsoft session is alive.
 The third row is the point: the moment real credentials exist, real data is
 never served to an anonymous caller — even if sign-in was never wired up.
 
+## What runs on its own
+
+Three loops, all started at boot in `server/index.ts`, all continuous:
+
+| Loop | Cadence | What it does |
+| --- | --- | --- |
+| `startExportScheduler` | the slots in Export settings | signs into Emburse, exports Needs Review, imports it |
+| `startReceiptReader` | 30s while there is work, 30 min idle, 10s after an import brings new images | reads receipt images, re-reads the ones whose total does not match, re-judges and re-queues |
+| `startDecisionWorker` | 1s while there is work, 5 min idle | signs in as the decider and clicks approve or deny in Emburse |
+
+Reading and deciding were always continuous. The import was not: its slots
+were **retries**, so the first one that succeeded closed the day and the queue
+showed whatever Emburse held at 6am until tomorrow. **Keep importing all day**
+in Export settings changes what those slots mean — every one of them runs,
+success or not — so the queue keeps up with Emburse: an expense submitted at
+eleven is here by noon, and one somebody approved in Emburse by hand stops
+being offered for a decision. Default is hourly, 6am to 9pm.
+
+With it on, "is the data current?" stops meaning "did this morning work?" and
+starts meaning "has anything arrived since the last slot that was due?" — the
+Import page reports *behind* when nothing has, which is the only thing that
+distinguishes a live queue from a dead importer. Overnight, when no slot is
+due, nothing is reported. Frequency is safe against a truncated export: the
+import already refuses one that would delete more than four in five of the
+waiting expenses without a decision of ours to explain it.
+
 ## Importing the daily export
 
 Emburse Spend's API is provisioning-only — members, team fields, receipt

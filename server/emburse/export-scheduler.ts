@@ -112,9 +112,20 @@ export async function nextDue(
   const day = localDate(schedule, now);
   const { count, succeeded } = await todaysAttempts(day);
 
-  if (succeeded) return { due: false, attempt: count, reason: "today's export already succeeded" };
+  // Only when the slots are RETRIES does a success close the day. On an
+  // all-day schedule they are not retries, they are the times the import
+  // runs: stopping at the first one that worked is exactly the behaviour
+  // that left the queue showing six in the morning at four in the afternoon.
+  if (!schedule.allDay && succeeded) {
+    return { due: false, attempt: count, reason: "today's export already succeeded" };
+  }
   if (count >= schedule.attemptsPerDay) {
-    return { due: false, attempt: count, reason: `all ${schedule.attemptsPerDay} attempts used today` };
+    return {
+      due: false, attempt: count,
+      reason: schedule.allDay
+        ? `all ${schedule.attemptsPerDay} of today's runs are done`
+        : `all ${schedule.attemptsPerDay} attempts used today`,
+    };
   }
 
   const slot = slotsFor(schedule, day)[count]!;

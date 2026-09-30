@@ -165,10 +165,22 @@ export const env = {
   schedule: {
     timezone: str("EXPORT_TIMEZONE", "America/Chicago"),
     firstRun: hhmm("EXPORT_FIRST_RUN", 6, 0),
-    /** Gap between retries within a day. */
-    retryHours: int("EXPORT_RETRY_HOURS", 3),
-    /** Attempts before the day is written off and the next is tomorrow. */
-    attemptsPerDay: Math.max(1, int("EXPORT_ATTEMPTS_PER_DAY", 2)),
+    /** Gap between one run and the next within a day. */
+    retryHours: int("EXPORT_RETRY_HOURS", 1),
+    /** How many runs the day holds, starting at `firstRun`. */
+    attemptsPerDay: Math.max(1, int("EXPORT_ATTEMPTS_PER_DAY", 16)),
+    /**
+     * Whether every slot runs, or only until one works.
+     *
+     * Off, these are RETRIES: the first success closes the day and the queue
+     * is whatever Emburse held at six in the morning until tomorrow. On, they
+     * are simply the times the import runs, so an expense submitted at eleven
+     * is in the app by noon and one approved in Emburse by hand stops being
+     * offered here. Reading receipts and applying decisions never stopped for
+     * the day; only the import did, and on a container that sleeps between
+     * requests that was the right shape. On a VM that is always up it is not.
+     */
+    allDay: str("EXPORT_ALL_DAY", "true").toLowerCase() !== "false",
     /**
      * How long after an attempt to keep waiting before calling it a miss.
      *

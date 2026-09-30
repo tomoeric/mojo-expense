@@ -9,6 +9,7 @@ type Schedule = {
   retryHours: number;
   attemptsPerDay: number;
   graceMinutes: number;
+  allDay: boolean;
 };
 
 type Settings = {
@@ -190,14 +191,41 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
         <p className="mt-1 flex items-start gap-2 rounded-lg border border-border bg-muted/50 p-3 text-sm text-muted-foreground">
           <Info className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
-            <strong className="text-foreground">This is what actually runs the export.</strong> The server
-            signs into Emburse itself at the first time below, and retries on the gap you set if a run
-            fails. Changes take effect on the next check — no restart. A run only asks for a verification
+            <strong className="text-foreground">This is what actually runs the import.</strong> The server
+            signs into Emburse itself at the first time below, then again on the gap you set.
+            Changes take effect on the next check — no restart. A run only asks for a verification
             code if Emburse stops trusting the browser, and only when somebody started it by hand; a
             scheduled run fails rather than waiting for an answer nobody is there to give.
           </span>
         </p>
       </div>
+
+      {/* The switch that decides what every other field below MEANS, so it
+          sits above them rather than among them. */}
+      <label className="flex items-start gap-3 rounded-xl border border-border p-3.5">
+        <input
+          type="checkbox"
+          checked={schedule.allDay}
+          disabled={!isAdmin}
+          onChange={(e) => setSchedule({ ...schedule, allDay: e.target.checked })}
+          className="mt-0.5 h-4 w-4 shrink-0 accent-emerald-600 disabled:opacity-60"
+        />
+        <span className="text-sm">
+          <strong>Keep importing all day</strong>
+          <span className="mt-1 block text-xs text-muted-foreground">
+            On, the times below are simply when the import runs — every one of them, whether or not
+            an earlier one worked. The queue then keeps up with Emburse through the day: an expense
+            submitted at eleven is here by noon, and one somebody approved in Emburse by hand stops
+            being offered for a decision. Off, they are retries: the first one that succeeds closes
+            the day, and what you are looking at after that is whatever Emburse held at{" "}
+            {schedule.firstRun}.
+            <span className="mt-1 block">
+              Receipt reading and queued approvals run continuously either way — this setting is
+              only about the import that brings expenses in.
+            </span>
+          </span>
+        </span>
+      </label>
 
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Timezone" hint="All the times below are read in this zone.">
@@ -213,7 +241,7 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
           </select>
         </Field>
 
-        <Field label="First run" hint="When the server signs in and requests the export.">
+        <Field label="First run" hint="When the server first signs in and requests the export.">
           <input
             type="time"
             value={schedule.firstRun}
@@ -223,9 +251,14 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
           />
         </Field>
 
-        <Field label="Attempts per day" hint="After the last one fails, the day is left until tomorrow.">
+        <Field
+          label={schedule.allDay ? "Runs per day" : "Attempts per day"}
+          hint={schedule.allDay
+            ? "How many times the import runs, counting the first. 16 hourly from 6am reaches 9pm."
+            : "After the last one fails, the day is left until tomorrow."}
+        >
           <input
-            type="number" min={1} max={8}
+            type="number" min={1} max={24}
             value={schedule.attemptsPerDay}
             disabled={!isAdmin}
             onChange={(e) => setSchedule({ ...schedule, attemptsPerDay: Number(e.target.value) })}
@@ -233,7 +266,12 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
           />
         </Field>
 
-        <Field label="Hours between attempts" hint="How long to wait before retrying a failed run.">
+        <Field
+          label={schedule.allDay ? "Hours between runs" : "Hours between attempts"}
+          hint={schedule.allDay
+            ? "How long the queue may be behind Emburse at worst."
+            : "How long to wait before retrying a failed run."}
+        >
           <input
             type="number" min={1} max={12}
             value={schedule.retryHours}
@@ -245,7 +283,7 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
 
         <Field
           label="Grace, minutes"
-          hint="Emburse queues the export and the folder poll then takes up to an hour, so an attempt that fired on time still lands late."
+          hint="Emburse queues the export and the folder poll then takes up to an hour, so a run that fired on time still lands late. Nothing arriving this long after a slot is what gets reported as a miss."
         >
           <input
             type="number" min={0} max={720} step={15}
@@ -379,7 +417,9 @@ function SchedulePreview({ schedule }: { schedule: Schedule }) {
     const minutes = (h ?? 6) * 60 + (m ?? 0) + i * schedule.retryHours * 60;
     slots.push({
       at: clock(minutes),
-      label: i === 0 ? "first attempt" : `retry ${i}`,
+      label: schedule.allDay
+        ? (i === 0 ? "first import" : "import")
+        : (i === 0 ? "first attempt" : `retry ${i}`),
     });
   }
 
@@ -402,11 +442,20 @@ function SchedulePreview({ schedule }: { schedule: Schedule }) {
         <li className="flex items-center gap-2 text-sm">
           <span className="tnum w-20 shrink-0 whitespace-nowrap font-semibold text-amber-600">{clock(givesUp)}</span>
           <span className="text-muted-foreground">
-            marked missed if nothing has arrived — next attempt tomorrow at {schedule.firstRun}
+            {schedule.allDay
+              ? <>marked behind if nothing has arrived since the last run — then quiet until {schedule.firstRun} tomorrow</>
+              : <>marked missed if nothing has arrived — next attempt tomorrow at {schedule.firstRun}</>}
           </span>
         </li>
       </ol>
-      {spillsOver && (
+      {schedule.allDay && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Every one of these runs, whether or not an earlier one worked, so the queue is never more
+          than {schedule.retryHours === 1 ? "an hour" : `${schedule.retryHours} hours`} behind
+          Emburse while the window is open.
+        </p>
+      )}
+      {spillsOver && !schedule.allDay && (
         <p className="mt-2 text-xs text-amber-600">
           The last attempt plus its grace runs past midnight, so a miss is only reported the next day.
           Move the first run earlier, or shorten the grace.

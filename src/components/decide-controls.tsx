@@ -3,7 +3,7 @@ import {
   Check, X, Loader2, Clock, AlertTriangle, Undo2, FlaskConical, ShieldCheck, Bot, CircleSlash,
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { inspectEditForm, retryDecision, testDecision, type QueuedDecision } from "@/lib/decisions";
+import { inspectEditForm, retryDecision, type QueuedDecision } from "@/lib/decisions";
 import { useConfig } from "@/lib/api";
 import { moneyExact } from "@/lib/format";
 
@@ -617,75 +617,3 @@ export function InspectEditForm({ id }: { id: number | string }) {
   );
 }
 
-export function TestDecision({ id, trace }: { id: number; trace: boolean }) {
-  const [state, setState] = useState<
-    { phase: "idle" } | { phase: "running" } |
-    { phase: "done"; ok: boolean; matchedRow: string | null; detail: string;
-      steps: QueuedDecision["steps"] }
-  >({ phase: "idle" });
-
-  async function run() {
-    setState({ phase: "running" });
-    try {
-      const r = await testDecision(id);
-      setState({
-        phase: "done",
-        ok: r.ok,
-        matchedRow: r.matchedRow,
-        detail: r.steps.find((s) => !s.ok)?.detail ?? r.steps.at(-1)?.detail ?? "",
-        steps: r.steps,
-      });
-    } catch (err) {
-      setState({
-        phase: "done", ok: false, matchedRow: null,
-        detail: (err as Error).message, steps: [],
-      });
-    }
-  }
-
-  return (
-    <span className="inline-flex flex-wrap items-center gap-2 text-xs">
-      <button
-        type="button"
-        disabled={state.phase === "running"}
-        onClick={() => void run()}
-        className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 font-semibold hover:bg-muted disabled:opacity-40"
-      >
-        {state.phase === "running" ? (
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        ) : (
-          <FlaskConical className="h-3.5 w-3.5" />
-        )}
-        {state.phase === "running" ? "Checking…" : "Test"}
-      </button>
-
-      {state.phase === "running" && (
-        <span className="text-muted-foreground">
-          Signing in and finding the row — a minute or so, and it queues behind any export.
-        </span>
-      )}
-
-      {state.phase === "done" && (
-        <span className="block w-full">
-          <span className={state.ok ? "text-emerald-600" : "text-amber-600"}>
-            {state.ok
-              ? `Found it: ${state.matchedRow ?? "the row matched"}`
-              : state.detail}
-          </span>
-          {/* Every stage, not just the one that threw. A step can succeed and
-              still carry the answer — "signed in, but no team-wide tab matched"
-              is the cause of a failure reported three steps later.
-
-              Behind the same Configuration toggle that stores the trace on a
-              real decision, because that is what it is for: six stages with
-              timings answer "where does it break" while it is being set up,
-              and are clutter above a queue once it works. A FAILURE still
-               shows them whatever the setting — that is the moment they are
-              wanted, and needing to switch something on first, then
-              reproduce, is how a one-off failure gets lost. */}
-          {(trace || !state.ok) && <DecisionSteps steps={state.steps} />}
-        </span>
-      )}
-    </span>
-  );
-}

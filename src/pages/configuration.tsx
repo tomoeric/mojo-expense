@@ -670,8 +670,8 @@ function DecisionTrace({ isAdmin }: { isAdmin: boolean }) {
       </div>
       <p className="mt-1 text-xs text-muted-foreground">
         With this on, the browser run is shown stage by stage — signing in, switching to the team
-        view, finding the row, verifying it, clicking — both under the <strong>Test</strong> button
-        on the queue and on each decision, where a failed one keeps its trace to open later.
+        view, finding the row, verifying it, clicking — on each decision, where a failed one keeps
+        its trace to open later.
         Turn it on to work out <em>where</em> something breaks; turn it off once it works, because a
         healthy queue has no use for a six-line transcript above it.
       </p>

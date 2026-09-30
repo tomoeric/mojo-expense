@@ -10,9 +10,14 @@ import type { Schedule } from "./settings.js";
  * here as nothing having landed, which is what the reviewer actually cares
  * about: is the data current?
  *
- * The schedule is: first attempt at `firstRun`, retry every `retryHours`, at
- * most `attemptsPerDay` attempts. After the last one fails the day is written
- * off and the next attempt is tomorrow's first slot.
+ * The schedule is: first run at `firstRun`, another every `retryHours`,
+ * `attemptsPerDay` of them. What those slots MEAN depends on `allDay`:
+ *
+ *   off — they are retries. The first success closes the day; after the last
+ *         one fails the day is written off and the next attempt is tomorrow.
+ *   on  — they are simply the times the import runs. Every slot fires, and
+ *         "is the data current?" stops meaning "did this morning work?" and
+ *         starts meaning "has anything arrived since the last slot was due?"
  */
 
 export type ImportSchedule = {
@@ -38,7 +43,7 @@ export function describeSchedule(
   lastImportAt: Date | null,
   now = new Date(),
 ): ImportSchedule {
-  const { timezone, retryHours, attemptsPerDay, graceMinutes } = schedule;
+  const { timezone, retryHours, attemptsPerDay, graceMinutes, allDay } = schedule;
   const [h = "6", m = "0"] = schedule.firstRun.split(":");
   const firstRun = { hour: Number(h), minute: Number(m) };
 
@@ -49,6 +54,43 @@ export function describeSchedule(
   // "Today" starts at the first attempt, not at midnight: an export that landed
   // at 06:10 belongs to today's run, one that landed at 23:00 yesterday does not.
   const arrivedToday = lastImportAt !== null && lastImportAt >= slots[0]!;
+
+  const grace0 = graceMinutes * 60_000;
+
+  // An all-day schedule is answering a different question, so it answers it
+  // separately rather than bending the once-a-day wording around it.
+  //
+  // "Today's export arrived" is true from 6:05am until midnight and therefore
+  // says nothing: what matters on a live queue is whether the LAST slot that
+  // was due actually produced an import. That also gets the quiet hours right
+  // — at 5am the last due slot is yesterday's 9pm one, and an import at 9:05pm
+  // answers it, so the overnight gap is not reported as a failure.
+  if (allDay) {
+    const nextSlot = slots.find((s) => now < s) ?? tomorrowFirst;
+    // The most recent slot whose grace has run out. Nothing having arrived
+    // since is the only thing that means the import has stopped working.
+    const lastDue = [...slots].reverse().find((s) => now.getTime() >= s.getTime() + grace0);
+    const behind = lastDue !== undefined && (lastImportAt === null || lastImportAt < lastDue);
+
+    return {
+      timezone,
+      slots: slots.map(iso),
+      lastImportAt: lastImportAt?.toISOString() ?? null,
+      arrivedToday,
+      nextAttemptAt: iso(nextSlot),
+      // "arrived" is a claim about data being current, so it needs something
+      // to have arrived. Before the first run of a fresh day there is nothing
+      // wrong and nothing here yet, which is "waiting", not a failure.
+      state: behind ? "missed" : lastImportAt === null ? "waiting" : "arrived",
+      note: behind
+        ? `Nothing has arrived since the ${describe(lastDue, timezone, now).replace(/^at /, "")} ` +
+          `import was due. Next one ${describe(nextSlot, timezone, now)}.`
+        : lastImportAt === null
+          ? `First import of the day ${describe(nextSlot, timezone, now)}.`
+          : `Imported ${describe(lastImportAt, timezone, now)}. ` +
+            `Next ${describe(nextSlot, timezone, now)} — every ${hours(retryHours)} through the day.`,
+    };
+  }
 
   if (arrivedToday) {
     return {
@@ -65,7 +107,7 @@ export function describeSchedule(
   // A slot only counts as missed once the grace has run out: the export is
   // queued by Emburse and then picked up by a folder poll, so an attempt that
   // fired on time still lands well after its slot.
-  const grace = graceMinutes * 60_000;
+  const grace = grace0;
   const pending = slots.find((s) => now.getTime() < s.getTime() + grace);
 
   if (pending) {
@@ -104,6 +146,8 @@ export function describeSchedule(
 }
 
 const iso = (d: Date) => d.toISOString();
+
+const hours = (n: number) => (n === 1 ? "hour" : `${n} hours`);
 
 type DateParts = { year: number; month: number; day: number };
 
@@ -174,5 +218,8 @@ function describe(when: Date, tz: string, now: Date): string {
 
   if (days === 0) return `at ${time}`;
   if (days === 1) return `tomorrow at ${time}`;
+  // Reachable now that an all-day schedule looks BACK at the last import,
+  // which overnight is last night's final run.
+  if (days === -1) return `yesterday at ${time}`;
   return `on ${new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "long" }).format(when)} at ${time}`;
 }

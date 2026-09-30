@@ -15,7 +15,9 @@ it is a demo.
 Runs anywhere, including here. No credentials, no Emburse, no browser.
 
 ```bash
-pnpm exec tsx scripts/verify-schedule.ts       # 26 boundary cases
+pnpm exec tsx scripts/verify-schedule.ts       # 26 boundary cases, once-a-day shape
+pnpm exec tsx scripts/test-all-day.ts          # the all-day shape: every slot runs
+pnpm exec tsx scripts/test-scheduler.ts        # what is due, against export_runs (needs DATABASE_URL)
 pnpm exec tsx scripts/test-browser-lock.ts     # one browser at a time
 pnpm exec tsx scripts/test-stale-import.ts     # refusing an out-of-date export
 pnpm exec tsx scripts/test-identical-rows.ts   # two expenses the export describes identically

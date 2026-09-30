@@ -35,6 +35,7 @@ const SCHEDULE = isDbConfigured()
       retryHours: env.schedule.retryHours,
       attemptsPerDay: env.schedule.attemptsPerDay,
       graceMinutes: env.schedule.graceMinutes,
+      allDay: env.schedule.allDay,
     };
 
 const { timezone } = SCHEDULE;
@@ -42,7 +43,8 @@ const { timezone } = SCHEDULE;
 console.log(
   `\nsource=${isDbConfigured() ? "settings (database)" : "env defaults"}  timezone=${SCHEDULE.timezone}  ` +
     `first run=${SCHEDULE.firstRun}  retry=${SCHEDULE.retryHours}h  ` +
-    `attempts=${SCHEDULE.attemptsPerDay}  grace=${SCHEDULE.graceMinutes}m`,
+    `runs=${SCHEDULE.attemptsPerDay}  grace=${SCHEDULE.graceMinutes}m  ` +
+    `all-day=${SCHEDULE.allDay ? "yes" : "no"}`,
 );
 if (arrivesAtHour !== null) console.log(`Simulating an export arriving at ${arrivesAtHour}:15 local.\n`);
 else console.log("Simulating a day on which no export ever arrives.\n");

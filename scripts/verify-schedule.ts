@@ -20,6 +20,9 @@ const SCHEDULE: Schedule = {
   retryHours: 3,
   attemptsPerDay: 2,
   graceMinutes: 90,
+  // These assertions are about the once-a-day shape: slots are retries and
+  // the first success closes the day. The all-day shape has its own suite.
+  allDay: false,
 };
 
 const CT = (s: string) => new Date(s);

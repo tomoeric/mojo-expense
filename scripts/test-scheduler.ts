@@ -22,6 +22,9 @@ const SCHEDULE: Schedule = {
   retryHours: 3,
   attemptsPerDay: 2,
   graceMinutes: 90,
+  // These assertions are about the once-a-day shape: slots are retries and
+  // the first success closes the day. The all-day shape has its own suite.
+  allDay: false,
 };
 
 let failures = 0;
@@ -84,6 +87,23 @@ await clear();
 await record(1, true);
 d = await nextDue(SCHEDULE, new Date("2026-09-22T14:30:00Z"));
 check("no second run after a success", !d.due, d.reason);
+
+console.log("\n5b. On an all-day schedule a success does NOT close the day");
+// The same database state as case 5, read through the other shape. This is the
+// one line of reasoning that separates "a daily export with retries" from "a
+// queue that keeps up with Emburse", so it is checked against a real
+// export_runs table rather than against a re-implementation of the rule.
+await clear();
+await record(1, true);
+const ALL_DAY: Schedule = { ...SCHEDULE, allDay: true, retryHours: 1, attemptsPerDay: 16 };
+d = await nextDue(ALL_DAY, new Date("2026-09-22T12:30:00Z")); // 7:30am CT, past the 7am slot
+check("the 7am run happens anyway", d.due, d.reason);
+check("and it is run 2", d.attempt === 2, `attempt ${d.attempt}`);
+// Still bounded: sixteen runs is sixteen, not one every few minutes forever.
+await clear();
+for (let i = 1; i <= 16; i++) await record(i, true);
+d = await nextDue(ALL_DAY, new Date("2026-09-23T03:00:00Z")); // 10pm CT
+check("but the day still ends", !d.due, d.reason);
 
 console.log("\n6. A restart mid-morning does not hand back fresh attempts");
 // Same state as case 3, re-read from the database rather than memory.

@@ -53,12 +53,25 @@ export type ExportSettings = {
 
 export type Schedule = {
   timezone: string;
-  /** First attempt, as "HH:MM" in `timezone`. */
+  /** First run of the day, as "HH:MM" in `timezone`. */
   firstRun: string;
+  /** Gap between one run and the next. */
   retryHours: number;
+  /** How many runs the day holds, starting at `firstRun`. */
   attemptsPerDay: number;
-  /** Minutes to keep waiting after an attempt before calling it a miss. */
+  /** Minutes to keep waiting after a run before calling it a miss. */
   graceMinutes: number;
+  /**
+   * Whether every slot runs, or only until one works.
+   *
+   * This is the difference between a daily export and a live queue. Off, the
+   * slots are retries — the first success closes the day, and what the app
+   * shows from then on is whatever Emburse held at `firstRun`. On, they are
+   * simply the times the import runs, so the queue keeps up with Emburse all
+   * day: an expense submitted at eleven is here by noon, and one somebody
+   * approved in Emburse by hand stops being offered for a decision.
+   */
+  allDay: boolean;
 };
 
 /** Every section Emburse offers, in the order the dialog shows them. */
@@ -80,11 +93,11 @@ const DEFAULT_SECTIONS = ["Needs Review"];
 
 /** Env still supplies the starting point, so a fresh database is not blank. */
 function envSchedule(): Schedule {
-  const { timezone, firstRun, retryHours, attemptsPerDay, graceMinutes } = env.schedule;
+  const { timezone, firstRun, retryHours, attemptsPerDay, graceMinutes, allDay } = env.schedule;
   return {
     timezone,
     firstRun: `${String(firstRun.hour).padStart(2, "0")}:${String(firstRun.minute).padStart(2, "0")}`,
-    retryHours, attemptsPerDay, graceMinutes,
+    retryHours, attemptsPerDay, graceMinutes, allDay,
   };
 }
 
@@ -103,6 +116,29 @@ ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS attempts_per_day integer;
 ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS grace_minutes   integer;
 ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS selectors       jsonb;
 ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS emburse_url     text;
+
+-- Turning the import from "once a day, retry until it works" into "keep up
+-- with Emburse all day", for a database that already has a schedule in it.
+--
+-- The column alone would not do it. A stored schedule still on the shipped
+-- default is 06:00, every 3 hours, 2 attempts — two slots, the second only
+-- if the first failed. Switch that to all-day and nothing visible changes:
+-- it would import at 6am and again at 9am and then stop, which is not what
+-- all-day means. So the same one-time step that adds the column widens a
+-- schedule nobody ever touched to hourly from 6am to 9pm. A schedule that
+-- WAS deliberately set keeps its times; only the shipped default moves.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_name = 'export_settings' AND column_name = 'all_day'
+  ) THEN
+    ALTER TABLE export_settings ADD COLUMN all_day boolean;
+    UPDATE export_settings
+       SET retry_hours = 1, attempts_per_day = 16
+     WHERE retry_hours = 3 AND attempts_per_day = 2;
+  END IF;
+END $$;
 `;
 
 let ready: Promise<void> | null = null;
@@ -141,9 +177,10 @@ export async function readSettings(): Promise<ExportSettings> {
     timezone: string | null; first_run: string | null;
     retry_hours: number | null; attempts_per_day: number | null; grace_minutes: number | null;
     selectors: Record<string, string> | null; emburse_url: string | null;
+    all_day: boolean | null;
   }>(`SELECT sections, receipts_only, updated_at, updated_by,
              timezone, first_run, retry_hours, attempts_per_day, grace_minutes, selectors,
-             emburse_url
+             emburse_url, all_day
         FROM export_settings WHERE id`);
 
   const row = rows[0];
@@ -166,6 +203,7 @@ export async function readSettings(): Promise<ExportSettings> {
       retryHours: row.retry_hours ?? fallback.retryHours,
       attemptsPerDay: row.attempts_per_day ?? fallback.attemptsPerDay,
       graceMinutes: row.grace_minutes ?? fallback.graceMinutes,
+      allDay: row.all_day ?? fallback.allDay,
     },
     // Defaults first, then real overrides. A stored value that is merely an
     // old default is discarded, so an improvement ships to everyone who never
@@ -196,18 +234,18 @@ export async function writeSettings(
   await db().query(
     `INSERT INTO export_settings (id, sections, receipts_only, timezone, first_run,
                                   retry_hours, attempts_per_day, grace_minutes, selectors,
-                                  emburse_url, updated_at, updated_by)
-     VALUES (true, $1, $2, $3, $4, $5, $6, $7, $8, $9, now(), $10)
+                                  emburse_url, all_day, updated_at, updated_by)
+     VALUES (true, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), $11)
      ON CONFLICT (id) DO UPDATE SET
        sections = EXCLUDED.sections, receipts_only = EXCLUDED.receipts_only,
        timezone = EXCLUDED.timezone, first_run = EXCLUDED.first_run,
        retry_hours = EXCLUDED.retry_hours, attempts_per_day = EXCLUDED.attempts_per_day,
        grace_minutes = EXCLUDED.grace_minutes, selectors = EXCLUDED.selectors,
-       emburse_url = EXCLUDED.emburse_url,
+       emburse_url = EXCLUDED.emburse_url, all_day = EXCLUDED.all_day,
        updated_at = now(), updated_by = EXCLUDED.updated_by`,
     [ordered, receiptsOnly, schedule.timezone, schedule.firstRun, schedule.retryHours,
      schedule.attemptsPerDay, schedule.graceMinutes, JSON.stringify(overrides),
-     cleanUrl(emburseUrl, env.emburseLogin.url), updatedBy],
+     cleanUrl(emburseUrl, env.emburseLogin.url), schedule.allDay, updatedBy],
   );
   return readSettings();
 }
@@ -224,8 +262,12 @@ export function cleanSchedule(raw: Partial<Schedule> | undefined, base: Schedule
     timezone: isZone(tz) ? tz : base.timezone,
     firstRun: /^([01]\d|2[0-3]):[0-5]\d$/.test(String(raw?.firstRun)) ? String(raw!.firstRun) : base.firstRun,
     retryHours: int(raw?.retryHours, 1, 12, base.retryHours),
-    attemptsPerDay: int(raw?.attemptsPerDay, 1, 8, base.attemptsPerDay),
+    // Was capped at 8, which predates all-day importing: hourly from 6am to
+    // 9pm is 16 slots, and a cap that quietly clamps it to 8 would stop the
+    // import at 1pm with nothing on screen to say why.
+    attemptsPerDay: int(raw?.attemptsPerDay, 1, 24, base.attemptsPerDay),
     graceMinutes: int(raw?.graceMinutes, 0, 720, base.graceMinutes),
+    allDay: typeof raw?.allDay === "boolean" ? raw.allDay : base.allDay,
   };
 }
 
