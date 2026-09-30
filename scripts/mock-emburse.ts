@@ -236,9 +236,14 @@ const ROWS = [
   // returns other people's rows, so only the users filter finds them — and
   // once found there is nothing to tell them apart, which is fine, because
   // there is nothing that needs telling apart.
-  { date: "9/24/2026", merchant: "MENARDS 3065MENARD INC", who: "Kevin McBride", amount: "312.44", shy: true },
-  { date: "9/24/2026", merchant: "MENARDS 3065MENARD INC", who: "Kevin McBride", amount: "312.44", shy: true },
-  { date: "9/24/2026", merchant: "MENARDS 3065MENARD INC", who: "Kevin McBride", amount: "312.44", shy: true },
+  // NOT byte-identical, and that is the real shape: the employee split one
+  // receipt evenly across three sites, so the rows agree on employee,
+  // merchant, amount and date and differ on the site column. Three rows
+  // that are interchangeable for the purposes of the decision, and are not
+  // the same string.
+  { date: "9/24/2026", merchant: "MENARDS 3065MENARD INC", who: "Kevin McBride", amount: "312.44", shy: true, site: "York" },
+  { date: "9/24/2026", merchant: "MENARDS 3065MENARD INC", who: "Kevin McBride", amount: "312.44", shy: true, site: "Maintenance" },
+  { date: "9/24/2026", merchant: "MENARDS 3065MENARD INC", who: "Kevin McBride", amount: "312.44", shy: true, site: "Ashland" },
 ];
 
 /**
@@ -300,6 +305,7 @@ const grid = (search: string) => {
   }
   const cells = (r: (typeof ROWS)[number]) =>
     `${r.date}</td><td>${r.merchant}</td><td>${r.who}</td><td>$${r.amount}</td>
+     <td>${"site" in r && r.site ? r.site : ""}</td>
      <td><button class="ap">APPROVE</button> <button aria-label="more" class="mn">&#8942;</button>`;
 
   // A grid whose buttons DO something. Approving or confirming a denial

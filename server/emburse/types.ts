@@ -63,6 +63,16 @@ export type ExpenseLine = {
   reimbursable: boolean;
   billable: boolean;
   hasReceipt: boolean;
+  /**
+   * A receipt is attached and has not been read yet.
+   *
+   * Not the same as "no receipt": the image is there, the reader simply
+   * has not got to it. Until it has, every rule about what the receipt
+   * says returns UNKNOWN, so the expense is neither flagged nor cleared —
+   * a state the queue used to show as an ordinary unflagged row, which
+   * reads as "nothing wrong with this one".
+   */
+  receiptUnread?: boolean;
   /** Tenant's own receipt id, when the line exposes one. */
   receiptId: string;
   /**

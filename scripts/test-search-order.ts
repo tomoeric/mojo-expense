@@ -54,7 +54,7 @@ process.env.EMBURSE_LOGIN_EMAIL ||= "bot@example.invalid";
 process.env.EMBURSE_LOGIN_PASSWORD ||= "not-a-real-password";
 process.env.EMBURSE_STEP_TIMEOUT_MS ||= "12000";
 
-const { runDecision, DECISION_SELECTORS, forgetCardholderIds } =
+const { runDecision, runDecisions, DECISION_SELECTORS, forgetCardholderIds } =
   await import("../server/emburse/decide.js");
 
 const SEL = {
@@ -93,10 +93,51 @@ try {
     check("…and it says the filter is what found it", /Kevin McBride filter/.test(how(run)), how(run));
     // Three identical rows used to be an ambiguity refusal, which left all
     // three red for ever. There is nothing to disambiguate.
-    check("…taking one of the three identical rows rather than refusing",
-      /3 identical rows/.test(how(run)), how(run));
+    check("…taking one of the three rather than refusing",
+      /3 rows matched equally well/.test(how(run)), how(run));
     check("…and the row taken is the right one",
       /312\.44/.test(run.matchedRow ?? ""), run.matchedRow ?? "");
+  }
+
+  console.log("\n2b. Rows that differ only where the decision does not care");
+  // "If 3 receipts in Emburse are identical and 3 in the app are identical
+  // then it can approve any and it will not matter. Employee is dividing a
+  // receipt between 3 sites identically."
+  //
+  // They are NOT byte-identical — the site column differs — which is why
+  // the earlier identical-text rule refused all three. What matters is
+  // that they agree on everything the decision names, and differ only
+  // where it does not.
+  mock.reset();
+  forgetCardholderIds();
+  {
+    const TRIPLE = {
+      employee: "Kevin McBride", merchant: "MENARDS 3065MENARD INC",
+      amount: 312.44, date: "2026-09-24",
+    };
+    // The automation did not look at the expense, so it still refuses.
+    const auto = await runDecisions(
+      [{ id: 1, decision: "approve" as const, reason: "", target: TRIPLE, automatic: true }],
+      SEL, mock.url, LOGIN, { dryRun: true });
+    const autoWhy = auto.get(1)?.steps.find((s) => !s.ok)?.detail ?? "";
+    check("the automation still refuses to choose between them",
+      auto.get(1)?.ok === false && /equally well/.test(autoWhy), autoWhy.slice(0, 140));
+    check("…and says to approve it by hand if any of them will do",
+      /Approve it yourself/.test(autoWhy), autoWhy.slice(0, 200));
+
+    // A person clicked Approve. They looked at it and meant it.
+    mock.reset();
+    forgetCardholderIds();
+    const byHand = await runDecisions(
+      [{ id: 2, decision: "approve" as const, reason: "", target: TRIPLE, automatic: false }],
+      SEL, mock.url, LOGIN, { dryRun: true });
+    const run = byHand.get(2);
+    check("a person's approval takes one of them", run?.ok === true,
+      run?.steps.find((s) => !s.ok)?.detail?.slice(0, 160) ?? "no run");
+    check("…and the record says a choice was made among three",
+      /3 rows matched equally well/.test(
+        run?.steps.find((s) => s.name === "search for the expense")?.detail ?? ""),
+      run?.steps.find((s) => s.name === "search for the expense")?.detail ?? "");
   }
 
   console.log("\n3. The filter is the route, not the fallback");

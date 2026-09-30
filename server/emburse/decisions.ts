@@ -632,6 +632,27 @@ export async function appliedCount(): Promise<number> {
   return Number(rows[0]?.n ?? 0);
 }
 
+/**
+ * Take an expense out of the queue, because Emburse no longer has it.
+ *
+ * `notInQueue` is not a guess: the run read that cardholder's whole Needs
+ * Review and found no row for this amount, which is what an expense that
+ * has already been approved or denied looks like. Leaving it on screen
+ * afterwards, greyed out with "they drop off at the next import", asks
+ * somebody to keep looking at rows that are finished — and the import
+ * might be tomorrow.
+ *
+ * Safe because it is self-correcting in the one direction that matters: if
+ * Emburse does still hold the expense, the next import carries it and the
+ * row comes straight back. Nothing is deleted, and the decision record
+ * stays exactly as it was.
+ */
+async function dropFromInbox(dedupeKey: string): Promise<void> {
+  await db().query(
+    "UPDATE expenses SET in_inbox = false WHERE dedupe_key = $1 AND in_inbox = true",
+    [dedupeKey]);
+}
+
 export async function settleDecision(
   id: number,
   outcome:
@@ -678,6 +699,13 @@ export async function settleDecision(
       outcome.ok ? false : outcome.notInQueue === true,
     ],
   );
+
+  // And off the queue it comes, now rather than at the next import.
+  if (!outcome.ok && outcome.notInQueue === true) {
+    const { rows } = await db().query<{ dedupe_key: string }>(
+      "SELECT dedupe_key FROM expense_decisions WHERE id = $1", [id]);
+    if (rows[0]) await dropFromInbox(rows[0].dedupe_key);
+  }
 }
 
 /**

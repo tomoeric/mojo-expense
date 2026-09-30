@@ -297,7 +297,7 @@ export async function runDecision(
   selectors: Record<string, string>,
   emburseUrl: string,
   login: Login,
-  opts: { dryRun?: boolean; onChallenge?: ChallengeHook } = {},
+  opts: { dryRun?: boolean; onChallenge?: ChallengeHook; automatic?: boolean } = {},
 ): Promise<DecisionRun> {
   const steps: StepResult[] = [];
   const step = makeStepper(steps);
@@ -453,7 +453,8 @@ export async function runDecisions(
         const step = makeStepper(steps);
         let matchedRow: string | null = null;
         const ok = await applyOne(
-          page, it.decision, it.target, it.reason ?? "", sel, emburseUrl, step, opts,
+          page, it.decision, it.target, it.reason ?? "", sel, emburseUrl, step,
+          { ...opts, automatic: it.automatic === true },
           (t) => (matchedRow = t), login.email,
         );
         const run: DecisionRun = {
@@ -1353,6 +1354,15 @@ export type BatchItem = {
   decision: Decision;
   target: Target;
   reason: string | null;
+  /**
+   * Decided by the automation rather than by somebody clicking.
+   *
+   * It decides what happens when several rows match the expense equally
+   * well. A person who clicked Approve looked at the expense; the
+   * automation did not, and the difference is the whole basis for letting
+   * one of them pick and not the other.
+   */
+  automatic?: boolean;
 };
 
 async function drive(
@@ -1364,7 +1374,7 @@ async function drive(
   emburseUrl: string,
   login: Login,
   step: (name: string, fn: () => Promise<string>) => Promise<boolean>,
-  opts: { dryRun?: boolean; onChallenge?: ChallengeHook },
+  opts: { dryRun?: boolean; onChallenge?: ChallengeHook; automatic?: boolean },
   setRow: (text: string) => void,
 ): Promise<boolean> {
   if (!(await signInOnce(page, sel, emburseUrl, login, step, opts.onChallenge))) return false;
@@ -1463,7 +1473,7 @@ async function applyOne(
   sel: Record<string, string>,
   emburseUrl: string,
   step: (name: string, fn: () => Promise<string>) => Promise<boolean>,
-  opts: { dryRun?: boolean },
+  opts: { dryRun?: boolean; automatic?: boolean },
   setRow: (text: string) => void,
   asEmail?: string,
 ): Promise<boolean> {
@@ -1676,7 +1686,8 @@ async function applyOne(
           `the ${filteredCount} row(s) in it is for ${money(target.amount)}. ${attempts} An expense that ` +
           `has already been approved or denied leaves Needs Review, so the commonest reason for ` +
           `this is that the decision already went through \u2014 trying again searches the same ` +
-          `empty view. It will drop off this queue at the next import.`);
+          `empty view. It has been taken off the queue here; the next import brings it back ` +
+          `if Emburse does still hold it.`);
       }
       // Nothing row-shaped matched our selector anywhere — not in the
       // cardholder's own queue, not under any search. That is the row
@@ -1723,32 +1734,39 @@ async function applyOne(
     // Hidden copies first: a grid that keeps them matches the same expense
     // more than once, and none of the copies is the row on screen.
     const chosen = matches.length > 1 ? await visibleOf(rows, matches) : matches;
-    let identical = 0;
+    let several = 0;
     if (chosen.length > 1) {
-      // Rows that are INDISTINGUISHABLE from one another are a different
-      // case from rows that merely match the same expense, and the
-      // difference decides whether a choice is even being made.
+      // Several rows match the expense on employee, merchant, amount AND
+      // date. They are interchangeable with respect to everything this
+      // decision names; where they differ — the site, the batch id, the
+      // posted date — is not something it named.
       //
-      // Dustin Suppi has three Menards charges of $312.44 on the same day
-      // with the same business purpose — real, and visible in Emburse as
-      // three identical rows. Three decisions are queued, one per expense.
-      // Refusing every one as ambiguous leaves all three red for ever, and
-      // there is nothing to disambiguate: approving “a $312.44 Menards
-      // charge of Dustin Suppi on Sep 24” is satisfied by any of them, and
-      // the other decisions take the others.
+      // Dustin Suppi has three Menards charges of $312.44 on the same day:
+      // one receipt split evenly across three sites, which is ordinary.
+      // Three expenses, three queued decisions, three rows. Refusing each
+      // of them as ambiguous left all three red for ever.
       //
-      // Rows that DIFFER in any visible way are the case the refusal is
-      // for — a split purchase coded two ways, a credit beside its charge.
-      // There, picking one is picking an expense nobody chose.
-      const texts = await Promise.all(chosen.map((i) =>
-        rows.nth(i).innerText().catch(() => "").then((t) => t.replace(/\s+/g, " ").trim())));
-      if (!texts.every((t) => t === texts[0])) {
+      // Whether picking one is allowed turns on WHO decided, and on
+      // nothing else.
+      //
+      //   A PERSON clicked Approve. They looked at the expense and meant
+      //   it, and approving "a $312.44 Menards charge of Dustin Suppi on
+      //   Sep 24" is satisfied by any row that is one. The other decisions
+      //   take the others. Same principle as flags, where a person may
+      //   approve a flagged expense and the automation may not.
+      //
+      //   The AUTOMATION looked at nothing. It refuses, every time, and it
+      //   does not matter whether the rows read alike: unattended, the
+      //   question is not "can these be told apart" but "is there anybody
+      //   here to take responsibility for picking". There is not.
+      if (opts.automatic) {
         throw new Error(
-          `${chosen.length} rows match this expense equally well and they are not identical; ` +
-          `refusing to guess which one to ${decision}`,
+          `${chosen.length} rows match this expense equally well, and this was decided by the ` +
+          `automation rather than by a person; refusing to guess which one to ${decision}. ` +
+          `Approve it yourself if any of them will do.`,
         );
       }
-      identical = chosen.length;
+      several = chosen.length;
     }
     if (chosen.length === 0) {
       throw new Error(
@@ -1763,9 +1781,9 @@ async function applyOne(
     // the single most useful thing this step can report.
     return `matched 1 of ${count} rows searching “${term}”` +
       (ghosts > 0 ? ` (${ghosts} hidden ${ghosts === 1 ? "copy" : "copies"} ignored)` : "") +
-      (identical > 1
-        ? ` (${identical} identical rows — took one; the others belong to the other ` +
-          `decisions queued for them)`
+      (several > 1
+        ? ` (${several} rows matched equally well — took one; they are interchangeable for ` +
+          `this decision, and the others belong to the other decisions queued for them)`
         : "");
   }))) return false;
 
@@ -1880,7 +1898,16 @@ async function confirmActioned(
   target: Target,
   what: string,
 ): Promise<string> {
-  for (let i = 0; i < 12; i++) {
+  // Long enough for a slow link, and it costs nothing when things are
+  // normal: the loop exits the moment the row goes, which is usually the
+  // first or second pass. Six seconds was the old budget, and on the
+  // morning a plain HEAD to Emburse was taking fourteen seconds an
+  // approval that had landed perfectly well was reported as unconfirmed —
+  // which sends somebody to check it by hand, the exact work this exists
+  // to remove.
+  const CONFIRM_MS = 20_000;
+  const deadline = Date.now() + CONFIRM_MS;
+  while (Date.now() < deadline) {
     await page.waitForTimeout(500);
     // Re-scanned rather than held as a locator: the grid re-renders after an
     // action, so the row that was nth(3) is a different expense now.
@@ -1903,6 +1930,7 @@ async function confirmActioned(
   }
   throw new Error(
     `clicked ${what === "approved" ? "APPROVE" : "Deny"}, but the expense is still in ` +
-    `Needs Review six seconds later, so nothing confirms Emburse recorded it. It may ` +
-    `have gone through — check the expense in Emburse before deciding it again.`);
+    `Needs Review ${Math.round(CONFIRM_MS / 1000)} seconds later, so nothing confirms Emburse ` +
+    `recorded it. It may have gone through — check the expense in Emburse before deciding it ` +
+    `again.`);
 }

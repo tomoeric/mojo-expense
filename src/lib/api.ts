@@ -30,6 +30,16 @@ export type ExpenseLine = {
   reimbursable: boolean;
   billable: boolean;
   hasReceipt: boolean;
+  /**
+   * A receipt is attached and has not been read yet.
+   *
+   * Not the same as "no receipt": the image is there, the reader simply
+   * has not got to it. Until it has, every rule about what the receipt
+   * says returns UNKNOWN, so the expense is neither flagged nor cleared —
+   * a state the queue used to show as an ordinary unflagged row, which
+   * reads as "nothing wrong with this one".
+   */
+  receiptUnread?: boolean;
   receiptId: string;
   receiptUrl: string;
   glCode: string;
@@ -158,6 +168,25 @@ export function useReports(days: number, enabled = true) {
       });
       return get<ReportsResponse>(`/api/reports?${qs}`);
     },
+    /**
+     * Poll ONLY while receipts are still being read.
+     *
+     * The reader works through a backlog in the background, and an expense
+     * moves out of "Receipt being read" into a flag or into Unflagged the
+     * moment it has been. Without this the move only happened on a reload,
+     * so the tab sat there full while the work was already done — and a
+     * queue that needs a refresh to tell the truth is a queue nobody
+     * trusts.
+     *
+     * Off the rest of the time, which is almost all of the time: a page
+     * with nothing outstanding has nothing to poll for, and this response
+     * is the expensive one.
+     */
+    refetchInterval: (query) =>
+      (query.state.data?.reports ?? []).some((r) => r.lines.some((l) => l.receiptUnread))
+        ? 15_000
+        : false,
+    refetchIntervalInBackground: false,
   });
 }
 

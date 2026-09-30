@@ -1066,6 +1066,13 @@ async function clickVisible(
  * common as fixes, and until this existed the message guessed at the first
  * one every time.
  */
+/**
+ * Above this, a "successful" probe is evidence AGAINST the browser being
+ * the problem rather than for it. A healthy container answers this HEAD in
+ * well under a second; the reports that prompted this were 11–17 seconds.
+ */
+const SLOW_REACH_MS = 3_000;
+
 async function reachable(url: string): Promise<string> {
   const started = Date.now();
   try {
@@ -1074,6 +1081,21 @@ async function reachable(url: string): Promise<string> {
       method: "HEAD", redirect: "manual", signal: stop,
     });
     const ms = Date.now() - started;
+    // SLOW is its own answer, and leaving it out was a misdiagnosis with a
+    // cost. One redirect taking fourteen seconds is not "the network is
+    // fine" — it is a link on which a full single-page app, dozens of
+    // requests deep, cannot finish inside ninety seconds no matter how
+    // healthy Chromium is. Twenty-five decisions in one report were filed
+    // under "look at Chromium: a corrupt profile, a leftover process, or
+    // memory on this VM" off a 13.9-second HEAD, which sends somebody to
+    // rebuild a browser that was working.
+    if (ms > SLOW_REACH_MS) {
+      return `A plain request from the container did reach it, but took ${(ms / 1000).toFixed(1)}s ` +
+        `for a single redirect (HTTP ${res.status}). That is the container's egress being very ` +
+        `slow, not the browser: a page that fetches dozens of things cannot finish in ` +
+        `${Math.round(env.emburseLogin.openTimeoutMs / 1000)}s over a link like that. Nothing here ` +
+        `needs fixing — try again when the network is better, or raise EMBURSE_OPEN_TIMEOUT_MS.`;
+    }
     return `A plain request from the container reached it in ${ms}ms (HTTP ${res.status}), so the ` +
       `network is fine and the BROWSER is what could not load the page — look at Chromium: a ` +
       `corrupt profile, a leftover process, or memory on this VM.`;
@@ -1114,7 +1136,19 @@ export async function openEmburse(page: Page, url: string): Promise<string> {
   const open = async (): Promise<void> => {
     const from = Date.now();
     try {
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: env.emburseLogin.openTimeoutMs });
+      // "commit", not "domcontentloaded". This waits only for the navigation
+      // to be accepted and the first bytes to arrive; it does NOT wait for
+      // the document to parse. That matters on a slow link, which is what
+      // the failures actually are: twenty-five decisions died here while a
+      // plain HEAD to the same host took fourteen seconds, so the app shell
+      // had no hope of parsing inside ninety.
+      //
+      // Nothing is lost by it. Every caller immediately waits for something
+      // real — the sign-in field, the team tab, the grid — each with its own
+      // budget and its own diagnosis. So a page that commits and then never
+      // renders fails at the step that can say what was on it, instead of
+      // here, where all it can say is "did not load".
+      await page.goto(url, { waitUntil: "commit", timeout: env.emburseLogin.openTimeoutMs });
       spent.push(`${((Date.now() - from) / 1000).toFixed(1)}s`);
     } catch (err) {
       spent.push(`timed out after ${((Date.now() - from) / 1000).toFixed(1)}s`);

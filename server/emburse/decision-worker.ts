@@ -146,6 +146,11 @@ async function tick(): Promise<void> {
 
       const batch: BatchItem[] = items.map((d) => ({
         id: d.id, decision: d.decision, target: d.target, reason: d.reason,
+        // Carried through because it changes what the run is allowed to do
+        // when several rows match the expense equally well: a person who
+        // clicked Approve may have one of them picked for them, the
+        // automation may not.
+        automatic: d.automatic,
       }));
 
       console.log(`decisions: applying ${batch.length} as ${decider}`);

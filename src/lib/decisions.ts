@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
 
 /**
  * The reviewer's side of approving and denying.
@@ -107,6 +108,31 @@ export function useDecisions(keys: string[]) {
       (query.state.data?.pending.length ?? 0) > 0 || query.state.data?.challenge ? 3000 : false,
     refetchIntervalInBackground: true,
   });
+
+  // The queue refreshes ITSELF when a decision settles, without anybody
+  // pressing anything.
+  //
+  // The poll above keeps the badges current, but the row list came from a
+  // separate query that nothing told. So an expense the run established
+  // had already left Emburse sat there greyed out until the page was
+  // reloaded — and "auto remove, don't require a page refresh" is the
+  // whole point of watching it land.
+  //
+  // Keyed on what each decision IS, not on how many there are: a pending
+  // that becomes applied is the interesting change and the count does not
+  // move. Compared as a string so a poll returning the same thing costs
+  // nothing.
+  const settled = (q.data?.recent ?? [])
+    .map((d) => `${d.id}:${d.state}`).join(",");
+  const pendingIds = (q.data?.pending ?? []).map((d) => d.id).join(",");
+  const signature = `${settled}|${pendingIds}|${q.data?.applied ?? 0}`;
+  const seen = useRef<string | null>(null);
+  useEffect(() => {
+    if (seen.current === null) { seen.current = signature; return; }
+    if (seen.current === signature) return;
+    seen.current = signature;
+    void qc.invalidateQueries({ queryKey: ["reports"] });
+  }, [signature, qc]);
 
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: ["decisions"] });

@@ -85,8 +85,14 @@ try {
     (await decisionsFor([GONE])).get(GONE)?.notInQueue === true);
   check("one is still on its way", await stateOf(SENT) === "pending");
   check("one already landed", await stateOf(DONE) === "applied");
-  check("both failures are counted", (await failureSummary())
-    .reduce((n, g) => n + g.n, 0) >= 2);
+  // ONE, not two. The failure summary counts only expenses still in the
+  // queue — "an expense that has left is not somebody's problem any more"
+  // — and settling `notInQueue` takes it off the queue there and then.
+  // Before that it counted both and the second was noise: nothing to fix,
+  // nothing to retry, and a row somebody had to learn to ignore.
+  check("the real failure is counted", (await failureSummary())
+    .reduce((n, g) => n + g.n, 0) === 1,
+    JSON.stringify(await failureSummary()));
 
   console.log("\n2. A failure now says WHEN it failed");
   // A decision queued on Monday and attempted on Thursday carried Monday's
@@ -97,6 +103,30 @@ try {
     Date.now() - new Date(broke.failedAt).getTime() < 60_000);
   check("…while one that landed is not stamped",
     (await decisionsFor([DONE])).get(DONE)?.failedAt == null);
+
+  console.log("\n2b. An expense Emburse no longer has comes off the queue at once");
+  // "On something like this remove it from the app list — auto remove,
+  // don't require a page refresh." It used to sit there greyed out until
+  // the next import, which might be tomorrow, asking somebody to keep
+  // looking at a row that is finished.
+  //
+  // Warranted because notInQueue is not a guess: the run read that
+  // cardholder's whole Needs Review and found no row for this amount. And
+  // self-correcting in the direction that matters — if Emburse does still
+  // hold it, the next import carries it and the row comes back.
+  const inbox = async (key: string): Promise<boolean | null> => {
+    const { rows } = await db().query<{ in_inbox: boolean }>(
+      "SELECT in_inbox FROM expenses WHERE dedupe_key = $1", [key]);
+    return rows[0]?.in_inbox ?? null;
+  };
+  check("the one Emburse no longer has is off the queue", await inbox(GONE) === false);
+  check("…while an ordinary failure stays on it, to be retried",
+    await inbox(BROKE) === true);
+  check("…and so does one still on its way", await inbox(SENT) === true);
+  // An applied decision is a different path: Emburse confirmed the row
+  // left, and the import purge handles it. Not this one's business.
+  check("…and one that landed is left to the import as before",
+    await inbox(DONE) === true);
 
   console.log("\n3. Clearing only the ones Emburse no longer has");
   const goneOnly = await clearFailedDecisions("eric@example.invalid", { onlyGone: true });

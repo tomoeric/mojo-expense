@@ -462,7 +462,19 @@ function BandRows({
   );
 }
 
-export type Tab = "all" | "flagged" | "clean" | "approved" | "denied";
+export type Tab = "all" | "reading" | "flagged" | "clean" | "approved" | "denied";
+
+/**
+ * Still waiting for its receipt to be read.
+ *
+ * Its own bucket because it is its own state, and the queue had no way to
+ * say it. Every rule about what a receipt says returns UNKNOWN until the
+ * reader has been, so an expense whose receipt arrived minutes ago is
+ * neither flagged nor cleared — and it was being shown as an ordinary
+ * Unflagged row, which reads as "nothing wrong with this one" when the
+ * truth is "nobody has looked yet".
+ */
+const beingRead = (r: Row): boolean => r.line.receiptUnread === true;
 
 /**
  * Finished with, as far as this app is concerned.
@@ -519,6 +531,7 @@ function FlagTabs({
   const approved = rows.filter((r) => r.decision?.state === "applied" && r.decision.decision !== "deny");
   const denied = rows.filter((r) => r.decision?.state === "applied" && r.decision.decision === "deny");
   const flagged = waiting.filter((r) => r.flags.length > 0);
+  const reading = waiting.filter(beingRead);
   const groups = useMemo(() => {
     const counts = new Map<string, number>();
     for (const r of flagged) for (const g of r.flagGroups) counts.set(g, (counts.get(g) ?? 0) + 1);
@@ -527,8 +540,18 @@ function FlagTabs({
 
   const tabs = [
     { key: "all" as const, label: "All", n: waiting.length },
+    // Only while there are any. It empties itself as the reader works
+    // through them, and a permanently empty tab is furniture.
+    ...(reading.length > 0
+      ? [{ key: "reading" as const, label: "Receipt being read", n: reading.length }]
+      : []),
     { key: "flagged" as const, label: "Flagged", n: flagged.length },
-    { key: "clean" as const, label: "Unflagged", n: waiting.length - flagged.length },
+    // Unflagged means judged and clean. An expense nobody has read the
+    // receipt for is neither, so it is counted in its own tab and not
+    // here — otherwise "Unflagged 157" includes rows that may be flagged
+    // in thirty seconds.
+    { key: "clean" as const, label: "Unflagged",
+      n: waiting.filter((r) => r.flags.length === 0 && !beingRead(r)).length },
     { key: "approved" as const, label: "Approved", n: approved.length },
     // Only when there are any. An always-empty tab is a permanent
     // reminder of something nobody did.
@@ -759,7 +782,7 @@ function FailedStrip({
         <span className="text-muted-foreground">
           <strong className="font-semibold tabular-nums">{gone.length.toLocaleString()}</strong>{" "}
           {gone.length === 1 ? "is" : "are"} no longer in Emburse&rsquo;s queue — already approved or
-          denied there, so there is nothing to retry. They drop off at the next import.
+          denied there, so there is nothing to retry. They come off this list on their own.
           {clear && (
             <>
               {" "}
@@ -894,8 +917,9 @@ export function ExpenseTable({
       base = base.filter((r) => isDone(r) && r.decision?.decision === "deny");
     } else {
       base = base.filter((r) => !isDone(r));
+      if (tab === "reading") base = base.filter(beingRead);
       if (tab === "flagged") base = base.filter((r) => r.flags.length > 0);
-      if (tab === "clean") base = base.filter((r) => r.flags.length === 0);
+      if (tab === "clean") base = base.filter((r) => r.flags.length === 0 && !beingRead(r));
     }
     // Within flagged, one rule at a time. Every rule's catches in one list is
     // the pile the tabs exist to break up: "Gas Category" and "Meal Count > 3"

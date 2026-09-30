@@ -601,10 +601,12 @@ forgetCardholderIds();
   check("a row no merchant search returns is found by the filter", run.ok,
     run.steps.find((s) => !s.ok)?.detail ?? "");
   check("…and it says the filter is what found it", /Kevin McBride filter/.test(how), how);
-  // Three identical rows used to be an ambiguity refusal, which left all
-  // three red for ever. There is nothing to disambiguate.
-  check("…taking one of the three identical rows rather than refusing",
-    /3 identical rows/.test(how), how);
+  // Three rows that agree on everything the decision names used to be an
+  // ambiguity refusal, which left all three red for ever. One receipt
+  // split evenly across three sites is ordinary, and the rows differ only
+  // where the decision does not care.
+  check("…taking one of the three rather than refusing",
+    /3 rows matched equally well/.test(how), how);
   check("…and the row taken is the right one",
     /312\.44/.test(run.matchedRow ?? "") && /McBride/i.test(run.matchedRow ?? ""),
     run.matchedRow ?? "");
@@ -815,17 +817,42 @@ check("…and the approval is still confirmed, not reported as unconfirmed",
   /left Needs Review/.test(doubled.steps.at(-1)?.detail ?? ""),
   doubled.steps.at(-1)?.detail ?? "");
 
-// The safety property this sits beside must survive. Two rows that are
-// both VISIBLE and agree on employee, merchant, amount AND date are a
-// split purchase; nothing here can tell them apart, and approving either
-// would be picking somebody's expense at random.
+// The safety property this sits beside must survive, and WHO decided is
+// what it now turns on. Two rows a person can see, agreeing on employee,
+// merchant, amount AND date, are indistinguishable as far as anything
+// here can tell.
+//
+//   The AUTOMATION did not look at the expense. Picking between them is
+//   guessing with somebody else's money, so it refuses.
+//
+//   A PERSON clicked Approve, having looked at it. Approving "a $26.40
+//   DoorDash charge of Brianna Ruth on the 13th" is satisfied by either
+//   row, and the other decision queued for the other row takes that one.
+//   This is the real shape behind it: one receipt split evenly across
+//   three sites, three expenses, three rows, and refusing every one of
+//   them left all three red for ever.
 mock.reset();
 await fetch(`${mock.url}/__app?twinRows=true`, { method: "POST" });
-const twinned = await runDecision("approve", TARGET, "", SEL, mock.url, LOGIN, {});
+const twinned = await runDecision(
+  "approve", TARGET, "", SEL, mock.url, LOGIN, { automatic: true });
 const twinWhy = twinned.steps.find((s) => !s.ok)?.detail ?? "";
-check("two rows a person CAN see are still refused", !twinned.ok, twinWhy.slice(0, 120));
+check("the automation still refuses two rows it cannot tell apart", !twinned.ok,
+  twinWhy.slice(0, 120));
 check("…saying it will not guess between them",
   /equally well/.test(twinWhy), twinWhy.slice(0, 160));
+check("…and telling somebody they can approve it themselves",
+  /Approve it yourself/.test(twinWhy), twinWhy.slice(0, 200));
+
+mock.reset();
+await fetch(`${mock.url}/__app?twinRows=true`, { method: "POST" });
+const twinByHand = await runDecision(
+  "approve", TARGET, "", SEL, mock.url, LOGIN, { dryRun: true });
+check("…while a person's decision takes one of them", twinByHand.ok,
+  twinByHand.steps.find((s) => !s.ok)?.detail?.slice(0, 140) ?? "");
+check("…and the record says a choice was made among them",
+  /rows matched equally well/.test(
+    twinByHand.steps.find((s) => s.name === "search for the expense")?.detail ?? ""),
+  twinByHand.steps.find((s) => s.name === "search for the expense")?.detail ?? "");
 
 // And when EVERY match is hidden, it must say so rather than time out with
 // a Playwright message that names no cause.

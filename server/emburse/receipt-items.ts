@@ -662,7 +662,7 @@ export async function expensesForReceipts(shas: string[]): Promise<string[]> {
  * model calls spent re-failing on the same receipts while nothing was being
  * imported.
  */
-const MAX_ATTEMPTS = 3;
+export const MAX_ATTEMPTS = 3;
 
 /** Receipts we hold an image for and have not yet read successfully. */
 export async function unreadReceipts(limit: number): Promise<string[]> {

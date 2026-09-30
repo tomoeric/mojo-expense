@@ -1,6 +1,7 @@
 import { db } from "../db.js";
 import { withFlags } from "./policy.js";
 import { hitsFor, type Hit } from "../rules/store.js";
+import { MAX_ATTEMPTS } from "./receipt-items.js";
 import type { EmburseProvider, ExpenseLine, ExpenseReport, FetchWindow, PolicyFlag, ProviderResult } from "./types.js";
 
 /**
@@ -33,6 +34,7 @@ type Row = {
   left_inbox_at: Date | null;
   section: string | null;
   receipt_count: string;
+  receipt_unread: boolean;
   changes: { field: string; before_value: string | null; after_value: string | null }[] | null;
 };
 
@@ -46,6 +48,26 @@ export class NeonProvider implements EmburseProvider {
               e.category, e.department, e.location, e.note, e.method,
               e.in_inbox, e.first_seen_at, e.left_inbox_at, e.section,
               (SELECT count(*) FROM expense_receipts r WHERE r.dedupe_key = e.dedupe_key) AS receipt_count,
+              -- A receipt attached that nobody has managed to read yet.
+              --
+              -- Never read, not "not read by the CURRENT reader": bumping
+              -- READER_VERSION re-queues everything already read, and if
+              -- that counted here the whole queue would drop into "Reading
+              -- receipts" after every reader improvement. This is about a
+              -- newly imported expense whose receipt has not been looked at
+              -- once.
+              --
+              -- And not one the reader has given up on. Three failed
+              -- attempts is not "being read", it is finished and unreadable,
+              -- and parking those in a waiting bucket for ever is how a
+              -- status stops meaning anything.
+              EXISTS (
+                SELECT 1 FROM expense_receipts r
+                 WHERE r.dedupe_key = e.dedupe_key
+                   AND NOT EXISTS (
+                         SELECT 1 FROM receipt_readings rr
+                          WHERE rr.sha256 = r.sha256
+                            AND (rr.error IS NULL OR rr.attempts >= ${MAX_ATTEMPTS}))) AS receipt_unread,
               -- Only the newest import's changes. Older ones stay in the table
               -- for history, but "what changed" on screen means "since the last
               -- sync", and carrying every edit ever would drown that.
@@ -104,6 +126,8 @@ function toReport(key: string, group: Row[], hits: Map<string, Hit[]>): ExpenseR
     reimbursable: (r.method ?? "").toLowerCase().includes("corporate card") ? false : true,
     billable: false,
     hasReceipt: Number(r.receipt_count) > 0,
+    // Attached, and still waiting for its first reading.
+    receiptUnread: r.receipt_unread === true,
     receiptId: Number(r.receipt_count) > 0 ? r.dedupe_key : "",
     receiptUrl: "",
     glCode: "",
