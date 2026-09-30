@@ -57,7 +57,13 @@ export async function runRules(opts: { keys?: string[]; decide?: boolean } = {})
   await ensureRules();
   const rules = await activeRules();
   const result = empty();
-  if (rules.length === 0) return result;
+  if (rules.length === 0) {
+    // Still judged, vacuously: there is nothing to judge them against, and
+    // leaving them unstamped would park every expense in "Receipt being
+    // read" for ever on a tenant with no rules written yet.
+    await markJudged(db(), opts.keys);
+    return result;
+  }
 
   const rows = await subjects(db(), opts.keys);
   result.rulesRun = rules.length;
@@ -108,6 +114,10 @@ export async function runRules(opts: { keys?: string[]; decide?: boolean } = {})
   await db().query(
     `UPDATE expense_rules SET last_run_at = now() WHERE id = ANY($1::bigint[])`,
     [rules.map((r) => r.id)]);
+  // And per EXPENSE, which is the thing "has this been judged yet" actually
+  // asks. `last_run_at` is per rule, so a rule that ran an hour ago counts
+  // as run for an expense whose receipt was read a minute ago.
+  await markJudged(db(), rows.map((r) => r.dedupeKey));
 
   if (deciding) {
     for (const rule of rules) {
@@ -119,6 +129,30 @@ export async function runRules(opts: { keys?: string[]; decide?: boolean } = {})
   }
 
   return result;
+}
+
+/**
+ * Record that these expenses have now been judged.
+ *
+ * Per expense, not per rule. The queue needs to know whether a verdict
+ * exists for THIS row yet: reading a receipt takes it out of "Receipt being
+ * read", and the rules are re-run for the batch afterwards — half a minute
+ * later for a full batch — so in between it had a read receipt and no
+ * verdict, and showed as Unflagged, which is supposed to mean judged and
+ * clean.
+ *
+ * `keys` undefined means every expense, which is what a full run examined.
+ */
+async function markJudged(
+  client: Pick<pg.PoolClient, "query">,
+  keys?: string[],
+): Promise<void> {
+  if (keys && keys.length === 0) return;
+  await client.query(
+    keys
+      ? "UPDATE expenses SET rules_run_at = now() WHERE dedupe_key = ANY($1::text[])"
+      : "UPDATE expenses SET rules_run_at = now()",
+    keys ? [keys] : []);
 }
 
 /** One person, one day — the unit "three meals in a day" is counted over. */

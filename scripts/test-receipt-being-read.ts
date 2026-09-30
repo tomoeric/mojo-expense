@@ -26,6 +26,7 @@ process.env.SESSION_SECRET ||= "test-secret";
 const { db, ensureSchema } = await import("../server/db.js");
 const { ensureReceiptItems } = await import("../server/emburse/receipt-items.js");
 const { NeonProvider } = await import("../server/emburse/neon.js");
+const { runRules } = await import("../server/rules/run.js");
 
 let failures = 0;
 const check = (label: string, ok: boolean, detail = "") => {
@@ -95,6 +96,11 @@ try {
   await reading(`${TAG}-c`, { error: "the model was unreachable", attempts: 3 });
   await reading(`${TAG}-d`, { error: "a timeout", attempts: 1 });
 
+  // Judged, so the "read but not yet judged" half of the test below is not
+  // firing on everything. A real queue reaches this state on every rules
+  // run, which the server does on boot and after every read batch.
+  await runRules({ decide: false });
+
   console.log("\n1. Which expenses are waiting on a reader");
   check("a receipt nobody has read yet marks the expense", await unreadFor(WAITING) === true);
   check("…one already read does not", await unreadFor(READ) === false);
@@ -113,9 +119,20 @@ try {
   check("a receipt read by an older reader still counts as read",
     await unreadFor(READ) === false);
 
-  console.log("\n3. And reading it clears the state");
+  console.log("\n3. Read is not enough — it has to have been JUDGED");
+  // The window this closes: the reader works through a batch one receipt at
+  // a time and re-runs the rules for the whole batch at the end, half a
+  // minute later for twenty-five. An expense read early had a total and no
+  // verdict, and showed as Unflagged — which is supposed to mean judged and
+  // clean, and is the whole reason this state exists.
   await reading(`${TAG}-a`, {});
-  check("once read, the expense leaves the waiting bucket", await unreadFor(WAITING) === false);
+  check("reading it is not on its own enough to leave the bucket",
+    await unreadFor(WAITING) === true);
+  await runRules({ keys: [WAITING], decide: false });
+  check("…and once the rules have judged it, it leaves",
+    await unreadFor(WAITING) === false);
+  check("…without disturbing the ones that were already settled",
+    await unreadFor(READ) === false && await unreadFor(GAVEUP) === false);
 } finally {
   await clean();
   await db().end();

@@ -107,6 +107,15 @@ ALTER TABLE receipt_blobs ADD COLUMN IF NOT EXISTS render_version integer NOT NU
 -- With the default all-in-one export it stays null, and the UI simply does not
 -- offer the split rather than showing empty buckets.
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS section text;
+-- When the rules last judged THIS expense, as opposed to when a rule last
+-- ran at all.
+--
+-- The difference is a window the queue was lying in. Reading a receipt takes
+-- the expense out of "Receipt being read"; the rules are re-run for the whole
+-- batch afterwards, a good half-minute later for a batch of twenty-five. In
+-- between, an expense had a read receipt and no verdict yet — and showed as
+-- Unflagged, which is supposed to mean judged and clean.
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS rules_run_at timestamptz;
 CREATE INDEX IF NOT EXISTS expenses_section_idx ON expenses (section) WHERE section IS NOT NULL;
 
 -- What each import changed, field by field.

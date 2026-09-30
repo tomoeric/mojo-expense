@@ -61,13 +61,29 @@ export class NeonProvider implements EmburseProvider {
               -- attempts is not "being read", it is finished and unreadable,
               -- and parking those in a waiting bucket for ever is how a
               -- status stops meaning anything.
-              EXISTS (
+              (EXISTS (
                 SELECT 1 FROM expense_receipts r
                  WHERE r.dedupe_key = e.dedupe_key
                    AND NOT EXISTS (
                          SELECT 1 FROM receipt_readings rr
                           WHERE rr.sha256 = r.sha256
-                            AND (rr.error IS NULL OR rr.attempts >= ${MAX_ATTEMPTS}))) AS receipt_unread,
+                            AND (rr.error IS NULL OR rr.attempts >= ${MAX_ATTEMPTS})))
+               -- OR read, and not judged on it yet.
+               --
+               -- The second half closes a window the queue was lying in.
+               -- The reader works through a batch one receipt at a time and
+               -- re-runs the rules for the whole batch at the end — half a
+               -- minute later for twenty-five — so an expense read early
+               -- had a total, no verdict, and showed as Unflagged. Which is
+               -- supposed to mean judged and clean, and is the entire
+               -- reason this state exists.
+               OR EXISTS (
+                SELECT 1 FROM expense_receipts r
+                  JOIN receipt_readings rr ON rr.sha256 = r.sha256
+                 WHERE r.dedupe_key = e.dedupe_key
+                   AND rr.error IS NULL
+                   AND (e.rules_run_at IS NULL OR rr.extracted_at > e.rules_run_at))
+              ) AS receipt_unread,
               -- Only the newest import's changes. Older ones stay in the table
               -- for history, but "what changed" on screen means "since the last
               -- sync", and carrying every edit ever would drown that.
