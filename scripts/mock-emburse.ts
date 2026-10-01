@@ -657,6 +657,12 @@ app.post("/login", (req, res) => {
     return;
   }
   state.signedIn = true;
+  // A session cookie on every successful sign-in, like any real app. The
+  // mock only ever set one on the device-verification path, so a plain
+  // sign-in ended with an empty jar and "a successful sign-in saves its
+  // session" could not be tested at all — the check that exists for it was
+  // passing or failing on whether an EARLIER run had left a row behind.
+  res.setHeader("set-cookie", "mock_session=1; Path=/; Max-Age=86400");
   res.redirect("/");
 });
 

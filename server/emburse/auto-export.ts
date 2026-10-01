@@ -878,7 +878,26 @@ export async function signIn(
   }
 
   if (!(await emailBox.isVisible().catch(() => false))) {
-    if (await loggedIn.isVisible().catch(() => false)) return "already signed in";
+    if (await loggedIn.isVisible().catch(() => false)) {
+      /*
+       * Name the account, always.
+       *
+       * This said "already signed in" and nothing else — no email — which
+       * is precisely the line where the account matters most, because this
+       * is the branch that did NOT type a password. Asked "is this
+       * importing from Brian or Eric", the step log had no answer, and the
+       * only way to tell was to recognise the item count further down.
+       *
+       * The name is authoritative now rather than a hope: the browser
+       * profile and the cookie jar are both this account's, and the
+       * context's cookies are cleared before that account's are restored,
+       * so a live session here can only be theirs. It still says "the
+       * session already open" rather than claiming a fresh sign-in,
+       * because those are different facts and conflating them is how this
+       * went unnoticed.
+       */
+      return `already signed in as ${login.email} — their session was still open`;
+    }
 
     // Straight to a verification code, before any form. Clearable by a person,
     // so ask — and if nobody is there to ask, say THAT rather than blaming a

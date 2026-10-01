@@ -71,16 +71,21 @@ try {
   // deploy, so they were asked for a code again on the next ship.
   if (process.env.DATABASE_URL) {
     console.log("\nKeeping the device trusted");
-    const { cookiesSavedAt } = await import("../server/emburse/browser-state.js");
+    // Through the app's own function, not one table by name. There are two
+    // now — the old single row and the per-account jars — and clearing only
+    // the one this test knew about left a jar from an earlier run behind,
+    // so "nothing is remembered to begin with" failed on a clean app.
+    const { cookiesSavedAt, forgetCookies } = await import("../server/emburse/browser-state.js");
     const { db } = await import("../server/db.js");
-    await db().query("DELETE FROM emburse_browser_state").catch(() => {});
+    await forgetCookies().catch(() => {});
     check("nothing is remembered to begin with", (await cookiesSavedAt()) === null);
     await set("/__reset");
     const kept = await testConnection(sel, mock.url, login);
     check("the connection test signs in", kept.ok, names(kept));
     check("…and saves the jar, so the next deploy does not start as a stranger",
       (await cookiesSavedAt()) !== null);
-    await db().query("DELETE FROM emburse_browser_state").catch(() => {});
+    await forgetCookies().catch(() => {});
+    void db;
     // The pool stays open: the blocks below still sign in, and every sign-in
     // now saves the jar. Closing it here made those log a pool error.
   } else {
