@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { X, ReceiptText, AlertTriangle, ScanSearch, Loader2, Eye } from "lucide-react";
 import { type AuditResult, type ExpenseLine, type ExpenseReport } from "@/lib/api";
 import { receiptTotalOf, verdictFor } from "@/lib/receipt-verdict";
-import { moneyExact, shortDate } from "@/lib/format";
+import { moneyExact, shortDate, daysAgo } from "@/lib/format";
 import { useDecisions } from "@/lib/decisions";
 import { StatusPill } from "./ui";
 import { ReceiptPane, ReceiptViewer } from "./receipt-viewer";
@@ -222,6 +222,8 @@ export function ReportDrawer({
                     key={l.id}
                     line={l}
                     department={report.department}
+                    employee={report.employeeName || report.employeeEmail}
+                    ageDays={daysAgo(report.submittedDate)}
                     flagged={flaggedLineIds.has(l.id)}
                     audit={verdictFor(l.amount, receiptTotalOf(items.data?.byExpense?.[l.id], l.amount), l.id) ?? undefined}
                     items={items.data?.byExpense?.[l.id]}
@@ -304,10 +306,14 @@ function receiptFact(line: ExpenseLine): string {
 }
 
 function LineCard({
-  line, department, flagged, audit, items, itemsLoading, itemsEnabled, onShow, isShowing, decide,
+  line, department, employee, ageDays, flagged, audit, items, itemsLoading, itemsEnabled, onShow,
+  isShowing, decide,
 }: {
   line: ExpenseLine;
   department: string;
+  employee: string;
+  /** Days since it was submitted, the same figure the queue's Age column shows. */
+  ageDays: number | null;
   flagged: boolean;
   audit: AuditResult | undefined;
   items: ReceiptDetail[] | undefined;
@@ -332,6 +338,18 @@ function LineCard({
   // export's column selection, which moves the columns this parser reads by
   // x-position.
   const facts: [string, string][] = [
+    // The queue row's own columns first, as LABELLED fields.
+    //
+    // They were on screen already — date and category in the grey line above,
+    // the employee at the top of the panel, the amount on the right — but
+    // scattered as decoration rather than stated as record. Somebody checking
+    // a row against Emburse is reading down a list of fields, and having four
+    // of them live somewhere else in the layout is how "the detail is
+    // missing" is both wrong and completely fair.
+    ["Date", line.date ? shortDate(line.date) : ""],
+    ["Employee", employee],
+    ["Merchant", line.merchant],
+    ["Amount", moneyExact(line.amount)],
     ["Location / Site", line.location],
     ["Department", department],
     ["Category", line.category],
@@ -346,6 +364,16 @@ function LineCard({
     ["Reimbursable", line.reimbursable ? "Yes" : ""],
     ["Billable", line.billable ? "Yes" : ""],
     ["GL code", line.glCode],
+    // The last two columns the queue can show and this panel could not.
+    // "The line view and pop view are different for receipt detail" — they
+    // were, and the queue was the fuller of the two, which is backwards for
+    // a panel whose job is the detail.
+    // Measured off the submitted date, exactly as the queue's Age column
+    // is. Two numbers under one word is worse than no number.
+    ["Age", ageDays === null ? "" : `${ageDays}d waiting for review`],
+    ["Updated by the last import", line.changes.length === 0
+      ? ""
+      : line.changes.map((c) => `${c.field}: ${c.before || "—"} → ${c.after || "—"}`).join("; ")],
     ["Shared receipt", line.sharedWith && line.sharedWith > 1
       ? `${line.sharedWith} expenses` +
         (typeof line.shareTotal === "number" ? ` · ${moneyExact(line.shareTotal)} together` : "")
@@ -364,7 +392,7 @@ function LineCard({
    * Only the two that are about our own bookkeeping rather than Emburse's
    * record still disappear when there is nothing to say.
    */
-  const OURS = new Set(["First imported", "Shared receipt"]);
+  const OURS = new Set(["First imported", "Shared receipt", "Updated by the last import"]);
   const shown = facts.filter(([label, v]) => (v && v.trim()) || !OURS.has(label));
 
   return (

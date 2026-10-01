@@ -254,7 +254,7 @@ export async function attemptExport(
       trigger === "scheduled"
         ? undefined
         : (ctx: { prompt: string; screenshot: string | null; attempt: number; lastError: string | null }) =>
-            waitForCode({ ...ctx, owner: by });
+            waitForCode({ ...ctx, owner: by, loginEmail: login?.email ?? null });
 
     run = await runAutoExport(settings, settings.selectors as Selectors, login, {
       ...opts,

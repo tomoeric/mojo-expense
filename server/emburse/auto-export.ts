@@ -1034,6 +1034,16 @@ async function passChallenge(page: Page, sel: Selectors, ask: ChallengeHook): Pr
     const loggedIn = page.locator(sel.loggedIn).first();
     await loggedIn.waitFor({ state: "visible" }).catch(() => {});
     if (await loggedIn.isVisible().catch(() => false)) {
+      // Loud, because the whole promise made to the person who just read
+      // their email is that this is the last time. On a successful run the
+      // step detail is only stored when the trace flag is on, so without
+      // this the one thing worth knowing would be invisible exactly when
+      // everything appears to have worked.
+      console.log(remembered
+        ? "emburse: verified with a code and the device is now remembered"
+        : "emburse: VERIFIED BUT NOT REMEMBERED — Emburse did not offer a " +
+          '"remember this device" box, or the mfaRemember selector no longer matches it, ' +
+          "so a code will be asked for again");
       return remembered
         ? `verified with a code, and this device is now remembered, so future runs should not be asked again`
         : `verified with a code. Emburse did not offer to remember this device, so the next run may be asked again — ` +

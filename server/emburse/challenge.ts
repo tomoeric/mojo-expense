@@ -39,6 +39,15 @@ export type ChallengeView = {
   screenshot: string | null;
   /** Who is allowed to answer, for showing "waiting on you" vs "waiting on X". */
   owner: string;
+  /**
+   * The Emburse login the code was sent to.
+   *
+   * Emburse MAILS the code rather than texting it, so "enter the code we
+   * sent you" is not enough to act on: the one thing somebody needs is
+   * which inbox to open, and their Emburse login is often not the address
+   * they signed into this app with.
+   */
+  loginEmail: string | null;
   startedAt: string;
   expiresAt: string;
   /** Codes tried so far, and how many are left before this is torn down. */
@@ -72,6 +81,8 @@ export function waitForCode(input: {
   prompt: string;
   screenshot: string | null;
   owner: string;
+  /** The Emburse login the code was mailed to, when the caller knows it. */
+  loginEmail?: string | null;
   /** Set when a previous code was refused, so the page can say so. */
   lastError?: string | null;
   /** 1 for the first code asked of this sign-in, 2 for the retry after a bad one. */
@@ -105,6 +116,7 @@ export function waitForCode(input: {
       prompt: input.prompt,
       screenshot: input.screenshot,
       owner: input.owner,
+      loginEmail: input.loginEmail ?? null,
       startedAt,
       expiresAt: new Date(Date.now() + ms).toISOString(),
       attempts,

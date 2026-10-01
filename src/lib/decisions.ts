@@ -49,9 +49,15 @@ export type Challenge = {
   prompt: string;
   screenshot: string | null;
   owner: string;
+  /** The Emburse login the code was mailed to — which inbox to open. */
+  loginEmail?: string | null;
   attempt: number;
   maxAttempts: number;
+  attemptsLeft?: number;
   lastError: string | null;
+  startedAt?: string;
+  /** When the wait gives up, so the page can show a clock instead of hiding one. */
+  expiresAt?: string;
   /** True when the viewer is the one who can answer it. */
   mine: boolean;
 };

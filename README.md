@@ -309,6 +309,21 @@ VM the directory persists, so it is forever — every import, every approval,
 until somebody deletes a file nobody knows about. A launch that fails that way
 now clears the stale lock and tries once more.
 
+**The code prompt has to be followable by somebody who has never seen it.**
+Emburse MAILS the verification code rather than texting it, often to a
+different address than the one they signed into this app with, and there is a
+deadline. So the prompt names the inbox, numbers the steps, shows the time
+left ticking, and says plainly that this is the only time they will be
+asked — which is the difference between a small chore and a thing worth
+refusing to set up.
+
+That last claim is kept by two mechanisms, not one: the run ticks Emburse's
+"remember this device" box before submitting the code, and the browser's
+cookies are then written to the database, so the trust survives a deploy that
+rebuilds the profile directory. If the box is ever missing or its selector
+stops matching, the boot log says VERIFIED BUT NOT REMEMBERED rather than
+letting a broken promise pass as success.
+
 **A fix to the alcohol list reaches readings already stored.** The floor
 under the model's answer is a pure function of the line's own text — "RED
 BULL SUDACHI LIME 12" is not alcohol however the model felt about it — so

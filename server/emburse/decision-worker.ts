@@ -207,7 +207,8 @@ async function tick(): Promise<void> {
 
       const results = await runDecisions(batch, settings.selectors, settings.emburseUrl, login, {
         ...(somebodyIsHere
-          ? { onChallenge: ((ctx) => waitForCode({ ...ctx, owner: decider })) as ChallengeHook }
+          ? { onChallenge: ((ctx) =>
+                waitForCode({ ...ctx, owner: decider, loginEmail: login.email })) as ChallengeHook }
           : {}),
         // Pause has to reach the batch already running, or it only stops
         // work that had not started — which, mid-way through a hundred and

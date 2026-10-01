@@ -78,7 +78,7 @@ decisionRouter.post("/emburse-check", requireAuth, async (req: Request, res: Res
       // Somebody pressed a button and is watching, so a code CAN be asked for —
       // and answering it here is the whole reason to press it.
       onChallenge: (ctx: { prompt: string; screenshot: string | null; attempt: number; lastError: string | null }) =>
-        waitForCode({ ...ctx, owner: who }),
+        waitForCode({ ...ctx, owner: who, loginEmail: login.email }),
     });
     // A failed connection test is NOT automatically a wrong password: a device
     // check and a moved button fail the same way, and flagging those for
