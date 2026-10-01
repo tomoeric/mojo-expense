@@ -7,6 +7,7 @@ import { logAiCredential } from "./ai.js";
 import { env, databaseHost, databaseUrlSource } from "./env.js";
 import { api } from "./routes.js";
 import { allowListSize, authMiddleware, authRouter, isAuthConfigured } from "./auth/index.js";
+import { viewAsMiddleware } from "./auth/view-as.js";
 import { importRouter } from "./import/routes.js";
 import { decisionRouter } from "./emburse/decision-routes.js";
 import { startExportScheduler } from "./emburse/export-scheduler.js";
@@ -28,6 +29,10 @@ app.use((req, res, next) =>
 app.use(cookieParser());
 // Populates req.user from the session cookie before anything reads it.
 app.use(authMiddleware);
+// After the identity is read and before anything uses it. Swaps req.user for
+// an admin who is looking through somebody else's eyes, and refuses every
+// write while they are.
+app.use(viewAsMiddleware);
 app.use("/api", authRouter);
 app.use("/api", importRouter);
 app.use("/api", decisionRouter);

@@ -10,6 +10,7 @@ import { SectionTitle, LiveStrip, SegmentedControl, Empty } from "@/components/u
 import { NotConnected } from "@/components/not-connected";
 import { SignIn } from "@/components/sign-in";
 import { UserMenu } from "@/components/user-menu";
+import { ViewAs } from "@/components/view-as";
 import { ReportDrawer } from "@/components/report-drawer";
 import { QueuePage } from "@/pages/queue";
 import { ReportsPage } from "@/pages/reports";
@@ -204,10 +205,25 @@ export function App() {
                   ? "demo mode"
                   : (config.data?.source ?? "")}
             </span>
+            {auth.data?.user && (
+              <ViewAs isAdmin={auth.data.isAdmin} viewingAs={auth.data.viewingAs} />
+            )}
             {auth.data?.user && <UserMenu user={auth.data.user} isAdmin={auth.data.isAdmin} />}
           </div>
         </div>
       </header>
+
+      {/* Impossible to miss, because the cost of forgetting is real: every
+          count, every flag and every admin control below is somebody
+          else's, and a decision attempted here is refused by the server
+          rather than quietly recorded under the wrong name. */}
+      {auth.data?.viewingAs && (
+        <div className="border-b border-amber-500/40 bg-amber-500/15 px-5 py-1.5 text-center text-xs text-amber-900 dark:text-amber-200">
+          Viewing as <strong>{auth.data.viewingAs.viewed}</strong> — everything below is their
+          view of the app. Read-only: nothing can be approved, denied or changed until you go
+          back to {auth.data.viewingAs.real}.
+        </div>
+      )}
 
       {/* Wider than a reading column on purpose: the queue is an eleven-column
           table, and squeezing it into prose width is what made columns collapse. */}

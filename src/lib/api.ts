@@ -128,7 +128,13 @@ export type ReportsResponse = {
 
 export type SessionUser = { id: string; email: string; name: string; exp: number; isAdmin?: boolean };
 
-export type AuthResponse = { user: SessionUser | null; authConfigured: boolean; isAdmin: boolean };
+export type AuthResponse = {
+  user: SessionUser | null;
+  authConfigured: boolean;
+  isAdmin: boolean;
+  /** Set only while an admin is looking through somebody else's eyes. */
+  viewingAs?: { real: string; viewed: string } | null;
+};
 
 export type ConfigResponse = {
   configured: boolean;

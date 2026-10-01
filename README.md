@@ -309,6 +309,23 @@ VM the directory persists, so it is forever — every import, every approval,
 until somebody deletes a file nobody knows about. A launch that fails that way
 now clears the stale lock and tries once more.
 
+**Viewing as somebody must never become acting as them.** An admin can look
+at the app through another reviewer's eyes — the control is in the main
+header, the people offered are those with an Emburse login stored, and a band
+under the header says whose view it is for as long as it lasts. It swaps the
+identity the whole app reads, because that is what makes the view honest:
+whether a login is stored and so whether anything can be decided, which
+failures are theirs, what the automation did while they were away.
+
+That identity also stamps every write — `decidedBy` on a decision, who saved
+a rule, who flipped a flag — and an approval reaches Emburse under the
+decider's own login and carries their name in the finance system
+permanently. So the rule is not "be careful which writes to allow", it is
+**allow none**: `viewAsMiddleware` refuses every request that is not a GET
+while the mode is on. An allow-list of safe methods, so a write route added
+next month is refused by default rather than discovered later. Admin rights
+are re-checked on every request against the real signed-in user.
+
 **An expense Emburse no longer has is not a failure.** Somebody approving or
 denying directly in Emburse is allowed and normal, and when a run reads that
 cardholder's whole Needs Review and finds no row for the amount, there is

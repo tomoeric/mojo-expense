@@ -9,6 +9,8 @@ import {
 } from "./session.js";
 import { isDbConfigured } from "../db.js";
 import { noteVisit, whileAway } from "../visits.js";
+import { VIEW_AS_COOKIE } from "./view-as.js";
+import { listCredentials } from "../emburse/credentials.js";
 
 /**
  * Microsoft SSO via Entra ID (OpenID Connect + PKCE), matching how
@@ -184,7 +186,76 @@ authRouter.get("/auth/user", (req: Request, res: Response) => {
     // With sign-in off there is no identity, so the UI should not hide admin
     // affordances behind a check the server is not making either.
     isAdmin: !isAuthConfigured() || (req.user ? isAdmin(req.user.email) : false),
+    // Who is really here, when that is not who the page is showing. The UI
+    // needs it for the banner, and for keeping the exit visible: the one
+    // control that must not disappear is the one that gets you back.
+    viewingAs: req.viewingAs
+      ? { real: req.viewingAs.real.email, viewed: req.viewingAs.viewed }
+      : null,
   });
+});
+
+/**
+ * Who an admin can look at, and swapping to one of them.
+ *
+ * The candidates are the people with an Emburse login stored, because those
+ * are the people the automation acts for and therefore the people whose view
+ * is worth watching. Whose-and-whether only — `listCredentials` never
+ * returns a password, and nothing here goes near one.
+ */
+authRouter.get("/auth/view-as/people", async (req: Request, res: Response) => {
+  const real = req.viewingAs?.real ?? req.user;
+  if (isAuthConfigured() && (!real || !isAdmin(real.email))) {
+    res.status(403).json({ error: "Only an administrator can view as somebody else." });
+    return;
+  }
+  if (!isDbConfigured()) { res.json({ people: [] }); return; }
+  try {
+    const people = (await listCredentials()).map((c) => ({
+      email: c.userEmail,
+      loginEmail: c.loginEmail,
+      lastOkAt: c.lastOkAt,
+      needsReentry: c.needsReentry,
+      lastError: c.lastError,
+    }));
+    res.json({ people });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/**
+ * Start or stop viewing as somebody.
+ *
+ * Judged on the REAL user, never the viewed one, or a view could hop from
+ * person to person without an admin behind it. Sending no email stops.
+ */
+authRouter.post("/auth/view-as", (req: Request, res: Response) => {
+  const real = req.viewingAs?.real ?? req.user;
+  if (isAuthConfigured() && (!real || !isAdmin(real.email))) {
+    res.status(403).json({ error: "Only an administrator can view as somebody else." });
+    return;
+  }
+  const email = String((req.body as { email?: unknown })?.email ?? "").trim().toLowerCase();
+  if (!email) {
+    res.clearCookie(VIEW_AS_COOKIE, { path: "/" });
+    res.json({ viewingAs: null });
+    return;
+  }
+  if (real && email === real.email.trim().toLowerCase()) {
+    res.clearCookie(VIEW_AS_COOKIE, { path: "/" });
+    res.json({ viewingAs: null });
+    return;
+  }
+  // Session-length, not remembered: coming back tomorrow as somebody else by
+  // accident is a worse failure than having to press the button again.
+  res.cookie(VIEW_AS_COOKIE, email, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+  });
+  res.json({ viewingAs: { real: real?.email ?? null, viewed: email } });
 });
 
 /**

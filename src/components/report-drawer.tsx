@@ -346,9 +346,26 @@ function LineCard({
     ["Reimbursable", line.reimbursable ? "Yes" : ""],
     ["Billable", line.billable ? "Yes" : ""],
     ["GL code", line.glCode],
+    ["Shared receipt", line.sharedWith && line.sharedWith > 1
+      ? `${line.sharedWith} expenses` +
+        (typeof line.shareTotal === "number" ? ` · ${moneyExact(line.shareTotal)} together` : "")
+      : ""],
     ["Note", line.note],
   ];
-  const shown = facts.filter(([, v]) => v && v.trim());
+
+  /**
+   * Shown even when empty, and that is the point of the change.
+   *
+   * Hiding a blank field makes "Emburse holds nothing here" look identical
+   * to "the app never pulled this", and the whole reason to open this panel
+   * rather than Emburse is to settle exactly that question. A row of
+   * dashes is an answer; an absent row is a second trip.
+   *
+   * Only the two that are about our own bookkeeping rather than Emburse's
+   * record still disappear when there is nothing to say.
+   */
+  const OURS = new Set(["First imported", "Shared receipt"]);
+  const shown = facts.filter(([label, v]) => (v && v.trim()) || !OURS.has(label));
 
   return (
     <li className={`rounded-xl border ${flagged ? "border-amber-300 bg-amber-50/40" : "border-border"}`}>
@@ -370,7 +387,11 @@ function LineCard({
                   matter — "Refund- drb suggested i…" is exactly the thing
                   somebody opened the drawer to read — and it was being cut
                   off here as well as in the table. */}
-              <dd className="ml-auto min-w-0 text-right [overflow-wrap:anywhere]">{value}</dd>
+              <dd className={`ml-auto min-w-0 text-right [overflow-wrap:anywhere] ${
+                value && value.trim() ? "" : "text-muted-foreground/50"
+              }`}>
+                {value && value.trim() ? value : "—"}
+              </dd>
             </div>
           ))}
         </dl>
