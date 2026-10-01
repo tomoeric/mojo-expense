@@ -304,8 +304,52 @@ export async function systemChromium(): Promise<string | null> {
  * everything outside a-z0-9 replaced so nothing in an address can reach
  * out of the directory it is supposed to name.
  */
-function cleanName(email: string): string {
+export function cleanName(email: string): string {
   return email.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 80) || "shared";
+}
+
+/**
+ * Give the device Emburse already trusts to one account, keeping it.
+ *
+ * The per-account profiles are right and they have one cost nobody can
+ * pay: the trust lives in the OLD shared directory, and moving to
+ * per-account directories abandons it, so everybody signs in again. "I
+ * won't be able to enter the code for Brian — we entered in code already.
+ * That needs to stay." Quite so. A second reviewer is somebody else's
+ * working day, and a design that needs them at a screen to be re-verified
+ * is a design that does not ship.
+ *
+ * So the old profile is not discarded, it is handed to whichever account
+ * it actually belongs to — a question the app cannot answer and a person
+ * can. Everything comes across: cookies, localStorage, IndexedDB, which is
+ * why this copies the directory rather than only the cookie jar.
+ *
+ * Copies rather than moves, so a wrong choice can be corrected by choosing
+ * again rather than by somebody finding a verification code.
+ */
+export async function adoptLegacyProfile(userEmail: string): Promise<number> {
+  const base = env.emburseLogin.profileDir;
+  if (!base || !userEmail.trim()) return 0;
+  const target = `${base}/${cleanName(userEmail)}`;
+
+  const entries = await fs.readdir(base, { withFileTypes: true }).catch(() => []);
+  // The old profile is whatever sits directly in the base directory. The
+  // per-account ones are subdirectories we made, and Chromium's lock files
+  // belong to the process that left them, not to anybody's session.
+  const LOCKS = new Set(["SingletonLock", "SingletonCookie", "SingletonSocket"]);
+  const mine = new Set(entries.filter((e) => e.isDirectory() && /^[a-z0-9-]+$/.test(e.name))
+    .map((e) => e.name));
+  const carry = entries.filter((e) => !LOCKS.has(e.name) && !mine.has(e.name));
+  if (carry.length === 0) return 0;
+
+  await fs.mkdir(target, { recursive: true }).catch(() => {});
+  let copied = 0;
+  for (const e of carry) {
+    await fs.cp(`${base}/${e.name}`, `${target}/${e.name}`, { recursive: true, force: true })
+      .then(() => { copied++; })
+      .catch(() => {});
+  }
+  return copied;
 }
 
 export async function openBrowser(
@@ -386,11 +430,19 @@ export async function openBrowser(
       }
       context = await launch();
     }
-    // Belt and braces. The directory is this account's, so nothing of
-    // anybody else's should be in it — and "should" is what the shared
-    // profile was running on. Cleared, then filled with this account's own,
-    // so "already signed in" can only ever mean signed in as them.
-    await context.clearCookies().catch(() => {});
+    /*
+     * NOT cleared. The directory is this account's and nobody else's, so
+     * the cookies in it are theirs — including the one Emburse issues for
+     * "remember this device for 30 days", which is the entire point of
+     * keeping a profile at all.
+     *
+     * Clearing them was a belt-and-braces reflex and it quietly destroyed
+     * the feature: every run would start as a stranger and ask for a
+     * verification code, which for a second reviewer means asking somebody
+     * else to drop what they are doing. Isolation is what makes a session
+     * safe to reuse; emptying the profile on the way in is not isolation,
+     * it is just forgetting.
+     */
     // The profile directory carries trust between runs; the database carries
     // it between deployments, which rebuild that directory and would otherwise
     // lose the device every time the app ships.
@@ -404,7 +456,6 @@ export async function openBrowser(
     acceptDownloads: true,
     viewport: { width: 1600, height: 1000 },
   });
-  await context.clearCookies().catch(() => {});
   await restoreCookies(context, asUser);
   return { context, close: () => browser.close() };
 }

@@ -136,6 +136,8 @@ export function ExportRunner({
         deviceRememberedAt: string | null;
         viewingAs: string | null;
         runsFor: string | null;
+        legacyDeviceAt: string | null;
+        people: string[];
       }>(res);
       if (!res.ok) throw new Error(body.error ?? "Failed");
       return body as {
@@ -146,6 +148,8 @@ export function ExportRunner({
         deviceRememberedAt: string | null;
         viewingAs: string | null;
         runsFor: string | null;
+        legacyDeviceAt: string | null;
+        people: string[];
       };
     },
     // While a run is going, the list is the only progress indicator there is.
@@ -237,6 +241,21 @@ export function ExportRunner({
       await qc.invalidateQueries({ queryKey: ["export-runs"] });
     } catch (err) {
       setError((err as Error).message);
+    }
+  }
+
+  /** Keep a trust already earned, under the account it belongs to. */
+  async function adopt(email: string): Promise<void> {
+    setBusy("real");
+    try {
+      await fetch("/api/export-device/adopt", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      await qc.invalidateQueries({ queryKey: ["export-runs"] });
+    } finally {
+      setBusy("");
     }
   }
 
@@ -337,6 +356,35 @@ export function ExportRunner({
           </>
         )}
       </p>
+
+      {/* A device trusted before the jars were keyed per account. It is
+          somebody's, the app cannot know whose, and until that is said the
+          person it belongs to would be asked for a code they have already
+          given — which for a reviewer who is not the admin means
+          interrupting them to read one out. */}
+      {isAdmin && q.data?.legacyDeviceAt && !q.data?.deviceRememberedAt && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
+          <p>
+            Emburse already trusts this browser from{" "}
+            {new Date(q.data.legacyDeviceAt).toLocaleString()}, from before the app kept a
+            separate sign-in per account. Say whose it is and they keep it — no new
+            verification code.
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {(q.data.people ?? []).map((who) => (
+              <button
+                key={who}
+                type="button"
+                disabled={working}
+                onClick={() => void adopt(who)}
+                className="rounded-lg border border-border bg-background px-3 py-1 text-xs font-semibold disabled:opacity-50"
+              >
+                It is {who}&rsquo;s
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-2">
         <button

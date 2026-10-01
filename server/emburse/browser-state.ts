@@ -142,6 +142,52 @@ export async function rememberCookies(
 }
 
 /**
+ * Is there still a device trusted under the old shared jar, and when?
+ *
+ * Only ever a transitional answer: before the jars were keyed there was
+ * one, and it belongs to whoever last signed in — which the app cannot
+ * know and a person can.
+ */
+export async function legacyDevice(): Promise<string | null> {
+  if (!isDbConfigured()) return null;
+  await ensure();
+  const { rows } = await db().query<{ updated_at: Date }>(
+    "SELECT updated_at FROM emburse_browser_state WHERE id");
+  return rows[0] ? rows[0].updated_at.toISOString() : null;
+}
+
+/**
+ * Hand the old shared device to the account it actually belongs to.
+ *
+ * The per-account jars are right and they have one cost nobody can pay:
+ * the trust already earned sits in the shared row, and keying the jars
+ * abandons it, so everybody enters a verification code again. For a second
+ * reviewer that means interrupting somebody else's day to read out a code
+ * — and "we entered in code already, that needs to stay" is a fair thing
+ * to insist on.
+ *
+ * So it is not thrown away, it is assigned. Which account it belongs to is
+ * the one question here that only a person can answer, so a person answers
+ * it. Copied rather than moved, so a wrong answer is corrected by choosing
+ * again rather than by hunting for a code.
+ */
+export async function adoptLegacyDevice(userEmail: string): Promise<boolean> {
+  if (!isDbConfigured()) return false;
+  await ensure();
+  const who = userEmail.trim().toLowerCase();
+  if (!who) return false;
+  const { rows } = await db().query<{ state: Buffer }>(
+    "SELECT state FROM emburse_browser_state WHERE id");
+  const sealed = rows[0]?.state;
+  if (!sealed) return false;
+  await db().query(
+    `INSERT INTO emburse_browser_jars (user_email, state, updated_at) VALUES ($1, $2, now())
+     ON CONFLICT (user_email) DO UPDATE SET state = EXCLUDED.state, updated_at = now()`,
+    [who, sealed]);
+  return true;
+}
+
+/**
  * Forget a remembered device — the escape hatch when a jar goes stale.
  *
  * One person's, when named. Unnamed clears everybody's, which is what the

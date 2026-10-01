@@ -12,7 +12,8 @@ import { claimUnclaimed, credentialStatus, deleteCredential, hasCredential, list
 import { attemptExport, nextDue, recentRuns, reviewerImports, runScreenshot, setReviewerImport,
          stopRun } from "../emburse/export-scheduler.js";
 import { answerChallenge, cancelChallenge, currentChallenge } from "../emburse/challenge.js";
-import { cookiesSavedAt, forgetCookies } from "../emburse/browser-state.js";
+import { adoptLegacyDevice, cookiesSavedAt, forgetCookies, legacyDevice }
+  from "../emburse/browser-state.js";
 
 /**
  * Upload and history for the daily Emburse export.
@@ -428,6 +429,11 @@ importRouter.get("/export-runs", requireAuth, async (req: Request, res: Response
       // Their device, not whoever signed in last. One shared jar was both
       // a wrong readout and a way for one person's run to pick up another's
       // session, which is why there is one per account now.
+      // A device trusted before the jars were keyed, still unassigned. It
+      // is somebody's, and until it is said whose, that person would be
+      // asked for a verification code they have already given.
+      legacyDeviceAt: await legacyDevice().catch(() => null),
+      people: (await listCredentials().catch(() => [])).map((c) => c.userEmail),
       deviceRememberedAt: await cookiesSavedAt(
         await ownLoginEmail(req.user?.email ?? "")),
     });
@@ -491,6 +497,39 @@ async function ownLoginEmail(appUser: string): Promise<string> {
     .find((c) => c.userEmail.toLowerCase() === appUser.trim().toLowerCase());
   return found?.loginEmail ?? "";
 }
+
+/**
+ * Keep the device Emburse already trusts, under one account's name.
+ *
+ * The one question the app cannot answer: the old shared jar and profile
+ * belong to whoever last signed in, and only a person knows who that was.
+ * Assigning it is what keeps a verification code already given from having
+ * to be given again — which, for a reviewer who is not the admin, means
+ * not having to interrupt them at all.
+ */
+importRouter.post("/export-device/adopt", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  const email = String((req.body as { email?: unknown })?.email ?? "").trim();
+  if (!email) {
+    res.status(400).json({ error: "Name whose remembered device this is." });
+    return;
+  }
+  try {
+    // Inside the browser lock: copying a Chromium profile out from under a
+    // running Chromium is how a profile gets half-copied.
+    const { withBrowser } = await import("../emburse/browser-lock.js");
+    const { adoptLegacyProfile } = await import("../emburse/auto-export.js");
+    const jar = await adoptLegacyDevice(email);
+    const files = await withBrowser("keeping the remembered device",
+      () => adoptLegacyProfile(email));
+    console.log(
+      `export: remembered device assigned to ${email} by ${req.viewingAs?.real.email ?? req.user?.email}` +
+      ` (jar: ${jar ? "yes" : "none"}, profile entries: ${files})`);
+    res.json({ ok: true, jar, files });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "Could not keep it." });
+  }
+});
 
 /** Give up on a parked sign-in rather than waiting out its timeout. */
 importRouter.delete("/export-challenge", requireAuth, requireAdmin, (req: Request, res: Response) => {
