@@ -6,7 +6,8 @@ import { ingestExport } from "./ingest.js";
 import { describeSchedule } from "./schedule.js";
 import { ALL_SECTIONS, cleanSchedule, readSettings, writeSettings } from "./settings.js";
 import { DEFAULT_SELECTORS, SELECTOR_HELP, STEP_SELECTORS, envLogin } from "../emburse/auto-export.js";
-import { credentialStatus, deleteCredential, listCredentials, saveCredential } from "../emburse/credentials.js";
+import { claimUnclaimed, credentialStatus, deleteCredential, listCredentials, saveCredential,
+         scopeFor, unclaimedExpenses } from "../emburse/credentials.js";
 import { attemptExport, nextDue, recentRuns, runScreenshot, stopRun } from "../emburse/export-scheduler.js";
 import { answerChallenge, cancelChallenge, currentChallenge } from "../emburse/challenge.js";
 import { cookiesSavedAt, forgetCookies } from "../emburse/browser-state.js";
@@ -63,16 +64,28 @@ importRouter.post(
   },
 );
 
-importRouter.get("/imports", requireAuth, async (_req: Request, res: Response) => {
+importRouter.get("/imports", requireAuth, async (req: Request, res: Response) => {
   if (!guard(res)) return;
   try {
     await ensureSchema();
+    // Whose imports. Inside a view this page is about the person being
+    // viewed: it showed Brian "45 expenses stored · 44 awaiting review ·
+    // $9,649" and a history of files he had never imported, every one of
+    // them Eric's, which is a straight answer to "whose data am I looking
+    // at" and the wrong one.
+    const { reviewer, ownsBlanks } = await scopeFor(req.user?.email ?? "");
     const { rows } = await db().query(
       `SELECT id, filename, imported_at, imported_by, parsed_rows, inserted_count,
               updated_count, unchanged_count, left_inbox_count, receipts_added,
-              total_cents, stated_total_cents, reconciled, warnings, export_sections
-         FROM expense_imports ORDER BY imported_at DESC LIMIT 25`,
+              total_cents, stated_total_cents, reconciled, warnings, export_sections,
+              reviewer, source
+         FROM expense_imports
+        WHERE reviewer = $1 OR (reviewer = '' AND $2)
+        ORDER BY imported_at DESC LIMIT 25`,
+      [reviewer, ownsBlanks],
     );
+    // Receipt storage is shared by content hash across everybody, so it is
+    // counted whole rather than pretending to a per-reviewer figure.
     const { rows: stat } = await db().query(
       `SELECT count(*) AS expenses,
               count(*) FILTER (WHERE in_inbox) AS in_inbox,
@@ -80,7 +93,9 @@ importRouter.get("/imports", requireAuth, async (_req: Request, res: Response) =
               min(expense_date) AS earliest, max(expense_date) AS latest,
               (SELECT count(*) FROM receipt_blobs) AS receipts,
               (SELECT coalesce(sum(byte_size), 0) FROM receipt_blobs) AS receipt_bytes
-         FROM expenses`,
+         FROM expenses e
+        WHERE e.reviewer = $1 OR (e.reviewer = '' AND $2)`,
+      [reviewer, ownsBlanks],
     );
     // The newest row is the last export that actually brought new bytes in —
     // a re-uploaded duplicate returns early and never inserts one.
@@ -90,12 +105,37 @@ importRouter.get("/imports", requireAuth, async (_req: Request, res: Response) =
       imports: rows,
       stats: stat[0] ?? null,
       schedule: describeSchedule((await readSettings()).schedule, lastImport),
+      // Whose page this is, and the rows nobody holds. Both exist so the
+      // answer to "whose data is this" is on the screen rather than worked
+      // out from the numbers — which is how it was got wrong.
+      you: req.user?.email ?? null,
+      viewingAs: req.viewingAs?.viewed ?? null,
+      unclaimed: await unclaimedExpenses().catch(() => null),
     });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Could not read import history." });
   }
 });
 
+
+/**
+ * Settle who owns the expenses nobody claimed.
+ *
+ * Admin-only and refused inside a view, like every other write: it decides
+ * whose queue a batch of real expenses is, and an admin looking through
+ * somebody else's eyes is not that person.
+ */
+importRouter.post("/imports/claim", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  const { email } = req.body as { email?: unknown };
+  try {
+    const n = await claimUnclaimed(String(email ?? ""));
+    console.log(`imports: ${n} unclaimed expense(s) claimed for ${String(email)}`);
+    res.json({ claimed: n });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Could not claim them." });
+  }
+});
 
 /**
  * What the export is supposed to contain.

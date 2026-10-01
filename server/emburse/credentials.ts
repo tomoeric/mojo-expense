@@ -325,11 +325,77 @@ export async function sharedImporter(): Promise<string | null> {
   await ensure();
   const chosen = await flagOwner("importAs").catch(() => null);
   if (chosen) return chosen;
+
+  // Nobody has been named. The old answer here was "the credential most
+  // recently proven to work", and borrowing that rule for OWNERSHIP was a
+  // bad mistake: it is a sensible way to pick a login and a disastrous way
+  // to decide whose expenses are whose, because it MOVES.
+  //
+  // What that did, exactly. Brian's first export succeeded at 3:40pm. That
+  // gave his credential the newest `last_ok_at`, which made him the shared
+  // importer, which handed him ownership of every unclaimed row in the
+  // table — all of Eric's. A successful import of his own queue took Eric's
+  // expenses away from Eric and showed them to Brian, and nothing anywhere
+  // said so.
+  //
+  // So it never drifts now. One credential is unambiguous: there is nobody
+  // else those rows could belong to, and a single-login deployment behaves
+  // exactly as it always has. More than one and nobody named is genuinely
+  // ambiguous, and the app says so and offers to settle it (Import page →
+  // claim) rather than guessing and being wrong in silence.
   const { rows } = await db().query<{ user_email: string }>(
-    `SELECT user_email FROM emburse_credentials
-      ORDER BY (last_ok_at IS NOT NULL) DESC, last_ok_at DESC, updated_at DESC
-      LIMIT 1`);
-  return rows[0]?.user_email ?? null;
+    "SELECT user_email FROM emburse_credentials LIMIT 2");
+  return rows.length === 1 ? rows[0]!.user_email : null;
+}
+
+/**
+ * How many expenses nobody has claimed, and who could claim them.
+ *
+ * Only ever a transitional state: rows imported before the app tracked whose
+ * queue they came from, and hand-uploaded files, which deliberately import
+ * as nobody so a dragged-in PDF cannot purge a scheduled reviewer's work.
+ * Shown rather than inferred, because the inferring is what went wrong.
+ */
+export async function unclaimedExpenses(): Promise<{
+  count: number; owner: string | null; candidates: string[];
+}> {
+  await ensure();
+  const { rows } = await db().query<{ n: string }>(
+    "SELECT count(*) AS n FROM expenses WHERE reviewer = '' AND in_inbox");
+  const { rows: people } = await db().query<{ user_email: string }>(
+    "SELECT user_email FROM emburse_credentials ORDER BY user_email");
+  return {
+    count: Number(rows[0]?.n ?? 0),
+    owner: await sharedImporter().catch(() => null),
+    candidates: people.map((p) => p.user_email),
+  };
+}
+
+/**
+ * Settle it: stamp every unclaimed expense with one reviewer, for good.
+ *
+ * The permanent end of the question, rather than another rule for answering
+ * it. After this the rows ARE theirs — the queue, the purge, the automation
+ * and the import guards all read the same column and agree, and nothing
+ * depends any more on which credential most recently worked.
+ *
+ * Scoped to `reviewer = ''` so it can only ever claim rows nobody holds; it
+ * cannot move an expense from one reviewer to another.
+ */
+export async function claimUnclaimed(userEmail: string): Promise<number> {
+  await ensure();
+  const who = userEmail.trim().toLowerCase();
+  if (!who) throw new Error("Name whose expenses these are.");
+  const { rows } = await db().query<{ n: string }>(
+    "SELECT count(*) AS n FROM emburse_credentials WHERE lower(user_email) = $1", [who]);
+  if (Number(rows[0]?.n ?? 0) === 0) {
+    throw new Error(
+      `${userEmail} has no Emburse login stored, so these expenses cannot be theirs — ` +
+      "their queue has never been read.");
+  }
+  const { rowCount } = await db().query(
+    "UPDATE expenses SET reviewer = $1 WHERE reviewer = ''", [who]);
+  return rowCount ?? 0;
 }
 
 /**

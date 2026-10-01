@@ -682,6 +682,18 @@ Two separate things, and confusing them cost a queue full of failures.
   than Eric's rows, and told him to re-run the export he had just run.
   `expense_imports` carries `reviewer` and `source` so the question can be
   asked at all. Anything new that asks it must be scoped the same way.
+- **Rules and Configuration are shared; Import and the Review Queue are not.**
+  One set of rules judges everybody's expenses and the settings are the app's,
+  but a queue and an import history belong to the one Emburse account they
+  were read from. Anything new goes in one of those two buckets deliberately,
+  not by whichever query was easiest to write.
+- **Ownership of unclaimed rows must never be derived from a credential's
+  state.** It used to be "the credential most recently proven to work", so a
+  successful first export MOVED every unclaimed row to the person whose export
+  had just worked. Nothing that changes when somebody signs in may decide
+  whose expenses are whose. One login owns them; two and nobody named means
+  nobody does, and the app says so and offers to stamp them (Import page →
+  claim) rather than guessing.
 - **`scopeFor` is the single definition of whose data something is**
   (`server/emburse/credentials.ts`): your own rows, plus the unclaimed ones if
   you are the shared importer. It exists because the rule had been written out

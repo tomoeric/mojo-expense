@@ -63,7 +63,14 @@ export function ViewAs({
       setOpen(false);
       // Everything on screen was shaped by who was asking, so none of it is
       // still true. Cheaper to say that once than to list the queries.
-      await qc.invalidateQueries();
+      //
+      // `clear`, not `invalidate`. Invalidating marks a query stale and
+      // refetches it while STILL SERVING the old data, so for the second or
+      // two it takes, the page renders one person's expenses under the
+      // other's name — complete with their merchants, notes and amounts.
+      // That is the exact failure this whole mode exists to avoid, and it
+      // looks like a leak rather than a loading state.
+      qc.clear();
     } catch (e) {
       setError((e as Error).message);
     } finally {

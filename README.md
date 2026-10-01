@@ -181,6 +181,14 @@ afternoon has no use for a 2am run.
 person's reviewer, which is also what makes "view as Brian" show Brian's
 expenses rather than a copy of Eric's.
 
+**What is shared and what is not.** Rules and Configuration are the whole
+company's: one set of rules judges every expense, and the settings are the
+app's settings. **Import and the Review Queue are one person's** — their
+own Emburse account's Needs Review, their own import history, their own
+totals. The Import page inside a view is the viewed person's page: it used
+to show Brian 45 expenses stored, 44 awaiting review and $9,649, every
+figure of it Eric's.
+
 Rows no import has claimed — everything from before the reviewer column
 existed, and anything uploaded by hand — belong to **whoever the shared
 import runs as**. Showing them to everyone was the first attempt and did
@@ -189,6 +197,28 @@ second reviewer signed in and found the whole of the first one's queue. A
 deployment with one login is unaffected, because that login owns them; a
 reviewer who has not imported yet sees nothing, which is the truth, since
 Emburse has not been asked for their Needs Review.
+
+**And that ownership never moves.** It was resolved as "the credential most
+recently proven to work" — the same rule that picks a login, borrowed for a
+question it cannot answer, because it drifts. Brian's first export succeeded
+at 3:40pm; that gave his credential the newest `last_ok_at`, which made him
+the shared importer, which handed him every unclaimed row in the table. His
+own import working is what took Eric's expenses off Eric and showed them to
+Brian, silently, at the moment it worked.
+
+So nothing is guessed at now. One stored login owns the unclaimed rows,
+because there is nobody else they could belong to. With two and nobody
+named it is genuinely ambiguous, so they are shown to **nobody** and the
+Import page says how many there are and offers to settle it — and settling
+it stamps the reviewer onto the rows, which ends the question in the data
+instead of adding another rule for re-deriving it. Claiming can only ever
+take rows nobody holds; it cannot move an expense between reviewers.
+
+Swapping views **clears** the client cache rather than invalidating it.
+Invalidating refetches while still serving what it has, so for the second it
+takes, one person's expenses render under the other's name — merchants,
+notes, amounts and all. It looks exactly like the leak this mode exists to
+prevent, because for that second it is one.
 
 Both the reviewer and that ownership are part of the cache key as well as
 the query: keyed on the date window alone, whoever asked first would serve

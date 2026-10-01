@@ -89,6 +89,9 @@ export function ImportPage() {
         imports: HistoryRow[];
         stats: Stats | null;
         schedule: Schedule;
+        you: string | null;
+        viewingAs: string | null;
+        unclaimed: { count: number; owner: string | null; candidates: string[] } | null;
       };
     },
   });
@@ -124,6 +127,21 @@ export function ImportPage() {
 
   return (
     <div className="space-y-5">
+      {history.data?.viewingAs && (
+        <p className="rounded-lg border border-sky-500/30 bg-sky-500/10 p-3 text-sm">
+          Everything on this page is <strong>{history.data.viewingAs}</strong>&rsquo;s — their
+          imports, their stored expenses, their totals. Nothing here counts anybody else&rsquo;s.
+        </p>
+      )}
+
+      <Unclaimed
+        data={history.data?.unclaimed ?? null}
+        onClaimed={() => {
+          void history.refetch();
+          void qc.invalidateQueries({ queryKey: ["reports"] });
+        }}
+      />
+
       {schedule && <ScheduleStrip schedule={schedule} />}
 
       {stats && Number(stats.expenses) > 0 && (
@@ -429,5 +447,91 @@ function ScheduleStrip({ schedule }: { schedule: Schedule }) {
         {`Runs ${schedule.slots.map(at).join(" and ")} daily`}
       </p>
     </section>
+  );
+}
+
+/**
+ * The expenses nobody holds, and the one button that ends the question.
+ *
+ * Rows imported before the app tracked whose queue they came from, plus
+ * hand-uploaded files, which import as nobody on purpose so a dragged-in
+ * PDF cannot purge a scheduled reviewer's work. While they sit unclaimed
+ * the app has to GUESS who they belong to, and the guess is what went
+ * wrong: ownership used to follow whichever credential had most recently
+ * signed in successfully, so Brian's first export handed him every one of
+ * Eric's expenses, silently, at the moment his own import worked.
+ *
+ * It does not guess any more. With one stored login there is nobody else
+ * they could be. With two and nobody named it says so and offers to settle
+ * it — and settling it writes the reviewer onto the rows, so the question
+ * is answered in the data rather than by another rule.
+ */
+function Unclaimed({
+  data, onClaimed,
+}: {
+  data: { count: number; owner: string | null; candidates: string[] } | null;
+  onClaimed: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [who, setWho] = useState("");
+
+  if (!data || data.count === 0) return null;
+  // Settled already: one login, or somebody named. Nothing to ask.
+  if (data.owner) return null;
+
+  async function claim(email: string) {
+    setBusy(true);
+    setError("");
+    try {
+      const res = await fetch("/api/imports/claim", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const body = (await res.json()) as { claimed?: number; error?: string };
+      if (!res.ok) throw new Error(body.error ?? "Could not claim them.");
+      onClaimed();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
+      <p>
+        <strong className="tabular-nums">{data.count}</strong> expense
+        {data.count === 1 ? "" : "s"} in the queue were imported before the app recorded whose
+        Emburse queue they came from, so they belong to nobody. They are hidden from everybody
+        until that is settled — showing them to the wrong person is the thing this prevents.
+      </p>
+      <p className="mt-1 text-muted-foreground">
+        Whoever&rsquo;s Needs Review they came out of should claim them. Their own next import
+        would claim them too; this just does it now.
+      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <select
+          value={who}
+          onChange={(e) => setWho(e.target.value)}
+          className="rounded-lg border border-border bg-background px-2 py-1 text-sm"
+        >
+          <option value="">Choose whose they are…</option>
+          {data.candidates.map((c) => (
+            <option key={c} value={c}>{c}</option>
+          ))}
+        </select>
+        <button
+          type="button"
+          disabled={busy || !who}
+          onClick={() => void claim(who)}
+          className="rounded-lg bg-foreground px-3 py-1 text-sm font-semibold text-background disabled:opacity-50"
+        >
+          {busy ? "Claiming…" : "Claim them"}
+        </button>
+      </div>
+      {error && <p className="mt-2 text-red-600">{error}</p>}
+    </div>
   );
 }
