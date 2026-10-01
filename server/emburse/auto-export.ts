@@ -762,7 +762,17 @@ export async function gridLoaded(page: Page, sel: Selectors): Promise<string | n
    * on a slow link it is the difference between an approval and a wrong
    * diagnosis.
    */
-  if (!/\bloading\b/i.test(body)) return null;
+  /*
+   * An unreadable body counts as still loading too.
+   *
+   * A failure reported "[role=\"grid\"] ×1, [role=\"rowgroup\"] ×4,
+   * [role=\"row\"] ×6, … so the page loaded and one of those is the grid"
+   * and then "The page says: (nothing readable)". The elements were in the
+   * DOM and nothing was painted, so every visibility check failed and the
+   * word "Loading" was not there to be found either. A page with no
+   * readable text at all has not arrived, whatever its markup says.
+   */
+  if (!/\bloading\b/i.test(body) && body.trim() !== "") return null;
   const late = await Promise.all([
     firstVisible(page, sel.grid, ms),
     firstVisible(page, '[role="grid"], [role="table"]', ms),

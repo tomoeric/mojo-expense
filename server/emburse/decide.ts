@@ -1561,6 +1561,15 @@ async function applyOne(
    * question the grid can answer when a split receipt puts six identical
    * rows in it — five are still there after a perfectly good approval. What
    * the grid CAN answer is whether there is one fewer than there was.
+   *
+   * Counted the LOOSE way, with `rowMatches` and nothing else, because that
+   * is how the confirmation counts afterwards. Setting it from the narrowed
+   * set instead was the same mistake as the peers one, now inside the
+   * confirmation: the vendor score picked the Fairhope row out of three
+   * PITSTOP CARWASH charges, so this said 1, while afterwards the loose
+   * matcher still saw the Gulfport and Wavela rows and said 2 — and three
+   * good approvals were reported as unconfirmed. The two numbers have to be
+   * the same measurement or their difference means nothing.
    */
   let matchedRows = 1;
 
@@ -1893,7 +1902,7 @@ async function applyOne(
       }
       several = chosen.length;
     }
-    matchedRows = chosen.length;
+    matchedRows = visible.length;
     if (chosen.length === 0) {
       throw new Error(
         `${matches.length} rows match this expense but none of them is visible — they are the ` +
@@ -2050,7 +2059,14 @@ async function confirmActioned(
   // approval that had landed perfectly well was reported as unconfirmed —
   // which sends somebody to check it by hand, the exact work this exists
   // to remove.
-  const CONFIRM_MS = 20_000;
+  /*
+   * Thirty, up from twenty. The grid has to re-render before the row goes,
+   * and this app shares one vCPU with Chromium — a render that is merely
+   * slow should not cost somebody a trip to Emburse to check an approval
+   * that landed. The loop still exits the moment the count drops, so the
+   * larger number is only ever paid when something is already wrong.
+   */
+  const CONFIRM_MS = 30_000;
   const deadline = Date.now() + CONFIRM_MS;
   while (Date.now() < deadline) {
     await page.waitForTimeout(500);

@@ -208,6 +208,34 @@ try {
       twins.ok === false && /we hold only 1 like it/.test(why(twins)), why(twins).slice(0, 140));
   }
 
+  console.log("\n2f. Approving a sibling-site row is CONFIRMED too");
+  // The counting mistake one level down from 2e. The vendor score picks the
+  // Fairhope row out of three PITSTOP CARWASH charges, so "rows before" was
+  // 1 — while the confirmation afterwards counts with the LOOSE matcher and
+  // still saw Gulfport and Wavela, so it said 2, and three good approvals
+  // came back as "the expense is still in Needs Review".
+  //
+  // Both numbers are the loose count now. Approving one row takes one of
+  // them away whichever row it was.
+  mock.reset();
+  forgetCardholderIds();
+  await fetch(`${mock.url}/__app?actions=live`, { method: "POST" });
+  {
+    const out = await runDecisions(
+      [{ id: 31, decision: "approve" as const, reason: "", target: {
+          employee: "Kevin McBride", merchant: "PITSTOP CARWASH - FAIRHOMAMMOTH HOLDINGS LLC",
+          amount: 29.99, date: "2026-08-28",
+        }, automatic: true, peers: 3 }],
+      SEL, mock.url, LOGIN, {});
+    const run = out.get(31);
+    const approve = run?.steps.find((s) => s.name === "approve");
+    check("the approval is confirmed", run?.ok === true,
+      approve?.detail?.slice(0, 200) ?? "no approve step");
+    check("…counting the siblings it did not take",
+      /3 rows matched this expense and 2 remain/.test(approve?.detail ?? ""),
+      approve?.detail ?? "");
+  }
+
   console.log("\n2c. Approving one of several identical rows is CONFIRMED");
   // "Nothing gets approved." Four automatic approvals came back as "clicked
   // APPROVE, but the expense is still in Needs Review 20 seconds later" —
