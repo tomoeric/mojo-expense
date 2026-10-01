@@ -726,6 +726,20 @@ Two separate things, and confusing them cost a queue full of failures.
   whose expenses are whose. One login owns them; two and nobody named means
   nobody does, and the app says so and offers to stamp them (Import page →
   claim) rather than guessing.
+- **Three routes are writable from inside a view, and no more**
+  (`CONTROLS` in `view-as.ts`): `view-as` itself, `export-run`, and
+  `reviewer-imports`. The first two because there would otherwise be no way
+  out and no way to refresh what you came to look at. The third because
+  starting and stopping somebody's automation grants the admin nothing they
+  did not already have — the same admin can set the same switch for the
+  same person from the settings page without entering a view. All three
+  judge the real user and record them, so `updated_by` names who pressed
+  it, not whose row changed. Deciding stays refused, and so do the shared
+  flags: those are not the viewed person's to change on their behalf.
+- **A view never counts as the viewed person's visit.** `authMiddleware`
+  runs before `viewAsMiddleware`, so `noteVisit` gets the real user. It has
+  to stay that way: an admin looking at somebody's screen must not reset the
+  "approved since your last login" count that person has not seen yet.
 - **`requireAdmin` judges the REAL person, not the viewed one.** Judging on
   `req.user` meant an admin looking at the app as a non-admin lost every
   admin surface — no automation card, no per-reviewer settings, no failure

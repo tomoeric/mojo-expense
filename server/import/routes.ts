@@ -166,7 +166,10 @@ importRouter.post("/reviewer-imports", requireAuth, requireAdmin, async (req: Re
       autoApprove: body.autoApprove === true,
       autoApprovePerRun: typeof body.autoApprovePerRun === "number"
         ? Math.max(1, Math.min(100, Math.round(body.autoApprovePerRun))) : null,
-    }, req.user?.email ?? "unknown");
+      // The REAL admin, never the viewed person. This is reachable from
+      // inside a view, and a setting changed by Eric while looking at
+      // Brian's screen was changed by Eric.
+    }, req.viewingAs?.real.email ?? req.user?.email ?? "unknown");
     res.json({ reviewers: await reviewerImports() });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Could not save." });

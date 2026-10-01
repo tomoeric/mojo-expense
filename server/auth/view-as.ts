@@ -47,9 +47,26 @@ declare global {
  * an import reads Emburse and writes our own tables, approves nothing,
  * denies nothing, and puts nobody's name on a decision. It is recorded as
  * asked for by the admin and read as the viewed person, so the log says
- * both. Everything else stays refused.
+ * both.
+ *
+ * And `reviewer-imports`, which is where a reviewer's import list and their
+ * automatic-approval switch live. "Ensure that I can … be able to start or
+ * stop automation" — and the thing that makes it safe is that it grants the
+ * admin nothing they did not already have: these are admin settings on an
+ * admin page, and the same admin can set the same switch for the same
+ * person without entering a view at all. All the view changes is whether
+ * they have to leave it first. Judged on the real user like the other two,
+ * and recorded against them, so `updated_by` names the person who actually
+ * pressed it rather than the person whose settings changed.
+ *
+ * What it still does NOT allow is deciding. An approval carries its
+ * decider's name in Emburse permanently; a switch does not, and the
+ * approvals that follow are applied by signing in as the switch's owner
+ * whoever turned it on.
+ *
+ * Everything else stays refused.
  */
-const CONTROLS = /^\/api\/(auth\/view-as|export-run)$/;
+const CONTROLS = /^\/api\/(auth\/view-as|export-run|reviewer-imports)$/;
 
 /**
  * Methods that cannot change anything.

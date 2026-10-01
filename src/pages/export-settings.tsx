@@ -550,10 +550,9 @@ const clock = (minutes: number) => {
 function ReviewerGrids() {
   const qc = useQueryClient();
   const [error, setError] = useState("");
-  // Every write is refused inside a view, so the controls are shown off
-  // rather than left live to produce a 403 on click. The settings are still
-  // worth READING through a view — "is his automation on" is most of why
-  // somebody looks.
+  // These ARE settable from inside a view — they are admin settings the
+  // same admin could set for the same person without entering one, and the
+  // change is recorded against whoever pressed it, not whose row it is.
   const auth = useAuth();
   const viewingAs = auth.data?.viewingAs?.viewed ?? null;
   const q = useQuery({
@@ -624,15 +623,15 @@ function ReviewerGrids() {
           tenant spells the path differently. */}
       {viewingAs && (
         <p className="mt-2 rounded-lg bg-sky-500/10 p-2 text-sm">
-          Viewing as <strong>{viewingAs}</strong> — these can be read but not changed. Go back
-          to yourself to set them.
+          Viewing as <strong>{viewingAs}</strong>. These are settable from here and the change
+          is recorded against you — but it is still everybody&rsquo;s settings on this page, not
+          only theirs.
         </p>
       )}
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <button
           type="button"
-          disabled={Boolean(viewingAs)}
           onClick={() => void Promise.all(
             rows.map((r) => save(r.userEmail, { path: "/transactions", section: "inbox" })))}
           className="rounded-lg bg-foreground px-3 py-1 text-sm font-semibold text-background disabled:opacity-50"
@@ -641,7 +640,6 @@ function ReviewerGrids() {
         </button>
         <button
           type="button"
-          disabled={Boolean(viewingAs)}
           onClick={() => void Promise.all(
             rows.map((r) => save(r.userEmail, { path: "", section: "" })))}
           className="rounded-lg border border-border px-3 py-1 text-sm font-semibold disabled:opacity-50"
@@ -677,7 +675,7 @@ function ReviewerGrids() {
               />
               <button
                 type="button"
-                disabled={!dirty || Boolean(viewingAs)}
+                disabled={!dirty}
                 onClick={() => void save(r.userEmail, v)}
                 className="rounded-lg bg-foreground px-3 py-1 text-xs font-semibold text-background disabled:opacity-40"
               >
@@ -688,7 +686,6 @@ function ReviewerGrids() {
                   off for everybody. */}
               <button
                 type="button"
-                disabled={Boolean(viewingAs)}
                 onClick={() => void save(r.userEmail, v, !r.autoApprove)}
                 title={`Approve ${r.userEmail}'s unflagged expenses automatically, signed in as them.`}
                 className={`rounded-lg border px-3 py-1 text-xs font-semibold disabled:opacity-50 ${

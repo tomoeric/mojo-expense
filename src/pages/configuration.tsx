@@ -483,11 +483,13 @@ type AutoReport = {
  * pass now.
  */
 function AutoApprove({ isAdmin, viewingAs }: { isAdmin: boolean; viewingAs: string | null }) {
-  // Inside a view this card describes THEIR automation, and nothing on it
-  // may be pressed: the server refuses every write from a view, so a live
-  // button here could only ever produce a 403. Read-only is the honest
-  // rendering of a read-only mode.
-  const readOnly = Boolean(viewingAs);
+  // Inside a view this card is about THEM: their switch, their eligible
+  // count, their reasons. The switch can be flipped from here — it is an
+  // admin setting the same admin could set for the same person without
+  // entering the view at all, and it is recorded against whoever pressed
+  // it. Running a pass by hand is not offered, because the sweep that
+  // would run is everybody's; theirs comes round within fifteen minutes.
+  const theirs = Boolean(viewingAs);
   const qc = useQueryClient();
   const { data } = useQuery<Record<string, unknown>>({
     queryKey: ["flags"],
@@ -512,7 +514,10 @@ function AutoApprove({ isAdmin, viewingAs }: { isAdmin: boolean; viewingAs: stri
   const [ran, setRan] = useState<string | null>(null);
   if (!isAdmin || !data) return null;
 
-  const on = Boolean(data.autoApprove);
+  // Whose switch this card is showing. In a view the report is the viewed
+  // person's, so reading `on` off the global flag would put their queue and
+  // somebody else's switch on the same card.
+  const on = theirs ? Boolean(report.data?.on) : Boolean(data.autoApprove);
   const perRun = Number(data.autoApprovePerRun ?? 10);
   const owner = typeof data.autoApproveOwner === "string" ? data.autoApproveOwner : null;
 
@@ -524,11 +529,24 @@ function AutoApprove({ isAdmin, viewingAs }: { isAdmin: boolean; viewingAs: stri
   const save = async (body: Record<string, unknown>) => {
     setBusy(true);
     try {
-      await fetch("/api/flags/autoApprove", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      // Their own switch in a view, the global one otherwise. Two different
+      // settings behind one button, deliberately: the card always means
+      // "the automation for the person this page is about".
+      await (theirs
+        ? fetch("/api/reviewer-imports", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              email: viewingAs,
+              autoApprove: body.enabled === true,
+              autoApprovePerRun: typeof body.perRun === "number" ? body.perRun : undefined,
+            }),
+          })
+        : fetch("/api/flags/autoApprove", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          }));
       await refresh();
     } finally {
       setBusy(false);
@@ -575,9 +593,9 @@ function AutoApprove({ isAdmin, viewingAs }: { isAdmin: boolean; viewingAs: stri
         <button
           type="button"
           onClick={() => void runNow()}
-          disabled={busy || !on || readOnly}
-          title={readOnly
-            ? `Viewing as ${viewingAs}. Only they can run their own approvals.`
+          disabled={busy || !on || theirs}
+          title={theirs
+            ? `Viewing as ${viewingAs}. Their next sweep is within fifteen minutes.`
             : on ? "Run a pass now instead of waiting for the next one" : "Switch it on first"}
           className="ml-auto rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold hover:bg-muted disabled:opacity-50"
         >
@@ -586,8 +604,8 @@ function AutoApprove({ isAdmin, viewingAs }: { isAdmin: boolean; viewingAs: stri
         <button
           type="button"
           onClick={() => void save({ enabled: !on })}
-          disabled={busy || readOnly}
-          title={readOnly ? `Viewing as ${viewingAs}. Their switch is theirs to set.` : undefined}
+          disabled={busy}
+          title={theirs ? `Start or stop ${viewingAs}'s automatic approvals.` : undefined}
           className={`rounded-lg border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50 ${
             on ? "border-amber-600/50 bg-amber-500/10 text-amber-700" : "border-border hover:bg-muted"
           }`}
@@ -596,11 +614,12 @@ function AutoApprove({ isAdmin, viewingAs }: { isAdmin: boolean; viewingAs: stri
         </button>
       </div>
 
-      {readOnly && (
+      {theirs && (
         <p className="mt-2 rounded-lg bg-sky-500/10 p-2 text-xs">
           This is <strong>{viewingAs}</strong>&rsquo;s automation — their switch, their queue,
-          their reasons. Approvals are made by signing in as them, so only they can turn it on
-          or run a pass. Nothing here can be pressed while viewing.
+          their reasons. Starting or stopping it here is recorded against you, and every
+          approval it then makes is applied by signing in as them, with their name on it in
+          Emburse. Their next sweep is within fifteen minutes, so there is no Run now.
         </p>
       )}
 

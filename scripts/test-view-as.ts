@@ -101,11 +101,23 @@ console.log("\nAn admin viewing as somebody else");
   // which is what separates it from every other write.
   const pull = run({ method: "POST", path: "/api/export-run", cookie: BRIAN });
   check("running the viewed person's import is allowed", pull.nexted);
+
+  // And their import list and automatic-approval switch, because an admin
+  // monitoring somebody has to be able to start and stop it. Safe for a
+  // different reason from the import: it grants the admin nothing they did
+  // not already have, since the same admin can set the same switch for the
+  // same person from the settings page without entering a view at all.
+  const settings = run({ method: "POST", path: "/api/reviewer-imports", cookie: BRIAN });
+  check("setting their import and approval switch is allowed", settings.nexted);
+  check("…and the record knows who really pressed it",
+    settings.req.viewingAs?.real.email === "eric.s@mammothholdings.com");
   check("…and the real admin is still known for the record",
     pull.req.viewingAs?.real.email === "eric.s@mammothholdings.com");
-  // The carve-out is two routes, not a category. Anything that decides is
-  // still refused from inside a view.
-  for (const path of ["/api/decisions", "/api/decisions/correct-category", "/api/rules"]) {
+  // The carve-out is three routes, not a category. Anything that decides is
+  // still refused from inside a view, and so are the shared switches —
+  // those are not the viewed person's to change on their behalf.
+  for (const path of ["/api/decisions", "/api/decisions/correct-category", "/api/rules",
+                      "/api/flags", "/api/flags/autoApprove"]) {
     const w = run({ method: "POST", path, cookie: BRIAN });
     check(`${path} is still refused`, !w.nexted && w.status === 403);
   }

@@ -317,6 +317,21 @@ the applied count the Live strip subtracts, the failure summary and its
 markdown, and the pending and recent decisions, which belong to whoever made
 them.
 
+**An admin can start and stop a reviewer's automation from their view**, and
+see the automation queue, the count of approvals made since that person last
+signed in, the failures and the downloadable failure report — all of it
+theirs. The switch is the one write the view allows beyond the import,
+because it grants the admin nothing they did not already have: the same
+admin can set the same switch for the same person from the settings page
+without entering a view at all. It is recorded against whoever pressed it,
+and the approvals that follow are still applied by signing in as the
+switch's owner, with their name on them in Emburse. Deciding stays refused,
+and so do the shared flags.
+
+Looking at somebody's screen does not count as their visit — `noteVisit`
+runs on the real user, so an admin checking Brian's automation cannot reset
+the "approved since your last login" count he has not seen yet.
+
 **And a view shows their automation, not a copy of yours.** `requireAdmin`
 judges the real person rather than the viewed one — judging on the viewed
 one took every admin surface away from the admin doing the looking, which
