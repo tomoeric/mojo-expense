@@ -169,10 +169,23 @@ async function firstReason(
  * Shared by the pass and the report so the page cannot say one thing while
  * the automation does another.
  */
-async function setup(): Promise<Setup> {
-  const on = await getFlag("autoApprove").catch(() => false);
-  const owner = await flagOwner("autoApprove");
-  const perRun = Math.min(Math.max(1, (await getLimit("autoApprove")) ?? DEFAULT_PER_RUN), MOST_PER_RUN);
+async function setup(who: string | null = null): Promise<Setup> {
+  // A named reviewer reads their own switch; `null` is the global one.
+  // Same function either way, so the per-person path cannot drift from the
+  // path that has been approving real money for months.
+  const mine = who
+    ? await (async () => {
+        const { reviewerImports } = await import("../emburse/export-scheduler.js");
+        return (await reviewerImports().catch(() => []))
+          .find((r) => r.userEmail.toLowerCase() === who.toLowerCase()) ?? null;
+      })()
+    : null;
+  const on = who ? Boolean(mine?.autoApprove) : await getFlag("autoApprove").catch(() => false);
+  const owner = who ?? (await flagOwner("autoApprove"));
+  const perRun = Math.min(
+    Math.max(1, (who ? mine?.autoApprovePerRun : null)
+      ?? (await getLimit("autoApprove")) ?? DEFAULT_PER_RUN),
+    MOST_PER_RUN);
   const rules = await activeRules();
   const receiptMatters = rules.some((r) =>
     [...r.when, ...(r.must ? [r.must] : [])].some(
@@ -220,7 +233,55 @@ async function setup(): Promise<Setup> {
  * import must not fail because an optional automation could not run.
  */
 export async function autoQueueApprovals(): Promise<AutoApproveResult> {
-  const s = await setup();
+  // Everybody who has switched it on, each sweeping their own queue under
+  // their own login. The global switch is one of them — the owner's — so a
+  // single-reviewer deployment behaves exactly as it always has.
+  let queued = 0;
+  const skipped: string[] = [];
+  for (const who of await owners()) {
+    const r = await sweepFor(who);
+    queued += r.queued;
+    if (r.skipped) skipped.push(r.skipped);
+  }
+  return { queued, skipped: skipped.length ? skipped.join(" · ") : null };
+}
+
+/**
+ * Everyone whose automatic approvals are on, the global owner included.
+ *
+ * The global switch stays exactly what it was — one person, one queue — and
+ * the per-reviewer switches sit beside it rather than replacing it, because
+ * a deployment with one reviewer should not have to learn a new control to
+ * keep working.
+ */
+async function owners(): Promise<(string | null)[]> {
+  const out: (string | null)[] = [null];
+  try {
+    const { reviewerImports } = await import("../emburse/export-scheduler.js");
+    for (const r of await reviewerImports()) {
+      if (r.autoApprove && r.userEmail) out.push(r.userEmail);
+    }
+  } catch {
+    // The table may not exist yet on a cold install. The global switch is
+    // unaffected, and an optional automation must not break the import it
+    // runs on the back of.
+  }
+  // The global owner may also have a switch of their own; sweeping twice
+  // would just double their per-pass limit without telling anybody.
+  const seen = new Set<string>();
+  const globalOwner = (await flagOwner("autoApprove").catch(() => null))?.toLowerCase();
+  return out.filter((o) => {
+    const k = (o ?? globalOwner ?? "").toLowerCase();
+    if (o !== null && k === globalOwner) return false;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+/** One person's pass. `who` null means the global switch and its owner. */
+async function sweepFor(who: string | null): Promise<AutoApproveResult> {
+  const s = await setup(who);
   // Switched off is not a complaint. The others are: somebody turned this
   // on and it is not doing what they think it is doing.
   if (!s.on) return { queued: 0, skipped: null };
@@ -288,6 +349,8 @@ export type AutoApproveReport = {
     awaitingReceipt: number;
     eligible: number;
   };
+  /** Each other reviewer's share of the queue, and whether theirs is on. */
+  others: { reviewer: string; count: number; on: boolean }[];
   /**
    * Expenses in the queue that belong to ANOTHER reviewer, counted apart
    * from everything above because the automation will never touch them.
@@ -310,8 +373,8 @@ export type AutoApproveReport = {
  * receipt means the reader is behind, eligible with a zero queued means
  * the pass has not run yet.
  */
-export async function autoApproveReport(): Promise<AutoApproveReport> {
-  const s = await setup();
+export async function autoApproveReport(who: string | null = null): Promise<AutoApproveReport> {
+  const s = await setup(who);
   // The same scope as the pass, for the same reason the tests are shared: a
   // report counting expenses the pass will never look at names the wrong
   // reason with complete confidence.
@@ -346,11 +409,23 @@ export async function autoApproveReport(): Promise<AutoApproveReport> {
   // above. It is the one number that explains a queue full of expenses and
   // an automation that does nothing: they are in another reviewer's Emburse
   // account, and only that person's login can approve them.
-  const { rows: others } = await db().query<{ n: string }>(
-    `SELECT count(*) AS n FROM expenses e
-      WHERE e.in_inbox = true AND $1 <> '' AND NOT ${MINE(1, 2)}`,
+  const { rows: others } = await db().query<{ reviewer: string; n: string }>(
+    `SELECT e.reviewer, count(*)::text AS n FROM expenses e
+      WHERE e.in_inbox = true AND $1 <> '' AND NOT ${MINE(1, 2)}
+      GROUP BY e.reviewer ORDER BY count(*) DESC`,
     [reviewer, ownsBlanks],
   );
+  // And whether THEY have switched it on, which is the next question
+  // anybody reading that number asks. The card used to end on "whoever they
+  // belong to has to switch this on for themselves" with no way to see
+  // whether they had.
+  const switches = new Map<string, boolean>();
+  try {
+    const { reviewerImports } = await import("../emburse/export-scheduler.js");
+    for (const r of await reviewerImports()) {
+      switches.set(r.userEmail.toLowerCase(), r.autoApprove);
+    }
+  } catch { /* no table yet; everybody reads as off, which they are */ }
   const n = (k: string) => Number(rows[0]?.[k] ?? 0);
   return {
     on: s.on,
@@ -367,7 +442,12 @@ export async function autoApproveReport(): Promise<AutoApproveReport> {
       awaitingReceipt: n("awaiting_receipt"),
       eligible: n("eligible"),
     },
-    elsewhere: Number(others[0]?.n ?? 0),
+    elsewhere: others.reduce((a, r) => a + Number(r.n), 0),
+    others: others.map((r) => ({
+      reviewer: r.reviewer,
+      count: Number(r.n),
+      on: switches.get(r.reviewer.toLowerCase()) ?? false,
+    })),
   };
 }
 

@@ -498,6 +498,16 @@ Two separate things, and confusing them cost a queue full of failures.
   somebody reviewing the expense, and clearing it there would launder every
   automatic approval into a reviewed one the first time a batch had to be
   re-run.
+- **One switch per reviewer, all off by default.** The global `autoApprove`
+  flag still works exactly as it did — one owner, their own queue — and each
+  reviewer with a stored login can now switch it on for theirs
+  (`reviewer_imports.auto_approve`, Export settings → *Per-reviewer imports
+  and approvals*). Without it the card told somebody "whoever they belong to
+  has to switch this on for themselves" and there was nowhere in the app to
+  do it: 340 expenses and an instruction that could not be followed. A pass
+  runs once per switched-on owner, each under their own login, and a save
+  that omits the flag reads as OFF — a missing field must never switch on
+  the one path that approves money with nobody looking.
 - **The refusals are in one place.** `setup()` reads the switch, the owner, the
   number and the enabled rules and returns the single reason a run would do
   nothing, so the pass and the report cannot disagree about it.

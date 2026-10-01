@@ -317,6 +317,14 @@ the applied count the Live strip subtracts, the failure summary and its
 markdown, and the pending and recent decisions, which belong to whoever made
 them.
 
+**Automatic approvals are one switch per reviewer**, all off until somebody
+turns one on. The global switch is unchanged — one owner, one queue — and
+each reviewer with a stored Emburse login has their own beside it (Export
+settings → *Per-reviewer imports and approvals*), sweeping their own queue
+under their own login. Before that, the Configuration card ended on
+"whoever they belong to has to switch this on for themselves" with nowhere
+in the app to do it.
+
 **The automation only approves its owner's own queue.** An approval is made
 by signing in as the owner, so an expense in somebody else's Needs Review
 could not be actioned under it even if the sweep queued it — it would fail

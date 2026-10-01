@@ -422,8 +422,21 @@ function WhyNothingMoved({ report }: { report: AutoReport }) {
         <p className="mt-1 text-muted-foreground">
           <span className="tabular-nums">{report.elsewhere}</span> more are in another reviewer's
           Emburse account and are not counted above. An approval is made by signing in as{" "}
-          {report.owner ?? "the owner"}, and those rows are not in their Needs Review — whoever
-          they belong to has to switch this on for themselves.
+          {report.owner ?? "the owner"}, and those rows are not in their Needs Review — each
+          reviewer switches this on for their own queue, under <em>Per-reviewer imports and
+          approvals</em> in Export settings.
+          {report.others.length > 0 && (
+            <>
+              {" "}
+              {report.others.map((o, i) => (
+                <span key={o.reviewer}>
+                  {i > 0 ? " · " : ""}
+                  <strong className="tabular-nums">{o.count}</strong> {o.reviewer} (
+                  {o.on ? "theirs is on" : "theirs is off"})
+                </span>
+              ))}
+            </>
+          )}
         </p>
       )}
       {c.awaitingReceipt > 0 && (
@@ -449,6 +462,7 @@ type AutoReport = {
   };
   /** In the queue but in somebody else's Emburse account. Never touched. */
   elsewhere: number;
+  others: { reviewer: string; count: number; on: boolean }[];
 };
 
 /**

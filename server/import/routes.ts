@@ -145,6 +145,7 @@ importRouter.post("/reviewer-imports", requireAuth, requireAdmin, async (req: Re
   if (!guard(res)) return;
   const body = req.body as {
     email?: unknown; enabled?: unknown; gridPath?: unknown; gridSection?: unknown;
+    autoApprove?: unknown; autoApprovePerRun?: unknown;
   };
   const email = String(body.email ?? "").trim();
   if (!email) {
@@ -160,6 +161,11 @@ importRouter.post("/reviewer-imports", requireAuth, requireAdmin, async (req: Re
       // the correct answer the first time somebody found it.
       gridPath: typeof body.gridPath === "string" ? body.gridPath.slice(0, 200) : null,
       gridSection: typeof body.gridSection === "string" ? body.gridSection.slice(0, 80) : null,
+      // The one setting here that approves money. Explicitly true or it is
+      // off: a missing field must never read as "switch it on".
+      autoApprove: body.autoApprove === true,
+      autoApprovePerRun: typeof body.autoApprovePerRun === "number"
+        ? Math.max(1, Math.min(100, Math.round(body.autoApprovePerRun))) : null,
     }, req.user?.email ?? "unknown");
     res.json({ reviewers: await reviewerImports() });
   } catch (err) {

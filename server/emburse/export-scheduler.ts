@@ -85,6 +85,22 @@ CREATE TABLE IF NOT EXISTS reviewer_imports (
 -- wants and has always had.
 ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS grid_path text;
 ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS grid_section text;
+
+-- Automatic approvals, per reviewer.
+--
+-- There is one global switch with one owner, and the sweep only ever touches
+-- that owner's own queue — it has to, because an approval is applied by
+-- signing in as them and another reviewer's rows are not in their Needs
+-- Review. Which left the Configuration card correctly telling somebody
+-- "whoever they belong to has to switch this on for themselves" with no way
+-- anywhere in the app for them to do it. 340 expenses, no automation, and an
+-- instruction that could not be followed.
+--
+-- Off for everybody until switched on, deliberately: this is the one path
+-- that approves spending with no human in the loop, and nobody's automation
+-- should start because a column appeared.
+ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS auto_approve boolean NOT NULL DEFAULT false;
+ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS auto_approve_per_run integer;
 `;
 
 let ready: Promise<void> | null = null;
@@ -518,6 +534,10 @@ export type ReviewerImport = {
   gridPath: string | null;
   /** The section filter it asks for, or null for the shared one. */
   gridSection: string | null;
+  /** Whether the sweep approves their unflagged expenses, under their login. */
+  autoApprove: boolean;
+  /** How many per pass, or null for the shared number. */
+  autoApprovePerRun: number | null;
 };
 
 /**
@@ -541,13 +561,15 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
   const people = await listCredentials().catch(() => []);
   if (people.length === 0) {
     return [{ userEmail: "", enabled: true, schedule: shared, shared: true,
-              gridPath: null, gridSection: null }];
+              gridPath: null, gridSection: null, autoApprove: false,
+              autoApprovePerRun: null }];
   }
 
   const { rows } = await db().query<{
     user_email: string; enabled: boolean; timezone: string | null; first_run: string | null;
     retry_hours: number | null; attempts_per_day: number | null; grace_minutes: number | null;
     all_day: boolean | null; grid_path: string | null; grid_section: string | null;
+    auto_approve: boolean | null; auto_approve_per_run: number | null;
   }>("SELECT * FROM reviewer_imports");
   const own = new Map(rows.map((r) => [r.user_email.toLowerCase(), r]));
 
@@ -561,6 +583,8 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
       shared: !set,
       gridPath: r?.grid_path ?? null,
       gridSection: r?.grid_section ?? null,
+      autoApprove: r?.auto_approve ?? false,
+      autoApprovePerRun: r?.auto_approve_per_run ?? null,
       schedule: {
         timezone: r?.timezone ?? shared.timezone,
         firstRun: r?.first_run ?? shared.firstRun,
@@ -580,6 +604,7 @@ export async function setReviewerImport(
     enabled?: boolean; schedule?: Partial<Schedule> | null;
     /** Empty string clears it back to the shared setting. */
     gridPath?: string | null; gridSection?: string | null;
+    autoApprove?: boolean; autoApprovePerRun?: number | null;
   },
   by: string,
 ): Promise<void> {
@@ -590,18 +615,22 @@ export async function setReviewerImport(
   await db().query(
     `INSERT INTO reviewer_imports (user_email, enabled, timezone, first_run, retry_hours,
                                    attempts_per_day, grace_minutes, all_day, updated_by,
-                                   grid_path, grid_section)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                                   grid_path, grid_section, auto_approve,
+                                   auto_approve_per_run)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
      ON CONFLICT (user_email) DO UPDATE SET
        enabled = EXCLUDED.enabled, timezone = EXCLUDED.timezone,
        first_run = EXCLUDED.first_run, retry_hours = EXCLUDED.retry_hours,
        attempts_per_day = EXCLUDED.attempts_per_day, grace_minutes = EXCLUDED.grace_minutes,
        all_day = EXCLUDED.all_day, updated_at = now(), updated_by = EXCLUDED.updated_by,
-       grid_path = EXCLUDED.grid_path, grid_section = EXCLUDED.grid_section`,
+       grid_path = EXCLUDED.grid_path, grid_section = EXCLUDED.grid_section,
+       auto_approve = EXCLUDED.auto_approve,
+       auto_approve_per_run = EXCLUDED.auto_approve_per_run`,
     [userEmail.trim().toLowerCase(), input.enabled ?? true,
      sc?.timezone ?? null, sc?.firstRun ?? null, sc?.retryHours ?? null,
      sc?.attemptsPerDay ?? null, sc?.graceMinutes ?? null, sc?.allDay ?? null, by,
-     blank(input.gridPath), blank(input.gridSection)]);
+     blank(input.gridPath), blank(input.gridSection),
+     input.autoApprove === true, input.autoApprovePerRun ?? null]);
 }
 
 export function startExportScheduler(): void {

@@ -556,7 +556,8 @@ function ReviewerGrids() {
       if (!res.ok) throw new Error("Failed");
       return (await res.json()) as {
         reviewers: { userEmail: string; enabled: boolean; gridPath: string | null;
-                     gridSection: string | null }[];
+                     gridSection: string | null; autoApprove: boolean;
+                     autoApprovePerRun: number | null }[];
       };
     },
   });
@@ -568,13 +569,21 @@ function ReviewerGrids() {
   const valueFor = (e: string, r: { gridPath: string | null; gridSection: string | null }) =>
     draft[e] ?? { path: r.gridPath ?? "", section: r.gridSection ?? "" };
 
-  async function save(email: string, v: { path: string; section: string }) {
+  async function save(
+    email: string,
+    v: { path: string; section: string },
+    auto?: boolean,
+  ) {
     setError("");
+    const now = rows.find((r) => r.userEmail === email);
     try {
       const res = await fetch("/api/reviewer-imports", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email, gridPath: v.path, gridSection: v.section }),
+        body: JSON.stringify({
+          email, gridPath: v.path, gridSection: v.section,
+          autoApprove: auto ?? now?.autoApprove ?? false,
+        }),
       });
       if (!res.ok) throw new Error(((await res.json()) as { error?: string }).error ?? "Failed");
       await qc.invalidateQueries({ queryKey: ["reviewer-imports"] });
@@ -586,7 +595,7 @@ function ReviewerGrids() {
 
   return (
     <div className="border-t border-border pt-5">
-      <h2 className="text-base font-bold">Which list each reviewer imports</h2>
+      <h2 className="text-base font-bold">Per-reviewer imports and approvals</h2>
       <p className="mt-1 text-sm text-muted-foreground">
         Approval is a chain — one person approves and it goes to the next — so each reviewer has
         their own queue in Emburse. Leave these blank and everybody reads the shared list above,
@@ -657,6 +666,21 @@ function ReviewerGrids() {
                 className="rounded-lg bg-foreground px-3 py-1 text-xs font-semibold text-background disabled:opacity-40"
               >
                 Save
+              </button>
+              {/* The one control that approves money without anybody
+                  clicking, so it says whose login it would use and starts
+                  off for everybody. */}
+              <button
+                type="button"
+                onClick={() => void save(r.userEmail, v, !r.autoApprove)}
+                title={`Approve ${r.userEmail}'s unflagged expenses automatically, signed in as them.`}
+                className={`rounded-lg border px-3 py-1 text-xs font-semibold ${
+                  r.autoApprove
+                    ? "border-amber-500/50 bg-amber-500/15 text-amber-800 dark:text-amber-200"
+                    : "border-border"
+                }`}
+              >
+                Auto-approve {r.autoApprove ? "on" : "off"}
               </button>
             </div>
           );
