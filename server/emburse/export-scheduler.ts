@@ -87,6 +87,10 @@ export type RunRow = {
   error: string | null;
   importId: number | null;
   hasScreenshot: boolean;
+  /** Whose Needs Review this run read. Blank is the shared import. */
+  reviewer: string;
+  /** Which Emburse list. Blank is Transactions. */
+  source: string;
 };
 
 /** Today's date in the schedule's timezone, as YYYY-MM-DD. */
@@ -174,13 +178,23 @@ export async function nextDue(
   return { due: true, attempt: count + 1, reason: `attempt ${count + 1} is due` };
 }
 
-export async function recentRuns(limit = 20): Promise<RunRow[]> {
+export async function recentRuns(limit = 20, reviewer?: string): Promise<RunRow[]> {
   await ensure();
+  // Whose runs, when somebody is named. An admin looking at the app as Brian
+  // was shown everybody's: his view carried Eric's successful 320-item pull
+  // in the history above his own running one, which is a reasonable thing to
+  // read as "this is about to export Eric's expenses". It is not — the run
+  // signs in as Brian — but a history that mixes two accounts with nothing
+  // saying so cannot be read any other way.
+  const who = (reviewer ?? "").trim().toLowerCase();
   const { rows } = await db().query(
     `SELECT id, started_at, finished_at, local_date, attempt, trigger, ok, steps,
-            item_line, error, import_id, (screenshot IS NOT NULL) AS has_screenshot
-       FROM export_runs ORDER BY id DESC LIMIT $1`,
-    [limit],
+            item_line, error, import_id, (screenshot IS NOT NULL) AS has_screenshot,
+            reviewer, source
+       FROM export_runs
+      WHERE $2::text IS NULL OR lower(reviewer) = $2
+      ORDER BY id DESC LIMIT $1`,
+    [limit, reviewer === undefined ? null : who],
   );
   return rows.map((r) => ({
     id: Number(r.id),
@@ -195,6 +209,8 @@ export async function recentRuns(limit = 20): Promise<RunRow[]> {
     error: r.error as string | null,
     importId: r.import_id ? Number(r.import_id) : null,
     hasScreenshot: Boolean(r.has_screenshot),
+    reviewer: (r.reviewer as string) ?? "",
+    source: (r.source as string) ?? "",
   }));
 }
 

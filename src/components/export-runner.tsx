@@ -80,6 +80,10 @@ type Run = {
   error: string | null;
   importId: number | null;
   hasScreenshot: boolean;
+  /** Whose Needs Review this run read. Blank is the shared import. */
+  reviewer: string;
+  /** Which Emburse list. Blank is Transactions. */
+  source: string;
 };
 
 /**
@@ -130,6 +134,7 @@ export function ExportRunner({
         runs: Run[];
         challenge: Challenge | null;
         deviceRememberedAt: string | null;
+        viewingAs: string | null;
       }>(res);
       if (!res.ok) throw new Error(body.error ?? "Failed");
       return body as {
@@ -138,6 +143,7 @@ export function ExportRunner({
         runs: Run[];
         challenge: Challenge | null;
         deviceRememberedAt: string | null;
+        viewingAs: string | null;
       };
     },
     // While a run is going, the list is the only progress indicator there is.
@@ -269,6 +275,17 @@ export function ExportRunner({
           nobody is emailed.
         </p>
       </div>
+
+      {/* Whose import this page is about. An admin inside a view needs to
+          know the button pulls the queue of the person they are viewing,
+          and not to have to infer it from the rows underneath. */}
+      {q.data?.viewingAs && (
+        <p className="rounded-lg border border-sky-500/30 bg-sky-500/10 p-3 text-sm">
+          You are viewing as <strong>{q.data.viewingAs}</strong>. Running the export signs into
+          Emburse as <strong>them</strong> and imports <strong>their</strong> Needs Review — not
+          yours. The history below is theirs too.
+        </p>
+      )}
 
       {q.data && !q.data.configured && (
         <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
@@ -509,6 +526,12 @@ export function ExportRunner({
                     <span className="text-muted-foreground">
                       {" "}· {r.trigger} · {new Date(r.startedAt).toLocaleString()}
                       {r.itemLine ? ` · ${r.itemLine}` : ""}
+                      {/* Whose queue it read. Two reviewers make an unlabelled
+                          history unreadable: a successful 320-item pull sitting
+                          above your own run looks like what yours is about to
+                          do, whoever it actually belonged to. */}
+                      {r.reviewer ? ` · ${r.reviewer}` : ""}
+                      {r.source ? ` · ${r.source}` : ""}
                     </span>
                   </span>
 

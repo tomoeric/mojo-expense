@@ -240,10 +240,17 @@ importRouter.get("/export-runs", requireAuth, async (req: Request, res: Response
   try {
     const { schedule } = await readSettings();
     const challenge = currentChallenge();
+    // Inside a view, this page is about the person being viewed: their runs
+    // and their timeline, not a mixture. Outside one it is the admin's
+    // overview of every reviewer, and each row says whose queue it read.
+    const viewed = req.viewingAs?.viewed;
     res.json({
       configured: (await listCredentials()).length > 0 || envLogin() !== null,
-      due: await nextDue(schedule),
-      runs: await recentRuns(20),
+      due: await nextDue(schedule, new Date(), viewed ?? ""),
+      runs: await recentRuns(20, viewed),
+      // Who this page is about, so it can say so rather than leaving somebody
+      // to work it out from the rows.
+      viewingAs: viewed ?? null,
       // Carried on the list rather than its own endpoint: this is already the
       // thing the page polls while a run is going, and a challenge is only
       // ever raised during one.
