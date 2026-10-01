@@ -2067,11 +2067,9 @@ async function confirmActioned(
    * larger number is only ever paid when something is already wrong.
    */
   const CONFIRM_MS = 30_000;
-  const deadline = Date.now() + CONFIRM_MS;
-  while (Date.now() < deadline) {
-    await page.waitForTimeout(500);
-    // Re-scanned rather than held as a locator: the grid re-renders after an
-    // action, so the row that was nth(3) is a different expense now.
+
+  /** Visible rows matching the expense, right now. */
+  const stillThere = async (): Promise<number> => {
     const rows = page.locator(sel.resultRow!);
     const n = Math.min(await rows.count().catch(() => 0), 60);
     let still = 0;
@@ -2086,19 +2084,63 @@ async function confirmActioned(
       if (!(await rows.nth(j).isVisible().catch(() => false))) continue;
       still++;
     }
-    if (still < before) {
-      return before > 1
-        ? `${what} in Emburse — ${before} rows matched this expense and ${still} ` +
-          `${still === 1 ? "remains" : "remain"}, so one left Needs Review`
-        : `${what} in Emburse — the row left Needs Review`;
-    }
+    return still;
+  };
+
+  const landed = (still: number, note = ""): string =>
+    (before > 1
+      ? `${what} in Emburse — ${before} rows matched this expense and ${still} ` +
+        `${still === 1 ? "remains" : "remain"}, so one left Needs Review`
+      : `${what} in Emburse — the row left Needs Review`) + note;
+
+  const deadline = Date.now() + CONFIRM_MS;
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(500);
+    // Re-scanned rather than held as a locator: the grid re-renders after an
+    // action, so the row that was nth(3) is a different expense now.
+    const still = await stillThere();
+    if (still < before) return landed(still);
   }
+
+  /**
+   * Ask the server before calling it a failure.
+   *
+   * Everything above reads the page we already have. That is right while
+   * the grid repaints itself, which it usually does — and useless when it
+   * does not, because then thirty seconds of polling a stale DOM says
+   * exactly what the first look said. Two approvals of Skyler Sudweeks's
+   * came back "still in Needs Review 30 seconds later" with nothing else
+   * wrong with them.
+   *
+   * A reload is not a retry and clicks nothing. It re-fetches the same
+   * filtered view: a row that really left is gone from it, and one that is
+   * really still there is still there. The difference between a grid that
+   * did not repaint and an approval that did not land is a question only
+   * Emburse can answer, so it is asked.
+   */
+  const reloaded = await (async () => {
+    try {
+      await page.reload({ waitUntil: "domcontentloaded" });
+      if (!(await gridLoaded(page, sel as never))) return null;
+      return await stillThere();
+    } catch {
+      return null;
+    }
+  })();
+
+  if (reloaded !== null && reloaded < before) {
+    return landed(reloaded, " (after reloading the view — the grid had not repainted)");
+  }
+
   throw new Error(
     `clicked ${what === "approved" ? "APPROVE" : "Deny"}, but ` +
     (before > 1
       ? `all ${before} rows matching this expense are still in Needs Review `
       : `the expense is still in Needs Review `) +
-    `${Math.round(CONFIRM_MS / 1000)} seconds later, so nothing confirms Emburse ` +
-    `recorded it. It may have gone through — check the expense in Emburse before deciding it ` +
-    `again.`);
+    `${Math.round(CONFIRM_MS / 1000)} seconds later` +
+    (reloaded === null
+      ? ", and the view could not be reloaded to check again"
+      : ", and still there on a freshly loaded view") +
+    `, so nothing confirms Emburse recorded it. It may have gone through — check the expense ` +
+    `in Emburse before deciding it again.`);
 }

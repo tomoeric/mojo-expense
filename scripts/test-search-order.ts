@@ -271,6 +271,34 @@ try {
   }
   await fetch(`${mock.url}/__app?twinRows=false`, { method: "POST" });
 
+  console.log("\n2g. A grid that does not repaint is not a failed approval");
+  // Two of Skyler Sudweeks's approvals came back "still in Needs Review 30
+  // seconds later" with nothing else wrong with them. The confirmation
+  // polls the page it already has, so a removal the grid never draws is
+  // invisible to it however long it waits.
+  //
+  // The mock's stale-grid mode is exactly that: the click tells the server
+  // and leaves the page alone. Only a reload can tell this apart from a
+  // click that missed, so the run asks for one before giving up.
+  mock.reset();
+  forgetCardholderIds();
+  await fetch(`${mock.url}/__app?actions=live&staleGrid=true`, { method: "POST" });
+  {
+    const out = await runDecisions(
+      [{ id: 41, decision: "approve" as const, reason: "", target: {
+          employee: "Shawn Emerson", merchant: "LA MADRELA FAMILIAR",
+          amount: 37.35, date: "2026-09-24",
+        }, automatic: true, peers: 1 }],
+      SEL, mock.url, LOGIN, {});
+    const run = out.get(41);
+    const approve = run?.steps.find((s) => s.name === "approve");
+    check("the approval is confirmed after a reload", run?.ok === true,
+      approve?.detail?.slice(0, 200) ?? "no approve step");
+    check("…and says that is what settled it",
+      /after reloading the view/.test(approve?.detail ?? ""), approve?.detail ?? "");
+  }
+  await fetch(`${mock.url}/__app?staleGrid=false`, { method: "POST" });
+
   console.log("\n2d. A click that lands on nothing is still a failure");
   // The fence the counting must not cost: with the buttons inert, no row
   // leaves and the count does not drop, so it must still refuse to claim

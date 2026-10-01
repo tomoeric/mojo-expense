@@ -85,6 +85,18 @@ type State = {
    */
   twinRows: boolean;
   /**
+   * Record an approval server-side but leave the row on the page.
+   *
+   * What a grid that does not repaint after an action looks like. The
+   * confirmation polls the DOM it already has, so a removal the page never
+   * draws is invisible to it however long it waits — and two perfectly good
+   * approvals came back "still in Needs Review 30 seconds later". A reload
+   * is the only thing that can tell this apart from a click that missed.
+   */
+  staleGrid: boolean;
+  /** Rows the page has told the server were approved, in a stale-grid run. */
+  actioned: Set<string>;
+  /**
    * How the search matches.
    *
    *   "substring" — any part of the merchant, which is the forgiving case.
@@ -201,6 +213,8 @@ const state: State = {
   ghostButtons: false,
   ghostRows: false,
   twinRows: false,
+  staleGrid: false,
+  actioned: new Set<string>(),
   searchMode: "substring",
   hiddenFromSearch: false,
   userFilter: "",
@@ -282,11 +296,15 @@ const rowHits = (merchant: string, term: string): boolean =>
     ? (merchant.match(/^[A-Za-z]+/)?.[0] ?? "").toLowerCase().startsWith(term.toLowerCase())
     : merchant.toLowerCase().includes(term.toLowerCase());
 
+/** A row the server has been told was approved, in a stale-grid run. */
+const actioned = (r: { date: string; merchant: string; who: string; amount: string }): boolean =>
+  state.actioned.has(`${r.date}|${r.merchant}|${r.who}|${r.amount}`);
+
 const gridIsEmpty = (search: string): boolean => {
   const term = search.trim();
-  const mine = state.userFilter
+  const mine = (state.userFilter
     ? ROWS.filter((r) => r.who.toLowerCase().includes(state.userFilter.toLowerCase()))
-    : ROWS;
+    : ROWS).filter((r) => !actioned(r));
   if (!term) return mine.length === 0 && state.padRows === 0;
   return state.padRows === 0 &&
     !mine.some((r) => !("shy" in r && r.shy) && rowHits(r.merchant, term));
@@ -309,7 +327,10 @@ const grid = (search: string) => {
     date: "9/01/2026", merchant: "DOORDASH INC.", who: `Filler Person${i}`,
     amount: (1000 + i).toFixed(2),
   }));
-  const shown = [...filler, ...matching];
+  // Rows actioned in a stale-grid run are gone from the SERVER's answer,
+  // which is the whole point: the page that is already open still shows
+  // them, and only a fresh load says otherwise.
+  const shown = [...filler, ...matching].filter((r) => !actioned(r));
   // What Emburse renders when nothing matches: the grid, the column headings
   // and the words "No rows". NOT an error, and not an absent grid — which is
   // exactly how it was read, because the shipped grid selector is "table" on
@@ -325,7 +346,8 @@ const grid = (search: string) => {
   const cells = (r: (typeof ROWS)[number]) =>
     `${r.date}</td><td>${r.merchant}</td><td>${r.who}</td><td>$${r.amount}</td>
      <td>${"site" in r && r.site ? r.site : ""}</td>
-     <td><button class="ap">APPROVE</button> <button aria-label="more" class="mn">&#8942;</button>`;
+     <td><button class="ap" data-k="${r.date}|${r.merchant}|${r.who}|${r.amount}">APPROVE</button> ` +
+    `<button aria-label="more" class="mn">&#8942;</button>`;
 
   // A grid whose buttons DO something. Approving or confirming a denial
   // takes the row out of Needs Review, which is how the run now confirms
@@ -335,12 +357,19 @@ const grid = (search: string) => {
     <div id="dlg" hidden><textarea placeholder="Reason"></textarea><button class="dc">Deny</button></div>
     <script>
       var live = ${state.actionsWork ? "true" : "false"};
+      var stale = ${state.staleGrid ? "true" : "false"};
       var target = null;
       document.addEventListener("click", function (e) {
         var b = e.target.closest("button"); if (!b) return;
         var row = b.closest("tr") || b.closest('[role="row"]');
         if (b.classList.contains("ap")) {
           if (!live) return;
+          // The grid that does not repaint: the server is told, the page is
+          // left exactly as it was.
+          if (stale) {
+            fetch("/__actioned?k=" + encodeURIComponent(b.dataset.k || ""), { method: "POST" });
+            return;
+          }
           // In the pinned layout the button's own row holds no data, so
           // removing it would leave the expense on screen. Take the body
           // row on the same line too, which is what Emburse does.
@@ -905,6 +934,7 @@ app.post("/__app", (req, res) => {
   if ("ghostButtons" in q) state.ghostButtons = q["ghostButtons"] === "true";
   if ("ghostRows" in q) state.ghostRows = q["ghostRows"] === "true";
   if ("twinRows" in q) state.twinRows = q["twinRows"] === "true";
+  if ("staleGrid" in q) state.staleGrid = q["staleGrid"] === "true";
   if ("searchMode" in q) state.searchMode = q["searchMode"] as State["searchMode"];
   if ("hiddenFromSearch" in q) state.hiddenFromSearch = q["hiddenFromSearch"] === "true";
   if ("format" in q) state.formatControl = q["format"] as State["formatControl"];
@@ -916,6 +946,13 @@ app.post("/__app", (req, res) => {
   if ("dialogRoot" in q) state.dialogRootIsHeaderOnly = q["dialogRoot"] === "header";
   res.json({ ok: true });
 });
+// Told by the page that a row was approved while the grid stayed as it was.
+app.post("/__actioned", (req, res) => {
+  const k = String((req.query as Record<string, string>)["k"] ?? "");
+  if (k) state.actioned.add(k);
+  res.json({ ok: true, actioned: state.actioned.size });
+});
+
 app.post("/__reset", (_req, res) => {
   reset();
   res.json({ ok: true });
@@ -933,7 +970,7 @@ const reset = () =>
     // the grid to divs left every later test running against divs — and the
     // one that then failed looked like a regression in whatever it was
     // actually testing, rather than leftover state from three tests ago.
-    gridShape: "table", padRows: 0, actionsWork: true, ghostButtons: false, ghostRows: false, twinRows: false, searchMode: "substring",
+    gridShape: "table", padRows: 0, actionsWork: true, ghostButtons: false, ghostRows: false, twinRows: false, staleGrid: false, actioned: new Set<string>(), searchMode: "substring",
     hiddenFromSearch: false, userFilter: "", hangOpens: 0, hangAll: false, oidcHop: false,
     formatControl: "links",
     chipsUnmatchable: false, appPaintMs: 0, showNavLabel: true,

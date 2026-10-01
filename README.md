@@ -280,6 +280,14 @@ against a peer count taken on the exact merchant. The run now scores the
 vendor name and keeps only the closest rows, so a sibling site is set aside
 and a genuine twin still ties.
 
+**And before calling an approval unconfirmed, ask the server.** The whole
+confirmation reads the page already open, which is right while the grid
+repaints itself and useless when it does not — then thirty seconds of polling
+a stale DOM says exactly what the first look said. A reload is not a retry
+and clicks nothing: it re-fetches the same filtered view, where a row that
+really left is gone and one that is really still there is still there. That
+difference is a question only Emburse can answer.
+
 **Confirming a decision means one FEWER matching row, not none.** A split
 receipt puts several identical rows in Emburse — six shares of one lunch are
 six rows agreeing on employee, merchant, amount and date, because they are
