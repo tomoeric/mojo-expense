@@ -313,7 +313,19 @@ and imported Brian's Needs Review. Nothing on the page said it would. Only
 somebody with no stored login of their own falls back to the shared import,
 which is the single-login deployment and the env fallback.
 
-**Each Emburse account has its own cookie jar** (`emburse_browser_jars`).
+**Each Emburse account has its own browser profile and its own cookie jar.**
+Keying the jar was not enough on its own: the persistent Chromium profile
+holds cookies, localStorage and IndexedDB, survives between runs, and was
+one directory for everybody — so a run opened with the previous account's
+session already live whatever the jar put in. A run started from Brian's
+view, labelled with his address, reported *"sign in — already signed in"*
+in 1.6 seconds and read **157 items, $29,287.03** off the grid, which is
+Eric's queue. It never signed in as Brian, imported Eric's Needs Review and
+stamped it as Brian's, and showed eleven green steps doing it. One
+directory per account, cookies cleared before that account's are restored,
+so "already signed in" can only mean signed in as them.
+
+**The jar itself** (`emburse_browser_jars`).
 One jar was right when one login was the whole app and is a data leak with
 two: it hands whoever runs next the live session of whoever signed in last,
 and because sign-in returns early on *"already signed in"*, that run skips

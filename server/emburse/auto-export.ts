@@ -297,6 +297,17 @@ export async function systemChromium(): Promise<string | null> {
  *
  * It also keeps the session, so most runs skip sign-in entirely.
  */
+/**
+ * An email as a safe folder name — one directory per Emburse account.
+ *
+ * Lower-cased so the same account cannot end up with two profiles, and
+ * everything outside a-z0-9 replaced so nothing in an address can reach
+ * out of the directory it is supposed to name.
+ */
+function cleanName(email: string): string {
+  return email.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 80) || "shared";
+}
+
 export async function openBrowser(
   /**
    * Whose saved session to put in the browser, if any.
@@ -313,7 +324,29 @@ export async function openBrowser(
   const executablePath = (await systemChromium()) ?? undefined;
   const args = ["--no-sandbox", "--disable-dev-shm-usage"];
 
-  const dir = env.emburseLogin.profileDir;
+  /*
+   * A profile DIRECTORY PER ACCOUNT, not one for the app.
+   *
+   * The database jar was keyed per account and that was not enough. The
+   * persistent Chromium profile holds cookies, localStorage and IndexedDB
+   * of its own, it survives between runs, and it was one directory for
+   * everybody — so the next run opened with the previous account's session
+   * already live, whatever the jar put in.
+   *
+   * What that produced, exactly: a run started from Brian's view, labelled
+   * brian.c@mojocarwash.com, reported "sign in — already signed in" in
+   * 1.6 seconds and then read 157 items, $29,287.03. That is Eric's queue.
+   * The run never signed in as Brian at all, imported Eric's Needs Review,
+   * and stamped it as Brian's, and every step was green.
+   *
+   * One directory each ends it: a session can only ever be found by the
+   * account it belongs to. `cleanName` keeps it a plain folder name rather
+   * than trusting an email in a path.
+   */
+  const base = env.emburseLogin.profileDir;
+  const dir = base
+    ? (asUser ? `${base}/${cleanName(asUser)}` : `${base}/shared`)
+    : base;
   if (dir) {
     await fs.mkdir(dir, { recursive: true }).catch(() => {});
     const launch = (): Promise<BrowserContext> => chromium.launchPersistentContext(dir, {
@@ -353,6 +386,11 @@ export async function openBrowser(
       }
       context = await launch();
     }
+    // Belt and braces. The directory is this account's, so nothing of
+    // anybody else's should be in it — and "should" is what the shared
+    // profile was running on. Cleared, then filled with this account's own,
+    // so "already signed in" can only ever mean signed in as them.
+    await context.clearCookies().catch(() => {});
     // The profile directory carries trust between runs; the database carries
     // it between deployments, which rebuild that directory and would otherwise
     // lose the device every time the app ships.
@@ -366,6 +404,7 @@ export async function openBrowser(
     acceptDownloads: true,
     viewport: { width: 1600, height: 1000 },
   });
+  await context.clearCookies().catch(() => {});
   await restoreCookies(context, asUser);
   return { context, close: () => browser.close() };
 }
