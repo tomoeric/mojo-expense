@@ -708,6 +708,18 @@ Two separate things, and confusing them cost a queue full of failures.
   strength of Eric's approval and the sweep skips all of them, which is the
   most convincing possible way to be wrong. Covered by
   `scripts/test-approval-chain.ts`.
+- **Nothing about this is a credentials problem, and chasing it as one
+  wastes days.** The logins work, the sessions work, the stamping works.
+  Signed in as Brian, Emburse shows him 300+ rows because he is an approver
+  and the export clicks the TEAM-WIDE tab — the whole company's review
+  stage, not "waiting on Brian". That is also the answer to "how could it
+  pull mine, I would have to be logged in": it never read Eric's account,
+  it read a list Brian's own account can see. One wrong URL, not a wrong
+  identity. Check the URL before suspecting anything else.
+- **A test run can try a list without saving it** (`probe` on
+  `attemptExport`, dry runs only, enforced there as well as at the route).
+  Finding out which list is really somebody's should not require changing
+  how the import works first.
 - **Approval is a CHAIN: Eric approves, then it goes to Brian.** Two stages,
   two queues, one at a time. Needs Review in Emburse IS per account — but the
   export clicks the team-wide tab and opens

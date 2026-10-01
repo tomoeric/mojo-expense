@@ -323,6 +323,16 @@ export async function attemptExport(
      */
     startedBy?: string;
     /**
+     * Try a different list for THIS RUN only, without saving anything.
+     *
+     * Dry runs only, enforced below. The question "which Emburse list is
+     * waiting on this person" can only be answered by asking Emburse, and
+     * asking it should not require committing a setting first — somebody
+     * sensibly nervous about changing how the import works will not find
+     * out by changing how the import works.
+     */
+    probe?: { gridPath?: string; gridSection?: string };
+    /**
      * Which Emburse list to export: blank for Transactions, or a key from
      * the configured sources. Reimbursements is a separate page with its
      * own queue and the same export dialog, so the whole run works on it
@@ -426,6 +436,11 @@ export async function attemptExport(
       // different stage, and asking for it means asking for it.
       ...(!list && mine?.gridPath ? { gridPath: mine.gridPath } : {}),
       ...(mine?.gridSection ? { gridSection: mine.gridSection } : {}),
+      // Last, and only on a dry run: a probe beats every stored setting
+      // precisely because it is not one. A real run must never take a list
+      // from a request — that is how an import reads the wrong queue.
+      ...(opts.dryRun && opts.probe?.gridPath ? { gridPath: opts.probe.gridPath } : {}),
+      ...(opts.dryRun && opts.probe?.gridSection ? { gridSection: opts.probe.gridSection } : {}),
     } as Selectors;
 
     run = await runAutoExport(settings, forThisRun, login, {

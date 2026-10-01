@@ -182,6 +182,10 @@ export function ExportRunner({
   // made a test run look like a real one.
   const kind = active ? (active.trigger === "dry-run" ? "dry" : "real") : busy;
 
+  /** A list to try for one test run only, saved nowhere. */
+  const [probePath, setProbePath] = useState("");
+  const [probeSection, setProbeSection] = useState("");
+
   async function run(dry: boolean) {
     setBusy(dry ? "dry" : "real");
     setError("");
@@ -189,7 +193,14 @@ export function ExportRunner({
       // Returns as soon as the run has an id. Everything after that — progress,
       // a verification code prompt, the result — arrives through the poll,
       // which is the only way this can survive a run that outlives a request.
-      const res = await fetch(`/api/export-run${dry ? "?dryRun=1" : ""}`, { method: "POST" });
+      const res = await fetch(`/api/export-run${dry ? "?dryRun=1" : ""}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        // Only a test run carries a list to try, and the server ignores it
+        // on a real one. Nothing here is saved.
+        body: JSON.stringify(dry && (probePath || probeSection)
+          ? { gridPath: probePath, gridSection: probeSection } : {}),
+      });
       const body = await readJson<{ error?: string; id?: number }>(res);
       if (!res.ok) throw new Error(body.error ?? `Run failed (${res.status})`);
       if (body.id) setOpen(body.id);
@@ -382,6 +393,39 @@ export function ExportRunner({
                 It is {who}&rsquo;s
               </button>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Finding out which list is really theirs, without changing
+          anything to find out. A test run stops before exporting: no file,
+          no email, nothing imported, nothing saved — it just prints what
+          that URL returns. Somebody sensibly nervous about changing how
+          the import works should not have to change how the import works
+          to check. */}
+      {isAdmin && (
+        <div className="rounded-lg border border-border p-3 text-sm">
+          <p className="text-muted-foreground">
+            Try a different list for <strong>one test run</strong> — nothing is saved and
+            nothing is imported. Leave blank to use the configured one. The item count it
+            reads tells you whose queue that URL is.
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <input
+              value={probePath}
+              onChange={(e) => setProbePath(e.target.value)}
+              placeholder="/transactions"
+              className="w-56 rounded-lg border border-border bg-background px-2 py-1 font-mono text-xs"
+            />
+            <input
+              value={probeSection}
+              onChange={(e) => setProbeSection(e.target.value)}
+              placeholder="inbox"
+              className="w-32 rounded-lg border border-border bg-background px-2 py-1 font-mono text-xs"
+            />
+            <span className="text-xs text-muted-foreground">
+              then press Test run below
+            </span>
           </div>
         </div>
       )}

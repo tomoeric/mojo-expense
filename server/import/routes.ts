@@ -356,7 +356,16 @@ importRouter.post("/export-run", requireAuth, requireAdmin, async (req: Request,
         // above is a log line; this is an identity, and conflating them
         // parked runs on a code with no valid answerer.
         { dryRun, onStarted: resolve, startedBy: real,
-          ...(reviewer ? { reviewer } : {}) },
+          ...(reviewer ? { reviewer } : {}),
+          // Only a test run may be pointed at a list by the request, and
+          // only for itself. attemptExport enforces that too.
+          ...(dryRun ? { probe: {
+            gridPath: typeof (req.body as { gridPath?: unknown })?.gridPath === "string"
+              ? String((req.body as { gridPath: string }).gridPath).slice(0, 200) : undefined,
+            gridSection: typeof (req.body as { gridSection?: unknown })?.gridSection === "string"
+              ? String((req.body as { gridSection: string }).gridSection).slice(0, 80) : undefined,
+          } } : {}),
+        },
       ).catch(reject); // only reaches here if it failed before recording itself
     });
     res.status(202).json({ id, running: true });
