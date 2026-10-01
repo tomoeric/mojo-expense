@@ -726,6 +726,14 @@ Two separate things, and confusing them cost a queue full of failures.
   whose expenses are whose. One login owns them; two and nobody named means
   nobody does, and the app says so and offers to stamp them (Import page →
   claim) rather than guessing.
+- **`requireAdmin` judges the REAL person, not the viewed one.** Judging on
+  `req.user` meant an admin looking at the app as a non-admin lost every
+  admin surface — no automation card, no per-reviewer settings, no failure
+  summary — which is the opposite of what the view is for. Not a hole: the
+  view-as middleware refuses every non-GET before `requireAdmin` runs, so
+  this widens what an admin may SEE through a view and nothing about what
+  anybody may change. Admin controls shown inside a view are rendered
+  disabled rather than left live to produce a 403 on click.
 - **Changing who you are is a page reload, not a cache operation.** Two
   clever versions were both wrong: `invalidateQueries` refetches while still
   serving what it has, so for a second the page rendered one person's

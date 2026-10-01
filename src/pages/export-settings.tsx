@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Save, ShieldAlert, Check, Clock, Info, AlertTriangle } from "lucide-react";
 import { ExportRunner } from "@/components/export-runner";
+import { useAuth } from "@/lib/api";
 
 type Schedule = {
   timezone: string;
@@ -549,6 +550,12 @@ const clock = (minutes: number) => {
 function ReviewerGrids() {
   const qc = useQueryClient();
   const [error, setError] = useState("");
+  // Every write is refused inside a view, so the controls are shown off
+  // rather than left live to produce a 403 on click. The settings are still
+  // worth READING through a view — "is his automation on" is most of why
+  // somebody looks.
+  const auth = useAuth();
+  const viewingAs = auth.data?.viewingAs?.viewed ?? null;
   const q = useQuery({
     queryKey: ["reviewer-imports"],
     queryFn: async () => {
@@ -615,20 +622,29 @@ function ReviewerGrids() {
           there is only one sensible answer: each reviewer reads their own
           Needs Review. The per-row fields below stay for the case this
           tenant spells the path differently. */}
+      {viewingAs && (
+        <p className="mt-2 rounded-lg bg-sky-500/10 p-2 text-sm">
+          Viewing as <strong>{viewingAs}</strong> — these can be read but not changed. Go back
+          to yourself to set them.
+        </p>
+      )}
+
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <button
           type="button"
+          disabled={Boolean(viewingAs)}
           onClick={() => void Promise.all(
             rows.map((r) => save(r.userEmail, { path: "/transactions", section: "inbox" })))}
-          className="rounded-lg bg-foreground px-3 py-1 text-sm font-semibold text-background"
+          className="rounded-lg bg-foreground px-3 py-1 text-sm font-semibold text-background disabled:opacity-50"
         >
           Everyone reads their own Needs Review
         </button>
         <button
           type="button"
+          disabled={Boolean(viewingAs)}
           onClick={() => void Promise.all(
             rows.map((r) => save(r.userEmail, { path: "", section: "" })))}
-          className="rounded-lg border border-border px-3 py-1 text-sm font-semibold"
+          className="rounded-lg border border-border px-3 py-1 text-sm font-semibold disabled:opacity-50"
         >
           Back to the shared team-wide list
         </button>
@@ -661,7 +677,7 @@ function ReviewerGrids() {
               />
               <button
                 type="button"
-                disabled={!dirty}
+                disabled={!dirty || Boolean(viewingAs)}
                 onClick={() => void save(r.userEmail, v)}
                 className="rounded-lg bg-foreground px-3 py-1 text-xs font-semibold text-background disabled:opacity-40"
               >
@@ -672,9 +688,10 @@ function ReviewerGrids() {
                   off for everybody. */}
               <button
                 type="button"
+                disabled={Boolean(viewingAs)}
                 onClick={() => void save(r.userEmail, v, !r.autoApprove)}
                 title={`Approve ${r.userEmail}'s unflagged expenses automatically, signed in as them.`}
-                className={`rounded-lg border px-3 py-1 text-xs font-semibold ${
+                className={`rounded-lg border px-3 py-1 text-xs font-semibold disabled:opacity-50 ${
                   r.autoApprove
                     ? "border-amber-500/50 bg-amber-500/15 text-amber-800 dark:text-amber-200"
                     : "border-border"

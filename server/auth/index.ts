@@ -90,9 +90,20 @@ export function adminListSize(): number {
 
 /** 403 unless the caller may change shared settings. */
 export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
-  // With sign-in switched off there is no identity to check, and the app is
-  // already refusing to serve real data, so this is not a hole.
-  if (!isAuthConfigured() || (req.user && isAdmin(req.user.email))) {
+  // The REAL person, not the one being viewed.
+  //
+  // `req.user` is the viewed person inside a view, so judging on it meant an
+  // admin looking at the app as a non-admin lost every admin surface — which
+  // is the opposite of what the view is for. "I need to be able to monitor
+  // imports, automation, and errors on his end" cannot be done from a page
+  // that answers 403 to the admin asking it.
+  //
+  // Not a hole, because the view-as middleware has already refused every
+  // non-GET before this runs — bar `view-as` and `export-run`, which do this
+  // same real-user check themselves. So this widens what an admin may SEE
+  // through a view and nothing at all about what anybody may change.
+  const real = req.viewingAs?.real ?? req.user;
+  if (!isAuthConfigured() || (real && isAdmin(real.email))) {
     next();
     return;
   }
@@ -185,7 +196,13 @@ authRouter.get("/auth/user", (req: Request, res: Response) => {
     authConfigured: isAuthConfigured(),
     // With sign-in off there is no identity, so the UI should not hide admin
     // affordances behind a check the server is not making either.
-    isAdmin: !isAuthConfigured() || (req.user ? isAdmin(req.user.email) : false),
+    // Judged on the real person, like the server does, so the page shows the
+    // admin surfaces their requests will actually be answered for. A view
+    // changes whose DATA is on screen, not who is looking at it.
+    isAdmin: (() => {
+      const real = req.viewingAs?.real ?? req.user;
+      return !isAuthConfigured() || (real ? isAdmin(real.email) : false);
+    })(),
     // Who is really here, when that is not who the page is showing. The UI
     // needs it for the banner, and for keeping the exit visible: the one
     // control that must not disappear is the one that gets you back.

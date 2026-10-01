@@ -161,7 +161,9 @@ const ENTRIES: Entry[] = [
   },
 ];
 
-export function ConfigurationPage({ onOpen, isAdmin }: { onOpen: (key: ConfigPage) => void; isAdmin: boolean }) {
+export function ConfigurationPage({ onOpen, isAdmin, viewingAs }: {
+  onOpen: (key: ConfigPage) => void; isAdmin: boolean; viewingAs: string | null;
+}) {
   const counts = useTaxonomyCounts();
 
   if (counts.isError) {
@@ -185,7 +187,7 @@ export function ConfigurationPage({ onOpen, isAdmin }: { onOpen: (key: ConfigPag
 
       <AiConnection isAdmin={isAdmin} />
 
-      <AutoApprove isAdmin={isAdmin} />
+      <AutoApprove isAdmin={isAdmin} viewingAs={viewingAs} />
       <DecisionTrace isAdmin={isAdmin} />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -480,7 +482,12 @@ type AutoReport = {
  * app. Hence the count of what qualifies and why, and a button that runs a
  * pass now.
  */
-function AutoApprove({ isAdmin }: { isAdmin: boolean }) {
+function AutoApprove({ isAdmin, viewingAs }: { isAdmin: boolean; viewingAs: string | null }) {
+  // Inside a view this card describes THEIR automation, and nothing on it
+  // may be pressed: the server refuses every write from a view, so a live
+  // button here could only ever produce a 403. Read-only is the honest
+  // rendering of a read-only mode.
+  const readOnly = Boolean(viewingAs);
   const qc = useQueryClient();
   const { data } = useQuery<Record<string, unknown>>({
     queryKey: ["flags"],
@@ -568,8 +575,10 @@ function AutoApprove({ isAdmin }: { isAdmin: boolean }) {
         <button
           type="button"
           onClick={() => void runNow()}
-          disabled={busy || !on}
-          title={on ? "Run a pass now instead of waiting for the next one" : "Switch it on first"}
+          disabled={busy || !on || readOnly}
+          title={readOnly
+            ? `Viewing as ${viewingAs}. Only they can run their own approvals.`
+            : on ? "Run a pass now instead of waiting for the next one" : "Switch it on first"}
           className="ml-auto rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold hover:bg-muted disabled:opacity-50"
         >
           Run now
@@ -577,7 +586,8 @@ function AutoApprove({ isAdmin }: { isAdmin: boolean }) {
         <button
           type="button"
           onClick={() => void save({ enabled: !on })}
-          disabled={busy}
+          disabled={busy || readOnly}
+          title={readOnly ? `Viewing as ${viewingAs}. Their switch is theirs to set.` : undefined}
           className={`rounded-lg border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-50 ${
             on ? "border-amber-600/50 bg-amber-500/10 text-amber-700" : "border-border hover:bg-muted"
           }`}
@@ -585,6 +595,14 @@ function AutoApprove({ isAdmin }: { isAdmin: boolean }) {
           {busy ? "Working…" : on ? "On" : "Off"}
         </button>
       </div>
+
+      {readOnly && (
+        <p className="mt-2 rounded-lg bg-sky-500/10 p-2 text-xs">
+          This is <strong>{viewingAs}</strong>&rsquo;s automation — their switch, their queue,
+          their reasons. Approvals are made by signing in as them, so only they can turn it on
+          or run a pass. Nothing here can be pressed while viewing.
+        </p>
+      )}
 
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
         <label htmlFor="auto-per-run">At most</label>

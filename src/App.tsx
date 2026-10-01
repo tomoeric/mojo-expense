@@ -369,7 +369,11 @@ export function App() {
           {data && route === "analytics" && <AnalyticsPage data={data} />}
           {route === "import" && <ImportPage />}
           {route === "configuration" && (
-            <ConfigurationPage onOpen={setRoute} isAdmin={auth.data?.isAdmin ?? false} />
+            <ConfigurationPage
+              onOpen={setRoute}
+              isAdmin={auth.data?.isAdmin ?? false}
+              viewingAs={auth.data?.viewingAs?.viewed ?? null}
+            />
           )}
           {route in LISTS && <TaxonomyPage kind={LISTS[route as keyof typeof LISTS]} />}
           {route === "how-emburse-works" && <HowEmburseWorksPage />}

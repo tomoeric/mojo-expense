@@ -209,13 +209,16 @@ api.get("/flags", requireAuth, async (_req, res) => {
  * user reads on every page load: this counts the whole inbox, and only an
  * admin has any use for the answer.
  */
-api.get("/flags/autoApprove/report", requireAuth, requireAdmin, async (_req, res) => {
+api.get("/flags/autoApprove/report", requireAuth, requireAdmin, async (req, res) => {
   if (!isDbConfigured()) {
     res.status(503).json({ error: "No database is configured." });
     return;
   }
   try {
-    res.json(await autoApproveReport());
+    // Inside a view, THEIR automation. An admin checking whether Brian's
+    // approvals are running wants Brian's switch, his eligible count and his
+    // reasons — not a second copy of their own card under his name.
+    res.json(await autoApproveReport(req.viewingAs ? req.viewingAs.viewed : null));
   } catch (err) {
     res.status(500).json({ error: describe(err) });
   }

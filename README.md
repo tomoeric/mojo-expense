@@ -317,6 +317,14 @@ the applied count the Live strip subtracts, the failure summary and its
 markdown, and the pending and recent decisions, which belong to whoever made
 them.
 
+**And a view shows their automation, not a copy of yours.** `requireAdmin`
+judges the real person rather than the viewed one — judging on the viewed
+one took every admin surface away from the admin doing the looking, which
+is the opposite of the point. The automation card, the failure summary and
+the downloadable failure report all describe the person being viewed, and
+every control on them is rendered disabled, because the server refuses
+writes from a view and a live button could only ever produce a 403.
+
 **Automatic approvals are one switch per reviewer**, all off until somebody
 turns one on. The global switch is unchanged — one owner, one queue — and
 each reviewer with a stored Emburse login has their own beside it (Export
