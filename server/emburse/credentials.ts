@@ -358,16 +358,25 @@ export async function sharedImporter(): Promise<string | null> {
  */
 export async function unclaimedExpenses(): Promise<{
   count: number; owner: string | null; candidates: string[];
+  /** Who holds the waiting expenses right now, and how many each. */
+  held: { reviewer: string; count: number }[];
 }> {
   await ensure();
   const { rows } = await db().query<{ n: string }>(
     "SELECT count(*) AS n FROM expenses WHERE reviewer = '' AND in_inbox");
   const { rows: people } = await db().query<{ user_email: string }>(
     "SELECT user_email FROM emburse_credentials ORDER BY user_email");
+  // Whose the queue actually is, counted from the rows themselves. The one
+  // readout that would have answered "why is Brian seeing Eric's?" in a
+  // glance, instead of three rounds of inference from screenshots.
+  const { rows: held } = await db().query<{ reviewer: string; n: string }>(
+    `SELECT reviewer, count(*)::text AS n FROM expenses
+      WHERE in_inbox AND reviewer <> '' GROUP BY reviewer ORDER BY count(*) DESC`);
   return {
     count: Number(rows[0]?.n ?? 0),
     owner: await sharedImporter().catch(() => null),
     candidates: people.map((p) => p.user_email),
+    held: held.map((h) => ({ reviewer: h.reviewer, count: Number(h.n) })),
   };
 }
 
@@ -382,7 +391,20 @@ export async function unclaimedExpenses(): Promise<{
  * Scoped to `reviewer = ''` so it can only ever claim rows nobody holds; it
  * cannot move an expense from one reviewer to another.
  */
-export async function claimUnclaimed(userEmail: string): Promise<number> {
+export async function claimUnclaimed(
+  userEmail: string,
+  /**
+   * "unclaimed" touches only rows nobody holds — the safe, ordinary case.
+   *
+   * "all" moves every waiting expense, including ones another reviewer
+   * holds, and exists because the app got this wrong on live data: while
+   * the import re-stamped every row with whoever had run most recently, one
+   * reviewer's 3:40pm import took the other's entire queue. Keeping the
+   * first owner stops that happening again and does nothing about the
+   * queue already sitting with the wrong person. This is the way back.
+   */
+  scope: "unclaimed" | "all" = "unclaimed",
+): Promise<number> {
   await ensure();
   const who = userEmail.trim().toLowerCase();
   if (!who) throw new Error("Name whose expenses these are.");
@@ -394,7 +416,10 @@ export async function claimUnclaimed(userEmail: string): Promise<number> {
       "their queue has never been read.");
   }
   const { rowCount } = await db().query(
-    "UPDATE expenses SET reviewer = $1 WHERE reviewer = ''", [who]);
+    scope === "all"
+      ? "UPDATE expenses SET reviewer = $1 WHERE in_inbox AND reviewer <> $1"
+      : "UPDATE expenses SET reviewer = $1 WHERE reviewer = ''",
+    [who]);
   return rowCount ?? 0;
 }
 

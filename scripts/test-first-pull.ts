@@ -145,7 +145,36 @@ try {
       reimb.warnings.join(" | ").slice(0, 160));
   }
 
-  console.log("\n6. Every import row records whose it was");
+  console.log("\n6. The same expenses in two exports do not change hands");
+  // The one that was actually happening. Both accounts read the team-wide
+  // tab with no per-person filter, so both exports carry the SAME rows —
+  // Eric's run and Brian's first run each read 320 items, $18,289.08. Under
+  // "last import wins" every import moved all of them to whoever had just
+  // run, so the queue changed hands on a timer.
+  {
+    const held = async (who: string) =>
+      Number((await db().query<{ n: string }>(
+        "SELECT count(*) AS n FROM expenses WHERE employee = $1 AND reviewer = $2",
+        [`${TAG} Both`, who])).rows[0]!.n);
+
+    const first = await run("Both", "2026-09-29", { reviewer: ERIC });
+    check("Eric's import brings them in", first.inserted === 3, String(first.inserted));
+    check("…and they are his", (await held(ERIC)) === 3, String(await held(ERIC)));
+
+    const second = await run("Both", "2026-09-29", { reviewer: BRIAN });
+    check("Brian's export carries the very same expenses", second.importId !== null);
+    // The line this exists for.
+    check("…and they STAY Eric's", (await held(ERIC)) === 3, String(await held(ERIC)));
+    check("…none of them moved to Brian", (await held(BRIAN)) === 0, String(await held(BRIAN)));
+    check("…and the import says so rather than hiding it",
+      second.warnings.some((w) => /already in another reviewer's queue/.test(w)),
+      second.warnings.join(" | ").slice(0, 200));
+    check("…naming the shared-list cause when the match is total",
+      second.warnings.some((w) => /both Emburse accounts are reading the same list/.test(w)),
+      second.warnings.join(" | ").slice(0, 240));
+  }
+
+  console.log("\n7. Every import row records whose it was");
   {
     const { rows } = await db().query<{ reviewer: string; source: string; n: string }>(
       `SELECT reviewer, source, count(*) AS n FROM expense_imports

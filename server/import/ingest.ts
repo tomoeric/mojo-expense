@@ -262,6 +262,44 @@ export async function ingestExport(
     const held = Number(inbox.rows[0]?.n ?? 0);
     const losing = held - Number(inbox.rows[0]?.live ?? 0);
 
+    /**
+     * Expenses in this file that somebody ELSE already holds.
+     *
+     * The question nobody was asking, and the one that explains the whole
+     * complaint. Two reviewers were supposed to have two queues because
+     * "Needs Review is per account" — but the export clicks the team-wide
+     * tab and opens /transactions/team with no user filter, so both
+     * accounts ask Emburse the same question. Eric's run and Brian's first
+     * run each read 320 items, $18,289.08. The same expenses, twice.
+     *
+     * Hidden, that produced a queue that changed hands on a timer and an
+     * admin quite reasonably reporting it as a leak. Counted and said out
+     * loud, it is a fact about the Emburse setup that somebody can act on:
+     * either these two accounts really do share one review pool, or the
+     * export needs to ask each of them a narrower question.
+     */
+    const overlap = await client.query<{ reviewer: string; n: string }>(
+      `SELECT reviewer, count(*)::text AS n
+         FROM expenses
+        WHERE dedupe_key = ANY($1::text[])
+          AND reviewer <> '' AND reviewer <> $2
+        GROUP BY reviewer ORDER BY count(*) DESC`,
+      [[...keys.keys()], reviewer],
+    );
+    if (overlap.rowCount && reviewer) {
+      const total = overlap.rows.reduce((a, r) => a + Number(r.n), 0);
+      const who = overlap.rows.map((r) => `${r.n} already ${r.reviewer}'s`).join(", ");
+      warnings.push(
+        `${total} of the ${keys.size} expenses in this export are already in another reviewer's ` +
+        `queue (${who}). They stay where they are — an expense belongs to the first reviewer who ` +
+        `imported it, so nothing was moved. ${total === keys.size
+          ? `This export matched theirs exactly, which means both Emburse accounts are reading the ` +
+            `same list: the import opens the team-wide tab with no per-person filter, so it asks ` +
+            `Emburse the same question whoever signs in.`
+          : `Where two reviewers genuinely share a row, only the first one sees it here.`}`,
+      );
+    }
+
     // How many of those we ACTIONED ourselves.
     //
     // The fence cannot otherwise tell a reviewer clearing the queue from a
@@ -378,12 +416,26 @@ export async function ingestExport(
            -- Keep a known section rather than letting an all-sections export
            -- blank out what a per-section one established.
            section        = COALESCE(EXCLUDED.section, expenses.section),
-           -- Last import wins. An expense that turns up in two reviewers'
-           -- Needs Review belongs to whichever read it most recently, which
-           -- is a tidy enough answer for a case Emburse makes rare: a row
-           -- waits on ONE approver. What matters is that it belongs to
-           -- exactly one, so exactly one purge can take it.
-           reviewer       = EXCLUDED.reviewer,
+           -- FIRST reviewer keeps it. This said "last import wins", on the
+           -- stated assumption that a row waits on ONE approver and two
+           -- reviewers holding the same expense would be rare.
+           --
+           -- On this tenant it is not rare, it is every row. The export
+           -- opens the team-wide tab at /transactions/team with no user
+           -- filter, so two accounts ask Emburse the same question and get
+           -- the same answer — Eric's run and Brian's first run both read
+           -- 320 items, $18,289.08, to the cent. Under "last wins" each
+           -- import therefore MOVED all 320 expenses to whoever had just
+           -- run, on a timer: Brian's 3:40pm import took Eric's entire
+           -- queue, approvals and all, and Eric's next one would take it
+           -- straight back.
+           --
+           -- Keeping the first owner does not decide who SHOULD hold a
+           -- shared row — nothing here can know that — but it stops the
+           -- churn, leaves the purge with exactly one owner per row, and
+           -- lets the import report the overlap instead of hiding it.
+           reviewer       = CASE WHEN expenses.reviewer = ''
+                                 THEN EXCLUDED.reviewer ELSE expenses.reviewer END,
            source         = EXCLUDED.source`,
         [key, e.employee, e.date, e.merchant, e.amountCents, e.category, e.department,
          e.location, e.note, e.method, e.receiptLabel, importId, e.sourcePage, section,

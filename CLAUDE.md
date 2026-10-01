@@ -687,6 +687,14 @@ Two separate things, and confusing them cost a queue full of failures.
   but a queue and an import history belong to the one Emburse account they
   were read from. Anything new goes in one of those two buckets deliberately,
   not by whichever query was easiest to write.
+- **The export is NOT per person — it reads the team-wide tab.** It clicks
+  ADMIN/MANAGER and opens `/transactions/team?filters[section]=inbox` with no
+  `filters[user_id][]`, so two accounts get the same rows: Eric's run and
+  Brian's first run both read 320 items, $18,289.08. Any reasoning that
+  starts "Needs Review is per account, so their queues differ" is wrong here
+  until the export asks each reviewer a narrower question. The upsert keeps
+  the FIRST reviewer who imported a row, because "last import wins" moved the
+  entire queue between two people on a timer.
 - **Ownership of unclaimed rows must never be derived from a credential's
   state.** It used to be "the credential most recently proven to work", so a
   successful first export MOVED every unclaimed row to the person whose export

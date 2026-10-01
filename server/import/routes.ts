@@ -127,10 +127,11 @@ importRouter.get("/imports", requireAuth, async (req: Request, res: Response) =>
  */
 importRouter.post("/imports/claim", requireAuth, requireAdmin, async (req: Request, res: Response) => {
   if (!guard(res)) return;
-  const { email } = req.body as { email?: unknown };
+  const { email, scope } = req.body as { email?: unknown; scope?: unknown };
+  const how = scope === "all" ? "all" : "unclaimed";
   try {
-    const n = await claimUnclaimed(String(email ?? ""));
-    console.log(`imports: ${n} unclaimed expense(s) claimed for ${String(email)}`);
+    const n = await claimUnclaimed(String(email ?? ""), how);
+    console.log(`imports: ${n} ${how} expense(s) claimed for ${String(email)}`);
     res.json({ claimed: n });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Could not claim them." });

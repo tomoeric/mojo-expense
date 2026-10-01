@@ -198,6 +198,31 @@ deployment with one login is unaffected, because that login owns them; a
 reviewer who has not imported yet sees nothing, which is the truth, since
 Emburse has not been asked for their Needs Review.
 
+**The two accounts may be reading the same Emburse list.** The export clicks
+the team-wide tab and opens `/transactions/team?filters[section]=inbox` with
+**no per-person filter**, so it asks Emburse the same question whoever signs
+in — Eric's run and Brian's first run each read *320 items, $18,289.08*, to
+the cent. The import's rule was "last import wins", written on the stated
+assumption that a row waits on one approver, so every import MOVED all 320
+expenses to whoever had just run: Brian's 3:40pm import took Eric's whole
+queue, approvals and all, and Eric's next one would have taken it straight
+back. An admin watching that is right to call it a leak.
+
+An expense now belongs to the **first** reviewer who imported it. That does
+not decide who *should* hold a row two accounts can both see — nothing in
+here can know that — but it stops the churn, leaves the purge with exactly
+one owner per row, and lets the import say what it found: *"320 of the 320
+expenses in this export are already in eric.s's queue… both Emburse accounts
+are reading the same list."* The Import page shows the standing split
+(waiting expenses by reviewer) and can hand the whole queue, or just the
+unheld rows, to one person — the way back from a queue that ended up with
+the wrong reviewer.
+
+Whether that is right depends on the Emburse setup, which the app cannot see:
+either these accounts genuinely share one review pool, in which case one
+import and one queue is the honest model, or the export needs a narrower
+question per reviewer. It reports the overlap rather than guessing.
+
 **And that ownership never moves.** It was resolved as "the credential most
 recently proven to work" — the same rule that picks a login, borrowed for a
 question it cannot answer, because it drifts. Brian's first export succeeded

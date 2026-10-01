@@ -91,7 +91,10 @@ export function ImportPage() {
         schedule: Schedule;
         you: string | null;
         viewingAs: string | null;
-        unclaimed: { count: number; owner: string | null; candidates: string[] } | null;
+        unclaimed: {
+          count: number; owner: string | null; candidates: string[];
+          held: { reviewer: string; count: number }[];
+        } | null;
       };
     },
   });
@@ -469,25 +472,30 @@ function ScheduleStrip({ schedule }: { schedule: Schedule }) {
 function Unclaimed({
   data, onClaimed,
 }: {
-  data: { count: number; owner: string | null; candidates: string[] } | null;
+  data: {
+    count: number; owner: string | null; candidates: string[];
+    held: { reviewer: string; count: number }[];
+  } | null;
   onClaimed: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [who, setWho] = useState("");
 
-  if (!data || data.count === 0) return null;
-  // Settled already: one login, or somebody named. Nothing to ask.
-  if (data.owner) return null;
+  if (!data) return null;
+  const shared = data.held.length > 1;
+  // Nothing unclaimed, one holder: settled. Nothing to say.
+  if (data.count === 0 && !shared) return null;
+  if (data.count > 0 && data.owner && !shared) return null;
 
-  async function claim(email: string) {
+  async function claim(email: string, scope: "unclaimed" | "all") {
     setBusy(true);
     setError("");
     try {
       const res = await fetch("/api/imports/claim", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, scope }),
       });
       const body = (await res.json()) as { claimed?: number; error?: string };
       if (!res.ok) throw new Error(body.error ?? "Could not claim them.");
@@ -501,34 +509,70 @@ function Unclaimed({
 
   return (
     <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
+      {/* Whose the waiting expenses actually are, counted from the rows.
+          The readout that would have answered "why is Brian seeing Eric's?"
+          at a glance instead of from screenshots. */}
       <p>
-        <strong className="tabular-nums">{data.count}</strong> expense
-        {data.count === 1 ? "" : "s"} in the queue were imported before the app recorded whose
-        Emburse queue they came from, so they belong to nobody. They are hidden from everybody
-        until that is settled — showing them to the wrong person is the thing this prevents.
+        Waiting expenses by reviewer:{" "}
+        {data.held.length === 0 ? "none held by anybody" : data.held.map((h, i) => (
+          <span key={h.reviewer}>
+            {i > 0 ? " · " : ""}
+            <strong className="tabular-nums">{h.count}</strong> {h.reviewer}
+          </span>
+        ))}
+        {data.count > 0 && (
+          <>
+            {data.held.length > 0 ? " · " : ""}
+            <strong className="tabular-nums">{data.count}</strong> held by nobody
+          </>
+        )}
       </p>
-      <p className="mt-1 text-muted-foreground">
-        Whoever&rsquo;s Needs Review they came out of should claim them. Their own next import
-        would claim them too; this just does it now.
-      </p>
+
+      {data.count > 0 && !data.owner && (
+        <p className="mt-1">
+          The unheld ones were imported before the app recorded whose Emburse queue they came
+          from. They are hidden from everybody until that is settled — showing them to the wrong
+          person is the thing this prevents.
+        </p>
+      )}
+
+      {shared && (
+        <p className="mt-1">
+          More than one reviewer holds part of the queue. An expense belongs to the first
+          reviewer who imported it, so if an import once moved rows to the wrong person they
+          stay there until they are moved back.
+        </p>
+      )}
+
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <select
           value={who}
           onChange={(e) => setWho(e.target.value)}
           className="rounded-lg border border-border bg-background px-2 py-1 text-sm"
         >
-          <option value="">Choose whose they are…</option>
+          <option value="">Choose a reviewer…</option>
           {data.candidates.map((c) => (
             <option key={c} value={c}>{c}</option>
           ))}
         </select>
+        {data.count > 0 && (
+          <button
+            type="button"
+            disabled={busy || !who}
+            onClick={() => void claim(who, "unclaimed")}
+            className="rounded-lg bg-foreground px-3 py-1 text-sm font-semibold text-background disabled:opacity-50"
+          >
+            {busy ? "Working…" : `Give them the ${data.count} unheld`}
+          </button>
+        )}
         <button
           type="button"
           disabled={busy || !who}
-          onClick={() => void claim(who)}
-          className="rounded-lg bg-foreground px-3 py-1 text-sm font-semibold text-background disabled:opacity-50"
+          onClick={() => void claim(who, "all")}
+          className="rounded-lg border border-border px-3 py-1 text-sm font-semibold disabled:opacity-50"
+          title="Moves every waiting expense to this reviewer, including ones another reviewer currently holds."
         >
-          {busy ? "Claiming…" : "Claim them"}
+          {busy ? "Working…" : "Give them the whole queue"}
         </button>
       </div>
       {error && <p className="mt-2 text-red-600">{error}</p>}
