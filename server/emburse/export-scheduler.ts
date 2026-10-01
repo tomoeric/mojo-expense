@@ -293,7 +293,13 @@ export async function attemptExport(
       // read, and verified the result — so the weaker header check has nothing
       // left to add about sections.
       const sectionsVerified = run.steps.some((s) => s.name === "set the sections" && s.ok);
-      const imported = await ingestExport(run.pdf, `emburse-${day}.pdf`, by, { sectionsVerified });
+      // Stamped with WHOSE Needs Review this is, which is what keeps one
+      // reviewer's import from purging another's queue. `userEmail` is the
+      // app user who owns the credential; the env fallback has no owner, so
+      // it imports as the blank reviewer exactly as a hand upload does.
+      const reviewer = "userEmail" in login ? String(login.userEmail ?? "") : "";
+      const imported = await ingestExport(
+        run.pdf, `emburse-${day}.pdf`, by, { sectionsVerified, reviewer });
       importId = imported.importId;
       // A duplicate file is not a failed run: it means Emburse produced the
       // same export twice, which is normal on a day nothing changed.

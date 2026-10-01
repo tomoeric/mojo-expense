@@ -79,6 +79,20 @@ CREATE TABLE IF NOT EXISTS expenses (
   last_import_id  bigint,
   source_page     integer
 );
+-- WHOSE Needs Review brought this row in.
+--
+-- Emburse's Needs Review is per account: the expenses waiting on Eric are
+-- not the expenses waiting on Brian. One import signing in as one account
+-- therefore cannot serve two reviewers — it shows each of them the other's
+-- work. This column is what makes a second importer possible at all, and
+-- the purge below is why it had to exist before one ran: "delete everything
+-- this export no longer carries" is correct for one reviewer and catastrophic
+-- for two, because each would delete the other's queue every hour.
+--
+-- Blank on rows imported before this existed, and on a hand-uploaded file
+-- where nobody can say whose queue it was.
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS reviewer text NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS expenses_reviewer_idx ON expenses (reviewer) WHERE in_inbox;
 CREATE INDEX IF NOT EXISTS expenses_date_idx     ON expenses (expense_date DESC);
 CREATE INDEX IF NOT EXISTS expenses_inbox_idx    ON expenses (in_inbox);
 CREATE INDEX IF NOT EXISTS expenses_employee_idx ON expenses (employee);
