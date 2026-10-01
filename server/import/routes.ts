@@ -4,6 +4,7 @@ import { db, ensureSchema, isDbConfigured } from "../db.js";
 import { requireAdmin, requireAuth } from "../auth/index.js";
 import { ingestExport } from "./ingest.js";
 import { describeSchedule } from "./schedule.js";
+import { reportsChanged } from "../reports-cache.js";
 import { ALL_SECTIONS, cleanSchedule, readSettings, writeSettings } from "./settings.js";
 import { DEFAULT_SELECTORS, SELECTOR_HELP, STEP_SELECTORS, envLogin } from "../emburse/auto-export.js";
 import { claimUnclaimed, credentialStatus, deleteCredential, hasCredential, listCredentials, saveCredential,
@@ -209,6 +210,10 @@ importRouter.post("/imports/claim", requireAuth, requireAdmin, async (req: Reque
   try {
     const n = await claimUnclaimed(String(email ?? ""), how);
     console.log(`imports: ${n} ${how} expense(s) claimed for ${String(email)}`);
+    // Ownership just moved, so every queue this is cached for is wrong.
+    // Without this the person who just gained a queue watches an empty one
+    // for five minutes and presses the button again.
+    reportsChanged();
     res.json({ claimed: n });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Could not claim them." });
@@ -345,8 +350,12 @@ importRouter.post("/export-run", requireAuth, requireAdmin, async (req: Request,
     const id = await new Promise<number>((resolve, reject) => {
       void attemptExport(
         dryRun ? "dry-run" : "manual",
-        reviewer ? `${real} (for ${reviewer})` : real,
-        { dryRun, onStarted: resolve, ...(reviewer ? { reviewer } : {}) },
+        reviewer && reviewer !== real ? `${real} (for ${reviewer})` : real,
+        // The admin answers the code, whoever's queue is being read. `by`
+        // above is a log line; this is an identity, and conflating them
+        // parked runs on a code with no valid answerer.
+        { dryRun, onStarted: resolve, startedBy: real,
+          ...(reviewer ? { reviewer } : {}) },
       ).catch(reject); // only reaches here if it failed before recording itself
     });
     res.status(202).json({ id, running: true });
@@ -404,7 +413,15 @@ importRouter.get("/export-runs", requireAuth, async (req: Request, res: Response
       // ever raised during one.
       // `mine` rather than making the page compare emails: only the owner can
       // answer, and the page should say who is being waited on either way.
-      challenge: challenge && { ...challenge, mine: challenge.owner === (req.user?.email ?? "") },
+      // Judged on the real person and loosely compared, for the same reason
+      // the server does: whoever started the run is who Emburse emailed,
+      // and a page that says "somebody else has to answer this" to the only
+      // person who can leaves the run to time out.
+      challenge: challenge && {
+        ...challenge,
+        mine: challenge.owner.trim().toLowerCase() ===
+          (req.viewingAs?.real.email ?? req.user?.email ?? "").trim().toLowerCase(),
+      },
       // When the browser last kept a session. The only visible sign that a
       // device is still trusted, and the thing to look at when a code gets
       // asked for that should not have been.
@@ -431,7 +448,9 @@ importRouter.get("/export-runs", requireAuth, async (req: Request, res: Response
 importRouter.post("/export-challenge", requireAuth, requireAdmin, (req: Request, res: Response) => {
   if (!guard(res)) return;
   const { code } = req.body as { code?: unknown };
-  const result = answerChallenge(code, req.user?.email ?? "");
+  // The real person, not the viewed one: an admin who starts a run from
+  // inside a view is the one Emburse emailed and the one at the screen.
+  const result = answerChallenge(code, req.viewingAs?.real.email ?? req.user?.email ?? "");
   if (!result.ok) {
     res.status(400).json({ error: result.error });
     return;
@@ -476,7 +495,8 @@ async function ownLoginEmail(appUser: string): Promise<string> {
 /** Give up on a parked sign-in rather than waiting out its timeout. */
 importRouter.delete("/export-challenge", requireAuth, requireAdmin, (req: Request, res: Response) => {
   if (!guard(res)) return;
-  const result = cancelChallenge("Cancelled from the app.", req.user?.email ?? "");
+  const result = cancelChallenge("Cancelled from the app.",
+    req.viewingAs?.real.email ?? req.user?.email ?? "");
   if (!result.ok) {
     res.status(400).json({ error: result.error });
     return;

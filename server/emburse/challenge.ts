@@ -154,7 +154,12 @@ export function currentChallenge(): ChallengeView | null {
  */
 export function answerChallenge(rawCode: unknown, by: string): { ok: true } | { ok: false; error: string } {
   if (!pending) return { ok: false, error: "Nothing is waiting for a code right now." };
-  if (pending.owner !== by) {
+  // Trimmed and case-insensitive. The owner is an email that has travelled
+  // through a session, a route and a log line, and refusing the right
+  // person over a capital letter costs them the whole run.
+  const same = (a: string, b: string) =>
+    a.trim().toLowerCase() === b.trim().toLowerCase();
+  if (!same(pending.owner, by)) {
     return {
       ok: false,
       error: `This sign-in was started by ${pending.owner}, so only they can complete it.`,

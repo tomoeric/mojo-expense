@@ -56,6 +56,11 @@ const WHY: Record<string, string> = {
  * own printed total. Every other check passes. Only the header disagrees.
  */
 export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
+  // Whose eyes this page is being read through. The settings above the
+  // per-reviewer rows are shared, so saving them is refused inside a view —
+  // and somebody trying to change one person's import time deserves to be
+  // told which control does that rather than shown a flat refusal.
+  const viewingAs = useAuth().data?.viewingAs?.viewed ?? null;
   const qc = useQueryClient();
   const [sections, setSections] = useState<string[] | null>(null);
   const [receiptsOnly, setReceiptsOnly] = useState(true);
@@ -346,6 +351,15 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
       </div>
 
       <SchedulePreview schedule={schedule} />
+
+      {viewingAs && (
+        <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
+          Everything above is the <strong>shared</strong> export setting, which is everybody&rsquo;s
+          — so Save is refused while you are viewing as {viewingAs}. To change only{" "}
+          <strong>{viewingAs}</strong>&rsquo;s import times, use <strong>Own times</strong> on their
+          row below; that one does save from here.
+        </p>
+      )}
 
       {isAdmin && <ReviewerGrids />}
 

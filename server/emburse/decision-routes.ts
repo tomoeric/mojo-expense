@@ -189,7 +189,10 @@ const lastFailure = (steps: { ok: boolean; detail: string }[]): string =>
  */
 decisionRouter.post("/decisions/challenge", requireAuth, (req: Request, res: Response) => {
   const { code } = req.body as { code?: unknown };
-  const result = answerChallenge(code, req.user?.email ?? "");
+  // The real person. A decision cannot be made from inside a view, so this
+  // only differs when an admin answers a code for a run they started before
+  // entering one — and refusing them there strands the run.
+  const result = answerChallenge(code, req.viewingAs?.real.email ?? req.user?.email ?? "");
   if (!result.ok) {
     res.status(400).json({ error: result.error });
     return;
@@ -438,7 +441,11 @@ decisionRouter.get("/decisions", requireAuth, async (req: Request, res: Response
     // which is the only place this used to appear.
     challenge: (() => {
       const c = currentChallenge();
-      return c && { ...c, mine: c.owner === (req.user?.email ?? "") };
+      return c && {
+        ...c,
+        mine: c.owner.trim().toLowerCase() ===
+          (req.viewingAs?.real.email ?? req.user?.email ?? "").trim().toLowerCase(),
+      };
     })(),
     pending: await pendingDecisions(req.user?.email ?? ""),
     recent: await recentDecisions(50, req.user?.email ?? ""),

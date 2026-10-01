@@ -311,6 +311,18 @@ export async function attemptExport(
      */
     reviewer?: string;
     /**
+     * The person who can answer a verification code, as a plain email.
+     *
+     * Separate from `by`, which is a log line and may read "eric.s@… (for
+     * brian.c@…)" for a run started from a view. That string was being used
+     * as the challenge owner, and `answerChallenge` compares it to the
+     * caller's own email — so a run started from a view parked for a code
+     * that NOBODY could answer: not the admin, whose email is only part of
+     * it, and not the person being viewed. Ten minutes of "Step 1 of 11",
+     * then a failed sign-in, which is exactly what a hang looks like.
+     */
+    startedBy?: string;
+    /**
      * Which Emburse list to export: blank for Transactions, or a key from
      * the configured sources. Reimbursements is a separate page with its
      * own queue and the same export dialog, so the whole run works on it
@@ -379,7 +391,7 @@ export async function attemptExport(
       trigger === "scheduled"
         ? undefined
         : (ctx: { prompt: string; screenshot: string | null; attempt: number; lastError: string | null }) =>
-            waitForCode({ ...ctx, owner: by, loginEmail: login?.email ?? null });
+            waitForCode({ ...ctx, owner: opts.startedBy ?? by, loginEmail: login?.email ?? null });
 
     /*
      * The list to read, as a selector override rather than a new parameter.

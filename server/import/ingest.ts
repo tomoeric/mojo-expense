@@ -4,6 +4,7 @@ import { db } from "../db.js";
 import { parseExpensesPdf, type ParsedExpense, type ParsedReceipt } from "./parse-pdf.js";
 import { dedupeKey, sha256 } from "./key.js";
 import { checkAgainstSettings, readSettings } from "./settings.js";
+import { reportsChanged } from "../reports-cache.js";
 import { nudgeReceiptReader } from "../emburse/receipt-reader.js";
 import { ensureTaxonomy, recordTaxonomy, type NewNames } from "./taxonomy.js";
 import { ensureRules } from "../rules/store.js";
@@ -536,6 +537,22 @@ export async function ingestExport(
     // of vision calls, and an import that held its transaction open for that
     // would fail as a unit on one bad receipt.
     if (receipts.added > 0) nudgeReceiptReader();
+
+    /*
+     * And the queue is now wrong everywhere it is being served from.
+     *
+     * The reports cache holds each person's window for five minutes, which
+     * is right for a page that polls and wrong for the moment an import
+     * lands: Eric's import brought 158 expenses at 5:31pm and his Review
+     * Queue went on saying "0 expenses awaiting a decision · updated
+     * 5:29 PM" — which, in the middle of separating two reviewers' queues,
+     * reads exactly like the separation having taken his away from him.
+     *
+     * Cleared for everybody rather than for this reviewer: a purge can take
+     * rows that were somebody else's a moment ago, and five minutes of a
+     * stale queue costs more than one re-query does.
+     */
+    reportsChanged();
 
     return { ...base, importId, inserted, updated, unchanged, purged,
       receiptsAdded: receipts.added, receiptsSkipped: receipts.skipped, newNames, rules,

@@ -5,7 +5,7 @@ import {
   DEFAULT_PER_RUN, MOST_PER_RUN, autoApproveReport, autoQueueApprovals,
 } from "./rules/auto-approve.js";
 import { env, isAuditConfigured, isEmburseConfigured } from "./env.js";
-import { TtlCache } from "./cache.js";
+import { reportsCache as cache } from "./reports-cache.js";
 import { HttpError } from "./http.js";
 import { resolveProvider } from "./emburse/provider.js";
 import { isAuthConfigured, requireAdmin, requireAuth } from "./auth/index.js";
@@ -17,7 +17,6 @@ import { checkAi } from "./ai.js";
 import { isKind, listTaxonomy, taxonomyCounts } from "./import/taxonomy.js";
 import type { ExpenseLine } from "./emburse/types.js";
 
-const cache = new TtlCache<ProviderResult & { demo: boolean }>(env.emburse.cacheTtlSec * 1000);
 
 const DAY_MS = 86_400_000;
 const iso = (d: Date): string => d.toISOString().slice(0, 10);
