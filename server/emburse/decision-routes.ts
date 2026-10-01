@@ -394,10 +394,10 @@ decisionRouter.post("/decisions/hold", requireAuth, async (req: Request, res: Re
  * "99 did not go through" is a number, not a diagnosis, and reading ninety-
  * nine dialogs one at a time is how three separate causes got taken for one.
  */
-decisionRouter.get("/decisions/failures", requireAuth, async (_req: Request, res: Response) => {
+decisionRouter.get("/decisions/failures", requireAuth, async (req: Request, res: Response) => {
   if (!guard(res)) return;
   try {
-    res.json({ groups: await failureSummary() });
+    res.json({ groups: await failureSummary(req.user?.email ?? "") });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
@@ -410,13 +410,13 @@ decisionRouter.get("/decisions/failures", requireAuth, async (_req: Request, res
  * tab is a wall of pipes, and the point of it is to be opened in something
  * that reads markdown, or pasted somewhere.
  */
-decisionRouter.get("/decisions/failures.md", requireAuth, async (_req: Request, res: Response) => {
+decisionRouter.get("/decisions/failures.md", requireAuth, async (req: Request, res: Response) => {
   if (!guard(res)) return;
   try {
     const day = new Date().toISOString().slice(0, 10);
     res.setHeader("content-type", "text/markdown; charset=utf-8");
     res.setHeader("content-disposition", `attachment; filename="decision-failures-${day}.md"`);
-    res.send(await failureReport());
+    res.send(await failureReport(req.user?.email ?? ""));
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
@@ -440,8 +440,8 @@ decisionRouter.get("/decisions", requireAuth, async (req: Request, res: Response
       const c = currentChallenge();
       return c && { ...c, mine: c.owner === (req.user?.email ?? "") };
     })(),
-    pending: await pendingDecisions(),
-    recent: await recentDecisions(50),
+    pending: await pendingDecisions(req.user?.email ?? ""),
+    recent: await recentDecisions(50, req.user?.email ?? ""),
     // Keyed by expense, so the queue page can badge each row without a
     // request per row.
     byExpense: Object.fromEntries(await decisionsFor(keys)),
@@ -460,7 +460,7 @@ decisionRouter.get("/decisions", requireAuth, async (req: Request, res: Response
     // stay until the next sync deletes them, which is minutes away at
     // best, and for that whole window the headline contradicted the list
     // underneath it.
-    applied: await appliedCount(),
+    applied: await appliedCount(req.user?.email ?? ""),
     // Whether to show the stage-by-stage trace at all. It rides on the poll
     // the queue already makes rather than getting a request of its own: it
     // is one boolean and the page is useless without this response anyway.

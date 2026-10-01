@@ -501,6 +501,16 @@ Two separate things, and confusing them cost a queue full of failures.
 - **The refusals are in one place.** `setup()` reads the switch, the owner, the
   number and the enabled rules and returns the single reason a run would do
   nothing, so the pass and the report cannot disagree about it.
+- **It only ever sweeps the owner's own queue.** An approval is applied by
+  signing in as the owner, so another reviewer's expense could not be actioned
+  under it even if the sweep queued it — the row is not in the Needs Review
+  the browser is reading, and it would fail after a minute of browsing with a
+  matching error that reads like broken selectors. Unattended and on a timer
+  is the worst place in the app to get "whose is this" wrong. The report
+  counts other reviewers' rows separately (`elsewhere`) and says so on the
+  card, rather than folding them into a reason the pass skipped something;
+  automatic approvals are per person, and whoever owns a queue switches them
+  on for it.
 
 ## Anthropic credentials
 
@@ -664,6 +674,20 @@ Two separate things, and confusing them cost a queue full of failures.
   half), unless it is forced. Measured against what is waiting rather than the
   whole table, so a first import after a long backlog is not blocked by the
   backlog it exists to clear.
+- **Every "have we seen this before" guard is scoped to one reviewer and one
+  list.** Stale export, duplicate file and the truncation fence all compare
+  against what we hold, and "we" is the person whose Needs Review the file
+  came out of, not the table. Unscoped, the stale check refused Brian's very
+  first pull — a correct, current export of his own queue — for being older
+  than Eric's rows, and told him to re-run the export he had just run.
+  `expense_imports` carries `reviewer` and `source` so the question can be
+  asked at all. Anything new that asks it must be scoped the same way.
+- **`scopeFor` is the single definition of whose data something is**
+  (`server/emburse/credentials.ts`): your own rows, plus the unclaimed ones if
+  you are the shared importer. It exists because the rule had been written out
+  by hand in four places and had drifted in three, which is how Brian came to
+  be looking at Eric's receipts. Use it rather than another copy, and use
+  `MINE(a, b)` from `decisions.ts` for the SQL half.
 - **Section names are per tenant, and a wrong one stops the export dead.**
   This tenant's chips are Needs Review · Pending Other's Review · Pending
   Submission · Denied · Completed. "Needs Manager Review" was in `ALL_SECTIONS`

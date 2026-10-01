@@ -201,6 +201,49 @@ denying nothing, putting nobody's name on a decision. The run records the
 real admin as having asked and the viewed person as whose queue was read.
 Everything that decides stays refused.
 
+**And nothing one reviewer does can stop another importing.** The queue was
+separated before the import was, and the gap showed up on Brian's very first
+pull: every step green, 320 items read out of his own Needs Review, and then
+*"this export is older than one already imported — re-run today's export
+instead"*. The expenses it was older than were Eric's. Three guards in the
+import ask **have we seen this before**, and the answer is only ever about
+one reviewer's queue and one Emburse list:
+
+| Guard | Refuses when | Now asks |
+| --- | --- | --- |
+| Stale export | the file's newest expense predates one already stored | the newest **we hold for them, on this list** |
+| Duplicate file | the same bytes have been imported before | the same bytes **by them, on this list** |
+| Truncation fence | the file would delete most of the waiting queue | most of **their** waiting queue |
+
+Each import row records whose queue it was and which list, so these can be
+asked at all. Nothing about Eric's queue can say anything about whether
+Brian's export is current, and the sharpest version of that is the one that
+happened: the guard did not corrupt anything, it told a correct, current
+export to go away.
+
+The same question — *whose is this* — is answered in one place now
+(`scopeFor`), because it had been written out by hand in four and had
+drifted in three. Everything that counts or lists now asks it: the queue,
+the "what changed since the last sync" badges (which read the newest import
+in the table, so Brian's hourly pull silently blanked every one of Eric's),
+the applied count the Live strip subtracts, the failure summary and its
+markdown, and the pending and recent decisions, which belong to whoever made
+them.
+
+**The automation only approves its owner's own queue.** An approval is made
+by signing in as the owner, so an expense in somebody else's Needs Review
+could not be actioned under it even if the sweep queued it — it would fail
+after a minute of browsing with an error that reads like broken selectors.
+Expenses belonging to other reviewers are counted apart on the Configuration
+card and named as such, rather than being folded into "why nothing moved";
+automatic approvals are per person, and whoever owns a queue switches them on
+for it. And `queueDecision`, which every approval and every denial in the app
+goes through, refuses an expense that is demonstrably somebody else's — a row
+stamped with another reviewer, or an unclaimed row when somebody else owns
+the unclaimed ones. Unclaimed-and-unowned goes through: hiding a row from
+somebody shows them too little, while refusing to let them decide it stops
+the work, and every row from before the reviewer column existed is unclaimed.
+
 Which account the shared import signs in as used to be decided by
 accident: "the credential most recently proven to work, else the most
 recently saved". It is a deliberate choice now (`importAs`), every export

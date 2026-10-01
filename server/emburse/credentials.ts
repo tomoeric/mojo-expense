@@ -331,3 +331,27 @@ export async function sharedImporter(): Promise<string | null> {
       LIMIT 1`);
   return rows[0]?.user_email ?? null;
 }
+
+/**
+ * Which expenses belong to one person: their own, and maybe the unclaimed.
+ *
+ * The one definition of "whose data is this", so every read that has to
+ * answer it answers it the same way. There is exactly one scope rule in
+ * this app and it is this: an expense belongs to the reviewer whose Needs
+ * Review it was imported from, and a row no import claimed belongs to
+ * whoever the shared import runs as.
+ *
+ * It exists because the rule was written out by hand in four places and had
+ * drifted in three of them — which is the whole reason Brian could see
+ * Eric's receipts. A caller that cannot reach the credentials table (tests,
+ * a cold boot) gets the narrow answer: their own rows only. Failing closed
+ * here shows somebody too little of their own data; failing open shows them
+ * somebody else's.
+ */
+export async function scopeFor(
+  userEmail: string,
+): Promise<{ reviewer: string; ownsBlanks: boolean }> {
+  const reviewer = (userEmail ?? "").trim().toLowerCase();
+  const shared = (await sharedImporter().catch(() => null))?.trim().toLowerCase() ?? "";
+  return { reviewer, ownsBlanks: reviewer !== "" && reviewer === shared };
+}

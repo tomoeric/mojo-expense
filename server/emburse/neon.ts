@@ -130,12 +130,19 @@ export class NeonProvider implements EmburseProvider {
               -- Only the newest import's changes. Older ones stay in the table
               -- for history, but "what changed" on screen means "since the last
               -- sync", and carrying every edit ever would drown that.
+              --
+              -- Which import is "the last sync" is asked of the expense, not of
+              -- the table. It used to be the highest id in expense_imports,
+              -- which is whoever imported most recently: once there are two
+              -- reviewers, Brian's hourly pull silently blanked the changes on
+              -- every one of Eric's rows, because no change of Eric's carried
+              -- Brian's import id.
               (SELECT json_agg(json_build_object(
                         'field', c.field, 'before_value', c.before_value, 'after_value', c.after_value)
                         ORDER BY c.id)
                  FROM expense_changes c
                 WHERE c.dedupe_key = e.dedupe_key
-                  AND c.import_id = (SELECT max(id) FROM expense_imports)) AS changes
+                  AND c.import_id = e.last_import_id) AS changes
          FROM expenses e
         WHERE e.expense_date BETWEEN $1::date AND $2::date
           AND ($3 = '' OR e.reviewer = $3 OR (e.reviewer = '' AND $4))

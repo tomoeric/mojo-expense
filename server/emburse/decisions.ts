@@ -1,4 +1,5 @@
 import { db, ensureSchema } from "../db.js";
+import { scopeFor, sharedImporter } from "./credentials.js";
 import { merchantAlike } from "./decide.js";
 import type { Decision, Target } from "./decide.js";
 
@@ -186,6 +187,54 @@ const shape = (r: Row): QueuedDecision => ({
   failedAt: r.failed_at ? r.failed_at.toISOString() : null,
 });
 
+/**
+ * The expenses one person may see and act on, as SQL against an `expenses e`.
+ *
+ * `$n` is their lowered email and `$n+1` whether they own the unclaimed rows
+ * — the pair `scopeFor` returns. Written once so a read cannot disagree with
+ * the queue about whose expense something is: a count that spans reviewers
+ * is not a cosmetic error here, it is Eric's totals appearing on Brian's
+ * screen.
+ */
+export const MINE = (a: number, b: number, e = "e") =>
+  `(${e}.reviewer = $${a} OR (${e}.reviewer = '' AND $${b}))`;
+
+/**
+ * Is this expense SOMEBODY ELSE'S? The question a write guard should ask.
+ *
+ * Deliberately not the question the queue asks. A read hides a row it
+ * cannot place; a write must only refuse one it can place with somebody
+ * else, because the cost of the two mistakes is not the same. Hiding an
+ * unclaimed row from somebody shows them too little. Refusing to let them
+ * decide it stops the work, and every row imported before the reviewer
+ * column existed is unclaimed.
+ *
+ * So: a row stamped with another reviewer is theirs and this is refused. A
+ * row no import claimed is refused only when somebody else demonstrably
+ * owns the unclaimed ones — they are the shared importer and this person is
+ * not. Otherwise it goes through, and it is still safe: the decision is
+ * applied by signing in as the decider, so a row that is not in their Needs
+ * Review cannot be actioned by it either way.
+ *
+ * An expense we do not hold answers `null` rather than false, so the caller
+ * can let the foreign key give its own, better sentence — the row may have
+ * been purged a second ago, which is not a permission problem and must not
+ * be reported as one.
+ */
+async function ownsExpense(dedupeKey: string, who: string): Promise<boolean | null> {
+  const { reviewer, ownsBlanks } = await scopeFor(who);
+  const { rows } = await db().query<{ reviewer: string }>(
+    "SELECT reviewer FROM expenses WHERE dedupe_key = $1", [dedupeKey],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  const owner = (row.reviewer ?? "").trim().toLowerCase();
+  if (owner !== "") return owner === reviewer;
+  // Unclaimed. Only the shared importer can make it somebody else's.
+  const shared = (await sharedImporter().catch(() => null))?.trim().toLowerCase() ?? "";
+  return shared === "" || ownsBlanks;
+}
+
 const COLUMNS = `id, dedupe_key, decision, reason, decided_by, decided_at, state,
                  attempts, applied_at, matched_row, error, target, steps, shot, automatic,
                  not_in_queue, failed_at`;
@@ -214,6 +263,26 @@ export async function queueDecision(input: {
     return { ok: false, error: "A denial needs a reason — the employee is told what it says." };
   }
 
+  // Yours to decide, or not at all.
+  //
+  // The one place worth putting this: every approval and every denial in the
+  // app arrives here, a person's click and the automation's sweep alike. A
+  // decision is applied by signing in as the decider and working THEIR Needs
+  // Review, so a decision on somebody else's expense cannot be carried out —
+  // the row is not in the queue the browser is looking at. It would fail
+  // after a minute of browsing with a matching error, which reads like the
+  // grid selectors are wrong.
+  //
+  // The queue already hides other reviewers' rows, so this cannot be reached
+  // by clicking. It can be reached by the automation sweeping a table that
+  // holds two people's expenses, and by anything that posts a dedupe key.
+  const owner = await ownsExpense(input.dedupeKey, input.decidedBy);
+  if (owner === false) {
+    return { ok: false, error:
+      "That expense is in another reviewer's Emburse queue, so it cannot be decided from here. " +
+      "Whoever it belongs to sees it in their own queue." };
+  }
+
   try {
     const { rows } = await db().query<Row>(
       `INSERT INTO expense_decisions (dedupe_key, decision, reason, decided_by, target, automatic)
@@ -235,11 +304,22 @@ export async function queueDecision(input: {
   }
 }
 
-/** Everything still waiting, oldest first — the order they will be applied in. */
-export async function pendingDecisions(): Promise<QueuedDecision[]> {
+/**
+ * Everything still waiting, oldest first — the order they will be applied in.
+ *
+ * Whose, when somebody is named. A decision belongs to whoever made it:
+ * Emburse records the approval under their login, so they are the only
+ * person it is true of. Unnamed — the worker, which applies everybody's —
+ * means all of them.
+ */
+export async function pendingDecisions(who = ""): Promise<QueuedDecision[]> {
   await ensure();
+  const mine = who.trim().toLowerCase();
   const { rows } = await db().query<Row>(
-    `SELECT ${COLUMNS} FROM expense_decisions WHERE state = 'pending' ORDER BY decided_at`,
+    `SELECT ${COLUMNS} FROM expense_decisions
+      WHERE state = 'pending' AND ($1 = '' OR lower(decided_by) = $1)
+      ORDER BY decided_at`,
+    [mine],
   );
   return rows.map(shape);
 }
@@ -261,10 +341,13 @@ export async function decisionsFor(keys: string[]): Promise<Map<string, QueuedDe
 }
 
 /** The last few decisions, whatever became of them. */
-export async function recentDecisions(limit = 50): Promise<QueuedDecision[]> {
+export async function recentDecisions(limit = 50, who = ""): Promise<QueuedDecision[]> {
   await ensure();
+  const mine = who.trim().toLowerCase();
   const { rows } = await db().query<Row>(
-    `SELECT ${COLUMNS} FROM expense_decisions ORDER BY decided_at DESC LIMIT $1`, [limit]);
+    `SELECT ${COLUMNS} FROM expense_decisions
+      WHERE ($2 = '' OR lower(decided_by) = $2)
+      ORDER BY decided_at DESC LIMIT $1`, [limit, mine]);
   return rows.map(shape);
 }
 
@@ -491,10 +574,15 @@ const FAILURE_KINDS: [RegExp, string][] = [
 
 export type FailureGroup = { reason: string; n: number; example: string };
 
-export async function failureSummary(): Promise<FailureGroup[]> {
+export async function failureSummary(who = ""): Promise<FailureGroup[]> {
   await ensure();
   // The newest decision per expense, and only the ones still in the queue:
   // an expense that has left is not somebody's problem any more.
+  //
+  // And only this person's queue, when one is named. "99 did not go through"
+  // is already hard enough to act on without most of them belonging to
+  // somebody else's Emburse account.
+  const { reviewer, ownsBlanks } = who ? await scopeFor(who) : { reviewer: "", ownsBlanks: false };
   const { rows } = await db().query<{ error: string | null }>(
     `SELECT d.error
        FROM (SELECT DISTINCT ON (dedupe_key) dedupe_key, state, error
@@ -502,7 +590,9 @@ export async function failureSummary(): Promise<FailureGroup[]> {
               WHERE state <> 'cancelled'
               ORDER BY dedupe_key, decided_at DESC) d
        JOIN expenses e ON e.dedupe_key = d.dedupe_key AND e.in_inbox = true
-      WHERE d.state = 'failed'`);
+      WHERE d.state = 'failed'
+        AND ($1 = '' OR ${MINE(1, 2)})`,
+    [reviewer, ownsBlanks]);
 
   const groups = new Map<string, FailureGroup>();
   for (const r of rows) {
@@ -529,8 +619,12 @@ export async function failureSummary(): Promise<FailureGroup[]> {
  *
  * Grouped by the same buckets as the summary, so the two cannot disagree.
  */
-export async function failureReport(): Promise<string> {
+export async function failureReport(who = ""): Promise<string> {
   await ensure();
+  // The same scope as the counts it explains. A report that listed another
+  // reviewer's failures under this one's heading would send somebody looking
+  // at rows they cannot even see, and it is the file people send on.
+  const { reviewer, ownsBlanks } = who ? await scopeFor(who) : { reviewer: "", ownsBlanks: false };
   const { rows } = await db().query<{
     error: string | null; decision: Decision; decided_at: Date; attempts: number;
     target: Target; matched_row: string | null; automatic: boolean; not_in_queue: boolean;
@@ -544,7 +638,9 @@ export async function failureReport(): Promise<string> {
               ORDER BY dedupe_key, decided_at DESC) d
        JOIN expenses e ON e.dedupe_key = d.dedupe_key AND e.in_inbox = true
       WHERE d.state = 'failed'
-      ORDER BY d.decided_at DESC`);
+        AND ($1 = '' OR ${MINE(1, 2)})
+      ORDER BY d.decided_at DESC`,
+    [reviewer, ownsBlanks]);
 
   // A pipe or a newline inside a cell breaks the table it is in.
   const cell = (v: string) => v.replace(/\|/g, "\\|").replace(/\s+/g, " ").trim();
@@ -655,10 +751,17 @@ export async function cancelBecauseFlagged(ids: number[]): Promise<number> {
  * the choice is bookkeeping — each decision takes a row and all six get
  * approved. It may not if we hold fewer, because then it would be picking.
  */
-export async function peersFor(keys: string[]): Promise<Map<string, number>> {
+export async function peersFor(keys: string[], who = ""): Promise<Map<string, number>> {
   await ensure();
   const out = new Map<string, number>();
   if (keys.length === 0) return out;
+
+  // Within the decider's own queue, never across reviewers. The browser
+  // signs in as them and reads THEIR Needs Review, so a row sitting in
+  // somebody else's is not one of the rows it is choosing between — and
+  // counting it would answer "we hold a decision for every matching row"
+  // with a number that includes rows this run cannot even see.
+  const { reviewer, ownsBlanks } = who ? await scopeFor(who) : { reviewer: "", ownsBlanks: false };
 
   // Employee, amount and day in SQL; the merchant in TypeScript, through the
   // very function the browser matches rows with.
@@ -685,8 +788,9 @@ export async function peersFor(keys: string[]): Promise<Map<string, number>> {
         AND lower(btrim(p.employee)) = lower(btrim(e.employee))
         AND p.amount_cents = e.amount_cents
         AND p.expense_date IS NOT DISTINCT FROM e.expense_date
+        AND ($2 = '' OR ${MINE(2, 3, "p")})
       WHERE e.dedupe_key = ANY($1::text[])`,
-    [keys]);
+    [keys, reviewer, ownsBlanks]);
 
   for (const key of keys) out.set(key, 0);
   for (const r of rows) {
@@ -700,14 +804,25 @@ export async function peersFor(keys: string[]): Promise<Map<string, number>> {
   return out;
 }
 
-/** How many expenses still held locally have already been actioned. */
-export async function appliedCount(): Promise<number> {
+/**
+ * How many expenses still held locally have already been actioned.
+ *
+ * Scoped to one person's queue when one is named, because that is what it
+ * is subtracted from: the Live strip takes "awaiting a decision" off this
+ * person's reports and this off the same queue. Counted across reviewers it
+ * subtracts Eric's morning from the number on Brian's screen, which can
+ * reach zero waiting while his list is full.
+ */
+export async function appliedCount(who = ""): Promise<number> {
   await ensure();
+  const { reviewer, ownsBlanks } = who ? await scopeFor(who) : { reviewer: "", ownsBlanks: false };
   const { rows } = await db().query<{ n: string }>(
     `SELECT count(*) AS n
        FROM expense_decisions d
        JOIN expenses e ON e.dedupe_key = d.dedupe_key
-      WHERE d.state = 'applied' AND e.in_inbox = true`,
+      WHERE d.state = 'applied' AND e.in_inbox = true
+        AND ($1 = '' OR ${MINE(1, 2)})`,
+    [reviewer, ownsBlanks],
   );
   return Number(rows[0]?.n ?? 0);
 }

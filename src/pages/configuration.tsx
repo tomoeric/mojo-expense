@@ -396,7 +396,11 @@ function WhyNothingMoved({ report }: { report: AutoReport }) {
   return (
     <div className="mt-3 rounded-lg bg-muted/50 p-3 text-xs">
       {c.inbox === 0 ? (
-        <p>Nothing is in the queue, so there is nothing to approve.</p>
+        <p>
+          {report.elsewhere > 0 && report.owner
+            ? `Nothing of ${report.owner}'s is in the queue, so there is nothing to approve.`
+            : "Nothing is in the queue, so there is nothing to approve."}
+        </p>
       ) : (
         <>
           <p>
@@ -414,6 +418,14 @@ function WhyNothingMoved({ report }: { report: AutoReport }) {
         </>
       )}
       {report.blocked && <p className="mt-1 text-amber-700">Nothing will run: {report.blocked}.</p>}
+      {report.elsewhere > 0 && (
+        <p className="mt-1 text-muted-foreground">
+          <span className="tabular-nums">{report.elsewhere}</span> more are in another reviewer's
+          Emburse account and are not counted above. An approval is made by signing in as{" "}
+          {report.owner ?? "the owner"}, and those rows are not in their Needs Review — whoever
+          they belong to has to switch this on for themselves.
+        </p>
+      )}
       {c.awaitingReceipt > 0 && (
         <p className="mt-1 text-muted-foreground">
           A receipt nobody has read is unflagged because nothing has been checked, not because
@@ -435,6 +447,8 @@ type AutoReport = {
     inbox: number; flagged: number; decided: number;
     awaitingRules: number; awaitingReceipt: number; eligible: number;
   };
+  /** In the queue but in somebody else's Emburse account. Never touched. */
+  elsewhere: number;
 };
 
 /**

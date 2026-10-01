@@ -161,7 +161,7 @@ async function tick(): Promise<void> {
       // matching rows: it may when we hold a decision for every one of
       // them, because then each decision takes a row and the choice is
       // bookkeeping rather than a guess.
-      const peers = await peersFor(items.map((d) => d.dedupeKey));
+      const peers = await peersFor(items.map((d) => d.dedupeKey), decider);
 
       const batch: BatchItem[] = items.map((d) => ({
         id: d.id, decision: d.decision, target: d.target, reason: d.reason,

@@ -156,9 +156,16 @@ export async function ingestExport(
     await client.query("BEGIN");
 
     // Re-uploading the identical file is a no-op rather than a second import.
+    //
+    // Scoped to this reviewer and this list, like everything else here. Two
+    // reviewers' exports are never byte-identical in practice, but a check
+    // that spans them can only ever refuse an import somebody wanted, and
+    // "already imported" would be a lie about a queue it never touched.
     if (!opts.force) {
       const seen = await client.query<{ id: string }>(
-        "SELECT id FROM expense_imports WHERE file_sha256 = $1 LIMIT 1", [fileHash]);
+        `SELECT id FROM expense_imports
+          WHERE file_sha256 = $1 AND reviewer = $2 AND source = $3 LIMIT 1`,
+        [fileHash, reviewer, source]);
       if (seen.rowCount) {
         await client.query("ROLLBACK");
         return { ...base, importId: Number(seen.rows[0]!.id), duplicateFile: true,
@@ -177,7 +184,7 @@ export async function ingestExport(
     // Refused rather than warned about, because by the time a warning is read
     // the queue has already been rewritten.
     if (!opts.force) {
-      const stale = await olderThanWhatWeHave(client, parsed);
+      const stale = await olderThanWhatWeHave(client, parsed, reviewer, source);
       if (stale) {
         await client.query("ROLLBACK");
         return { ...base, warnings: [...warnings, stale] };
@@ -186,10 +193,12 @@ export async function ingestExport(
 
     const imp = await client.query<{ id: string }>(
       `INSERT INTO expense_imports (filename, file_sha256, imported_by, page_count, parsed_rows,
-                                    total_cents, stated_total_cents, reconciled, export_sections)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+                                    total_cents, stated_total_cents, reconciled, export_sections,
+                                    reviewer, source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
       [filename, fileHash, importedBy, parsed.pageCount, parsed.expenses.length,
-       totalCents, parsed.statedTotalCents, reconciled, parsed.header?.sections ?? null]);
+       totalCents, parsed.statedTotalCents, reconciled, parsed.header?.sections ?? null,
+       reviewer, source]);
     const importId = Number(imp.rows[0]!.id);
 
     // Only unambiguous when the export covered exactly one *named* section.
@@ -709,17 +718,28 @@ function encode(pixmap: mupdf.Pixmap): Buffer {
 /**
  * Is this export older than one already imported? Say so in words, or null.
  *
- * Judged on the newest expense in the file against the newest we hold. An
- * export is a snapshot of the inbox, so a later snapshot cannot have an older
- * newest row — and on a quiet day the two simply match, which is not treated
- * as stale.
+ * Judged on the newest expense in the file against the newest we hold FOR
+ * THIS REVIEWER AND THIS LIST. An export is a snapshot of one person's Needs
+ * Review, so a later snapshot of it cannot have an older newest row — and on
+ * a quiet day the two simply match, which is not treated as stale.
+ *
+ * The scope is the whole point and was missing. Compared against the whole
+ * table, the newest expense anybody holds decides whether anybody else may
+ * import: Brian's first pull — a correct, current export of his own queue —
+ * was refused because Eric's rows ran a day later, and the message told him
+ * to re-run an export he had just run. Nothing about Eric's queue can say
+ * anything about whether Brian's export is stale.
  */
 async function olderThanWhatWeHave(
   client: pg.PoolClient,
   parsed: { expenses: { date: string }[] },
+  reviewer = "",
+  source = "",
 ): Promise<string | null> {
   const { rows } = await client.query<{ newest: string | null }>(
-    "SELECT max(expense_date)::text AS newest FROM expenses",
+    `SELECT max(expense_date)::text AS newest
+       FROM expenses WHERE reviewer = $1 AND source = $2`,
+    [reviewer, source],
   );
   return staleExportReason(
     parsed.expenses.map((e) => e.date).filter(Boolean).sort().at(-1) ?? null,

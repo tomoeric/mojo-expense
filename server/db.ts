@@ -55,7 +55,19 @@ CREATE TABLE IF NOT EXISTS expense_imports (
 ALTER TABLE expense_imports ADD COLUMN IF NOT EXISTS warnings text[] NOT NULL DEFAULT '{}';
 ALTER TABLE expense_imports ADD COLUMN IF NOT EXISTS export_sections text[];
 
+-- Whose Needs Review this file was, and which Emburse list it came from.
+--
+-- An import is scoped by that pair exactly as the expenses it carries are.
+-- Both of the checks that refuse an import ask "have we seen this before",
+-- and without these columns they answered for everybody: Brian's very first
+-- pull was refused for being older than Eric's, because the newest expense
+-- in the whole table is not the newest expense in Brian's queue.
+ALTER TABLE expense_imports ADD COLUMN IF NOT EXISTS reviewer text NOT NULL DEFAULT '';
+ALTER TABLE expense_imports ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT '';
+
 CREATE INDEX IF NOT EXISTS expense_imports_at_idx ON expense_imports (imported_at DESC);
+CREATE INDEX IF NOT EXISTS expense_imports_who_idx
+  ON expense_imports (reviewer, source, imported_at DESC);
 
 CREATE TABLE IF NOT EXISTS expenses (
   dedupe_key      text PRIMARY KEY,

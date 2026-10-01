@@ -34,8 +34,8 @@
 import { db } from "../db.js";
 import { exportInFlight } from "../emburse/export-scheduler.js";
 import { flagOwner, getFlag, getLimit } from "../flags.js";
-import { hasCredential } from "../emburse/credentials.js";
-import { queueApprovalFor } from "../emburse/decisions.js";
+import { hasCredential, scopeFor } from "../emburse/credentials.js";
+import { MINE, queueApprovalFor } from "../emburse/decisions.js";
 import { nudgeDecisionWorker } from "../emburse/decision-worker.js";
 import { activeRules } from "./store.js";
 import type { Field } from "./engine.js";
@@ -206,17 +206,28 @@ export async function autoQueueApprovals(): Promise<AutoApproveResult> {
   if (!s.on) return { queued: 0, skipped: null };
   if (s.blocked) return { queued: 0, skipped: s.blocked };
 
+  // The owner's own queue, and nobody else's.
+  //
+  // This is the same rule as everywhere else and it bites hardest here: an
+  // approval is applied by signing in as the owner, so approving another
+  // reviewer's expense would either put the owner's name on a decision
+  // about somebody else's queue or — more likely — fail after a minute of
+  // browsing, because the row is not in the Needs Review it is reading.
+  // Unattended and on a timer, that is the worst place in the app to get
+  // "whose is this" wrong.
+  const { reviewer, ownsBlanks } = await scopeFor(s.owner!);
   const { rows } = await db().query<{ dedupe_key: string }>(
     `SELECT e.dedupe_key
        FROM expenses e
       WHERE e.in_inbox = true
+        AND ($3 = '' OR ${MINE(3, 4)})
         AND NOT ${TESTS.flagged}
         AND NOT ${TESTS.awaitingRules}
         AND NOT ${TESTS.decided}
         AND ($2::boolean = false OR NOT ${TESTS.awaitingReceipt})
       ORDER BY e.expense_date NULLS LAST, e.dedupe_key
       LIMIT $1`,
-    [s.perRun, s.receiptMatters],
+    [s.perRun, s.receiptMatters, reviewer, ownsBlanks],
   );
 
   if (rows.length === 0) return { queued: 0, skipped: null };
@@ -257,6 +268,16 @@ export type AutoApproveReport = {
     awaitingReceipt: number;
     eligible: number;
   };
+  /**
+   * Expenses in the queue that belong to ANOTHER reviewer, counted apart
+   * from everything above because the automation will never touch them.
+   *
+   * Deliberately outside `counts`, which sums to `inbox`. These are not a
+   * reason the pass skipped something; they are expenses it cannot see. An
+   * approval is made under the owner's Emburse login and only their own
+   * Needs Review has the row in it.
+   */
+  elsewhere: number;
 };
 
 /**
@@ -271,6 +292,12 @@ export type AutoApproveReport = {
  */
 export async function autoApproveReport(): Promise<AutoApproveReport> {
   const s = await setup();
+  // The same scope as the pass, for the same reason the tests are shared: a
+  // report counting expenses the pass will never look at names the wrong
+  // reason with complete confidence.
+  const { reviewer, ownsBlanks } = s.owner
+    ? await scopeFor(s.owner)
+    : { reviewer: "", ownsBlanks: false };
   const { rows } = await db().query<Record<string, string>>(
     `WITH q AS (
        SELECT ${TESTS.flagged}        AS flagged,
@@ -278,7 +305,8 @@ export async function autoApproveReport(): Promise<AutoApproveReport> {
               ${TESTS.awaitingRules}  AS awaiting_rules,
               ($1::boolean AND ${TESTS.awaitingReceipt}) AS awaiting_receipt
          FROM expenses e
-        WHERE e.in_inbox = true)
+        WHERE e.in_inbox = true
+          AND ($2 = '' OR ${MINE(2, 3)}))
      SELECT count(*)                                              AS inbox,
             count(*) FILTER (WHERE flagged)                       AS flagged,
             count(*) FILTER (WHERE NOT flagged AND decided)       AS decided,
@@ -291,7 +319,17 @@ export async function autoApproveReport(): Promise<AutoApproveReport> {
                                    AND NOT awaiting_rules
                                    AND NOT awaiting_receipt)      AS eligible
        FROM q`,
-    [s.receiptMatters],
+    [s.receiptMatters, reviewer, ownsBlanks],
+  );
+
+  // Everybody else's, counted separately and never folded into the totals
+  // above. It is the one number that explains a queue full of expenses and
+  // an automation that does nothing: they are in another reviewer's Emburse
+  // account, and only that person's login can approve them.
+  const { rows: others } = await db().query<{ n: string }>(
+    `SELECT count(*) AS n FROM expenses e
+      WHERE e.in_inbox = true AND $1 <> '' AND NOT ${MINE(1, 2)}`,
+    [reviewer, ownsBlanks],
   );
   const n = (k: string) => Number(rows[0]?.[k] ?? 0);
   return {
@@ -309,6 +347,7 @@ export async function autoApproveReport(): Promise<AutoApproveReport> {
       awaitingReceipt: n("awaiting_receipt"),
       eligible: n("eligible"),
     },
+    elsewhere: Number(others[0]?.n ?? 0),
   };
 }
 
