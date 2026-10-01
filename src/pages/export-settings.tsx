@@ -34,10 +34,20 @@ const ZONES = [
   "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "UTC",
 ];
 
-/** What the section means for the people whose expenses are in it. */
+/**
+ * What the section means for the people whose expenses are in it.
+ *
+ * A STAGE, never a person. "Needs Review" used to read "the reviewer's
+ * queue", which says whose — and it does not. It is a status: this expense
+ * is at the review stage. Whose review stage depends entirely on which list
+ * the export opens, and with both reviewers ticking Needs Review and both
+ * exports opening the team-wide list, both got the whole company's review
+ * stage and the setting looked like it had failed. It had not; it was
+ * answering a different question from the one being asked of it.
+ */
 const WHY: Record<string, string> = {
-  "Needs Review": "The reviewer's queue — the reason this app exists.",
-  "Pending Other's Review": "With somebody else, still in flight. Not yours to decide.",
+  "Needs Review": "At the review stage. A status, not a person — whose queue depends on the list below.",
+  "Pending Other's Review": "At the review stage with somebody else, when read from a personal list.",
   "Pending Submission": "Not submitted yet. The employee's to finish, not yours.",
   Denied: "Sent back. These tend to return, so they are rarely finished.",
   Completed: "Done. Its absence from the export is how a row leaves the queue.",
@@ -138,6 +148,17 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
           Which Emburse sections the daily export covers. The app sets these in Emburse when it runs,
           then checks each import back against them — which is the only way to catch a section chip that
           ended up in the wrong state anyway.
+        </p>
+        {/* The distinction that cost days. These chips say WHICH STAGE, and
+            the list path says WHOSE. Two reviewers both ticking Needs Review
+            and both reading the team-wide list get the same expenses, and
+            the chips look like the thing that failed. */}
+        <p className="mt-1 text-sm text-muted-foreground">
+          These say <strong>which stage</strong>, not <strong>whose</strong>. Needs Review on the
+          team-wide list is the whole company&rsquo;s review stage, and it is the same for every
+          reviewer who can see it — which is why ticking it for two people does not give them two
+          queues. Whose queue a run reads is the list path, in{" "}
+          <em>Per-reviewer imports and approvals</em> below.
         </p>
       </div>
 
