@@ -198,11 +198,16 @@ deployment with one login is unaffected, because that login owns them; a
 reviewer who has not imported yet sees nothing, which is the truth, since
 Emburse has not been asked for their Needs Review.
 
-**The two accounts may be reading the same Emburse list.** The export clicks
-the team-wide tab and opens `/transactions/team?filters[section]=inbox` with
-**no per-person filter**, so it asks Emburse the same question whoever signs
-in — Eric's run and Brian's first run each read *320 items, $18,289.08*, to
-the cent. The import's rule was "last import wins", written on the stated
+**Approval is a chain, and the export was flattening it.** Eric approves
+first; the expense then goes to Brian to approve. Two stages, two queues,
+one at a time — and **Needs Review in Emburse is per account**, so each of
+them genuinely has their own list.
+
+The export did not ask for it. It clicks the team-wide tab and opens
+`/transactions/team?filters[section]=inbox`, and on the team tab that
+section is the whole review STAGE across everybody, not "waiting on me". So
+it asked Emburse the same question whoever signed in — Eric's run and
+Brian's first run each read *320 items, $18,289.08*, to the cent. The import's rule was "last import wins", written on the stated
 assumption that a row waits on one approver, so every import MOVED all 320
 expenses to whoever had just run: Brian's 3:40pm import took Eric's whole
 queue, approvals and all, and Eric's next one would have taken it straight
@@ -218,10 +223,37 @@ are reading the same list."* The Import page shows the standing split
 unheld rows, to one person — the way back from a queue that ended up with
 the wrong reviewer.
 
-Whether that is right depends on the Emburse setup, which the app cannot see:
-either these accounts genuinely share one review pool, in which case one
-import and one queue is the honest model, or the export needs a narrower
-question per reviewer. It reports the overlap rather than guessing.
+**Each reviewer's export can now be pointed at their own stage.** A reviewer
+may override the grid path and the section the export opens
+(`reviewer_imports.grid_path` / `grid_section`, Export settings → *Which list
+each reviewer imports*); leave both blank and nothing changes, which is every
+single-reviewer tenant. A run pointed away from the team-wide list skips the
+team-tab click, because landing there first would read the wrong list and
+leave Emburse remembering the wrong tab for the next run.
+
+What the right path is cannot be guessed from outside: the tenant's own URLs
+are the only answer, and they differ per tenant. So the way to find it is to
+open the list in Emburse as that person, copy the path and the
+`filters[section]` value out of the address bar, and press **Test run** —
+which stops before exporting, produces no file, emails nobody, and prints
+what that URL returns at the *read the item count* step. A wrong guess costs
+a minute.
+
+Once each reviewer reads their own stage the overlap goes to zero and the
+handoff happens by itself: Eric approves, the expense leaves his Needs
+Review, his next import purges it, and Brian's next import brings it in as
+his.
+
+**And the second stage can actually be approved.** The same expense in two
+queues is the same seven fields and so the same `dedupe_key`, and
+`expense_decisions` carries no foreign key on purpose — the record of who
+approved what outlives the purge, because it is the only audit trail on this
+side of the wire. Put those together and every "has this been decided" check
+would have answered yes for Brian on the strength of Eric's approval: his
+queue badging each row Approved, the sweep skipping all of them, and nothing
+in the second half of the chain ever approvable through this app. Decidedness
+is per reviewer now — `decided_by` against the row's reviewer — so Eric's
+approval settles Eric's stage and nothing else.
 
 **And that ownership never moves.** It was resolved as "the credential most
 recently proven to work" — the same rule that picks a login, borrowed for a

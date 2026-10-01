@@ -346,6 +346,8 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
 
       <SchedulePreview schedule={schedule} />
 
+      {isAdmin && <ReviewerGrids />}
+
       {/* Below the settings it exercises: the run is how you find out whether
           what is configured above actually works against the real Emburse. */}
       <div className="border-t border-border pt-5">
@@ -526,3 +528,112 @@ const clock = (minutes: number) => {
   const ampm = h < 12 ? "AM" : "PM";
   return `${((h + 11) % 12) + 1}:${String(m).padStart(2, "0")} ${ampm}`;
 };
+
+/**
+ * Which Emburse list each reviewer's export reads.
+ *
+ * Approval here is a chain: one person approves and the expense goes to the
+ * next. So at any moment the reviewers have DIFFERENT queues, and the one
+ * URL the export used for everybody — the team-wide tab, every review stage
+ * at once — described neither of them. Both accounts exported the same 320
+ * expenses, the app stamped each import with whoever had just run, and the
+ * queue changed hands on a timer.
+ *
+ * There is no guessing here about what Emburse calls the right list, because
+ * nothing outside Emburse knows: the tenant's own URLs are the only answer.
+ * Open the list in Emburse as that person, copy the path and the
+ * `filters[section]` value out of the address bar, put them here, and press
+ * Test run — the "read the item count" step prints what that URL returns, so
+ * a wrong guess costs one minute and produces no file and no email.
+ */
+function ReviewerGrids() {
+  const qc = useQueryClient();
+  const [error, setError] = useState("");
+  const q = useQuery({
+    queryKey: ["reviewer-imports"],
+    queryFn: async () => {
+      const res = await fetch("/api/reviewer-imports");
+      if (!res.ok) throw new Error("Failed");
+      return (await res.json()) as {
+        reviewers: { userEmail: string; enabled: boolean; gridPath: string | null;
+                     gridSection: string | null }[];
+      };
+    },
+  });
+
+  const [draft, setDraft] = useState<Record<string, { path: string; section: string }>>({});
+  const rows = q.data?.reviewers.filter((r) => r.userEmail) ?? [];
+  if (rows.length < 1) return null;
+
+  const valueFor = (e: string, r: { gridPath: string | null; gridSection: string | null }) =>
+    draft[e] ?? { path: r.gridPath ?? "", section: r.gridSection ?? "" };
+
+  async function save(email: string, v: { path: string; section: string }) {
+    setError("");
+    try {
+      const res = await fetch("/api/reviewer-imports", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, gridPath: v.path, gridSection: v.section }),
+      });
+      if (!res.ok) throw new Error(((await res.json()) as { error?: string }).error ?? "Failed");
+      await qc.invalidateQueries({ queryKey: ["reviewer-imports"] });
+      setDraft((d) => { const n = { ...d }; delete n[email]; return n; });
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  return (
+    <div className="border-t border-border pt-5">
+      <h2 className="text-base font-bold">Which list each reviewer imports</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Approval is a chain — one person approves and it goes to the next — so each reviewer has
+        their own queue in Emburse. Leave these blank and everybody reads the shared list above,
+        which is the team-wide one: every stage at once, the same rows for everybody.
+      </p>
+      <p className="mt-1 text-sm text-muted-foreground">
+        To fill one in: sign into Emburse as that person, open the list that holds what is
+        waiting on <em>them</em>, and copy the path (the part after the host, e.g.{" "}
+        <code className="rounded bg-muted px-1">/transactions</code>) and the{" "}
+        <code className="rounded bg-muted px-1">filters[section]</code> value out of the address
+        bar. Then press <strong>Test run</strong> below — it stops before exporting anything and
+        prints how many items that URL returns, so you can see at a glance whether it is their
+        queue or everybody&rsquo;s.
+      </p>
+
+      <div className="mt-3 space-y-2">
+        {rows.map((r) => {
+          const v = valueFor(r.userEmail, r);
+          const dirty = Boolean(draft[r.userEmail]);
+          return (
+            <div key={r.userEmail} className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="min-w-56 font-medium">{r.userEmail}</span>
+              <input
+                value={v.path}
+                onChange={(e) => setDraft((d) => ({ ...d, [r.userEmail]: { ...v, path: e.target.value } }))}
+                placeholder="shared (/transactions/team)"
+                className="w-64 rounded-lg border border-border bg-background px-2 py-1 font-mono text-xs"
+              />
+              <input
+                value={v.section}
+                onChange={(e) => setDraft((d) => ({ ...d, [r.userEmail]: { ...v, section: e.target.value } }))}
+                placeholder="shared (inbox)"
+                className="w-36 rounded-lg border border-border bg-background px-2 py-1 font-mono text-xs"
+              />
+              <button
+                type="button"
+                disabled={!dirty}
+                onClick={() => void save(r.userEmail, v)}
+                className="rounded-lg bg-foreground px-3 py-1 text-xs font-semibold text-background disabled:opacity-40"
+              >
+                Save
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+    </div>
+  );
+}

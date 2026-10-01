@@ -444,7 +444,7 @@ decisionRouter.get("/decisions", requireAuth, async (req: Request, res: Response
     recent: await recentDecisions(50, req.user?.email ?? ""),
     // Keyed by expense, so the queue page can badge each row without a
     // request per row.
-    byExpense: Object.fromEntries(await decisionsFor(keys)),
+    byExpense: Object.fromEntries(await decisionsFor(keys, req.user?.email ?? "")),
     // Category changes on their way to Emburse, or that did not get there.
     // Keyed the same way and on the same poll: the row has to show the
     // category it is being changed TO, not the one the last import

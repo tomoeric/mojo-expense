@@ -66,6 +66,25 @@ CREATE TABLE IF NOT EXISTS reviewer_imports (
   updated_at       timestamptz NOT NULL DEFAULT now(),
   updated_by       text
 );
+
+-- WHICH list in Emburse this reviewer's export reads.
+--
+-- The reason these exist. Approval here is a chain: Eric approves, and the
+-- expense then goes to Brian to approve. Two stages, two queues, one at a
+-- time — so the same expense is Eric's today and Brian's tomorrow, and it
+-- is never both at once.
+--
+-- The export did not know that. It clicks the team-wide tab and opens
+-- /transactions/team?filters[section]=inbox for everybody, which is the
+-- whole review stage regardless of whose turn it is, so both accounts
+-- exported the identical 320 items and the two queues were one queue read
+-- twice. Pointing each reviewer at their own stage is the fix, and the
+-- path and section are the two things that say which stage.
+--
+-- Null means the shared setting, which is what a single-reviewer tenant
+-- wants and has always had.
+ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS grid_path text;
+ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS grid_section text;
 `;
 
 let ready: Promise<void> | null = null;
@@ -359,9 +378,27 @@ export async function attemptExport(
     if (opts.source && !list) {
       throw new Error(`There is no import source called “${opts.source}”.`);
     }
-    const forThisRun = list
-      ? ({ ...settings.selectors, gridPath: list.path } as Selectors)
-      : (settings.selectors as Selectors);
+    /*
+     * And WHOSE stage to read, by the same mechanism.
+     *
+     * Approval is a chain — Eric approves, then it goes to Brian — so the
+     * two reviewers have two queues that the same URL cannot both describe.
+     * A reviewer's own path and section override the shared ones; set
+     * neither and nothing changes, which is every single-reviewer tenant.
+     */
+    const mine = opts.reviewer
+      ? (await reviewerImports().catch(() => []))
+          .find((r) => r.userEmail.toLowerCase() === opts.reviewer!.toLowerCase())
+      : undefined;
+    const forThisRun = {
+      ...settings.selectors,
+      ...(list ? { gridPath: list.path } : {}),
+      // The reviewer's own path wins over the shared one, but never over an
+      // explicitly chosen list: Reimbursements is a different page, not a
+      // different stage, and asking for it means asking for it.
+      ...(!list && mine?.gridPath ? { gridPath: mine.gridPath } : {}),
+      ...(mine?.gridSection ? { gridSection: mine.gridSection } : {}),
+    } as Selectors;
 
     run = await runAutoExport(settings, forThisRun, login, {
       ...opts,
@@ -477,6 +514,10 @@ export type ReviewerImport = {
   schedule: Schedule;
   /** True where every field came from the shared schedule. */
   shared: boolean;
+  /** The grid this reviewer's export reads, or null for the shared one. */
+  gridPath: string | null;
+  /** The section filter it asks for, or null for the shared one. */
+  gridSection: string | null;
 };
 
 /**
@@ -499,13 +540,14 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
   const { listCredentials } = await import("./credentials.js");
   const people = await listCredentials().catch(() => []);
   if (people.length === 0) {
-    return [{ userEmail: "", enabled: true, schedule: shared, shared: true }];
+    return [{ userEmail: "", enabled: true, schedule: shared, shared: true,
+              gridPath: null, gridSection: null }];
   }
 
   const { rows } = await db().query<{
     user_email: string; enabled: boolean; timezone: string | null; first_run: string | null;
     retry_hours: number | null; attempts_per_day: number | null; grace_minutes: number | null;
-    all_day: boolean | null;
+    all_day: boolean | null; grid_path: string | null; grid_section: string | null;
   }>("SELECT * FROM reviewer_imports");
   const own = new Map(rows.map((r) => [r.user_email.toLowerCase(), r]));
 
@@ -517,6 +559,8 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
       userEmail: p.userEmail,
       enabled: r?.enabled ?? true,
       shared: !set,
+      gridPath: r?.grid_path ?? null,
+      gridSection: r?.grid_section ?? null,
       schedule: {
         timezone: r?.timezone ?? shared.timezone,
         firstRun: r?.first_run ?? shared.firstRun,
@@ -532,23 +576,32 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
 /** Set or clear one reviewer's own import times. */
 export async function setReviewerImport(
   userEmail: string,
-  input: { enabled?: boolean; schedule?: Partial<Schedule> | null },
+  input: {
+    enabled?: boolean; schedule?: Partial<Schedule> | null;
+    /** Empty string clears it back to the shared setting. */
+    gridPath?: string | null; gridSection?: string | null;
+  },
   by: string,
 ): Promise<void> {
   await ensure();
   const sc = input.schedule;
+  const blank = (v: string | null | undefined) =>
+    v === undefined || v === null || v.trim() === "" ? null : v.trim();
   await db().query(
     `INSERT INTO reviewer_imports (user_email, enabled, timezone, first_run, retry_hours,
-                                   attempts_per_day, grace_minutes, all_day, updated_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                                   attempts_per_day, grace_minutes, all_day, updated_by,
+                                   grid_path, grid_section)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
      ON CONFLICT (user_email) DO UPDATE SET
        enabled = EXCLUDED.enabled, timezone = EXCLUDED.timezone,
        first_run = EXCLUDED.first_run, retry_hours = EXCLUDED.retry_hours,
        attempts_per_day = EXCLUDED.attempts_per_day, grace_minutes = EXCLUDED.grace_minutes,
-       all_day = EXCLUDED.all_day, updated_at = now(), updated_by = EXCLUDED.updated_by`,
+       all_day = EXCLUDED.all_day, updated_at = now(), updated_by = EXCLUDED.updated_by,
+       grid_path = EXCLUDED.grid_path, grid_section = EXCLUDED.grid_section`,
     [userEmail.trim().toLowerCase(), input.enabled ?? true,
      sc?.timezone ?? null, sc?.firstRun ?? null, sc?.retryHours ?? null,
-     sc?.attemptsPerDay ?? null, sc?.graceMinutes ?? null, sc?.allDay ?? null, by]);
+     sc?.attemptsPerDay ?? null, sc?.graceMinutes ?? null, sc?.allDay ?? null, by,
+     blank(input.gridPath), blank(input.gridSection)]);
 }
 
 export function startExportScheduler(): void {

@@ -325,17 +325,31 @@ export async function pendingDecisions(who = ""): Promise<QueuedDecision[]> {
 }
 
 /** The decision history for the expenses on screen, keyed by expense. */
-export async function decisionsFor(keys: string[]): Promise<Map<string, QueuedDecision>> {
+export async function decisionsFor(
+  keys: string[],
+  /** Whose badges these are. Unnamed means anybody's, for internal callers. */
+  who = "",
+): Promise<Map<string, QueuedDecision>> {
   await ensure();
   if (keys.length === 0) return new Map();
   // The newest per expense: an expense that failed and was decided again
   // should show the current attempt, not the abandoned one.
+  //
+  // And this person's, because approval is a chain. The receipt goes to
+  // Eric's Needs Review, Eric approves, and it goes to Brian's — the same
+  // expense with the same key, and Eric's decision still in the table
+  // because decisions outlive the purge on purpose. Unscoped, Brian's queue
+  // badges every second-stage row "Approved" on the strength of somebody
+  // else's approval, which is both wrong and the most convincing possible
+  // way to be wrong.
+  const mine = who.trim().toLowerCase();
   const { rows } = await db().query<Row>(
     `SELECT DISTINCT ON (dedupe_key) ${COLUMNS}
        FROM expense_decisions
       WHERE dedupe_key = ANY($1) AND state <> 'cancelled'
+        AND ($2 = '' OR lower(decided_by) = $2)
       ORDER BY dedupe_key, decided_at DESC`,
-    [keys],
+    [keys, mine],
   );
   return new Map(rows.map((r) => [r.dedupe_key, shape(r)]));
 }
@@ -821,7 +835,12 @@ export async function appliedCount(who = ""): Promise<number> {
        FROM expense_decisions d
        JOIN expenses e ON e.dedupe_key = d.dedupe_key
       WHERE d.state = 'applied' AND e.in_inbox = true
-        AND ($1 = '' OR ${MINE(1, 2)})`,
+        AND ($1 = '' OR ${MINE(1, 2)})
+        -- The holder's own approval. In a chain the previous stage's
+        -- decision is still in the table against the same key, and counting
+        -- it here tells somebody their queue is finished when it has not
+        -- been started.
+        AND ($1 = '' OR lower(d.decided_by) = $1)`,
     [reviewer, ownsBlanks],
   );
   return Number(rows[0]?.n ?? 0);

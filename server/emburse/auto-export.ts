@@ -81,6 +81,7 @@ export type SelectorKey =
   | "mfaCode" | "mfaSubmit" | "mfaRemember"
   | "adminTab" | "grid" | "itemCount"
   | "gridPath"
+  | "gridSection"
   | "exportButton" | "dialog" | "dialogRoot" | "dialogScope" | "formatSelect" | "formatOption"
   | "dialogExport" | "exportStarted"
   | "exportsNav" | "newestExportReady" | "newestExportDownload";
@@ -132,6 +133,7 @@ export const DEFAULT_SELECTORS: Selectors = {
 
   // A path, not a selector: the grid's filters live in the query string.
   gridPath: "/transactions/team",
+  gridSection: "inbox",
 
   exportButton: 'button:has-text("EXPORT")',
   dialog: 'text=Export Expenses',
@@ -178,7 +180,7 @@ export const STEP_SELECTORS: Record<string, SelectorKey[]> = {
   "sign in": ["loginEmail", "loginPassword", "loginSubmit", "loggedIn",
               "mfaCode", "mfaSubmit", "mfaRemember"],
   "switch to the team view": ["adminTab"],
-  "open the filtered grid": ["gridPath", "grid"],
+  "open the filtered grid": ["gridPath", "gridSection", "grid"],
   "read the item count": ["itemCount"],
   "open the export dialog": ["exportButton", "dialog"],
   "set the sections": ["dialogRoot", "dialog"],
@@ -201,6 +203,7 @@ export const SELECTOR_HELP: Record<SelectorKey, string> = {
   grid: "The transactions table itself — used to tell the page has loaded. The item-count line is accepted instead, so this missing is not fatal.",
   itemCount: "The \u201cN items, $X\u201d line above the grid.",
   gridPath: "Path to the transactions grid. Filters are added as query parameters.",
+  gridSection: "The section filter the grid is opened with — Emburse's own value, \"inbox\" for Needs Review. With a two-stage approval chain this is one of the two things that says WHOSE stage is being read.",
   exportButton: "The EXPORT button above the grid, not the one in the dialog.",
   dialog: "Text that proves the Export Expenses dialog is open.",
   dialogRoot: "The dialog element itself; section chips are looked for inside it.",
@@ -1468,6 +1471,14 @@ async function runSteps(
   if (!(await step("sign in", async () => signIn(page, sel, login, url, opts.onChallenge)))) return false;
 
   if (!(await step("switch to the team view", async () => {
+    // Not when this run is pointed somewhere else. A reviewer reading their
+    // own approval stage is deliberately NOT on the team-wide tab, and
+    // clicking it first would land on the wrong list before the URL below
+    // corrects it — or leave Emburse remembering the wrong tab for the
+    // next run.
+    if (sel.gridPath && !/\/team\b/.test(sel.gridPath)) {
+      return `skipped — this run reads ${sel.gridPath}, which is not the team-wide list`;
+    }
     // Emburse reopens on whichever of the team tab / PERSONAL was last used,
     // and PERSONAL holds only this account's own expenses. The tab is called
     // ADMIN on some tenants and MANAGER on others.
@@ -1503,7 +1514,9 @@ async function runSteps(
     //
     // The filters live in the query string, so there is also no ADVANCED
     // FILTERS dialog and no toggle whose state could be misread and inverted.
-    const target = gridUrl(url, { receiptsOnly: settings.receiptsOnly, path: sel.gridPath });
+    const target = gridUrl(url, {
+      receiptsOnly: settings.receiptsOnly, path: sel.gridPath, section: sel.gridSection,
+    });
     await page.goto(target, { waitUntil: "domcontentloaded" });
 
     // Two independent ways to know the grid arrived, because one selector for

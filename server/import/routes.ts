@@ -8,7 +8,8 @@ import { ALL_SECTIONS, cleanSchedule, readSettings, writeSettings } from "./sett
 import { DEFAULT_SELECTORS, SELECTOR_HELP, STEP_SELECTORS, envLogin } from "../emburse/auto-export.js";
 import { claimUnclaimed, credentialStatus, deleteCredential, listCredentials, saveCredential,
          scopeFor, unclaimedExpenses } from "../emburse/credentials.js";
-import { attemptExport, nextDue, recentRuns, runScreenshot, stopRun } from "../emburse/export-scheduler.js";
+import { attemptExport, nextDue, recentRuns, reviewerImports, runScreenshot, setReviewerImport,
+         stopRun } from "../emburse/export-scheduler.js";
 import { answerChallenge, cancelChallenge, currentChallenge } from "../emburse/challenge.js";
 import { cookiesSavedAt, forgetCookies } from "../emburse/browser-state.js";
 
@@ -117,6 +118,54 @@ importRouter.get("/imports", requireAuth, async (req: Request, res: Response) =>
   }
 });
 
+
+/**
+ * Which Emburse list each reviewer's import reads.
+ *
+ * It exists because approval here is a CHAIN — one person approves and the
+ * expense then goes to the next — so the reviewers have different queues at
+ * any given moment, and one URL cannot describe both. The export asked
+ * everybody for the team-wide review list, which is every stage at once, so
+ * two accounts exported the identical 320 expenses and the app spent a day
+ * looking like it was leaking one person's data to the other.
+ *
+ * Readable by any admin; the path and section are what to change when a
+ * reviewer's export comes back with somebody else's rows in it.
+ */
+importRouter.get("/reviewer-imports", requireAuth, requireAdmin, async (_req: Request, res: Response) => {
+  if (!guard(res)) return;
+  try {
+    res.json({ reviewers: await reviewerImports() });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "Could not read them." });
+  }
+});
+
+importRouter.post("/reviewer-imports", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  const body = req.body as {
+    email?: unknown; enabled?: unknown; gridPath?: unknown; gridSection?: unknown;
+  };
+  const email = String(body.email ?? "").trim();
+  if (!email) {
+    res.status(400).json({ error: "Name the reviewer." });
+    return;
+  }
+  try {
+    await setReviewerImport(email, {
+      enabled: body.enabled !== false,
+      // Deliberately NOT validated against a list of known paths. Emburse's
+      // own URLs are the only source of truth for what its lists are called,
+      // they differ per tenant, and a guard built from guesses would refuse
+      // the correct answer the first time somebody found it.
+      gridPath: typeof body.gridPath === "string" ? body.gridPath.slice(0, 200) : null,
+      gridSection: typeof body.gridSection === "string" ? body.gridSection.slice(0, 80) : null,
+    }, req.user?.email ?? "unknown");
+    res.json({ reviewers: await reviewerImports() });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "Could not save." });
+  }
+});
 
 /**
  * Settle who owns the expenses nobody claimed.

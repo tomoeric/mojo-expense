@@ -687,12 +687,26 @@ Two separate things, and confusing them cost a queue full of failures.
   but a queue and an import history belong to the one Emburse account they
   were read from. Anything new goes in one of those two buckets deliberately,
   not by whichever query was easiest to write.
-- **The export is NOT per person — it reads the team-wide tab.** It clicks
-  ADMIN/MANAGER and opens `/transactions/team?filters[section]=inbox` with no
-  `filters[user_id][]`, so two accounts get the same rows: Eric's run and
-  Brian's first run both read 320 items, $18,289.08. Any reasoning that
-  starts "Needs Review is per account, so their queues differ" is wrong here
-  until the export asks each reviewer a narrower question. The upsert keeps
+- **One stage's decision does not discharge the next one's.** The chain
+  means the same expense — same seven fields, same `dedupe_key` — passes
+  through two queues, and `expense_decisions` has no foreign key on purpose
+  so Eric's approval is still in the table when Brian's import brings the
+  expense back as his. Every "has this been decided" check must therefore
+  ask *decided by whom*: `TESTS.decided` compares `decided_by` against the
+  row's `reviewer`, and `decisionsFor`/`appliedCount` take the viewer.
+  Unscoped, Brian's queue badges every second-stage row Approved on the
+  strength of Eric's approval and the sweep skips all of them, which is the
+  most convincing possible way to be wrong. Covered by
+  `scripts/test-approval-chain.ts`.
+- **Approval is a CHAIN: Eric approves, then it goes to Brian.** Two stages,
+  two queues, one at a time. Needs Review in Emburse IS per account — but the
+  export clicks the team-wide tab and opens
+  `/transactions/team?filters[section]=inbox`, and on that tab the section is
+  the whole review stage across everybody. So both accounts read the same 320
+  items, $18,289.08, and the per-account distinction never reached the app.
+  A reviewer's own `grid_path`/`grid_section` (`reviewer_imports`, Export
+  settings) points their run at their own stage, and a run pointed away from
+  `/team` skips the team-tab click. The upsert keeps
   the FIRST reviewer who imported a row, because "last import wins" moved the
   entire queue between two people on a timer.
 - **Ownership of unclaimed rows must never be derived from a credential's

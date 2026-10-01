@@ -80,10 +80,30 @@ const TESTS = {
            WHERE r.enabled
              AND (r.last_run_at IS NULL OR r.last_run_at < e.first_seen_at))`,
 
-  /** Already decided, queued, or failed and waiting on a person. */
+  /**
+   * Already decided, queued, or failed and waiting on a person — BY THE
+   * PERSON WHOSE QUEUE THIS IS.
+   *
+   * Approval here is a chain: the receipt lands in Eric's Needs Review, Eric
+   * approves, and it then goes to Brian's Needs Review. Same expense, same
+   * seven fields, so the same `dedupe_key` — and `expense_decisions` has no
+   * foreign key, deliberately, so Eric's approval outlives the purge and is
+   * still sitting there when Brian's import brings the expense back as his.
+   *
+   * Asked without the reviewer, this says "already decided" about every
+   * expense that reached the second stage, for ever. Brian's queue would
+   * show Eric's approval as its own, the sweep would skip every row, and
+   * nothing in the second half of the chain could ever be approved through
+   * this app. One stage's decision does not discharge the next one's.
+   *
+   * A row nobody holds keeps the old reading — any decision counts — because
+   * there is no reviewer to compare against and the alternative is offering
+   * to approve something twice.
+   */
   decided: `EXISTS (
           SELECT 1 FROM expense_decisions d
-           WHERE d.dedupe_key = e.dedupe_key AND d.state IN ('pending','applied','failed'))`,
+           WHERE d.dedupe_key = e.dedupe_key AND d.state IN ('pending','applied','failed')
+             AND (e.reviewer = '' OR lower(d.decided_by) = lower(e.reviewer)))`,
 
   /**
    * A receipt on this expense has not been read — when that matters.
