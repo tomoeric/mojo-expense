@@ -443,8 +443,27 @@ export async function attemptExport(
       ...(opts.dryRun && opts.probe?.gridSection ? { gridSection: opts.probe.gridSection } : {}),
     } as Selectors;
 
+    /*
+     * Every other Emburse login we hold, so the run can catch itself being
+     * signed in as one of them. It is the check that was missing while
+     * two reviewers' queues kept turning out to be the same queue: every
+     * step reported the account we MEANT to use and nothing ever asked the
+     * page.
+     */
+    const otherLogins = await (async () => {
+      try {
+        const { listCredentials } = await import("./credentials.js");
+        return (await listCredentials())
+          .map((c) => c.loginEmail)
+          .filter((e) => e && e.toLowerCase() !== login.email.toLowerCase());
+      } catch {
+        return [];
+      }
+    })();
+
     run = await runAutoExport(settings, forThisRun, login, {
       ...opts,
+      otherLogins,
       onChallenge,
       // Written as they happen. A run can take twenty minutes, most of it
       // waiting for Emburse to build the file, and the steps used to appear

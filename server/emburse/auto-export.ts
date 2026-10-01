@@ -511,6 +511,15 @@ export async function runAutoExport(
     dryRun?: boolean;
     onChallenge?: ChallengeHook;
     /**
+     * Every other Emburse login this app knows about.
+     *
+     * Only ever used to catch being signed in as the wrong one. Seeing one
+     * of these on the page while our own is absent is the proof that a run
+     * reporting the right name all the way down is reading somebody else's
+     * queue — which is otherwise invisible until the numbers look odd.
+     */
+    otherLogins?: string[];
+    /**
      * Called as each step finishes, so progress can be seen while it happens.
      *
      * A run can legitimately take twenty minutes — most of it spent waiting
@@ -1578,7 +1587,11 @@ async function runSteps(
   sel: Selectors,
   login: Login,
   step: (name: string, fn: () => Promise<string>) => Promise<boolean>,
-  opts: { dryRun?: boolean; onChallenge?: ChallengeHook; shouldStop?: () => boolean },
+  opts: {
+    dryRun?: boolean; onChallenge?: ChallengeHook; shouldStop?: () => boolean;
+    /** The other logins this app knows, to catch being signed in as one. */
+    otherLogins?: string[];
+  },
   setItemLine: (v: string) => void,
   setPdf: (b: Buffer) => void,
   gotPdf: () => boolean,
@@ -1589,6 +1602,45 @@ async function runSteps(
   if (!(await step("open Emburse", () => openEmburse(page, url)))) return false;
 
   if (!(await step("sign in", async () => signIn(page, sel, login, url, opts.onChallenge)))) return false;
+
+  /*
+   * WHO is actually signed in — asked of the page, not of our intentions.
+   *
+   * Every step until now reports the account we MEANT to use. Nothing
+   * checked, and "sign in" returns early on "already signed in" without
+   * looking, so a run could be signed in as somebody else and say the
+   * right name at every stage. Days went into deciding whether a 300-row
+   * pull meant the list was too wide or the session was the wrong
+   * person's, and the run itself could have answered that in a second.
+   *
+   * No selector, deliberately: Emburse's account menu is markup we cannot
+   * know, and a wrong guess at it would be another thing to maintain. The
+   * page's own text is enough for the question that matters — is ANOTHER
+   * known login visible here? Finding one is proof of the wrong account.
+   *
+   * Three outcomes, and only one is fatal:
+   *   - another reviewer's login on the page → stop, before a single row
+   *     of theirs is imported as somebody else's;
+   *   - our own login on the page → confirmed, and say so;
+   *   - neither → cannot tell, which is honest and not a reason to refuse.
+   */
+  if (!(await step("confirm who is signed in", async () => {
+    const text = (await page.locator("body").innerText().catch(() => "")).toLowerCase();
+    const mine = login.email.trim().toLowerCase();
+    const others = (opts.otherLogins ?? [])
+      .map((e) => e.trim().toLowerCase())
+      .filter((e) => e && e !== mine);
+
+    const wrong = others.find((e) => text.includes(e));
+    if (wrong && !text.includes(mine)) {
+      throw new Error(
+        `this run is signed in as ${wrong}, not ${login.email} — ${wrong} is on the page and ` +
+        `${login.email} is not. Nothing was exported. The browser kept somebody else's session; ` +
+        `clear the remembered device for ${login.email} and run it again.`);
+    }
+    if (text.includes(mine)) return `confirmed as ${login.email} — their address is on the page`;
+    return `could not confirm from the page, which shows no login address; proceeding as ${login.email}`;
+  }))) return false;
 
   if (!(await step("switch to the team view", async () => {
     // Not when this run is pointed somewhere else. A reviewer reading their

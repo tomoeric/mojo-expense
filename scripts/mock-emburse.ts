@@ -31,6 +31,8 @@ type State = {
   receiptsFilter: boolean;
   sections: Record<string, boolean>;
   rowsTicked: number;
+  /** The address an account menu would show, for the who-is-signed-in check. */
+  whoami: string;
   pendingUser: string;
   loginOutcome: "ok" | "rejected" | "mfa" | "device" | "code" | "code-first";
   /**
@@ -203,6 +205,8 @@ const state: State = {
     "Pending Submission": false, Denied: true, Completed: false,
   },
   rowsTicked: 0,
+  /** The address an account menu would show. Empty renders none. */
+  whoami: "",
   pendingUser: "",
   loginOutcome: "ok",
   codeAttempts: 0,
@@ -559,7 +563,12 @@ app.get("/", (req, res) => {
   // real one this app runs against calls it MANAGER — which the shipped
   // selector matched for weeks only because nothing depended on the click.
   // A mock that renders ADMIN would let that selector regress unnoticed.
-  const nav = `<a href="/admin">MANAGER</a> <a href="/personal">PERSONAL</a>` +
+  // Whoever the mock is pretending is signed in, rendered where a real
+  // tenant puts an account menu. Nothing reads it except the check that
+  // asks "is somebody ELSE's address on this page" — which is the only
+  // question answerable without knowing Emburse's markup.
+  const whoami = state.whoami ? `<span id="account">${state.whoami}</span> ` : "";
+  const nav = whoami + `<a href="/admin">MANAGER</a> <a href="/personal">PERSONAL</a>` +
     (state.showNavLabel ? ` <a href="/transactions">Transactions</a>` : ` <a href="/transactions">Spend</a>`);
 
   if (state.appPaintMs > 0) {
@@ -1006,7 +1015,14 @@ app.post("/__actioned", (req, res) => {
   res.json({ ok: true, actioned: state.actioned.size });
 });
 
+/** Pretend the browser is signed in as this address. */
+app.post("/__whoami/:email", (req, res) => {
+  state.whoami = decodeURIComponent(req.params.email ?? "");
+  res.json({ ok: true, whoami: state.whoami });
+});
+
 app.post("/__reset", (_req, res) => {
+  state.whoami = "";
   reset();
   res.json({ ok: true });
 });

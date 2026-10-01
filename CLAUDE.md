@@ -708,6 +708,20 @@ Two separate things, and confusing them cost a queue full of failures.
   strength of Eric's approval and the sweep skips all of them, which is the
   most convincing possible way to be wrong. Covered by
   `scripts/test-approval-chain.ts`.
+- **A run proves WHO it is signed in as** ("confirm who is signed in",
+  right after sign-in). Every other step reports the account we MEANT to
+  use, and sign-in returns early on "already signed in" without looking —
+  so a run could be signed in as somebody else and print the right name at
+  every stage, which is exactly what a shared browser profile produced. It
+  needs no selector: if another login this app holds is on the page and
+  ours is not, that is proof, and the run stops before anything is
+  exported. Our own address present means confirmed; neither present means
+  it could not tell, which is honest and not grounds to refuse.
+- **Chasing this as a credentials problem wastes days** — but so does
+  assuming the opposite. The logins and sessions work; what was never
+  checked is whether the browser was still holding somebody else's
+  session, which the step above now settles in one line of the run log
+  instead of by comparing item counts after the fact.
 - **Nothing about this is a credentials problem, and chasing it as one
   wastes days.** The logins work, the sessions work, the stamping works.
   Signed in as Brian, Emburse shows him 300+ rows because he is an approver
