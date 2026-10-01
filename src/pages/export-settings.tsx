@@ -602,6 +602,35 @@ function ReviewerGrids() {
         queue or everybody&rsquo;s.
       </p>
 
+      {/* The whole setting, as one button, because under a two-stage chain
+          there is only one sensible answer: each reviewer reads their own
+          Needs Review. The per-row fields below stay for the case this
+          tenant spells the path differently. */}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => void Promise.all(
+            rows.map((r) => save(r.userEmail, { path: "/transactions", section: "inbox" })))}
+          className="rounded-lg bg-foreground px-3 py-1 text-sm font-semibold text-background"
+        >
+          Everyone reads their own Needs Review
+        </button>
+        <button
+          type="button"
+          onClick={() => void Promise.all(
+            rows.map((r) => save(r.userEmail, { path: "", section: "" })))}
+          className="rounded-lg border border-border px-3 py-1 text-sm font-semibold"
+        >
+          Back to the shared team-wide list
+        </button>
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Try it, then press <strong>Test run</strong> below as each person. If the item count
+        drops below the team-wide one and differs between them, that is their own queue. Nothing
+        is exported and nobody is emailed by a test run, and an import that came back nearly
+        empty would be refused by the truncation fence rather than wiping anything.
+      </p>
+
       <div className="mt-3 space-y-2">
         {rows.map((r) => {
           const v = valueFor(r.userEmail, r);
