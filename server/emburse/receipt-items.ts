@@ -792,6 +792,45 @@ export async function expensesForReceipts(shas: string[]): Promise<string[]> {
 export const MAX_ATTEMPTS = 3;
 
 /** Receipts we hold an image for and have not yet read successfully. */
+/**
+ * Re-apply the alcohol floor to readings already stored.
+ *
+ * The floor is a pure function of the line's own text — "RED BULL SUDACHI
+ * LIME 12" is not alcohol however the model felt about it — so widening the
+ * list does not need the image read again. Bumping READER_VERSION does get
+ * there eventually, but "eventually" is one vision call per receipt in the
+ * whole backlog, and on a settled queue that is hours and real money to fix
+ * a word list.
+ *
+ * A Kwik Trip run flagged for alcohol on three Red Bulls, read by reader
+ * v4, is what this is for: the list that would clear it shipped, and the
+ * expense stayed flagged because its image was somewhere behind three
+ * hundred others.
+ *
+ * Only ever clears. A line the model called clean stays clean — this must
+ * not start inventing drink nobody saw — and `isAlcohol` already enforces
+ * that, so the override list cannot flip one on either.
+ *
+ * Returns how many lines changed, so the caller can decide whether the
+ * rules are worth re-running.
+ */
+export async function reapplyAlcoholFloor(): Promise<number> {
+  await ensure();
+  const { rows } = await db().query<{ sha256: string; line_no: number; description: string }>(
+    "SELECT sha256, line_no, description FROM receipt_items WHERE alcohol = true");
+  const stale = rows.filter((r) => !isAlcohol(r.description, true));
+  if (stale.length === 0) return 0;
+  await db().query(
+    `UPDATE receipt_items SET alcohol = false
+      WHERE (sha256, line_no) IN (
+        SELECT * FROM unnest($1::text[], $2::int[]))`,
+    [stale.map((r) => r.sha256), stale.map((r) => r.line_no)]);
+  console.log(
+    `receipts: cleared the alcohol mark on ${stale.length} line(s) the floor now covers ` +
+    `— e.g. ${stale.slice(0, 3).map((r) => `"${r.description}"`).join(", ")}`);
+  return stale.length;
+}
+
 export async function unreadReceipts(limit: number): Promise<string[]> {
   await ensure();
   const { rows } = await db().query<{ sha256: string }>(

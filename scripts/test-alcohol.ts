@@ -148,7 +148,37 @@ try {
     check(`“${d}” still is`, items.isAlcohol(d, true) === true);
   }
 
-  console.log("\n6. The reader was bumped, so stored readings are done again");
+  console.log("\n6. The floor reaches readings already stored");
+  // A Kwik Trip run flagged for alcohol on three Red Bulls, read by reader
+  // v4 and sitting behind three hundred other images in the re-read queue.
+  // Bumping the reader gets there eventually; eventually is one vision call
+  // per receipt and hours of them. The floor is a pure function of the
+  // line's own text, so it can simply be re-applied.
+  const SHA = `${TAG}-floor`;
+  await db().query(
+    `INSERT INTO receipt_blobs (sha256, content_type, byte_size, bytes)
+     VALUES ($1,'image/jpeg',1,'\\x00'::bytea) ON CONFLICT DO NOTHING`, [SHA]);
+  await db().query(
+    `INSERT INTO receipt_readings (sha256, model, legible, itemised, reader_version)
+     VALUES ($1,'test',true,true,4) ON CONFLICT (sha256) DO NOTHING`, [SHA]);
+  await db().query(
+    `INSERT INTO receipt_items (sha256, line_no, description, amount_cents, alcohol)
+     VALUES ($1,1,'RED BULL SUDACHI LIME 12',1197,true),
+            ($1,2,'MM 71 Red Bull 12oz 2 FO',-396,true),
+            ($1,3,'LAGUNITAS IPA 6PK',1299,true)
+     ON CONFLICT DO NOTHING`, [SHA]);
+
+  const cleared = await items.reapplyAlcoholFloor();
+  check("the lines the floor covers are cleared", cleared >= 2, String(cleared));
+  const after = await db().query<{ line_no: number; alcohol: boolean }>(
+    "SELECT line_no, alcohol FROM receipt_items WHERE sha256 = $1 ORDER BY line_no", [SHA]);
+  check("…the Red Bulls are no longer alcohol",
+    after.rows[0]?.alcohol === false && after.rows[1]?.alcohol === false);
+  // The half that matters more: it only ever CLEARS.
+  check("…and the IPA still is", after.rows[2]?.alcohol === true);
+  check("…running it again changes nothing", await items.reapplyAlcoholFloor() === 0);
+
+  console.log("\n7. The reader was bumped, so stored readings are done again");
   check("reader version is 6", items.READER_VERSION === 6, String(items.READER_VERSION));
 } finally {
   await clean();

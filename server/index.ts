@@ -13,6 +13,7 @@ import { decisionRouter } from "./emburse/decision-routes.js";
 import { startExportScheduler } from "./emburse/export-scheduler.js";
 import { startDecisionWorker } from "./emburse/decision-worker.js";
 import { startReceiptReader } from "./emburse/receipt-reader.js";
+import { reapplyAlcoholFloor } from "./emburse/receipt-items.js";
 import { startAutoApprove } from "./rules/auto-approve.js";
 import { runRules } from "./rules/run.js";
 import { ensureSchema, isDbConfigured } from "./db.js";
@@ -94,7 +95,12 @@ if (env.isProd) {
 function recheckRulesOnBoot(): void {
   // After the workers, and not in the way of the first request.
   setTimeout(() => {
-    void runRules({ decide: false })
+    // Before the re-check, not after: the floor changes what the rules will
+    // conclude, and running them first would leave every expense it clears
+    // flagged until something else happened to re-judge it.
+    void reapplyAlcoholFloor()
+      .catch((err: unknown) => { console.error("receipts: the alcohol floor could not be re-applied:", err); return 0; })
+      .then(() => runRules({ decide: false }))
       .then((r) =>
         console.log(
           `rules: re-checked ${r.expenses} expense(s) against ${r.rulesRun} rule(s) — ` +

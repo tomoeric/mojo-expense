@@ -309,6 +309,16 @@ VM the directory persists, so it is forever — every import, every approval,
 until somebody deletes a file nobody knows about. A launch that fails that way
 now clears the stale lock and tries once more.
 
+**A fix to the alcohol list reaches readings already stored.** The floor
+under the model's answer is a pure function of the line's own text — "RED
+BULL SUDACHI LIME 12" is not alcohol however the model felt about it — so
+widening it does not need the image read again. Bumping `READER_VERSION`
+gets there eventually, but eventually is one vision call per receipt in the
+whole backlog: hours, and real money, to fix a word list. `reapplyAlcoholFloor()`
+runs on boot, before the rule re-check so the flags it clears actually clear,
+and it only ever REMOVES the mark — a line the model called clean stays
+clean.
+
 **Viewing as somebody must never become acting as them.** An admin can look
 at the app through another reviewer's eyes — the control is in the main
 header, the people offered are those with an Emburse login stored, and a band
