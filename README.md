@@ -323,6 +323,26 @@ come back with the wrong person's expenses, intermittently, depending only
 on who exported last. A run with no account name gets no cookies and signs
 in the long way.
 
+**A manual export signs in as whoever pressed it**, and the run list and
+"next attempt due" are that person's. Outside a view it passed an empty
+reviewer, which means the shared import — whose login is still chosen by
+"the credential most recently proven to work" — so on a day when Brian's
+export had succeeded most recently, Eric pressed *Run export now* on his
+own settings page, not viewing as anybody, and the run signed in as Brian
+and imported Brian's Needs Review. Nothing on the page said it would. Only
+somebody with no stored login of their own falls back to the shared import,
+which is the single-login deployment and the env fallback.
+
+**Each Emburse account has its own cookie jar** (`emburse_browser_jars`).
+One jar was right when one login was the whole app and is a leak with two:
+it hands whoever runs next the live session of whoever signed in last, and
+because sign-in returns early on *"already signed in"*, that run skips the
+password step and reads the first person's Needs Review while reporting its
+own name. Every other scope here could be perfect and a run would still
+come back with the wrong person's expenses, intermittently, depending only
+on who exported last. A run with no account name gets no cookies and signs
+in the long way.
+
 **And nothing one reviewer does can stop another importing.** The queue was
 separated before the import was, and the gap showed up on Brian's very first
 pull: every step green, 320 items read out of his own Needs Review, and then
