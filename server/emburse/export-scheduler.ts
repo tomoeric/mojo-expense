@@ -244,6 +244,12 @@ export async function attemptExport(
           "their user menu, or set EMBURSE_LOGIN_EMAIL and EMBURSE_LOGIN_PASSWORD.",
       );
     }
+    // WHOSE queue this is. Emburse's Needs Review is relative to whoever
+    // signed in, so the account below decides what the entire app shows —
+    // and until now nothing anywhere said which account that was.
+    console.log(
+      `export: signing in as ${login.email}` +
+      ("chosen" in login && login.chosen ? ` (${login.chosen})` : " (from the environment)"));
 
     // A verification code can only be asked of somebody who is there to be
     // asked. Derived from the trigger rather than passed in, so there is no

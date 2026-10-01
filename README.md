@@ -139,6 +139,26 @@ through Entra, which is silent while their Microsoft session is alive.
 The third row is the point: the moment real credentials exist, real data is
 never served to an anonymous caller — even if sign-in was never wired up.
 
+## One queue, and whose it is
+
+There is no per-person queue here, and it is worth being plain about why.
+Emburse's **Needs Review is relative to whoever signed in**, and the import
+signs in once, as one account. That account's Needs Review *is* the queue
+this whole app shows — the same 26 expenses to everybody, which is why
+viewing as somebody else shows the same list rather than a shorter one.
+What differs per person is whether they can decide (an Emburse login
+stored), whose name goes on each decision, which admin controls exist, and
+what the automation did while they were away.
+
+Which account that is used to be decided by accident: "the credential most
+recently proven to work, else the most recently saved". The moment a second
+person stored a login and it succeeded once, the entire queue silently
+became THEIR Needs Review — nobody told, nothing on screen saying whose list
+it was, expenses appearing and vanishing for everyone. It is a deliberate
+choice now (`importAs`), every export logs whose queue it read and whether
+that was chosen or fallen back to, and naming somebody with no stored login
+refuses rather than substituting another account.
+
 ## What runs on its own
 
 Four loops, all started at boot in `server/index.ts`, all continuous:

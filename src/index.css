@@ -1,6 +1,26 @@
 @import "tailwindcss";
 
 /*
+ * This app is light, and only light.
+ *
+ * The tokens below are light values, `color-scheme` is light, and there is
+ * no dark palette anywhere — but Tailwind v4's `dark:` variant defaults to
+ * `@media (prefers-color-scheme: dark)`, so on a machine set to dark every
+ * `dark:` class in this codebase fires over a page that is still white.
+ * Two dozen of them, all chosen as the readable colour on a DARK surface:
+ * `dark:text-amber-200` on a white banner, `dark:text-emerald-400` on a
+ * white strip. The result is pale text on pale ground, and it looks like a
+ * rendering fault rather than a decision — which is exactly how it was
+ * reported ("also yellow?").
+ *
+ * Pointing the variant at a class that is never set makes every one of them
+ * inert, so each colour is the light one the page was designed around.
+ * Should this app ever grow a real dark theme, that theme sets `.dark` on
+ * the root and all of them come back correctly.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
  * Tokens mirror the ninja-live-status palette so MOJO Expense reads as part of
  * the same system: neutral surfaces, emerald as the single accent.
  */

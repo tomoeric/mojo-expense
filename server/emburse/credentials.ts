@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { db, ensureSchema } from "../db.js";
+import { flagOwner } from "../flags.js";
 import { env } from "../env.js";
 
 /**
@@ -162,11 +163,54 @@ function toStatus(r: Record<string, unknown>): CredentialStatus {
  * called by the export runner, and the plaintext never leaves that call.
  */
 export async function credentialForExport(): Promise<
-  { userId: string; email: string; password: string } | null
+  { userId: string; email: string; password: string; userEmail: string; chosen: string } | null
 > {
   await ensure();
-  const { rows } = await db().query<{ user_id: string; login_email: string; secret: Buffer }>(
-    `SELECT user_id, login_email, secret FROM emburse_credentials
+
+  /**
+   * WHOSE Needs Review the import brings in.
+   *
+   * This matters more than it looks, and it was decided by accident. Emburse's
+   * Needs Review is relative to whoever signed in, so the account the import
+   * uses IS the queue this whole app shows. The rule was "the credential most
+   * recently proven to work, else the most recently saved" — which, the moment
+   * a second person stores a login and it succeeds once, silently moves the
+   * entire queue to THEIR Needs Review. Nobody is told, nothing in the app
+   * says whose list it is, and expenses appear or vanish for everyone.
+   *
+   * So it is a deliberate choice now, stored as the owner of the `importAs`
+   * flag. The old rule remains only as the fallback for a deployment that has
+   * never made the choice, and every run says which it used and why.
+   */
+  const preferred = await flagOwner("importAs").catch(() => null);
+  if (preferred) {
+    const { rows } = await db().query<{ user_id: string; login_email: string; secret: Buffer; user_email: string }>(
+      `SELECT user_id, login_email, secret, user_email FROM emburse_credentials
+        WHERE lower(btrim(user_email)) = lower(btrim($1))`, [preferred]);
+    const chosen = rows[0];
+    if (chosen) {
+      try {
+        return {
+          userId: chosen.user_id, email: chosen.login_email, password: open(chosen.secret),
+          userEmail: chosen.user_email, chosen: `chosen: the import is set to run as ${preferred}`,
+        };
+      } catch {
+        throw new Error(
+          `The stored Emburse password for ${preferred}, who the import is set to run as, could ` +
+          "not be decrypted — SESSION_SECRET or EMBURSE_CREDENTIAL_KEY has changed since it was " +
+          "saved. They need to enter it again.");
+      }
+    }
+    // Named but not stored. Falling through silently is how the queue would
+    // move without anybody noticing, which is the thing this exists to stop.
+    throw new Error(
+      `The import is set to run as ${preferred}, who has no Emburse login stored. Either they ` +
+      "store one, or somebody else is chosen — until then the import must not quietly use " +
+      "another account's Needs Review, because that is a different queue.");
+  }
+
+  const { rows } = await db().query<{ user_id: string; login_email: string; secret: Buffer; user_email: string }>(
+    `SELECT user_id, login_email, secret, user_email FROM emburse_credentials
       ORDER BY (last_ok_at IS NOT NULL) DESC, last_ok_at DESC, updated_at DESC
       LIMIT 1`,
   );
@@ -174,7 +218,14 @@ export async function credentialForExport(): Promise<
   if (!row) return null;
 
   try {
-    return { userId: row.user_id, email: row.login_email, password: open(row.secret) };
+    return {
+      userId: row.user_id, email: row.login_email, password: open(row.secret),
+      userEmail: row.user_email,
+      chosen:
+        `by default: nobody has chosen whose Needs Review the import reads, so it used ` +
+        `${row.user_email} — the login most recently proven to work. Choose one deliberately ` +
+        `before a second person stores a login, or the queue moves when theirs succeeds.`,
+    };
   } catch {
     // A rotated key looks exactly like a corrupted row from here. Either way the
     // owner has to re-enter it, and saying so beats a bare decryption error.

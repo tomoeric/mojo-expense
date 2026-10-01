@@ -56,6 +56,19 @@ export const FLAGS = {
   autoApprove: false,
 
   /**
+   * Whose Needs Review the import reads.
+   *
+   * Not an on/off switch — the useful part is the OWNER, which names the
+   * person whose Emburse login the import signs in with. Emburse's Needs
+   * Review is relative to whoever signed in, so that account's queue is the
+   * queue this whole app shows.
+   *
+   * It lives here rather than in export settings because it is a person,
+   * and this is the table that already answers "which person owns this".
+   */
+  importAs: false,
+
+  /**
    * Hold everything back from Emburse, without losing anything.
    *
    * There was no way to say "not now". The only control was the automatic
@@ -123,6 +136,22 @@ export async function setLimit(key: FlagKey, amount: number, by: string): Promis
 }
 
 /** Whose Emburse login an automatic decision is made under. */
+/**
+ * Say who owns a flag, without touching whether it is on.
+ *
+ * `setFlag` claims ownership as a side effect of switching something on,
+ * which is right for a switch and wrong for `importAs`, where the owner IS
+ * the setting and there is nothing to switch.
+ */
+export async function setFlagOwner(key: FlagKey, owner: string | null): Promise<void> {
+  await ensure();
+  await db().query(
+    `INSERT INTO app_flags (key, enabled, owner, updated_by) VALUES ($1, false, $2, $2)
+     ON CONFLICT (key) DO UPDATE SET owner = EXCLUDED.owner, updated_at = now(),
+                                     updated_by = EXCLUDED.updated_by`,
+    [key, owner]);
+}
+
 export async function flagOwner(key: FlagKey): Promise<string | null> {
   await ensure();
   const { rows } = await db().query<{ owner: string | null }>(

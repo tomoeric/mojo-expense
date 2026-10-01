@@ -33,6 +33,7 @@ pnpm exec tsx scripts/test-unattended.ts       # a batch nobody is watching must
 pnpm exec tsx scripts/test-view-as.ts          # viewing as somebody can never write as them
 pnpm exec tsx scripts/test-correct-category.ts # changing a category in Emburse (needs a browser)
 pnpm exec tsx scripts/test-corrections.ts      # a category change is a record, not a button press (needs DATABASE_URL)
+pnpm exec tsx scripts/test-import-as.ts        # whose Needs Review the import reads (needs DATABASE_URL)
 pnpm exec tsx scripts/test-peers.ts            # both sides of the ambiguity guard mean the same thing (DB half needs DATABASE_URL)
 pnpm exec tsx scripts/test-receipt-totals.ts   # four real receipts flagged wrongly (DB half needs DATABASE_URL)
 pnpm exec tsx scripts/test-while-away.ts       # what the automation did since your last visit (needs DATABASE_URL)
