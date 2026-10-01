@@ -96,6 +96,8 @@ type State = {
   staleGrid: boolean;
   /** Rows the page has told the server were approved, in a stale-grid run. */
   actioned: Set<string>;
+  /** Categories a row has been edited to, by the same route. */
+  categories: Map<string, string>;
   /**
    * How the search matches.
    *
@@ -215,6 +217,7 @@ const state: State = {
   twinRows: false,
   staleGrid: false,
   actioned: new Set<string>(),
+  categories: new Map<string, string>(),
   searchMode: "substring",
   hiddenFromSearch: false,
   userFilter: "",
@@ -345,6 +348,7 @@ const grid = (search: string) => {
   }
   const cells = (r: (typeof ROWS)[number]) =>
     `${r.date}</td><td>${r.merchant}</td><td>${r.who}</td><td>$${r.amount}</td>
+     <td>${state.categories.get(`${r.date}|${r.merchant}|${r.who}|${r.amount}`) ?? ""}</td>
      <td>${"site" in r && r.site ? r.site : ""}</td>
      <td><button class="ap" data-k="${r.date}|${r.merchant}|${r.who}|${r.amount}">APPROVE</button> ` +
     `<button aria-label="more" class="mn">&#8942;</button>`;
@@ -353,7 +357,24 @@ const grid = (search: string) => {
   // takes the row out of Needs Review, which is how the run now confirms
   // the click landed — before this the mock's APPROVE was inert, so a test
   // could not tell a working click from one that hit nothing.
-  const behaviour = `<div id="menu" hidden><button class="dn">Deny</button></div>
+  // An edit form with a Category box, so the correction path has something
+  // real to drive. The categories are the ones the rows carry plus the two
+  // a fuel purchase gets mis-coded between, which is the case this exists
+  // for: an Exxon filed under Travel.
+  const EDIT_FORM =
+    `<div id="edit" hidden>
+       <label>Category</label>
+       <select name="category" aria-label="Category">
+         <option>Meals</option>
+         <option>Travel - Mileage &amp; Ground Transportation</option>
+         <option>Auto Fee &amp; Fuel</option>
+         <option>Repairs &amp; Maintenance</option>
+       </select>
+       <button class="sv" type="button">Save</button>
+     </div>`;
+
+  const behaviour = `<div id="menu" hidden><button class="dn">Deny</button><button class="ed">Edit</button></div>
+    ${EDIT_FORM}
     <div id="dlg" hidden><textarea placeholder="Reason"></textarea><button class="dc">Deny</button></div>
     <script>
       var live = ${state.actionsWork ? "true" : "false"};
@@ -385,6 +406,23 @@ const grid = (search: string) => {
           return;
         }
         if (b.classList.contains("mn")) { target = row; document.getElementById("menu").hidden = false; return; }
+        if (b.classList.contains("ed")) {
+          document.getElementById("menu").hidden = true;
+          document.getElementById("edit").hidden = false;
+          return;
+        }
+        if (b.classList.contains("sv")) {
+          var want = document.querySelector('#edit select[name="category"]').value;
+          document.getElementById("edit").hidden = true;
+          // Recorded server-side, like an approval: the next load of the
+          // grid is what proves the save took.
+          if (target) {
+            var k = target.getAttribute("data-row") || "";
+            fetch("/__category?k=" + encodeURIComponent(k) + "&v=" + encodeURIComponent(want),
+              { method: "POST" });
+          }
+          return;
+        }
         if (b.classList.contains("dn")) {
           document.getElementById("menu").hidden = true;
           document.getElementById("dlg").hidden = false; return;
@@ -428,7 +466,9 @@ const grid = (search: string) => {
     ? shown.map((r) => `<tr><td>${ghostBtn}${cells(r)}</td></tr>`).join("")
     : "";
   const realTable = `<table><thead><tr><th>Date</th><th>Merchant</th><th>Employee</th><th>Amount</th><th></th></tr></thead>
-    <tbody>${ghostRows}${twinRows}${shown.map((r) => `<tr><td>${ghostBtn}${cells(r)}</td></tr>`).join("")}</tbody></table>`;
+    <tbody>${ghostRows}${twinRows}${shown.map((r) =>
+      `<tr data-row="${r.date}|${r.merchant}|${r.who}|${r.amount}"><td>${ghostBtn}${cells(r)}</td></tr>`,
+    ).join("")}</tbody></table>`;
 
   if (state.gridShape === "ghost") {
     // The measuring table a data grid renders to size its columns. It is a
@@ -947,6 +987,13 @@ app.post("/__app", (req, res) => {
   res.json({ ok: true });
 });
 // Told by the page that a row was approved while the grid stayed as it was.
+// The category a row was edited to, so a reload can show it took.
+app.post("/__category", (req, res) => {
+  const q = req.query as Record<string, string>;
+  if (q["k"]) state.categories.set(q["k"], String(q["v"] ?? ""));
+  res.json({ ok: true });
+});
+
 app.post("/__actioned", (req, res) => {
   const k = String((req.query as Record<string, string>)["k"] ?? "");
   if (k) state.actioned.add(k);
@@ -970,7 +1017,7 @@ const reset = () =>
     // the grid to divs left every later test running against divs — and the
     // one that then failed looked like a regression in whatever it was
     // actually testing, rather than leftover state from three tests ago.
-    gridShape: "table", padRows: 0, actionsWork: true, ghostButtons: false, ghostRows: false, twinRows: false, staleGrid: false, actioned: new Set<string>(), searchMode: "substring",
+    gridShape: "table", padRows: 0, actionsWork: true, ghostButtons: false, ghostRows: false, twinRows: false, staleGrid: false, actioned: new Set<string>(), categories: new Map<string, string>(), searchMode: "substring",
     hiddenFromSearch: false, userFilter: "", hangOpens: 0, hangAll: false, oidcHop: false,
     formatControl: "links",
     chipsUnmatchable: false, appPaintMs: 0, showNavLabel: true,

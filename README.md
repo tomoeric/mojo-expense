@@ -342,6 +342,23 @@ runs on boot, before the rule re-check so the flags it clears actually clear,
 and it only ever REMOVES the mark — a line the model called clean stays
 clean.
 
+**Correcting a category is the third option, and often the right one.** A
+fuel purchase at an Exxon filed under Travel · Mileage & Ground
+Transportation is not a thing to deny: the spend is fine and the coding is
+wrong, and denying it tells an employee off for a mistake that is not theirs
+to fix. **Fix category** in the drawer changes it in Emburse — the choices
+offered are the categories this tenant actually uses, gathered from every
+import rather than typed into the code.
+
+It is the only path here that CHANGES a finance record rather than deciding
+on one, so: under the corrector's own Emburse login, never a fallback; never
+automatic, because a person picks the category; exactly ONE matching row, as
+a correction has no second correction coming to tidy up the others; and the
+row is re-read afterwards rather than the save being assumed. Every control
+it touches is a stored selector, and one it cannot find is reported by
+listing what IS on the form, so the right value can be set from the failure
+instead of a second trip.
+
 **Viewing as somebody must never become acting as them.** An admin can look
 at the app through another reviewer's eyes — the control is in the main
 header, the people offered are those with an Emburse login stored, and a band

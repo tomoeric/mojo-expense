@@ -66,7 +66,8 @@ export type DecisionRun = {
 export type DecisionSelectorKey =
   | "resultRow" | "approveButton" | "rowMenu"
   | "denyButton" | "denyReason" | "denyConfirm" | "decisionApplied"
-  | "userFilter" | "userFilterInput" | "userFilterOption";
+  | "userFilter" | "userFilterInput" | "userFilterOption"
+  | "editMenuItem" | "editCategory" | "editCategoryOption" | "editSave";
 
 export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
   // Both grid shapes, because Emburse uses the second one.
@@ -108,6 +109,21 @@ export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
   // the way a selector union can. Set it only if a tenant needs it.
   userFilterInput: "",
   userFilterOption: '[role="option"], li',
+
+  // Correcting a category writes to somebody's finance record, so the parts
+  // of Emburse's edit form are configuration for the same reason as
+  // everything else here: they cannot be known from outside the tenant, and
+  // guessing at markup one step from changing a real expense is how the
+  // wrong field gets written. These are a starting point. A run that cannot
+  // find a control lists every control that IS on the form, so the right
+  // value can be set from the failure rather than from a second trip.
+  editMenuItem: 'text=/^\\s*Edit\\s*$/i',
+  editCategory:
+    '[role="combobox"][aria-label*="categ" i], input[aria-label*="categ" i], ' +
+    'select[name*="categ" i], input[name*="categ" i], input[placeholder*="categ" i], ' +
+    '[data-testid*="categ" i]',
+  editCategoryOption: '[role="option"], li[role="option"], li',
+  editSave: 'button:has-text("Save"), button:has-text("Update"), button[type="submit"]',
 };
 
 export const DECISION_SELECTOR_HELP: Record<DecisionSelectorKey, string> = {
@@ -121,6 +137,10 @@ export const DECISION_SELECTOR_HELP: Record<DecisionSelectorKey, string> = {
   userFilter: "The users dropdown above the grid — the one reading “All users”.",
   userFilterInput: "The box inside that dropdown you type a name into.",
   userFilterOption: "One name in the list the dropdown offers.",
+  editMenuItem: "Edit, inside the \u22ee row menu.",
+  editCategory: "The Category control on the edit form.",
+  editCategoryOption: "One category in the list that control offers.",
+  editSave: "The button that saves the edit form.",
 };
 
 export const DECISION_STEP_SELECTORS: Record<string, DecisionSelectorKey[]> = {
@@ -128,6 +148,7 @@ export const DECISION_STEP_SELECTORS: Record<string, DecisionSelectorKey[]> = {
   "verify it is the right row": ["resultRow"],
   approve: ["approveButton", "decisionApplied"],
   deny: ["rowMenu", "denyButton", "denyReason", "denyConfirm", "decisionApplied"],
+  "correct the category": ["rowMenu", "editMenuItem", "editCategory", "editCategoryOption", "editSave"],
 };
 
 const money = (n: number) => n.toFixed(2);
@@ -2143,4 +2164,280 @@ async function confirmActioned(
       : ", and still there on a freshly loaded view") +
     `, so nothing confirms Emburse recorded it. It may have gone through — check the expense ` +
     `in Emburse before deciding it again.`);
+}
+
+/**
+ * Change an expense's category in Emburse, because the one it carries is
+ * wrong.
+ *
+ * "Flag for incorrect category — want option to correct the category, send
+ * update to Emburse." A fuel purchase at an Exxon filed under Travel ·
+ * Mileage & Ground Transportation is not a thing to deny: the spend is fine
+ * and the coding is wrong, and denying it sends an employee a message about
+ * a mistake that is not theirs to fix.
+ *
+ * This WRITES to the finance record, which puts it in a different class from
+ * everything else the browser does, so three things hold:
+ *
+ *   - It runs under the corrector's own Emburse login, never a shared one
+ *     and never a fallback. Emburse records who changed a field the same way
+ *     it records who approved; the name on it has to be the name of the
+ *     person who decided it.
+ *   - It is never automatic. A person picks the category and presses the
+ *     button, every time. The rules may one day propose a correction, but
+ *     proposing and performing are different, and this is the performing.
+ *   - Every control it touches is configurable, and a control it cannot find
+ *     is reported by listing what IS on the form. Guessing at markup one
+ *     step away from writing somebody's expense record is how the wrong
+ *     field gets changed, so it refuses and says what it saw instead.
+ */
+export async function correctCategory(
+  target: Target,
+  category: string,
+  selectors: Record<string, string>,
+  emburseUrl: string,
+  login: Login,
+  opts: { onChallenge?: ChallengeHook } = {},
+): Promise<DecisionRun & { was: string | null }> {
+  const steps: StepResult[] = [];
+  const step = makeStepper(steps);
+  const sel = { ...DECISION_SELECTORS, ...selectors } as Record<string, string>;
+  const wanted = category.trim();
+  let was: string | null = null;
+
+  const run = await withBrowser("correct a category", async () => {
+    let close: (() => Promise<void>) | null = null;
+    let page: Page | null = null;
+    try {
+      const opened = await openBrowser();
+      close = opened.close;
+      page = await opened.context.newPage();
+      page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
+
+      if (!(await signInOnce(page, sel, emburseUrl, login, step, opts.onChallenge))) {
+        return { ok: false, steps, matchedRow: null, screenshot: null };
+      }
+      await keepTrust(opened.context);
+
+      const ms = env.emburseLogin.stepTimeoutMs;
+      let row: Locator | null = null;
+
+      if (!(await step("find the expense", async () => {
+        const found = await findRow(page!, sel, target, emburseUrl, login);
+        row = found.row;
+        was = found.text;
+        return found.detail;
+      }))) return { ok: false, steps, matchedRow: null, screenshot: null };
+
+      if (!(await step("correct the category", async () => {
+        await (await controlForRow(page!, row!, sel.rowMenu!, "⋮ row menu", ms)).click();
+        await page!.waitForTimeout(400);
+        await clickFirstVisible(page!, sel.editMenuItem!, "Edit in the row menu", ms);
+        await page!.waitForTimeout(1200);
+
+        const field = await firstVisible(page!, sel.editCategory!, ms);
+        if (!field) throw await asError(whatIsOnTheForm(page!, sel.editCategory!, "Category"));
+
+        // A <select> is settled in one call; anything else is a combobox,
+        // which has to be opened, typed into and chosen from.
+        const tag = await field.evaluate((el) => el.tagName.toLowerCase()).catch(() => "");
+        if (tag === "select") {
+          // Read the list before choosing from it. `selectOption` on a label
+          // that is not there times out after the whole step budget and
+          // reports "locator.selectOption: Timeout 8000ms exceeded", which
+          // says nothing about the one thing worth knowing: what the form
+          // actually offers.
+          const labels = await field.evaluate((el) =>
+            Array.from((el as HTMLSelectElement).options).map((o) => o.text.trim()),
+          ).catch(() => [] as string[]);
+          const match = labels.find((l) => l.toLowerCase() === wanted.toLowerCase());
+          if (!match) {
+            throw new Error(
+              `the Category list does not offer “${wanted}”. It offers: ` +
+              `${labels.filter(Boolean).slice(0, 12).join(" | ") || "nothing"}.`);
+          }
+          await field.selectOption({ label: match });
+          return `chose “${match}” from the Category list`;
+        }
+
+        await field.click();
+        await page!.waitForTimeout(250);
+        await field.fill("").catch(() => undefined);
+        await field.pressSequentially(wanted, { delay: 20 }).catch(() => undefined);
+        await page!.waitForTimeout(600);
+
+        const options = page!.locator(sel.editCategoryOption!);
+        const n = Math.min(await options.count().catch(() => 0), 40);
+        const offered: string[] = [];
+        for (let i = 0; i < n; i++) {
+          const o = options.nth(i);
+          if (!(await o.isVisible().catch(() => false))) continue;
+          const text = (await o.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+          if (!text) continue;
+          offered.push(text);
+          // Exact first, so "Meals" cannot take "Meals & Entertainment".
+          if (text.toLowerCase() === wanted.toLowerCase()) {
+            await o.click();
+            return `chose “${text}” from ${offered.length} offered`;
+          }
+        }
+        throw new Error(
+          `the Category list does not offer “${wanted}”. It offered: ` +
+          `${offered.slice(0, 12).join(" | ") || "nothing visible"}. ` +
+          `Pick one of those, or correct the editCategoryOption selector in Settings.`,
+        );
+      }))) return { ok: false, steps, matchedRow: null, screenshot: null };
+
+      if (!(await step("save it", async () => {
+        await clickFirstVisible(page!, sel.editSave!, "Save on the edit form", ms);
+        await page!.waitForTimeout(1500);
+        return "saved";
+      }))) return { ok: false, steps, matchedRow: null, screenshot: null };
+
+      // Said rather than assumed. A save that silently did nothing looks
+      // exactly like one that worked, and this is the finance record.
+      if (!(await step("check it took", async () => {
+        await page!.reload({ waitUntil: "domcontentloaded" }).catch(() => undefined);
+        if (!(await gridLoaded(page!, sel as never))) {
+          return "saved, but the grid did not come back to check it — look in Emburse";
+        }
+        const again = await findRow(page!, sel, target, emburseUrl, login).catch(() => null);
+        if (!again) return "saved; the row is no longer in this view to check against";
+        return again.text.toLowerCase().includes(wanted.toLowerCase())
+          ? `the row now reads “${wanted}”`
+          : `saved, but the row does not show “${wanted}” yet — it may need a moment, or the ` +
+            `save did not take. Check it in Emburse.`;
+      }))) return { ok: false, steps, matchedRow: null, screenshot: null };
+
+      return {
+        ok: true, steps, matchedRow: was,
+        screenshot: (await page.screenshot().catch(() => null))?.toString("base64") ?? null,
+      };
+    } catch (err) {
+      steps.push({ name: "correct the category", ok: false, ms: 0,
+        detail: err instanceof Error ? err.message : String(err) });
+      return {
+        ok: false, steps, matchedRow: was,
+        screenshot: page ? (await page.screenshot().catch(() => null))?.toString("base64") ?? null : null,
+      };
+    } finally {
+      if (close) await close().catch(() => undefined);
+    }
+  });
+
+  return { ...run, was };
+}
+
+/**
+ * The one row this expense is, or a refusal saying why it is not one row.
+ *
+ * Narrower than the decision path's own search on purpose. That one may take
+ * one of several interchangeable rows, because each of them has a decision
+ * queued and all of them end up actioned. Editing has no such argument: a
+ * correction changes ONE record, and if two rows match there is no second
+ * correction coming to tidy up the other. So this wants exactly one, and
+ * says how many it found when it is not.
+ */
+async function findRow(
+  page: Page,
+  sel: Record<string, string>,
+  target: Target,
+  emburseUrl: string,
+  login: Login,
+): Promise<{ row: Locator; text: string; detail: string }> {
+  /*
+   * The cardholder's own queue, not a text search — the same route the
+   * decision path takes, and for the same reason.
+   *
+   * Emburse's text search demonstrably misses rows that ARE in the view,
+   * and this started out searching for the merchant. On a tenant whose
+   * merchant strings carry the card descriptor that means the expenses
+   * most in need of a correction are exactly the ones it could never find:
+   * "MENARDS 3065MENARD" returns nothing, while the row sits one filter
+   * away. My own test caught it, which is the only reason it is not in the
+   * first release of this.
+   */
+  // Land on the transactions page before looking for the dropdown that
+  // lives on it. Without this the filter is hunted for on whatever page the
+  // sign-in finished on, and every run reports "no users filter matched …
+  // Control-shaped things on the page: none" — true, and about the wrong
+  // page. The decision path does the same, for the same reason.
+  await page.goto(gridUrl(emburseUrl, { path: sel.gridPath }), {
+    waitUntil: "domcontentloaded", timeout: env.emburseLogin.openTimeoutMs,
+  });
+  await filterToCardholder(page, sel, target.employee, emburseUrl, sel.gridPath);
+  if (!(await gridLoaded(page, sel as never))) throw await asError(whyNoGrid(page, sel, login.email));
+  const rows = page.locator(sel.resultRow!);
+  const count = await rows.count();
+  if (count === 0) {
+    throw new Error(
+      `${target.employee}'s queue in Emburse has no rows in it, so there is nothing to correct. ` +
+      `It may already have been actioned there.`);
+  }
+
+  const hits: number[] = [];
+  for (let i = 0; i < Math.min(count, ROWS_EXAMINED); i++) {
+    if (rowMatches(await rows.nth(i).innerText().catch(() => ""), target).ok) hits.push(i);
+  }
+  const visible = hits.length > 1 ? await visibleOf(rows, hits) : hits;
+
+  // The vendor score again, for the same reason as everywhere else: three
+  // car washes on one day share a word and are not the same purchase.
+  let only = visible;
+  if (visible.length > 1) {
+    const scores = await Promise.all(visible.map(async (i) =>
+      merchantScore(await rows.nth(i).innerText().catch(() => ""), target.merchant)));
+    const best = Math.max(...scores);
+    const closest = visible.filter((_, k) => scores[k] === best);
+    if (closest.length < visible.length) only = closest;
+  }
+
+  if (only.length !== 1) {
+    throw new Error(
+      `${only.length} of ${count} rows match this expense${
+        hits.length !== visible.length ? ` (${hits.length - visible.length} hidden copies ignored)` : ""
+      }, and a correction changes one record — there is no second correction coming to tidy up ` +
+      `the others. Edit it in Emburse, or narrow what distinguishes these rows.`);
+  }
+  const row = rows.nth(only[0]!);
+  return {
+    row,
+    text: (await row.innerText().catch(() => "")).replace(/\s+/g, " ").trim(),
+    detail: `matched 1 of ${count} rows`,
+  };
+}
+
+/**
+ * What the form actually contains, when the control we wanted is not on it.
+ *
+ * The same reasoning as `whyNoGrid`: this sits one step from writing
+ * somebody's expense record, so a selector that matched nothing is reported
+ * in enough detail to set it by hand rather than widened until something
+ * matches.
+ */
+async function whatIsOnTheForm(page: Page, tried: string, what: string): Promise<string> {
+  const controls = page.locator("input, select, textarea, [role=combobox], [role=listbox]");
+  const n = Math.min(await controls.count().catch(() => 0), 30);
+  const seen: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const c = controls.nth(i);
+    if (!(await c.isVisible().catch(() => false))) continue;
+    const [tag, name, label, ph, role] = await Promise.all([
+      c.evaluate((el) => el.tagName.toLowerCase()).catch(() => "?"),
+      c.getAttribute("name").catch(() => null),
+      c.getAttribute("aria-label").catch(() => null),
+      c.getAttribute("placeholder").catch(() => null),
+      c.getAttribute("role").catch(() => null),
+    ]);
+    seen.push([tag, role && `role=${role}`, name && `name=${name}`,
+      label && `aria-label=${label}`, ph && `placeholder=${ph}`].filter(Boolean).join(" "));
+  }
+  return (
+    `no ${what} control on the edit form matched “${tried}”. ` +
+    (seen.length > 0
+      ? `What IS on the form: ${seen.slice(0, 10).join(" | ")}. Set the editCategory selector ` +
+        `in Settings to whichever of those is the Category box.`
+      : `Nothing form-shaped is visible at all, so the edit form may not have opened — check ` +
+        `the editMenuItem selector.`)
+  );
 }

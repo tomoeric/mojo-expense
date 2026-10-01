@@ -5,7 +5,10 @@ import { requireAuth } from "../auth/index.js";
 import { answerChallenge, cancelChallenge, currentChallenge, waitForCode } from "../emburse/challenge.js";
 import { browserQueue, whyWaiting } from "./browser-lock.js";
 import { credentialForUser, hasCredential, noteResult } from "./credentials.js";
-import { inspectEditForm, runDecision, testConnection, type Decision, type Target } from "./decide.js";
+import {
+  correctCategory, inspectEditForm, runDecision, testConnection,
+  type Decision, type Target,
+} from "./decide.js";
 import {
   appliedCount, cancelDecision, decisionsFor, pendingDecisions, queueApprovalFor, queueDecision,
   clearFailedDecisions, failureReport, failureSummary, recentDecisions, retryFailedDecisions,
@@ -62,6 +65,53 @@ async function targetFor(dedupeKey: string): Promise<Target | null> {
  * phone. An admin cannot answer it for them, so there is nothing to gain by
  * letting them try.
  */
+/**
+ * Correct an expense's category in Emburse.
+ *
+ * The only route in this app that CHANGES a finance record rather than
+ * deciding on one, so it holds the same line everything else does and one
+ * more: under the corrector's own Emburse login, never a fallback; and
+ * never from the automation, because a person picks the category.
+ *
+ * Synchronous rather than queued. Decisions queue because a hundred of them
+ * share one sign-in; a correction is one deliberate act by somebody watching
+ * the screen, and the answer they need — did it take — is worth the minute.
+ */
+decisionRouter.post("/decisions/correct-category", requireAuth, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  const who = req.user?.email ?? "";
+  const body = req.body as { target?: Target; category?: unknown };
+  const category = String(body?.category ?? "").trim();
+  if (!body?.target || !category) {
+    res.status(400).json({ error: "An expense and a category are both needed." });
+    return;
+  }
+  const login = await credentialForUser(who);
+  if (!login) {
+    res.status(400).json({
+      error:
+        "You have no Emburse login stored, and a category change is recorded in Emburse against " +
+        "whoever made it. Add yours under \u201cYour Emburse login\u201d in the user menu.",
+    });
+    return;
+  }
+  try {
+    const settings = await readSettings();
+    const run = await correctCategory(
+      body.target, category, settings.selectors, settings.emburseUrl, login,
+      { onChallenge: (ctx) => waitForCode({ ...ctx, owner: who, loginEmail: login.email }) },
+    );
+    res.json({
+      ok: run.ok,
+      was: run.was,
+      steps: run.steps,
+      detail: run.steps.find((st) => !st.ok)?.detail ?? run.steps.at(-1)?.detail ?? "",
+    });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 decisionRouter.post("/emburse-check", requireAuth, async (req: Request, res: Response) => {
   const who = req.user?.email ?? "";
   const login = await credentialForUser(who);

@@ -344,3 +344,26 @@ export async function testDecision(id: number): Promise<{
   if (!res.ok) throw new Error(body.error ?? "The test could not run.");
   return body;
 }
+
+/**
+ * Change an expense's category in Emburse.
+ *
+ * Synchronous: it signs in, finds the row, edits and checks, which takes
+ * about a minute — and the thing the person wants to know is whether it
+ * took, which is not worth hiding behind a queue for one deliberate act.
+ */
+export async function correctCategory(
+  target: { employee: string; merchant: string; amount: number; date: string | null },
+  category: string,
+): Promise<{ ok: boolean; was: string | null; detail: string }> {
+  const res = await fetch("/api/decisions/correct-category", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ target, category }),
+  });
+  const body = await readJson<{
+    error?: string; ok: boolean; was: string | null; detail: string;
+  }>(res);
+  if (!res.ok) throw new Error(body.error ?? "Could not change the category.");
+  return body;
+}

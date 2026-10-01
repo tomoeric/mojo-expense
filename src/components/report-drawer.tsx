@@ -9,6 +9,7 @@ import { ReceiptPane, ReceiptViewer } from "./receipt-viewer";
 import { ReceiptItems, useReceiptItems, type ReceiptDetail } from "./receipt-items";
 import { AuditBadge } from "./audit-badge";
 import { DecideButtons, InspectEditForm } from "./decide-controls";
+import { FixCategory } from "./fix-category";
 
 /** Line-level detail for one report — what a reviewer actually reads before approving. */
 export function ReportDrawer({
@@ -254,6 +255,19 @@ export function ReportDrawer({
                         }}
                         onCancel={(id) =>
                           cancel.mutate(id, { onError: (e) => setDecideError((e as Error).message) })}
+                      />
+                      {/* The third option, and often the right one. A fuel
+                          purchase coded as Travel is not a thing to deny —
+                          the spend is fine and the coding is wrong, and
+                          denying it tells an employee off for a mistake
+                          that is not theirs to fix. */}
+                      <FixCategory
+                        target={{
+                          employee: report.employeeName,
+                          merchant: l.merchant, amount: l.amount, date: l.date,
+                        }}
+                        current={l.category}
+                        onDone={() => setDecideError("")}
                       />
                       {/* Reconnaissance for correcting a field in Emburse.
                           It opens this row's edit form, reports every
