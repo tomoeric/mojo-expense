@@ -219,8 +219,15 @@ export function App() {
           rather than quietly recorded under the wrong name. */}
       {auth.data?.viewingAs && (
         <div className="border-b border-amber-500/40 bg-amber-500/15 px-5 py-1.5 text-center text-xs text-amber-900 dark:text-amber-200">
-          Viewing as <strong>{auth.data.viewingAs.viewed}</strong> — everything below is their
-          queue, read from their own Emburse Needs Review. Read-only: nothing can be approved,
+          {/* "read from their own Emburse Needs Review" is what this used to
+              claim, and it is the sentence that made a separation look real
+              when it was not: the export reads the TEAM-WIDE tab with no
+              per-person filter, so what their import brought may be the very
+              same rows as everybody else's. The banner says what is true —
+              these are the expenses their import holds — and the Import page
+              says who holds what. */}
+          Viewing as <strong>{auth.data.viewingAs.viewed}</strong> — everything below is the
+          queue their own import holds. Read-only: nothing can be approved,
           denied or changed until you go back to {auth.data.viewingAs.real}.{" "}
           {/* The one action allowed from in here. Checking somebody's view is
               worth little if the view is whatever it was when they last
