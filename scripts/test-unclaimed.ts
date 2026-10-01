@@ -45,11 +45,18 @@ const clean = async (): Promise<void> => {
   await db().query("DELETE FROM app_flags WHERE key = 'importAs'").catch(() => undefined);
 };
 
+/** Place (or re-place) a row in somebody's queue, as an import would. */
 const add = (n: number, reviewer: string) =>
   db().query(
     `INSERT INTO expenses (dedupe_key, employee, expense_date, merchant, amount_cents,
                            category, department, location, note, method, in_inbox, reviewer)
-     VALUES ($1,'Someone','2026-09-24','MERCHANT',1000,'Meals','Ops','Site','','Card',true,$2)`,
+     VALUES ($1,'Someone','2026-09-24','MERCHANT',1000,'Meals','Ops','Site','','Card',true,$2)
+     ON CONFLICT (dedupe_key) DO UPDATE SET
+       in_inbox = true,
+       -- The import's own rule: the first reviewer to claim a row keeps it,
+       -- and a row nobody holds goes to whoever turns up.
+       reviewer = CASE WHEN expenses.reviewer = ''
+                       THEN EXCLUDED.reviewer ELSE expenses.reviewer END`,
     [`${TAG}-${n}`, reviewer]);
 
 /** What this person would be shown, by the one rule that decides it. */
@@ -125,6 +132,38 @@ try {
     await add(9, BRIAN);
     await claimUnclaimed(ERIC);
     check("Brian's row is still Brian's", (await sees(BRIAN)) === 1, String(await sees(BRIAN)));
+  }
+
+  console.log("\nStarting ownership over takes them back off everybody");
+  // The state this exists for: one import, made while the export was still
+  // reading the team-wide list, claimed every row. The other reviewer's
+  // queue is empty and no import of theirs can refill it, because an
+  // expense belongs to the FIRST reviewer who imported it and theirs sees
+  // a row somebody already holds.
+  {
+    await clean();
+    await saveCredential(ERIC, ERIC, ERIC, "pw-eric");
+    await saveCredential(BRIAN, BRIAN, BRIAN, "pw-brian");
+    for (const n of [1, 2, 3]) await add(n, BRIAN);
+    check("Brian holds all three", (await sees(BRIAN)) === 3, String(await sees(BRIAN)));
+    check("…and Eric has nothing", (await sees(ERIC)) === 0, String(await sees(ERIC)));
+
+    const n = await claimUnclaimed("", "reset");
+    check("the reset unstamps them", n === 3, String(n));
+    check("…so nobody holds them", (await unclaimedExpenses()).held.length === 0);
+    // Nothing is deleted — that is the whole difference between this and
+    // starting again.
+    const { rows } = await db().query<{ n: string }>(
+      "SELECT count(*) AS n FROM expenses WHERE dedupe_key LIKE $1", [`${TAG}%`]);
+    check("…and all three expenses are still there", Number(rows[0]!.n) === 3, rows[0]!.n);
+
+    // And the next import to carry one claims it, because blank loses to
+    // whoever turns up: that is how each reviewer gets their own back.
+    await add(1, ERIC);
+    check("Eric's import claims the one his export carries", (await sees(ERIC)) === 1,
+      String(await sees(ERIC)));
+    check("…and the other two are still nobody's",
+      (await unclaimedExpenses()).count >= 2, String((await unclaimedExpenses()).count));
   }
 
   console.log("\nAnd it refuses somebody with no Emburse login at all");

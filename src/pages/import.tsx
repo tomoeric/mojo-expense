@@ -483,12 +483,19 @@ function Unclaimed({
   const [who, setWho] = useState("");
 
   if (!data) return null;
-  const shared = data.held.length > 1;
-  // Nothing unclaimed, one holder: settled. Nothing to say.
+  // Shown whenever more than one person could own a queue. A single-login
+  // deployment never sees it, which is right: there is nothing to decide.
+  //
+  // It used to hide itself when one reviewer held everything, which is
+  // precisely the state that needed it — one import had claimed all 340,
+  // the other reviewer's queue was empty, and the control that would have
+  // fixed it was behind a condition that state did not meet.
+  const many = data.candidates.length > 1;
+  const shared = many && data.held.length > 0;
   if (data.count === 0 && !shared) return null;
-  if (data.count > 0 && data.owner && !shared) return null;
+  if (data.count > 0 && data.owner && !many) return null;
 
-  async function claim(email: string, scope: "unclaimed" | "all") {
+  async function claim(email: string, scope: "unclaimed" | "all" | "reset") {
     setBusy(true);
     setError("");
     try {
@@ -538,9 +545,14 @@ function Unclaimed({
 
       {shared && (
         <p className="mt-1">
-          More than one reviewer holds part of the queue. An expense belongs to the first
-          reviewer who imported it, so if an import once moved rows to the wrong person they
-          stay there until they are moved back.
+          {data.held.length > 1
+            ? "More than one reviewer holds part of the queue."
+            : `All of the waiting expenses are held by ${data.held[0]?.reviewer}.`}{" "} An expense belongs to the first
+          reviewer who imported it, so if an import once claimed rows that were never theirs
+          they stay there — no later import can take them back, because it sees a row somebody
+          already holds and leaves it alone. <strong>Start ownership over</strong> unstamps them
+          all and lets each next import claim what is genuinely in that person&rsquo;s own Needs
+          Review. Nothing is deleted.
         </p>
       )}
 
@@ -573,6 +585,18 @@ function Unclaimed({
           title="Moves every waiting expense to this reviewer, including ones another reviewer currently holds."
         >
           {busy ? "Working…" : "Give them the whole queue"}
+        </button>
+        {/* The way out of ownership that was decided while the export was
+            still reading the wrong list. Needs no name, because the point
+            is to stop asserting one. */}
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void claim("", "reset")}
+          className="rounded-lg border border-border px-3 py-1 text-sm font-semibold disabled:opacity-50"
+          title="Takes the waiting expenses away from everybody. Each reviewer's next import claims what is genuinely in their own Needs Review. Nothing is deleted."
+        >
+          {busy ? "Working…" : "Start ownership over"}
         </button>
       </div>
       {error && <p className="mt-2 text-red-600">{error}</p>}

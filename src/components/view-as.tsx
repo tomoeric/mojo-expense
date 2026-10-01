@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Eye, EyeOff, Loader2 } from "lucide-react";
 
 type Person = {
@@ -34,7 +34,6 @@ export function ViewAs({
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const qc = useQueryClient();
 
   const people = useQuery<{ people: Person[] }>({
     queryKey: ["view-as-people"],
@@ -61,16 +60,25 @@ export function ViewAs({
         throw new Error(body.error ?? "Could not change the view.");
       }
       setOpen(false);
-      // Everything on screen was shaped by who was asking, so none of it is
-      // still true. Cheaper to say that once than to list the queries.
-      //
-      // `clear`, not `invalidate`. Invalidating marks a query stale and
-      // refetches it while STILL SERVING the old data, so for the second or
-      // two it takes, the page renders one person's expenses under the
-      // other's name — complete with their merchants, notes and amounts.
-      // That is the exact failure this whole mode exists to avoid, and it
-      // looks like a leak rather than a loading state.
-      qc.clear();
+      /*
+       * Reload the page, rather than re-fetching into the app that is
+       * already running.
+       *
+       * Two goes at the clever version, both wrong. `invalidateQueries`
+       * refetches while STILL SERVING what it has, so for a second the page
+       * renders one person's expenses under the other's name — merchants,
+       * notes, amounts and all — which is the exact failure this mode
+       * exists to prevent. `clear()` fixes that and swaps it for a worse
+       * one: every query loses its data at once and the app sits there, so
+       * pressing the button looked like it did nothing at all.
+       *
+       * Identity is not query state. It is who the whole app is for, it is
+       * carried in a cookie the server reads on every request, and there is
+       * no honest way to keep half the screen while it changes. A reload
+       * costs a second and cannot show the wrong person's data on the way.
+       */
+      window.location.reload();
+      return;
     } catch (e) {
       setError((e as Error).message);
     } finally {

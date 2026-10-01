@@ -403,10 +403,35 @@ export async function claimUnclaimed(
    * first owner stops that happening again and does nothing about the
    * queue already sitting with the wrong person. This is the way back.
    */
-  scope: "unclaimed" | "all" = "unclaimed",
+  scope: "unclaimed" | "all" | "reset" = "unclaimed",
 ): Promise<number> {
   await ensure();
   const who = userEmail.trim().toLowerCase();
+
+  /*
+   * "reset" names nobody, and is the way out of ownership the app got wrong.
+   *
+   * An expense belongs to the FIRST reviewer who imported it, which stops
+   * the queue changing hands on a timer and has one consequence worth a
+   * button: a reviewer whose import claimed rows that were never theirs
+   * keeps them, and no later import can take them back — the other
+   * person's import sees a row somebody already holds and leaves it alone.
+   * That is exactly what happened here. One import, made while the export
+   * was still reading the team-wide list, claimed all 340 and left the
+   * other reviewer looking at an empty queue with no way to refill it.
+   *
+   * Unstamping is the honest repair. It takes the rows away from everybody
+   * rather than handing them to somebody else on another guess, and then
+   * each reviewer's next import claims what is genuinely in their own
+   * Needs Review. Nothing is deleted: the expenses, their receipts, their
+   * readings and their decisions all stay exactly where they are.
+   */
+  if (scope === "reset") {
+    const { rowCount } = await db().query(
+      "UPDATE expenses SET reviewer = '' WHERE in_inbox AND reviewer <> ''");
+    return rowCount ?? 0;
+  }
+
   if (!who) throw new Error("Name whose expenses these are.");
   const { rows } = await db().query<{ n: string }>(
     "SELECT count(*) AS n FROM emburse_credentials WHERE lower(user_email) = $1", [who]);

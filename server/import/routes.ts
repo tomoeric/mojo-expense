@@ -183,7 +183,7 @@ importRouter.post("/reviewer-imports", requireAuth, requireAdmin, async (req: Re
 importRouter.post("/imports/claim", requireAuth, requireAdmin, async (req: Request, res: Response) => {
   if (!guard(res)) return;
   const { email, scope } = req.body as { email?: unknown; scope?: unknown };
-  const how = scope === "all" ? "all" : "unclaimed";
+  const how = scope === "all" ? "all" : scope === "reset" ? "reset" : "unclaimed";
   try {
     const n = await claimUnclaimed(String(email ?? ""), how);
     console.log(`imports: ${n} ${how} expense(s) claimed for ${String(email)}`);

@@ -726,6 +726,18 @@ Two separate things, and confusing them cost a queue full of failures.
   whose expenses are whose. One login owns them; two and nobody named means
   nobody does, and the app says so and offers to stamp them (Import page →
   claim) rather than guessing.
+- **Changing who you are is a page reload, not a cache operation.** Two
+  clever versions were both wrong: `invalidateQueries` refetches while still
+  serving what it has, so for a second the page rendered one person's
+  expenses under the other's name; `clear()` fixed that and left the app
+  with no data and nothing to refetch, so the button appeared to do nothing.
+  Identity is carried in a cookie the server reads on every request — there
+  is no honest way to keep half the screen while it changes.
+- **"First reviewer keeps it" needs a way out, and it is `reset`.** A
+  reviewer whose import claimed rows that were never theirs keeps them, and
+  no later import can take them back. Import page → **Start ownership over**
+  unstamps every waiting expense (`reviewer = ''`) and lets each next import
+  claim what is genuinely in that person's Needs Review. It deletes nothing.
 - **`scopeFor` is the single definition of whose data something is**
   (`server/emburse/credentials.ts`): your own rows, plus the unclaimed ones if
   you are the shared importer. It exists because the rule had been written out
