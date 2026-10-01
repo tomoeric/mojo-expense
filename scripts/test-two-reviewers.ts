@@ -105,6 +105,32 @@ try {
     check("the hand-uploaded row goes", (await live("")).length === 0);
     check("…and Eric's queue is untouched", (await live(ERIC)).length === 2);
   }
+  console.log("\nWho sees the rows no import has claimed");
+  // The complaint that started this, and the first fix that did not fix it:
+  // every row imported before the reviewer column existed is blank, so
+  // "blank is everyone's" was the old behaviour wearing a new name — Brian
+  // signed in and found all 26 of Eric's.
+  {
+    const shown = async (viewer: string, ownsBlanks: boolean): Promise<number> => {
+      const { rows } = await db().query<{ n: string }>(
+        `SELECT count(*) AS n FROM expenses
+          WHERE dedupe_key LIKE $1
+            AND ($2 = '' OR reviewer = $2 OR (reviewer = '' AND $3))`,
+        [`${TAG}%`, viewer, ownsBlanks]);
+      return Number(rows[0]?.n ?? 0);
+    };
+    await clean();
+    await add(key("eric", 1), ERIC);
+    await add(key("old", 1), "");
+    await add(key("old", 2), "");
+
+    check("the shared importer sees the unclaimed rows", await shown(ERIC, true) === 3);
+    // The line this exists for.
+    check("…and a reviewer who has not imported yet sees none of them",
+      await shown(BRIAN, false) === 0);
+    check("…which is the truth: Emburse has not been asked for his queue yet",
+      (await live(BRIAN)).length === 0);
+  }
 } finally {
   await clean();
   client.release();

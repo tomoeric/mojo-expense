@@ -179,13 +179,20 @@ afternoon has no use for a 2am run.
 
 **And the queue shows you your own.** Rows are filtered to the signed-in
 person's reviewer, which is also what makes "view as Brian" show Brian's
-expenses rather than a copy of Eric's. Blank-reviewer rows — imported before
-this existed, or uploaded by hand — are shown to everyone, so a deployment
-with one login behaves exactly as it did, and they convert to a real
-reviewer the next time a scheduled import reads the same expense. The
-reviewer is part of the cache key as well as the query: keyed on the date
-window alone, whoever asked first would serve their queue to everybody for
-the life of the entry.
+expenses rather than a copy of Eric's.
+
+Rows no import has claimed — everything from before the reviewer column
+existed, and anything uploaded by hand — belong to **whoever the shared
+import runs as**. Showing them to everyone was the first attempt and did
+exactly the thing it was meant to prevent: every old row is blank, so a
+second reviewer signed in and found the whole of the first one's queue. A
+deployment with one login is unaffected, because that login owns them; a
+reviewer who has not imported yet sees nothing, which is the truth, since
+Emburse has not been asked for their Needs Review.
+
+Both the reviewer and that ownership are part of the cache key as well as
+the query: keyed on the date window alone, whoever asked first would serve
+their queue to everybody for the life of the entry.
 
 **An admin can pull the import for the person they are viewing.** It is the
 one action allowed from inside a view, and it is allowed because of what it

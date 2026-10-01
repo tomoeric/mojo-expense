@@ -11,6 +11,7 @@ import { resolveProvider } from "./emburse/provider.js";
 import { isAuthConfigured, requireAdmin, requireAuth } from "./auth/index.js";
 import type { ExpenseReport, ProviderResult } from "./emburse/types.js";
 import { fetchReceipt, ReceiptError } from "./emburse/receipts.js";
+import { sharedImporter } from "./emburse/credentials.js";
 import { db, isDbConfigured } from "./db.js";
 import { checkAi } from "./ai.js";
 import { isKind, listTaxonomy, taxonomyCounts } from "./import/taxonomy.js";
@@ -51,11 +52,18 @@ async function load(
 ) {
   if (force) cache.clear();
   const who = reviewer.trim().toLowerCase();
-  return cache.get(`${who}:${window.startDate}:${window.endDate}`, async () => {
+  // Rows no import has claimed belong to whoever the shared import runs
+  // as — not to everybody, which was the first attempt and showed Brian all
+  // 26 of Eric's the moment he signed in. Every row imported before the
+  // reviewer column existed is blank, so "blank is everyone's" was the old
+  // behaviour wearing a new name.
+  const owner = (await sharedImporter().catch(() => null))?.trim().toLowerCase() ?? "";
+  const ownsBlanks = owner !== "" && owner === who;
+  return cache.get(`${who}:${ownsBlanks}:${window.startDate}:${window.endDate}`, async () => {
     // The signed-in person's own queue. While an admin is viewing as
     // somebody else, `req.user` IS that person, so this is also what makes
     // "view as Brian" show Brian's expenses rather than a copy of Eric's.
-    const { provider, demo } = resolveProvider(who);
+    const { provider, demo } = resolveProvider(who, ownsBlanks);
     const result = await provider.fetchReports(window);
     return { ...result, demo };
   });

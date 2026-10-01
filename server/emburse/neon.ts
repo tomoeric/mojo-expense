@@ -53,13 +53,24 @@ export class NeonProvider implements EmburseProvider {
    * Brian opening the app and finding Eric's work — not a leak, but not his
    * queue either, and no way to tell.
    *
-   * Blank-reviewer rows are shown to everyone on purpose: they are the ones
-   * imported before this existed, and the ones somebody uploaded by hand. A
-   * deployment with one login therefore behaves exactly as it did, and the
-   * blanks convert to a real reviewer the next time a scheduled import
-   * reads the same expense.
+   * Blank-reviewer rows belong to WHOEVER THE SHARED IMPORT RUNS AS, not to
+   * everyone. Showing them to everyone was the first attempt and it did
+   * exactly the thing it was meant to prevent: every row imported before
+   * this column existed is blank, so Brian signed in and found all 26 of
+   * Eric's — the complaint that started this, unchanged.
+   *
+   * Giving them to the shared importer is right on both counts. A
+   * deployment with one login still behaves exactly as it did, because that
+   * login owns them. And a reviewer who has not imported yet sees an empty
+   * queue, which is the truth: Emburse has not been asked for their Needs
+   * Review yet. Hand-uploaded rows go the same way — somebody put them in
+   * the shared queue, so the shared queue is whose they are.
    */
-  constructor(private readonly reviewer: string = "") {}
+  constructor(
+    private readonly reviewer: string = "",
+    /** Who owns the blank-reviewer rows, if anybody does. */
+    private readonly ownsBlanks = false,
+  ) {}
 
   async fetchReports(window: FetchWindow): Promise<ProviderResult> {
     const { rows } = await db().query<Row>(
@@ -127,9 +138,9 @@ export class NeonProvider implements EmburseProvider {
                   AND c.import_id = (SELECT max(id) FROM expense_imports)) AS changes
          FROM expenses e
         WHERE e.expense_date BETWEEN $1::date AND $2::date
-          AND ($3 = '' OR e.reviewer = '' OR e.reviewer = $3)
+          AND ($3 = '' OR e.reviewer = $3 OR (e.reviewer = '' AND $4))
         ORDER BY e.expense_date DESC, e.employee, e.merchant`,
-      [window.startDate, window.endDate, this.reviewer.trim().toLowerCase()],
+      [window.startDate, window.endDate, this.reviewer.trim().toLowerCase(), this.ownsBlanks],
     );
 
     // One group per employee per day.

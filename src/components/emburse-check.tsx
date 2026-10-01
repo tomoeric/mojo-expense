@@ -1,5 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { PlugZap, Loader2, CheckCircle2, AlertTriangle } from "lucide-react";
+import { useDecisions } from "@/lib/decisions";
+import { CodePrompt } from "./code-prompt";
 
 type Step = { name: string; ok: boolean; detail: string; ms: number };
 type Result = { ok: boolean; who?: string; steps?: Step[]; screenshot?: string | null; error?: string };
@@ -13,12 +16,35 @@ type Result = { ok: boolean; who?: string; steps?: Step[]; screenshot?: string |
  *
  * It goes as far as opening the expenses grid, which is everything a decision
  * does except click the button. So it reproduces the actual failure on demand,
- * and a verification code raised along the way can be answered here — once,
- * after which the device is remembered.
+ * and a verification code raised along the way is answered HERE.
+ *
+ * That last word used to be a lie. The run parks for ten minutes waiting for
+ * somebody to type a code, this component said "the prompt appears above",
+ * and the only page that rendered one was the queue — which is not where
+ * anybody is when they are setting their login up. So a new reviewer pressed
+ * Test, watched "this takes a minute" for ten of them, and was told nobody
+ * had entered the code. The prompt is in this box now, where the person who
+ * just pressed the button is looking.
  */
 export function EmburseCheck({ canDecide }: { canDecide: boolean }) {
   const [result, setResult] = useState<Result | null>(null);
   const [busy, setBusy] = useState(false);
+  const qc = useQueryClient();
+  const { challenge, answerCode } = useDecisions([]);
+
+  /**
+   * Ask for the challenge while a test is running.
+   *
+   * The decisions poll only runs itself when something is already pending or
+   * a challenge is already known, and at the moment the test starts neither
+   * is true — so nothing would ever notice the prompt appearing. Two seconds
+   * is cheap against a run that takes sixty.
+   */
+  useEffect(() => {
+    if (!busy) return;
+    const t = setInterval(() => void qc.invalidateQueries({ queryKey: ["decisions"] }), 2000);
+    return () => clearInterval(t);
+  }, [busy, qc]);
 
   const run = async () => {
     setBusy(true);
@@ -54,11 +80,27 @@ export function EmburseCheck({ canDecide }: { canDecide: boolean }) {
         </button>
       </div>
 
-      {busy && (
+      {busy && !challenge && (
         <p className="mt-2 text-xs text-muted-foreground">
-          Signing in to Emburse in a real browser. If it asks to verify the device, the prompt appears
-          above — the code goes to you.
+          Signing in to Emburse in a real browser. If it asks to verify the device, the prompt
+          appears here — the code is emailed to you. It can also be waiting behind an import, which
+          takes a few minutes.
         </p>
+      )}
+
+      {/* Right here, because here is where the person who pressed the button
+          is looking. It is also shown when a test is NOT running: a code can
+          be raised by the scheduled import, and whoever can answer it should
+          be able to without hunting for the page that happens to render it. */}
+      {challenge && (
+        <div className="mt-2">
+          <CodePrompt
+            challenge={challenge}
+            busy={answerCode.isPending}
+            error={answerCode.error ? (answerCode.error as Error).message : ""}
+            onAnswer={(code) => answerCode.mutate(code)}
+          />
+        </div>
       )}
 
       {result && (

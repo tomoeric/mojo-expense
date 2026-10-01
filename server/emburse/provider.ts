@@ -14,11 +14,13 @@ import type { EmburseProvider } from "./types.js";
 export function resolveProvider(
   /** Whose queue to show — see NeonProvider. Blank shows every reviewer's. */
   reviewer = "",
+  /** Whether that person owns the rows no import has claimed. */
+  ownsBlanks = false,
 ): { provider: EmburseProvider; demo: boolean } {
   // Imported data is the real source now: Emburse Spend's API is provisioning
   // only and cannot serve expenses. A configured database therefore wins over
   // every API provider below.
-  if (isDbConfigured()) return { provider: new NeonProvider(reviewer), demo: false };
+  if (isDbConfigured()) return { provider: new NeonProvider(reviewer, ownsBlanks), demo: false };
   if (!isEmburseConfigured()) return { provider: new DemoProvider(), demo: true };
 
   switch (env.emburse.product) {

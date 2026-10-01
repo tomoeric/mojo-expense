@@ -312,3 +312,22 @@ export async function noteResult(
     [userId, ok, error?.slice(0, 500) ?? null, credentialFault],
   );
 }
+
+/**
+ * Who the shared import runs as, by app user — or nobody.
+ *
+ * Needed by the queue, not only by the export: rows that no import has
+ * claimed belong to this person. Deliberately does NOT decrypt anything;
+ * the question is whose name is on the shared import, and a password has
+ * nothing to do with answering it.
+ */
+export async function sharedImporter(): Promise<string | null> {
+  await ensure();
+  const chosen = await flagOwner("importAs").catch(() => null);
+  if (chosen) return chosen;
+  const { rows } = await db().query<{ user_email: string }>(
+    `SELECT user_email FROM emburse_credentials
+      ORDER BY (last_ok_at IS NOT NULL) DESC, last_ok_at DESC, updated_at DESC
+      LIMIT 1`);
+  return rows[0]?.user_email ?? null;
+}
