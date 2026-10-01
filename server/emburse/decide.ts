@@ -395,7 +395,7 @@ export async function runDecision(
   try {
     // The same persistent profile the export uses, so a device trusted once
     // is trusted for both — which is also why it has to queue behind it.
-    const opened = await openBrowser();
+    const opened = await openBrowser(login.email);
     close = opened.close;
     page = await opened.context.newPage();
     page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
@@ -403,7 +403,7 @@ export async function runDecision(
     const ok = await drive(page, decision, target, reason, sel, emburseUrl, login, step, opts, (t) => (matchedRow = t));
     // Whatever the decision itself did, a sign-in that got through is worth
     // keeping — including a device check somebody just cleared by hand.
-    if (steps.find((st) => st.name === "sign in")?.ok) await keepTrust(opened.context);
+    if (steps.find((st) => st.name === "sign in")?.ok) await keepTrust(opened.context, login.email);
     const screenshot = ok ? null : (await page.screenshot()).toString("base64");
     return { ok, steps, screenshot, matchedRow };
   } catch (err) {
@@ -477,7 +477,7 @@ export async function runDecisions(
     let close: (() => Promise<void>) | null = null;
     let page: Page | null = null;
     try {
-      let opened = await openBrowser();
+      let opened = await openBrowser(login.email);
       close = opened.close;
       page = await opened.context.newPage();
       page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
@@ -505,14 +505,14 @@ export async function runDecisions(
         console.log("decisions: the browser could not load Emburse though the network is up — reopening it");
         await close().catch(() => {});
         close = null;
-        opened = await openBrowser();
+        opened = await openBrowser(login.email);
         close = opened.close;
         page = await opened.context.newPage();
         page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
         signedIn = await signInOnce(page, sel, emburseUrl, login, makeStepper(shared), opts.onChallenge);
       }
 
-      if (signedIn) await keepTrust(opened.context);
+      if (signedIn) await keepTrust(opened.context, login.email);
       if (!signedIn) {
         // Nothing can be applied, and each item should say why rather than
         // failing with a blank.
@@ -1260,7 +1260,7 @@ export async function inspectEditForm(
     let close: (() => Promise<void>) | null = null;
     let page: Page | null = null;
     try {
-      const opened = await openBrowser();
+      const opened = await openBrowser(login.email);
       close = opened.close;
       page = await opened.context.newPage();
       page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
@@ -1268,7 +1268,7 @@ export async function inspectEditForm(
       if (!(await signInOnce(page, sel, emburseUrl, login, step, opts.onChallenge))) {
         return { ok: false, steps, matchedRow: null, screenshot: null };
       }
-      await keepTrust(opened.context);
+      await keepTrust(opened.context, login.email);
 
       let row: Locator | null = null;
       const ms = env.emburseLogin.stepTimeoutMs;
@@ -1385,14 +1385,14 @@ export async function testConnection(
     let close: (() => Promise<void>) | null = null;
     let page: Page | null = null;
     try {
-      const opened = await openBrowser();
+      const opened = await openBrowser(login.email);
       close = opened.close;
       const sheet = await opened.context.newPage();
       page = sheet;
       sheet.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
 
       let ok = await signInOnce(sheet, sel, emburseUrl, login, step, opts.onChallenge);
-      if (ok) await keepTrust(opened.context);
+      if (ok) await keepTrust(opened.context, login.email);
 
       // One step further than signing in, because signing in is not where it
       // has been failing. Opening the grid is everything a decision does
@@ -1497,8 +1497,12 @@ async function drive(
  * for a code again on the next ship, and the next, with the page cheerfully
  * reporting that Emburse trusts this browser (it did; just not as them).
  */
-async function keepTrust(context: BrowserContext): Promise<void> {
-  await rememberCookies(context).catch(() => 0);
+async function keepTrust(context: BrowserContext, asUser: string): Promise<void> {
+  // Saved against the account that signed in, not into one shared jar. One
+  // jar meant the next run restored whoever had gone last — and because
+  // sign-in returns early on "already signed in", that run would skip the
+  // password step and read their queue under its own name.
+  await rememberCookies(context, asUser).catch(() => 0);
 }
 
 async function signInOnce(
@@ -2228,7 +2232,7 @@ export async function correctCategory(
     let close: (() => Promise<void>) | null = null;
     let page: Page | null = null;
     try {
-      const opened = await openBrowser();
+      const opened = await openBrowser(login.email);
       close = opened.close;
       page = await opened.context.newPage();
       page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
@@ -2236,7 +2240,7 @@ export async function correctCategory(
       if (!(await signInOnce(page, sel, emburseUrl, login, step, opts.onChallenge))) {
         return { ok: false, steps, matchedRow: null, screenshot: null };
       }
-      await keepTrust(opened.context);
+      await keepTrust(opened.context, login.email);
 
       const ms = env.emburseLogin.stepTimeoutMs;
       let row: Locator | null = null;

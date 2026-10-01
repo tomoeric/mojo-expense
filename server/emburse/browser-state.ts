@@ -29,6 +29,29 @@ CREATE TABLE IF NOT EXISTS emburse_browser_state (
   state      bytea       NOT NULL,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- ONE JAR PER ACCOUNT. The table above holds exactly one row, by design,
+-- from when one login was the whole app — and with two reviewers that is a
+-- session belonging to whoever signed in last, handed to whoever runs next.
+--
+-- What that does is worse than losing the trust. Sign-in returns early on
+-- "already signed in" when it finds a live session, so a run that restored
+-- the other person's cookies skips the password step, reads THEIR Needs
+-- Review, and reports success under the name it meant to use. Everything
+-- else in this app can be scoped perfectly and a run can still come back
+-- with the wrong person's expenses, intermittently, depending only on who
+-- happened to export last.
+--
+-- Keyed by the app user, like the credential it belongs to. The old table
+-- is left alone rather than migrated: its single row cannot say whose
+-- session it holds, which is the entire problem, and guessing an owner for
+-- it would be the same mistake in a different place. Everybody signs in
+-- once more and the jars are right from then on.
+CREATE TABLE IF NOT EXISTS emburse_browser_jars (
+  user_email text PRIMARY KEY,
+  state      bytea       NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
 `;
 
 let ready: Promise<void> | null = null;
@@ -47,14 +70,26 @@ type Cookie = Parameters<BrowserContext["addCookies"]>[0][number];
  * run signs in the long way, which is the behaviour it had before any of this
  * existed — so it is logged and stepped over rather than thrown.
  */
-export async function restoreCookies(context: BrowserContext): Promise<number> {
+export async function restoreCookies(
+  context: BrowserContext,
+  /**
+   * Whose session to put back. No name, no cookies — deliberately.
+   *
+   * An unnamed run is one we cannot attribute, and handing it the last
+   * session anybody saved is how a run ends up reading somebody else's
+   * queue. Signing in the long way is slower and always correct.
+   */
+  userEmail = "",
+): Promise<number> {
   // No database is a legitimate way to run — the app boots without one, and so
   // should this. Silently, because there is nothing wrong to report.
   if (!isDbConfigured()) return 0;
+  const who = userEmail.trim().toLowerCase();
+  if (!who) return 0;
   try {
     await ensure();
     const { rows } = await db().query<{ state: Buffer }>(
-      "SELECT state FROM emburse_browser_state WHERE id",
+      "SELECT state FROM emburse_browser_jars WHERE user_email = $1", [who],
     );
     const sealed = rows[0]?.state;
     if (!sealed) return 0;
@@ -81,17 +116,23 @@ export async function restoreCookies(context: BrowserContext): Promise<number> {
  * worth anything — it now contains whatever Emburse issued for passing the
  * device check.
  */
-export async function rememberCookies(context: BrowserContext): Promise<number> {
+export async function rememberCookies(
+  context: BrowserContext,
+  /** Whose session this is. Unnamed is not saved, for the same reason. */
+  userEmail = "",
+): Promise<number> {
   if (!isDbConfigured()) return 0;
+  const who = userEmail.trim().toLowerCase();
+  if (!who) return 0;
   try {
     await ensure();
     const { cookies } = await context.storageState();
     if (cookies.length === 0) return 0;
 
     await db().query(
-      `INSERT INTO emburse_browser_state (id, state, updated_at) VALUES (true, $1, now())
-       ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, updated_at = now()`,
-      [seal(JSON.stringify(cookies))],
+      `INSERT INTO emburse_browser_jars (user_email, state, updated_at) VALUES ($1, $2, now())
+       ON CONFLICT (user_email) DO UPDATE SET state = EXCLUDED.state, updated_at = now()`,
+      [who, seal(JSON.stringify(cookies))],
     );
     return cookies.length;
   } catch (err) {
@@ -100,19 +141,33 @@ export async function rememberCookies(context: BrowserContext): Promise<number> 
   }
 }
 
-/** Forget the remembered device — the escape hatch when a jar goes stale. */
-export async function forgetCookies(): Promise<void> {
+/**
+ * Forget a remembered device — the escape hatch when a jar goes stale.
+ *
+ * One person's, when named. Unnamed clears everybody's, which is what the
+ * button did when there was one jar and is still the right thing for "this
+ * browser has gone strange".
+ */
+export async function forgetCookies(userEmail = ""): Promise<void> {
   if (!isDbConfigured()) return;
   await ensure();
+  const who = userEmail.trim().toLowerCase();
   await db().query("DELETE FROM emburse_browser_state");
+  await (who
+    ? db().query("DELETE FROM emburse_browser_jars WHERE user_email = $1", [who])
+    : db().query("DELETE FROM emburse_browser_jars"));
 }
 
-/** When the jar was last written, for showing whether a device is remembered. */
-export async function cookiesSavedAt(): Promise<string | null> {
+/** When a jar was last written, for showing whether a device is remembered. */
+export async function cookiesSavedAt(userEmail = ""): Promise<string | null> {
   if (!isDbConfigured()) return null;
   await ensure();
+  const who = userEmail.trim().toLowerCase();
   const { rows } = await db().query<{ updated_at: Date }>(
-    "SELECT updated_at FROM emburse_browser_state WHERE id",
+    who
+      ? "SELECT updated_at FROM emburse_browser_jars WHERE user_email = $1"
+      : "SELECT max(updated_at) AS updated_at FROM emburse_browser_jars",
+    who ? [who] : [],
   );
-  return rows[0] ? rows[0].updated_at.toISOString() : null;
+  return rows[0]?.updated_at ? rows[0].updated_at.toISOString() : null;
 }

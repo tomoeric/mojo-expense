@@ -135,6 +135,7 @@ export function ExportRunner({
         challenge: Challenge | null;
         deviceRememberedAt: string | null;
         viewingAs: string | null;
+        runsFor: string | null;
       }>(res);
       if (!res.ok) throw new Error(body.error ?? "Failed");
       return body as {
@@ -144,6 +145,7 @@ export function ExportRunner({
         challenge: Challenge | null;
         deviceRememberedAt: string | null;
         viewingAs: string | null;
+        runsFor: string | null;
       };
     },
     // While a run is going, the list is the only progress indicator there is.
@@ -279,6 +281,16 @@ export function ExportRunner({
       {/* Whose import this page is about. An admin inside a view needs to
           know the button pulls the queue of the person they are viewing,
           and not to have to infer it from the rows underneath. */}
+      {/* Whose runs these are. Outside a view it is your own queue, which
+          is the whole point and was not obvious when the list mixed two
+          reviewers with nothing saying which was which. */}
+      {!q.data?.viewingAs && q.data?.runsFor && (
+        <p className="text-xs text-muted-foreground">
+          Your own import — signs into Emburse as <strong>{q.data.runsFor}</strong> and reads
+          their Needs Review. The history below is yours.
+        </p>
+      )}
+
       {q.data?.viewingAs && (
         <p className="rounded-lg border border-sky-500/30 bg-sky-500/10 p-3 text-sm">
           You are viewing as <strong>{q.data.viewingAs}</strong>. Running the export signs into

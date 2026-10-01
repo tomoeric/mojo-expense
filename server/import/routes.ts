@@ -6,7 +6,7 @@ import { ingestExport } from "./ingest.js";
 import { describeSchedule } from "./schedule.js";
 import { ALL_SECTIONS, cleanSchedule, readSettings, writeSettings } from "./settings.js";
 import { DEFAULT_SELECTORS, SELECTOR_HELP, STEP_SELECTORS, envLogin } from "../emburse/auto-export.js";
-import { claimUnclaimed, credentialStatus, deleteCredential, listCredentials, saveCredential,
+import { claimUnclaimed, credentialStatus, deleteCredential, hasCredential, listCredentials, saveCredential,
          scopeFor, unclaimedExpenses } from "../emburse/credentials.js";
 import { attemptExport, nextDue, recentRuns, reviewerImports, runScreenshot, setReviewerImport,
          stopRun } from "../emburse/export-scheduler.js";
@@ -311,7 +311,27 @@ importRouter.post("/export-run", requireAuth, requireAdmin, async (req: Request,
    * their rights cannot keep them by staying inside a view.
    */
   const real = req.viewingAs?.real.email ?? req.user?.email ?? "manual";
-  const reviewer = req.viewingAs ? req.viewingAs.viewed : "";
+
+  /*
+   * A manual run is the caller's OWN queue, not "whoever worked last".
+   *
+   * This said `req.viewingAs ? viewed : ""`, and the empty string means the
+   * shared import, which picks a login by `credentialForExport()` — whose
+   * fallback is still "the credential most recently proven to work". So on
+   * a Tuesday when Brian's export had succeeded most recently, Eric pressed
+   * Run export now on his own settings page, not viewing as anybody, and
+   * the run signed in as brian.c@mojocarwash.com and imported Brian's
+   * Needs Review. Nothing on the page said it would.
+   *
+   * The same rule as everywhere else now: a run reads the queue of the
+   * person who asked for it. Only somebody with no stored login of their
+   * own falls back to the shared import, which is the single-login
+   * deployment and the env fallback, both of which have one queue anyway.
+   */
+  const asker = req.user?.email ?? "";
+  const reviewer = req.viewingAs
+    ? req.viewingAs.viewed
+    : (asker && await hasCredential(asker).catch(() => false)) ? asker : "";
   try {
     // Start it, do not wait for it. A run takes minutes — longer still when it
     // stops to ask somebody for a verification code — and the proxy in front
@@ -361,14 +381,24 @@ importRouter.get("/export-runs", requireAuth, async (req: Request, res: Response
     // Inside a view, this page is about the person being viewed: their runs
     // and their timeline, not a mixture. Outside one it is the admin's
     // overview of every reviewer, and each row says whose queue it read.
+    //
+    // Outside a view it is the signed-in person's own, not everybody's.
+    // "Import queues need to be separated" — and a history that mixes two
+    // reviewers' runs is where this went wrong twice: a 320-item success
+    // sitting above your own run, and no way to tell whose it was.
     const viewed = req.viewingAs?.viewed;
+    const mine = viewed
+      ?? ((req.user?.email && await hasCredential(req.user.email).catch(() => false))
+            ? req.user.email : undefined);
     res.json({
       configured: (await listCredentials()).length > 0 || envLogin() !== null,
-      due: await nextDue(schedule, new Date(), viewed ?? ""),
-      runs: await recentRuns(20, viewed),
+      due: await nextDue(schedule, new Date(), mine ?? ""),
+      runs: await recentRuns(20, mine),
       // Who this page is about, so it can say so rather than leaving somebody
       // to work it out from the rows.
       viewingAs: viewed ?? null,
+      // Whose runs and whose timeline these are, so the page can say it.
+      runsFor: mine ?? null,
       // Carried on the list rather than its own endpoint: this is already the
       // thing the page polls while a run is going, and a challenge is only
       // ever raised during one.
@@ -378,7 +408,11 @@ importRouter.get("/export-runs", requireAuth, async (req: Request, res: Response
       // When the browser last kept a session. The only visible sign that a
       // device is still trusted, and the thing to look at when a code gets
       // asked for that should not have been.
-      deviceRememberedAt: await cookiesSavedAt(),
+      // Their device, not whoever signed in last. One shared jar was both
+      // a wrong readout and a way for one person's run to pick up another's
+      // session, which is why there is one per account now.
+      deviceRememberedAt: await cookiesSavedAt(
+        await ownLoginEmail(req.user?.email ?? "")),
     });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Could not read export runs." });
@@ -415,11 +449,29 @@ importRouter.post("/export-challenge", requireAuth, requireAdmin, (req: Request,
  * past sign-in and then fails somewhere stranger. Clearing it costs one
  * verification code.
  */
-importRouter.delete("/export-device", requireAuth, requireAdmin, async (_req: Request, res: Response) => {
+importRouter.delete("/export-device", requireAuth, requireAdmin, async (req: Request, res: Response) => {
   if (!guard(res)) return;
+  // Everybody's. This is the "the browser has gone strange" button, and a
+  // stale jar for one account is rarely the only stale one; the cost is one
+  // verification code each, which is the point of pressing it.
   await forgetCookies();
+  console.log(`export: remembered devices cleared by ${req.user?.email ?? "unknown"}`);
   res.json({ ok: true });
 });
+
+/**
+ * The Emburse login email behind an app user, for keying their cookie jar.
+ *
+ * The jar belongs to the Emburse account that signed in, which is not the
+ * app address when somebody signs into Emburse under a different one — as
+ * here, where mojocarwash.com users hold mammothholdings.com logins.
+ */
+async function ownLoginEmail(appUser: string): Promise<string> {
+  if (!appUser) return "";
+  const found = (await listCredentials().catch(() => []))
+    .find((c) => c.userEmail.toLowerCase() === appUser.trim().toLowerCase());
+  return found?.loginEmail ?? "";
+}
 
 /** Give up on a parked sign-in rather than waiting out its timeout. */
 importRouter.delete("/export-challenge", requireAuth, requireAdmin, (req: Request, res: Response) => {

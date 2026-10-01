@@ -297,7 +297,18 @@ export async function systemChromium(): Promise<string | null> {
  *
  * It also keeps the session, so most runs skip sign-in entirely.
  */
-export async function openBrowser(): Promise<{ context: BrowserContext; close: () => Promise<void> }> {
+export async function openBrowser(
+  /**
+   * Whose saved session to put in the browser, if any.
+   *
+   * Required in spirit: a run with no name gets a clean context and signs
+   * in the long way. That is the safe end of the trade, because sign-in
+   * returns early on "already signed in" — so an unnamed run handed the
+   * last session anybody saved would skip the password step and read that
+   * person's Needs Review while reporting its own name.
+   */
+  asUser = "",
+): Promise<{ context: BrowserContext; close: () => Promise<void> }> {
   const chromium = await loadPlaywright();
   const executablePath = (await systemChromium()) ?? undefined;
   const args = ["--no-sandbox", "--disable-dev-shm-usage"];
@@ -345,7 +356,7 @@ export async function openBrowser(): Promise<{ context: BrowserContext; close: (
     // The profile directory carries trust between runs; the database carries
     // it between deployments, which rebuild that directory and would otherwise
     // lose the device every time the app ships.
-    await restoreCookies(context);
+    await restoreCookies(context, asUser);
     return { context, close: () => context.close() };
   }
 
@@ -355,7 +366,7 @@ export async function openBrowser(): Promise<{ context: BrowserContext; close: (
     acceptDownloads: true,
     viewport: { width: 1600, height: 1000 },
   });
-  await restoreCookies(context);
+  await restoreCookies(context, asUser);
   return { context, close: () => browser.close() };
 }
 
@@ -460,7 +471,7 @@ export async function runAutoExport(
   // thing.
   return withBrowser(opts.dryRun ? "a test export" : "the export", async () => {
   try {
-    const opened = await openBrowser();
+    const opened = await openBrowser(login.email);
     close = opened.close;
     page = await opened.context.newPage();
     page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
@@ -475,7 +486,7 @@ export async function runAutoExport(
     // After the steps rather than after sign-in, because the cookies that
     // matter are only set once the app has actually loaded.
     if (steps.find((st) => st.name === "sign in")?.ok) {
-      await rememberCookies(opened.context);
+      await rememberCookies(opened.context, login.email);
     }
 
     // Short leash, and never fatal. A page that has already timed out times
