@@ -11,11 +11,14 @@ import type { EmburseProvider } from "./types.js";
  * back to demo data so the app is fully explorable before Emburse access lands
  * — the response is marked `demo: true` so the UI can say so plainly.
  */
-export function resolveProvider(): { provider: EmburseProvider; demo: boolean } {
+export function resolveProvider(
+  /** Whose queue to show — see NeonProvider. Blank shows every reviewer's. */
+  reviewer = "",
+): { provider: EmburseProvider; demo: boolean } {
   // Imported data is the real source now: Emburse Spend's API is provisioning
   // only and cannot serve expenses. A configured database therefore wins over
   // every API provider below.
-  if (isDbConfigured()) return { provider: new NeonProvider(), demo: false };
+  if (isDbConfigured()) return { provider: new NeonProvider(reviewer), demo: false };
   if (!isEmburseConfigured()) return { provider: new DemoProvider(), demo: true };
 
   switch (env.emburse.product) {

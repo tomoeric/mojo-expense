@@ -3,7 +3,7 @@ import { ingestExport } from "../import/ingest.js";
 import { readSettings, type Schedule } from "../import/settings.js";
 import { envLogin, runAutoExport, type ExportRun, type Selectors } from "./auto-export.js";
 import { waitForCode } from "./challenge.js";
-import { credentialForExport, noteResult } from "./credentials.js";
+import { credentialForExport, credentialForUser, noteResult } from "./credentials.js";
 
 /**
  * Run the export on the configured schedule.
@@ -34,6 +34,34 @@ CREATE TABLE IF NOT EXISTS export_runs (
   screenshot  bytea
 );
 CREATE INDEX IF NOT EXISTS export_runs_day_idx ON export_runs (local_date, id DESC);
+
+-- WHOSE Needs Review this run read.
+--
+-- Emburse's Needs Review is per account, so two reviewers are two imports
+-- with two timelines. "How many attempts have been made today" is a
+-- question about one of them: counted across both, Eric's morning run
+-- spends Brian's attempts and Brian's queue never updates.
+ALTER TABLE export_runs ADD COLUMN IF NOT EXISTS reviewer text NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS export_runs_reviewer_idx
+  ON export_runs (reviewer, local_date, id DESC);
+
+-- A reviewer's own import schedule.
+--
+-- Null means "use the shared one", which is what everybody gets until
+-- somebody deliberately wants different times — a reviewer whose expenses
+-- arrive in the afternoon has no use for a 2am run.
+CREATE TABLE IF NOT EXISTS reviewer_imports (
+  user_email       text PRIMARY KEY,
+  enabled          boolean NOT NULL DEFAULT true,
+  timezone         text,
+  first_run        text,
+  retry_hours      integer,
+  attempts_per_day integer,
+  grace_minutes    integer,
+  all_day          boolean,
+  updated_at       timestamptz NOT NULL DEFAULT now(),
+  updated_by       text
+);
 `;
 
 let ready: Promise<void> | null = null;
@@ -90,11 +118,14 @@ function offset(date: Date, tz: string): number {
 }
 
 /** Attempts already made today, and whether any of them worked. */
-async function todaysAttempts(day: string): Promise<{ count: number; succeeded: boolean }> {
+async function todaysAttempts(
+  day: string, reviewer = "",
+): Promise<{ count: number; succeeded: boolean }> {
   const { rows } = await db().query<{ count: string; succeeded: boolean }>(
     `SELECT count(*)::text AS count, coalesce(bool_or(ok), false) AS succeeded
-       FROM export_runs WHERE local_date = $1 AND trigger = 'scheduled'`,
-    [day],
+       FROM export_runs
+      WHERE local_date = $1 AND trigger = 'scheduled' AND reviewer = $2`,
+    [day, reviewer],
   );
   return { count: Number(rows[0]?.count ?? 0), succeeded: rows[0]?.succeeded ?? false };
 }
@@ -108,9 +139,11 @@ async function todaysAttempts(day: string): Promise<{ count: number; succeeded: 
 export async function nextDue(
   schedule: Schedule,
   now = new Date(),
+  /** Whose timeline this is. Each reviewer's runs are counted separately. */
+  reviewer = "",
 ): Promise<{ due: boolean; attempt: number; reason: string }> {
   const day = localDate(schedule, now);
-  const { count, succeeded } = await todaysAttempts(day);
+  const { count, succeeded } = await todaysAttempts(day, reviewer);
 
   // Only when the slots are RETRIES does a success close the day. On an
   // all-day schedule they are not retries, they are the times the import
@@ -212,6 +245,14 @@ export async function attemptExport(
      * reports its progress through the run list.
      */
     onStarted?: (id: number) => void;
+    /**
+     * Whose Needs Review to read, by app user.
+     *
+     * Omitted means the one chosen for the shared import. Given, the run
+     * signs in as that person and everything it brings back is stamped as
+     * theirs, which is what keeps two reviewers' queues apart.
+     */
+    reviewer?: string;
   } = {},
 ): Promise<{ id: number; run: ExportRun; importId: number | null }> {
   await ensure();
@@ -219,10 +260,11 @@ export async function attemptExport(
   const day = localDate(settings.schedule);
 
   const { rows } = await db().query<{ id: string; attempt: number }>(
-    `INSERT INTO export_runs (local_date, attempt, trigger)
-     VALUES ($1, (SELECT count(*) + 1 FROM export_runs WHERE local_date = $1 AND trigger = $2), $2)
+    `INSERT INTO export_runs (local_date, attempt, trigger, reviewer)
+     VALUES ($1, (SELECT count(*) + 1 FROM export_runs
+                   WHERE local_date = $1 AND trigger = $2 AND reviewer = $3), $2, $3)
      RETURNING id, attempt`,
-    [day, trigger],
+    [day, trigger, opts.reviewer ?? ""],
   );
   const id = Number(rows[0]!.id);
   opts.onStarted?.(id);
@@ -237,7 +279,19 @@ export async function attemptExport(
   try {
     // A credential someone entered in the app, else the env fallback. Neither
     // existing is a configuration problem, not a run that failed silently.
-    const login = (await credentialForExport()) ?? envLogin();
+    // THE reviewer's own login when one is named, so the export reads THEIR
+    // Needs Review. Falling back to the shared choice would read somebody
+    // else's queue and stamp it as theirs, which is worse than not running.
+    const login = opts.reviewer
+      ? await credentialForUser(opts.reviewer).then((c) =>
+          c ? { ...c, userEmail: opts.reviewer!, chosen: `the import for ${opts.reviewer}` } : null)
+      : (await credentialForExport()) ?? envLogin();
+    if (opts.reviewer && !login) {
+      throw new Error(
+        `${opts.reviewer} has no Emburse login stored, so their Needs Review cannot be read. ` +
+        `Nothing else's queue will be used in its place — that would be a different set of ` +
+        `expenses recorded as theirs.`);
+    }
     if (!login) {
       throw new Error(
         "No Emburse login is stored. Whoever will own the export can add one under " +
@@ -368,6 +422,87 @@ export async function closeOrphanedRuns(): Promise<number> {
   return rowCount ?? 0;
 }
 
+export type ReviewerImport = {
+  userEmail: string;
+  enabled: boolean;
+  /** The reviewer's own times, or the shared schedule where they set none. */
+  schedule: Schedule;
+  /** True where every field came from the shared schedule. */
+  shared: boolean;
+};
+
+/**
+ * Who the scheduler imports for, and on what timetable.
+ *
+ * One row per person with a stored Emburse login, because that is exactly
+ * who HAS a Needs Review to read. A reviewer with no times of their own
+ * runs on the shared schedule, which is what everybody gets until somebody
+ * wants different ones — a reviewer whose expenses arrive in the afternoon
+ * has no use for a 2am run.
+ *
+ * The person chosen for the shared import (`importAs`) is not special here:
+ * they are simply one of the reviewers, and if nobody has been chosen the
+ * blank reviewer stands in so a single-login deployment behaves exactly as
+ * it did before any of this existed.
+ */
+export async function reviewerImports(): Promise<ReviewerImport[]> {
+  await ensure();
+  const { schedule: shared } = await readSettings();
+  const { listCredentials } = await import("./credentials.js");
+  const people = await listCredentials().catch(() => []);
+  if (people.length === 0) {
+    return [{ userEmail: "", enabled: true, schedule: shared, shared: true }];
+  }
+
+  const { rows } = await db().query<{
+    user_email: string; enabled: boolean; timezone: string | null; first_run: string | null;
+    retry_hours: number | null; attempts_per_day: number | null; grace_minutes: number | null;
+    all_day: boolean | null;
+  }>("SELECT * FROM reviewer_imports");
+  const own = new Map(rows.map((r) => [r.user_email.toLowerCase(), r]));
+
+  return people.map((p) => {
+    const r = own.get(p.userEmail.toLowerCase());
+    const set = [r?.timezone, r?.first_run, r?.retry_hours, r?.attempts_per_day,
+                 r?.grace_minutes, r?.all_day].some((v) => v !== null && v !== undefined);
+    return {
+      userEmail: p.userEmail,
+      enabled: r?.enabled ?? true,
+      shared: !set,
+      schedule: {
+        timezone: r?.timezone ?? shared.timezone,
+        firstRun: r?.first_run ?? shared.firstRun,
+        retryHours: r?.retry_hours ?? shared.retryHours,
+        attemptsPerDay: r?.attempts_per_day ?? shared.attemptsPerDay,
+        graceMinutes: r?.grace_minutes ?? shared.graceMinutes,
+        allDay: r?.all_day ?? shared.allDay,
+      },
+    };
+  });
+}
+
+/** Set or clear one reviewer's own import times. */
+export async function setReviewerImport(
+  userEmail: string,
+  input: { enabled?: boolean; schedule?: Partial<Schedule> | null },
+  by: string,
+): Promise<void> {
+  await ensure();
+  const sc = input.schedule;
+  await db().query(
+    `INSERT INTO reviewer_imports (user_email, enabled, timezone, first_run, retry_hours,
+                                   attempts_per_day, grace_minutes, all_day, updated_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     ON CONFLICT (user_email) DO UPDATE SET
+       enabled = EXCLUDED.enabled, timezone = EXCLUDED.timezone,
+       first_run = EXCLUDED.first_run, retry_hours = EXCLUDED.retry_hours,
+       attempts_per_day = EXCLUDED.attempts_per_day, grace_minutes = EXCLUDED.grace_minutes,
+       all_day = EXCLUDED.all_day, updated_at = now(), updated_by = EXCLUDED.updated_by`,
+    [userEmail.trim().toLowerCase(), input.enabled ?? true,
+     sc?.timezone ?? null, sc?.firstRun ?? null, sc?.retryHours ?? null,
+     sc?.attemptsPerDay ?? null, sc?.graceMinutes ?? null, sc?.allDay ?? null, by]);
+}
+
 export function startExportScheduler(): void {
   if (timer) return;
   // No credential check at boot: one can be added in the app at any time, and a
@@ -380,18 +515,26 @@ export function startExportScheduler(): void {
     running = true;
     try {
       await ensure();
-      const { schedule } = await readSettings();
-      const { due, attempt } = await nextDue(schedule);
-      if (!due) return;
+      // One timeline per reviewer. Emburse's Needs Review is per account, so
+      // "is an import due" is a question about one person's queue — asked
+      // across all of them, the first reviewer's morning run spends
+      // everybody's attempts and the rest never update.
+      for (const who of await reviewerImports()) {
+        if (!who.enabled) continue;
+        const { due, attempt } = await nextDue(who.schedule, new Date(), who.userEmail);
+        if (!due) continue;
 
-      console.log(`export: starting scheduled attempt ${attempt}`);
-      const { run } = await attemptExport("scheduled", "scheduler");
-      const failed = run.steps.find((s) => !s.ok);
-      console.log(
-        run.ok
-          ? `export: attempt ${attempt} succeeded (${run.itemLine ?? "no item count"})`
-          : `export: attempt ${attempt} failed at "${failed?.name ?? "start"}" — ${failed?.detail ?? "unknown"}`,
-      );
+        console.log(
+          `export: starting scheduled attempt ${attempt}` +
+          (who.userEmail ? ` for ${who.userEmail}` : ""));
+        const { run } = await attemptExport("scheduled", "scheduler", { reviewer: who.userEmail });
+        const failed = run.steps.find((s) => !s.ok);
+        console.log(
+          run.ok
+            ? `export: attempt ${attempt} succeeded (${run.itemLine ?? "no item count"})`
+            : `export: attempt ${attempt} failed at "${failed?.name ?? "start"}" — ${failed?.detail ?? "unknown"}`,
+        );
+      }
     } catch (err) {
       console.error("export scheduler:", err);
     } finally {

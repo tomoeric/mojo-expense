@@ -94,6 +94,21 @@ console.log("\nAn admin viewing as somebody else");
   check("the control that ends it still works", exit.nexted);
   check("…and it knows who really pressed it",
     exit.req.viewingAs?.real.email === "eric.s@mammothholdings.com");
+
+  // And one more, because an admin checking somebody's view has to be able
+  // to refresh it. An import reads Emburse and writes our own tables — it
+  // approves nothing, denies nothing, and puts nobody's name on a decision,
+  // which is what separates it from every other write.
+  const pull = run({ method: "POST", path: "/api/export-run", cookie: BRIAN });
+  check("running the viewed person's import is allowed", pull.nexted);
+  check("…and the real admin is still known for the record",
+    pull.req.viewingAs?.real.email === "eric.s@mammothholdings.com");
+  // The carve-out is two routes, not a category. Anything that decides is
+  // still refused from inside a view.
+  for (const path of ["/api/decisions", "/api/decisions/correct-category", "/api/rules"]) {
+    const w = run({ method: "POST", path, cookie: BRIAN });
+    check(`${path} is still refused`, !w.nexted && w.status === 403);
+  }
 }
 
 console.log("\nWho may do it at all");

@@ -35,10 +35,27 @@ function readWindow(q: Record<string, unknown>): { startDate: string; endDate: s
   return { startDate: iso(capped), endDate: iso(end) };
 }
 
-async function load(window: { startDate: string; endDate: string }, force: boolean) {
+/**
+ * `reviewer` is part of the cache key, not only of the query.
+ *
+ * Emburse's Needs Review is per account, so two people asking for the same
+ * date window are asking two different questions. Keyed on the window alone,
+ * whoever asked first would serve their queue to everybody for the life of
+ * the entry — which is the same bug as showing everybody everything, only
+ * intermittent and far harder to see.
+ */
+async function load(
+  window: { startDate: string; endDate: string },
+  force: boolean,
+  reviewer: string,
+) {
   if (force) cache.clear();
-  return cache.get(`${window.startDate}:${window.endDate}`, async () => {
-    const { provider, demo } = resolveProvider();
+  const who = reviewer.trim().toLowerCase();
+  return cache.get(`${who}:${window.startDate}:${window.endDate}`, async () => {
+    // The signed-in person's own queue. While an admin is viewing as
+    // somebody else, `req.user` IS that person, so this is also what makes
+    // "view as Brian" show Brian's expenses rather than a copy of Eric's.
+    const { provider, demo } = resolveProvider(who);
     const result = await provider.fetchReports(window);
     return { ...result, demo };
   });
@@ -290,7 +307,7 @@ api.get("/reports", requireAuth, async (req, res) => {
   }
   const window = readWindow(req.query as Record<string, unknown>);
   try {
-    const data = await load(window, req.query.refresh === "1");
+    const data = await load(window, req.query.refresh === "1", req.user?.email ?? "");
     res.json({
       window,
       demo: data.demo,
@@ -312,7 +329,7 @@ api.get("/reports/:id", requireAuth, async (req, res) => {
   }
   const window = readWindow(req.query as Record<string, unknown>);
   try {
-    const data = await load(window, false);
+    const data = await load(window, false, req.user?.email ?? "");
     const report = data.reports.find((r) => r.id === req.params.id);
     if (!report) {
       res.status(404).json({ error: "Report not found in the current window" });
@@ -342,7 +359,7 @@ api.get("/receipts/:lineId", requireAuth, async (req, res) => {
 
   const window = readWindow(req.query as Record<string, unknown>);
   try {
-    const line = await findLine(String(req.params.lineId ?? ""), window);
+    const line = await findLine(String(req.params.lineId ?? ""), window, req.user?.email ?? "");
     if (!line) {
       res.status(404).json({ error: "No such expense line." });
       return;
@@ -376,7 +393,11 @@ api.get("/receipts/:lineId", requireAuth, async (req, res) => {
  * line whose date fell outside the caller's window — which is every older
  * expense, because the receipt viewer does not send a window.
  */
-async function findLine(lineId: string, window: { startDate: string; endDate: string }): Promise<ExpenseLine | null> {
+async function findLine(
+  lineId: string,
+  window: { startDate: string; endDate: string },
+  reviewer: string,
+): Promise<ExpenseLine | null> {
   if (isDbConfigured()) {
     const { rows } = await db().query<{
       dedupe_key: string; expense_date: Date | null; merchant: string; amount_cents: string;
@@ -401,7 +422,7 @@ async function findLine(lineId: string, window: { startDate: string; endDate: st
       location: "", method: "",
     };
   }
-  const data = await load(window, false);
+  const data = await load(window, false, reviewer);
   return data.reports.flatMap((r) => r.lines).find((l) => l.id === lineId) ?? null;
 }
 

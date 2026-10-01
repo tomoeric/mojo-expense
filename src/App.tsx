@@ -220,8 +220,16 @@ export function App() {
       {auth.data?.viewingAs && (
         <div className="border-b border-amber-500/40 bg-amber-500/15 px-5 py-1.5 text-center text-xs text-amber-900 dark:text-amber-200">
           Viewing as <strong>{auth.data.viewingAs.viewed}</strong> — everything below is their
-          view of the app. Read-only: nothing can be approved, denied or changed until you go
-          back to {auth.data.viewingAs.real}.
+          queue, read from their own Emburse Needs Review. Read-only: nothing can be approved,
+          denied or changed until you go back to {auth.data.viewingAs.real}.{" "}
+          {/* The one action allowed from in here. Checking somebody's view is
+              worth little if the view is whatever it was when they last
+              signed in — and an import reads Emburse and writes our own
+              tables, deciding nothing. */}
+          <a href="#/import" className="font-semibold underline underline-offset-2">
+            Run their import
+          </a>{" "}
+          on the Import page to refresh it.
         </div>
       )}
 

@@ -39,8 +39,17 @@ declare global {
   }
 }
 
-/** The two routes that turn the mode on and off, judged on the REAL user. */
-const CONTROLS = /^\/api\/auth\/view-as$/;
+/**
+ * The routes judged on the REAL user rather than refused.
+ *
+ * `view-as` itself, or there would be no way back out. And the import run,
+ * because an admin checking somebody's view has to be able to refresh it —
+ * an import reads Emburse and writes our own tables, approves nothing,
+ * denies nothing, and puts nobody's name on a decision. It is recorded as
+ * asked for by the admin and read as the viewed person, so the log says
+ * both. Everything else stays refused.
+ */
+const CONTROLS = /^\/api\/(auth\/view-as|export-run)$/;
 
 /**
  * Methods that cannot change anything.

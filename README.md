@@ -160,7 +160,33 @@ A hand-uploaded file imports as the blank reviewer, and can only purge other
 blank-reviewer rows, so nobody's scheduled queue is at the mercy of a PDF
 somebody dragged in.
 
-Which account the scheduled import signs in as used to be decided by
+**Each reviewer has their own timeline.** The scheduler asks "is an import
+due" once per person with a stored Emburse login, counts their attempts
+separately in `export_runs`, and signs in as them — so the first reviewer's
+morning run no longer spends everybody's attempts while the rest never
+update. A reviewer with no times of their own runs on the shared schedule
+(`reviewer_imports` holds the overrides), which is what everybody gets until
+somebody wants different ones: a reviewer whose expenses arrive in the
+afternoon has no use for a 2am run.
+
+**And the queue shows you your own.** Rows are filtered to the signed-in
+person's reviewer, which is also what makes "view as Brian" show Brian's
+expenses rather than a copy of Eric's. Blank-reviewer rows — imported before
+this existed, or uploaded by hand — are shown to everyone, so a deployment
+with one login behaves exactly as it did, and they convert to a real
+reviewer the next time a scheduled import reads the same expense. The
+reviewer is part of the cache key as well as the query: keyed on the date
+window alone, whoever asked first would serve their queue to everybody for
+the life of the entry.
+
+**An admin can pull the import for the person they are viewing.** It is the
+one action allowed from inside a view, and it is allowed because of what it
+is: an import reads Emburse and writes our own tables, approving nothing,
+denying nothing, putting nobody's name on a decision. The run records the
+real admin as having asked and the viewed person as whose queue was read.
+Everything that decides stays refused.
+
+Which account the shared import signs in as used to be decided by
 accident: "the credential most recently proven to work, else the most
 recently saved". It is a deliberate choice now (`importAs`), every export
 logs whose queue it read and whether that was chosen or fallen back to, and

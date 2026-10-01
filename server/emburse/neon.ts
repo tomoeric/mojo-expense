@@ -45,6 +45,22 @@ export class NeonProvider implements EmburseProvider {
   readonly id = "neon";
   readonly label = "Imported expenses";
 
+  /**
+   * Whose queue to show.
+   *
+   * Emburse's Needs Review is per account, so an expense belongs to the
+   * reviewer whose import brought it in. Showing everybody everything meant
+   * Brian opening the app and finding Eric's work — not a leak, but not his
+   * queue either, and no way to tell.
+   *
+   * Blank-reviewer rows are shown to everyone on purpose: they are the ones
+   * imported before this existed, and the ones somebody uploaded by hand. A
+   * deployment with one login therefore behaves exactly as it did, and the
+   * blanks convert to a real reviewer the next time a scheduled import
+   * reads the same expense.
+   */
+  constructor(private readonly reviewer: string = "") {}
+
   async fetchReports(window: FetchWindow): Promise<ProviderResult> {
     const { rows } = await db().query<Row>(
       `SELECT e.dedupe_key, e.employee, e.expense_date, e.merchant, e.amount_cents,
@@ -111,8 +127,9 @@ export class NeonProvider implements EmburseProvider {
                   AND c.import_id = (SELECT max(id) FROM expense_imports)) AS changes
          FROM expenses e
         WHERE e.expense_date BETWEEN $1::date AND $2::date
+          AND ($3 = '' OR e.reviewer = '' OR e.reviewer = $3)
         ORDER BY e.expense_date DESC, e.employee, e.merchant`,
-      [window.startDate, window.endDate],
+      [window.startDate, window.endDate, this.reviewer.trim().toLowerCase()],
     );
 
     // One group per employee per day.

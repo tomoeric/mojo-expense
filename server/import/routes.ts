@@ -173,6 +173,26 @@ importRouter.put("/export-settings", requireAuth, requireAdmin, async (req: Requ
 importRouter.post("/export-run", requireAuth, requireAdmin, async (req: Request, res: Response) => {
   if (!guard(res)) return;
   const dryRun = req.query.dryRun === "1";
+
+  /**
+   * Whose Needs Review to read, and who asked.
+   *
+   * An admin looking at the app as Brian needs to be able to pull Brian's
+   * import — otherwise his queue is whatever it was when he last signed in,
+   * and the view they came to check is stale by exactly the thing they came
+   * to check.
+   *
+   * This is the one action allowed from inside the view, and it is allowed
+   * because of what it IS: an import reads Emburse and writes our own
+   * tables. Nothing is approved, denied or edited, and nothing in Emburse
+   * carries anybody's name as a decision. The run is recorded as asked for
+   * by the REAL admin and read as the viewed person, so the log says both.
+   *
+   * Judged on the real user, like every other control: an admin who lost
+   * their rights cannot keep them by staying inside a view.
+   */
+  const real = req.viewingAs?.real.email ?? req.user?.email ?? "manual";
+  const reviewer = req.viewingAs ? req.viewingAs.viewed : "";
   try {
     // Start it, do not wait for it. A run takes minutes — longer still when it
     // stops to ask somebody for a verification code — and the proxy in front
@@ -184,10 +204,11 @@ importRouter.post("/export-run", requireAuth, requireAdmin, async (req: Request,
     // So this returns as soon as the run has an id, and the page follows it
     // through the run list it already polls.
     const id = await new Promise<number>((resolve, reject) => {
-      void attemptExport(dryRun ? "dry-run" : "manual", req.user?.email ?? "manual", {
-        dryRun,
-        onStarted: resolve,
-      }).catch(reject); // only reaches here if it failed before recording itself
+      void attemptExport(
+        dryRun ? "dry-run" : "manual",
+        reviewer ? `${real} (for ${reviewer})` : real,
+        { dryRun, onStarted: resolve, ...(reviewer ? { reviewer } : {}) },
+      ).catch(reject); // only reaches here if it failed before recording itself
     });
     res.status(202).json({ id, running: true });
   } catch (err) {
