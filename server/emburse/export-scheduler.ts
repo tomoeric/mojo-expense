@@ -597,40 +597,65 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
   });
 }
 
-/** Set or clear one reviewer's own import times. */
+/**
+ * Set one reviewer's own import times, list or approval switch.
+ *
+ * Only the fields actually supplied are written. That is not tidiness: the
+ * same row holds a schedule, a grid path and the switch that approves
+ * spending unattended, and three different screens write to it. Writing
+ * every column every time meant flipping the automation switch silently
+ * cleared the grid path that had just been set to separate two reviewers'
+ * queues — the fix for one problem quietly undoing the fix for the other.
+ *
+ * Passing `schedule: null` DOES clear the times, which is how a reviewer
+ * goes back to the shared schedule. Omitting it leaves them alone.
+ */
 export async function setReviewerImport(
   userEmail: string,
   input: {
-    enabled?: boolean; schedule?: Partial<Schedule> | null;
+    enabled?: boolean;
+    /** Their own times; null puts them back on the shared schedule. */
+    schedule?: Partial<Schedule> | null;
     /** Empty string clears it back to the shared setting. */
-    gridPath?: string | null; gridSection?: string | null;
-    autoApprove?: boolean; autoApprovePerRun?: number | null;
+    gridPath?: string | null;
+    gridSection?: string | null;
+    autoApprove?: boolean;
+    autoApprovePerRun?: number | null;
   },
   by: string,
 ): Promise<void> {
   await ensure();
-  const sc = input.schedule;
   const blank = (v: string | null | undefined) =>
     v === undefined || v === null || v.trim() === "" ? null : v.trim();
+
+  const set: Record<string, unknown> = {};
+  if (input.enabled !== undefined) set.enabled = input.enabled;
+  if (input.schedule !== undefined) {
+    const sc = input.schedule;
+    set.timezone = sc?.timezone ?? null;
+    set.first_run = sc?.firstRun ?? null;
+    set.retry_hours = sc?.retryHours ?? null;
+    set.attempts_per_day = sc?.attemptsPerDay ?? null;
+    set.grace_minutes = sc?.graceMinutes ?? null;
+    set.all_day = sc?.allDay ?? null;
+  }
+  if (input.gridPath !== undefined) set.grid_path = blank(input.gridPath);
+  if (input.gridSection !== undefined) set.grid_section = blank(input.gridSection);
+  if (input.autoApprove !== undefined) set.auto_approve = input.autoApprove;
+  if (input.autoApprovePerRun !== undefined) set.auto_approve_per_run = input.autoApprovePerRun;
+  set.updated_by = by;
+
+  const cols = ["user_email", ...Object.keys(set)];
+  const vals = [userEmail.trim().toLowerCase(), ...Object.values(set)];
+  const marks = vals.map((_, i) => `$${i + 1}`).join(",");
+  const updates = [
+    ...Object.keys(set).map((c) => `${c} = EXCLUDED.${c}`),
+    "updated_at = now()",
+  ].join(", ");
   await db().query(
-    `INSERT INTO reviewer_imports (user_email, enabled, timezone, first_run, retry_hours,
-                                   attempts_per_day, grace_minutes, all_day, updated_by,
-                                   grid_path, grid_section, auto_approve,
-                                   auto_approve_per_run)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-     ON CONFLICT (user_email) DO UPDATE SET
-       enabled = EXCLUDED.enabled, timezone = EXCLUDED.timezone,
-       first_run = EXCLUDED.first_run, retry_hours = EXCLUDED.retry_hours,
-       attempts_per_day = EXCLUDED.attempts_per_day, grace_minutes = EXCLUDED.grace_minutes,
-       all_day = EXCLUDED.all_day, updated_at = now(), updated_by = EXCLUDED.updated_by,
-       grid_path = EXCLUDED.grid_path, grid_section = EXCLUDED.grid_section,
-       auto_approve = EXCLUDED.auto_approve,
-       auto_approve_per_run = EXCLUDED.auto_approve_per_run`,
-    [userEmail.trim().toLowerCase(), input.enabled ?? true,
-     sc?.timezone ?? null, sc?.firstRun ?? null, sc?.retryHours ?? null,
-     sc?.attemptsPerDay ?? null, sc?.graceMinutes ?? null, sc?.allDay ?? null, by,
-     blank(input.gridPath), blank(input.gridSection),
-     input.autoApprove === true, input.autoApprovePerRun ?? null]);
+    `INSERT INTO reviewer_imports (${cols.join(",")}) VALUES (${marks})
+     ON CONFLICT (user_email) DO UPDATE SET ${updates}`,
+    vals);
 }
 
 export function startExportScheduler(): void {

@@ -563,7 +563,8 @@ function ReviewerGrids() {
       return (await res.json()) as {
         reviewers: { userEmail: string; enabled: boolean; gridPath: string | null;
                      gridSection: string | null; autoApprove: boolean;
-                     autoApprovePerRun: number | null }[];
+                     autoApprovePerRun: number | null; shared: boolean;
+                     schedule: Schedule }[];
       };
     },
   });
@@ -684,6 +685,10 @@ function ReviewerGrids() {
               {/* The one control that approves money without anybody
                   clicking, so it says whose login it would use and starts
                   off for everybody. */}
+              <ReviewerSchedule
+                row={r}
+                onSaved={() => void qc.invalidateQueries({ queryKey: ["reviewer-imports"] })}
+              />
               <button
                 type="button"
                 onClick={() => void save(r.userEmail, v, !r.autoApprove)}
@@ -702,5 +707,108 @@ function ReviewerGrids() {
       </div>
       {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
     </div>
+  );
+}
+
+/**
+ * One reviewer's own import times, or the shared ones.
+ *
+ * The scheduler has always been able to run two people on two timetables —
+ * it asks "is an import due" once per person and counts their attempts
+ * separately — and there was no way to say so from a screen, so both ran on
+ * the shared schedule and the capability may as well not have existed.
+ *
+ * Blank is the shared schedule, which is what everybody has until somebody
+ * wants otherwise: a reviewer whose expenses arrive in the afternoon has no
+ * use for a 2am run, and a second stage of an approval chain is behind the
+ * first by definition.
+ */
+function ReviewerSchedule({
+  row, onSaved,
+}: {
+  row: { userEmail: string; shared: boolean; schedule: Schedule };
+  onSaved: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [sc, setSc] = useState<Schedule>(row.schedule);
+
+  async function send(schedule: Schedule | null) {
+    setBusy(true);
+    try {
+      // Only the schedule. The same row holds this person's grid path and
+      // their approval switch, and the server writes only what it is sent.
+      await fetch("/api/reviewer-imports", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: row.userEmail, schedule }),
+      });
+      onSaved();
+      setOpen(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const field = (
+    label: string, value: string | number,
+    onChange: (v: string) => void, width = "w-20",
+  ) => (
+    <label className="flex items-center gap-1 text-xs">
+      <span className="text-muted-foreground">{label}</span>
+      <input
+        value={String(value)}
+        onChange={(e) => onChange(e.target.value)}
+        className={`${width} rounded border border-border bg-background px-1.5 py-0.5`}
+      />
+    </label>
+  );
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="rounded-lg border border-border px-3 py-1 text-xs font-semibold"
+      >
+        {row.shared ? "Shared times" : "Own times"}
+      </button>
+      {open && (
+        <div className="flex w-full flex-wrap items-center gap-3 rounded-lg bg-muted/50 p-2">
+          {field("Timezone", sc.timezone, (v) => setSc({ ...sc, timezone: v }), "w-40")}
+          {field("First run", sc.firstRun, (v) => setSc({ ...sc, firstRun: v }), "w-24")}
+          {field("Runs/day", sc.attemptsPerDay,
+            (v) => setSc({ ...sc, attemptsPerDay: Number(v) || 1 }))}
+          {field("Hours between", sc.retryHours,
+            (v) => setSc({ ...sc, retryHours: Number(v) || 1 }))}
+          {field("Grace", sc.graceMinutes,
+            (v) => setSc({ ...sc, graceMinutes: Number(v) || 0 }))}
+          <label className="flex items-center gap-1 text-xs">
+            <input
+              type="checkbox"
+              checked={sc.allDay}
+              onChange={(e) => setSc({ ...sc, allDay: e.target.checked })}
+            />
+            <span className="text-muted-foreground">All day</span>
+          </label>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void send(sc)}
+            className="rounded-lg bg-foreground px-3 py-1 text-xs font-semibold text-background disabled:opacity-50"
+          >
+            {busy ? "Saving…" : "Save their times"}
+          </button>
+          <button
+            type="button"
+            disabled={busy || row.shared}
+            onClick={() => void send(null)}
+            className="rounded-lg border border-border px-3 py-1 text-xs font-semibold disabled:opacity-40"
+          >
+            Back to shared
+          </button>
+        </div>
+      )}
+    </>
   );
 }

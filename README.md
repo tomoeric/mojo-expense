@@ -168,6 +168,21 @@ on its own timeline. Every row carries which list it came from, and the
 purge is scoped by it for exactly the reason it is scoped by reviewer:
 without that, each hourly run would delete everything the other brought.
 
+**And their own timetable, settable at last.** The scheduler could always
+run two people on two schedules — it asks "is an import due" once per
+person and counts their attempts separately — but nothing on any screen
+could say so, so both ran the shared one and the capability may as well not
+have existed. Export settings → *Per-reviewer imports and approvals* →
+**Own times** sets a reviewer's timezone, first run, runs per day, hours
+between and grace; blank is the shared schedule, and *Back to shared* puts
+them there. A second stage of an approval chain is behind the first by
+definition, so an afternoon start is the point of it.
+
+Saves on that row write only the fields they carry. The same row holds the
+schedule, the import list and the approval switch, three screens write to
+it, and a save that wrote every column meant flipping the switch silently
+cleared the grid path that had just been set to separate the two queues.
+
 **Each reviewer has their own timeline.** The scheduler asks "is an import
 due" once per person with a stored Emburse login, counts their attempts
 separately in `export_runs`, and signs in as them — so the first reviewer's

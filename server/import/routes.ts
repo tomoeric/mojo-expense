@@ -145,27 +145,46 @@ importRouter.post("/reviewer-imports", requireAuth, requireAdmin, async (req: Re
   if (!guard(res)) return;
   const body = req.body as {
     email?: unknown; enabled?: unknown; gridPath?: unknown; gridSection?: unknown;
-    autoApprove?: unknown; autoApprovePerRun?: unknown;
+    autoApprove?: unknown; autoApprovePerRun?: unknown; schedule?: unknown;
   };
   const email = String(body.email ?? "").trim();
   if (!email) {
     res.status(400).json({ error: "Name the reviewer." });
     return;
   }
+  // Only what was sent. Three screens write to this one row — the schedule,
+  // the import list and the approval switch — and a save that wrote every
+  // column would have each of them quietly undoing the others.
+  const sent = <T,>(key: string, read: () => T): { [k: string]: T } =>
+    key in (body as object) ? { [key]: read() } : {};
+  const num = (v: unknown, lo: number, hi: number, fallback: number) =>
+    typeof v === "number" && Number.isFinite(v)
+      ? Math.max(lo, Math.min(hi, Math.round(v))) : fallback;
   try {
+    const sc = body.schedule as Record<string, unknown> | null | undefined;
     await setReviewerImport(email, {
-      enabled: body.enabled !== false,
+      ...sent("enabled", () => body.enabled !== false),
+      ...sent("schedule", () => sc === null ? null : {
+        timezone: typeof sc?.timezone === "string" ? sc.timezone.slice(0, 64) : undefined,
+        firstRun: typeof sc?.firstRun === "string" ? sc.firstRun.slice(0, 8) : undefined,
+        retryHours: num(sc?.retryHours, 1, 24, 4),
+        attemptsPerDay: num(sc?.attemptsPerDay, 1, 48, 4),
+        graceMinutes: num(sc?.graceMinutes, 0, 600, 90),
+        allDay: sc?.allDay === true,
+      }),
       // Deliberately NOT validated against a list of known paths. Emburse's
       // own URLs are the only source of truth for what its lists are called,
       // they differ per tenant, and a guard built from guesses would refuse
       // the correct answer the first time somebody found it.
-      gridPath: typeof body.gridPath === "string" ? body.gridPath.slice(0, 200) : null,
-      gridSection: typeof body.gridSection === "string" ? body.gridSection.slice(0, 80) : null,
+      ...sent("gridPath", () =>
+        typeof body.gridPath === "string" ? body.gridPath.slice(0, 200) : null),
+      ...sent("gridSection", () =>
+        typeof body.gridSection === "string" ? body.gridSection.slice(0, 80) : null),
       // The one setting here that approves money. Explicitly true or it is
       // off: a missing field must never read as "switch it on".
-      autoApprove: body.autoApprove === true,
-      autoApprovePerRun: typeof body.autoApprovePerRun === "number"
-        ? Math.max(1, Math.min(100, Math.round(body.autoApprovePerRun))) : null,
+      ...sent("autoApprove", () => body.autoApprove === true),
+      ...sent("autoApprovePerRun", () => typeof body.autoApprovePerRun === "number"
+        ? Math.max(1, Math.min(100, Math.round(body.autoApprovePerRun))) : null),
       // The REAL admin, never the viewed person. This is reachable from
       // inside a view, and a setting changed by Eric while looking at
       // Brian's screen was changed by Eric.

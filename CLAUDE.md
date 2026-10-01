@@ -726,6 +726,14 @@ Two separate things, and confusing them cost a queue full of failures.
   whose expenses are whose. One login owns them; two and nobody named means
   nobody does, and the app says so and offers to stamp them (Import page →
   claim) rather than guessing.
+- **`setReviewerImport` writes only the fields it is given.** One row holds
+  a reviewer's schedule, their import list and the switch that approves
+  spending unattended, and three screens write to it. Writing every column
+  every time meant flipping the automation switch silently cleared the grid
+  path that had just been set to separate two queues — each fix undoing
+  another. `schedule: null` still clears the times (that is how somebody
+  goes back to the shared schedule); omitting a field leaves it alone, and
+  the route passes through only what the request actually carried.
 - **Three routes are writable from inside a view, and no more**
   (`CONTROLS` in `view-as.ts`): `view-as` itself, `export-run`, and
   `reviewer-imports`. The first two because there would otherwise be no way
