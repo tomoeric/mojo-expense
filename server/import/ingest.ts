@@ -79,6 +79,16 @@ export async function ingestExport(
      */
     reviewer?: string;
     /**
+     * Which Emburse list this export is: Transactions, or Reimbursements.
+     *
+     * Blank means Transactions, which is what every row already in the
+     * table is. Same reasoning as `reviewer`, one level along: the two are
+     * separate queues on separate pages, so an import of one must not purge
+     * the other — each run would otherwise delete everything the other
+     * brought, every hour.
+     */
+    source?: string;
+    /**
      * The run that produced this file read the section chips and confirmed
      * they matched the configuration.
      *
@@ -111,6 +121,7 @@ export async function ingestExport(
   );
 
   const reviewer = (opts.reviewer ?? "").trim().toLowerCase();
+  const source = (opts.source ?? "").trim().toLowerCase();
   const totalCents = parsed.expenses.reduce((a, e) => a + e.amountCents, 0);
   const reconciled = parsed.statedTotalCents !== null && totalCents === parsed.statedTotalCents;
   if (parsed.statedTotalCents === null) {
@@ -236,8 +247,8 @@ export async function ingestExport(
     const inbox = await client.query<{ n: string; live: string }>(
       `SELECT count(*) AS n,
               count(*) FILTER (WHERE dedupe_key = ANY($1::text[])) AS live
-         FROM expenses WHERE in_inbox = true AND reviewer = $2`,
-      [[...keys.keys()], reviewer],
+         FROM expenses WHERE in_inbox = true AND reviewer = $2 AND source = $3`,
+      [[...keys.keys()], reviewer, source],
     );
     const held = Number(inbox.rows[0]?.n ?? 0);
     const losing = held - Number(inbox.rows[0]?.live ?? 0);
@@ -264,8 +275,9 @@ export async function ingestExport(
         `SELECT count(*) AS n
            FROM expenses e
            JOIN expense_decisions d ON d.dedupe_key = e.dedupe_key AND d.state = 'applied'
-          WHERE e.in_inbox = true AND e.dedupe_key <> ALL($1::text[]) AND e.reviewer = $2`,
-        [[...keys.keys()], reviewer],
+          WHERE e.in_inbox = true AND e.dedupe_key <> ALL($1::text[])
+            AND e.reviewer = $2 AND e.source = $3`,
+        [[...keys.keys()], reviewer, source],
       );
       actioned = Number(mine.rows[0]?.n ?? 0);
     } catch {
@@ -343,8 +355,8 @@ export async function ingestExport(
         `INSERT INTO expenses (dedupe_key, employee, expense_date, merchant, amount_cents,
                                category, department, location, note, method, receipt_label,
                                in_inbox, first_import_id, last_import_id, source_page, section,
-                               reviewer)
-         VALUES ($1,$2,NULLIF($3,'')::date,$4,$5,$6,$7,$8,$9,$10,$11,true,$12,$12,$13,$14,$15)
+                               reviewer, source)
+         VALUES ($1,$2,NULLIF($3,'')::date,$4,$5,$6,$7,$8,$9,$10,$11,true,$12,$12,$13,$14,$15,$16)
          ON CONFLICT (dedupe_key) DO UPDATE SET
            note           = EXCLUDED.note,
            method         = EXCLUDED.method,
@@ -362,10 +374,11 @@ export async function ingestExport(
            -- is a tidy enough answer for a case Emburse makes rare: a row
            -- waits on ONE approver. What matters is that it belongs to
            -- exactly one, so exactly one purge can take it.
-           reviewer       = EXCLUDED.reviewer`,
+           reviewer       = EXCLUDED.reviewer,
+           source         = EXCLUDED.source`,
         [key, e.employee, e.date, e.merchant, e.amountCents, e.category, e.department,
          e.location, e.note, e.method, e.receiptLabel, importId, e.sourcePage, section,
-         reviewer]);
+         reviewer, source]);
     }
 
     if (changes.length > 0) {
@@ -388,7 +401,7 @@ export async function ingestExport(
     // Now that this export has said which expenses are still in the queue,
     // everything absent from it goes — row, receipt and all. The newest export
     // is the truth about what is under review.
-    const freed = await purgeFinished(client, [...keys.keys()], reviewer);
+    const freed = await purgeFinished(client, [...keys.keys()], reviewer, source);
     const purged = freed.expenses;
 
     // Last, because storeReceipts appends to `warnings` too.
@@ -787,6 +800,12 @@ export async function purgeFinished(
    * the mercy of a file somebody dragged in.
    */
   reviewer = "",
+  /**
+   * Which list this export was. Transactions and Reimbursements are two
+   * queues, so each purges only its own — otherwise every run of one would
+   * delete everything the other brought.
+   */
+  source = "",
 ): Promise<{ expenses: number; images: number; bytes: number }> {
   // The decision record outlives its expense, so a pending one has to be
   // closed out here rather than cascaded away. It could never be applied: an
@@ -798,14 +817,15 @@ export async function purgeFinished(
       WHERE state = 'pending' AND dedupe_key <> ALL($1::text[])
         AND EXISTS (SELECT 1 FROM expenses e
                      WHERE e.dedupe_key = expense_decisions.dedupe_key
-                       AND e.reviewer = $2)`,
-    [live, reviewer],
+                       AND e.reviewer = $2 AND e.source = $3)`,
+    [live, reviewer, source],
   );
 
   // Cascades to expense_receipts, expense_changes and expense_rule_hits.
   const gone = await client.query(
-    `DELETE FROM expenses WHERE dedupe_key <> ALL($1::text[]) AND reviewer = $2`,
-    [live, reviewer],
+    `DELETE FROM expenses WHERE dedupe_key <> ALL($1::text[])
+       AND reviewer = $2 AND source = $3`,
+    [live, reviewer, source],
   );
 
   // Measured before deleting, so the import can say what it reclaimed.

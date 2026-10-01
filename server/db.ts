@@ -93,6 +93,15 @@ CREATE TABLE IF NOT EXISTS expenses (
 -- where nobody can say whose queue it was.
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS reviewer text NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS expenses_reviewer_idx ON expenses (reviewer) WHERE in_inbox;
+-- WHICH Emburse list this came from.
+--
+-- Transactions and Reimbursements are two queues on two pages, and the same
+-- argument as the reviewer column applies with the same force: an import of one must
+-- not purge the other, or each run would delete everything the other
+-- brought. Blank means Transactions, so every row that already exists is
+-- correct without touching it.
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS expenses_source_idx ON expenses (source) WHERE in_inbox;
 CREATE INDEX IF NOT EXISTS expenses_date_idx     ON expenses (expense_date DESC);
 CREATE INDEX IF NOT EXISTS expenses_inbox_idx    ON expenses (in_inbox);
 CREATE INDEX IF NOT EXISTS expenses_employee_idx ON expenses (employee);

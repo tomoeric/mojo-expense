@@ -31,16 +31,18 @@ function check(label: string, ok: boolean, detail = ""): void {
 
 const key = (who: string, n: number) => `${TAG}-${who}-${n}`;
 
-const add = (k: string, reviewer: string) =>
+const add = (k: string, reviewer: string, source = "") =>
   db().query(
     `INSERT INTO expenses (dedupe_key, employee, expense_date, merchant, amount_cents,
-                           category, department, location, note, method, in_inbox, reviewer)
-     VALUES ($1,'Someone','2026-09-24','MERCHANT',1000,'Meals','Ops','Site','','Card',true,$2)`,
-    [k, reviewer]);
+                           category, department, location, note, method, in_inbox,
+                           reviewer, source)
+     VALUES ($1,'Someone','2026-09-24','MERCHANT',1000,'Meals','Ops','Site','','Card',true,$2,$3)`,
+    [k, reviewer, source]);
 
-const live = async (reviewer: string): Promise<string[]> => {
+const live = async (reviewer: string, source = ""): Promise<string[]> => {
   const { rows } = await db().query<{ dedupe_key: string }>(
-    "SELECT dedupe_key FROM expenses WHERE reviewer = $1 ORDER BY dedupe_key", [reviewer]);
+    "SELECT dedupe_key FROM expenses WHERE reviewer = $1 AND source = $2 ORDER BY dedupe_key",
+    [reviewer, source]);
   return rows.map((r) => r.dedupe_key);
 };
 
@@ -79,6 +81,20 @@ try {
     check("both of his go", freed.expenses === 2, String(freed.expenses));
     check("…and Eric's two are still there", (await live(ERIC)).length === 2);
     check("…and so is the hand-uploaded one", (await live("")).length === 1);
+  }
+
+  console.log("\nTransactions and Reimbursements cannot take each other");
+  // Two lists on two pages, the same argument as two reviewers one level
+  // along: without scoping, each hourly run would delete everything the
+  // other brought.
+  {
+    await add(key("eric", 9), ERIC, "reimbursements");
+    await add(key("eric", 10), ERIC, "reimbursements");
+    const freed = await purgeFinished(client, [key("eric", 9)], ERIC, "reimbursements");
+    check("the reimbursement it no longer has goes", freed.expenses === 1, String(freed.expenses));
+    check("…leaving his other reimbursement", (await live(ERIC, "reimbursements")).length === 1);
+    // The line this half exists for.
+    check("…and his transactions are untouched", (await live(ERIC)).length === 2);
   }
 
   console.log("\nA hand upload cannot take a scheduled reviewer's queue");

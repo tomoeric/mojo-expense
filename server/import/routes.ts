@@ -124,7 +124,7 @@ importRouter.get("/export-settings", requireAuth, async (_req: Request, res: Res
 importRouter.put("/export-settings", requireAuth, requireAdmin, async (req: Request, res: Response) => {
   if (!guard(res)) return;
 
-  const body = req.body as { sections?: unknown; receiptsOnly?: unknown; schedule?: unknown; selectors?: unknown; emburseUrl?: unknown };
+  const body = req.body as { sections?: unknown; receiptsOnly?: unknown; schedule?: unknown; selectors?: unknown; emburseUrl?: unknown; sources?: unknown };
   const sections = Array.isArray(body.sections) ? body.sections.filter((s): s is string => typeof s === "string") : null;
   if (!sections) {
     res.status(400).json({ error: "sections must be an array of section names." });
@@ -149,6 +149,7 @@ importRouter.put("/export-settings", requireAuth, requireAdmin, async (req: Requ
       cleanSelectors(body.selectors, current.selectors),
       (body.emburseUrl as string) ?? current.emburseUrl,
       req.user?.email ?? "unknown",
+      (body.sources as never) ?? current.sources,
     );
     res.json({ ...saved, allSections: ALL_SECTIONS, selectorHelp: SELECTOR_HELP,
       stepSelectors: STEP_SELECTORS, defaultSelectors: DEFAULT_SELECTORS });

@@ -47,9 +47,39 @@ export type ExportSettings = {
    * setting and not an env var.
    */
   schedule: Schedule;
+  /** Which Emburse lists to import, and where each one lives. */
+  sources: ImportSource[];
   updatedAt: string | null;
   updatedBy: string | null;
 };
+
+/**
+ * The Emburse lists this app imports from.
+ *
+ * Transactions is the one it was built around. Reimbursements is a separate
+ * page with its own queue — "Reimbursements 5" in the left nav — and the
+ * same export dialog, so the whole run works on it unchanged once it is
+ * pointed at the right path.
+ *
+ * Kept as data rather than a boolean per list, because the path is the only
+ * thing that differs and a tenant whose Emburse puts it elsewhere should be
+ * able to correct it without a deploy, like every other selector here.
+ */
+export type ImportSource = {
+  /** Stored on every row, and what scopes the purge. Never change an existing one. */
+  key: string;
+  label: string;
+  /** The grid this list lives on. Filters are added as query parameters. */
+  path: string;
+  enabled: boolean;
+};
+
+export const DEFAULT_SOURCES: ImportSource[] = [
+  // Blank key on purpose: it is what every row already in the table has, so
+  // the list this app has always imported stays exactly where it was.
+  { key: "", label: "Transactions", path: "/transactions/team", enabled: true },
+  { key: "reimbursements", label: "Reimbursements", path: "/reimbursements", enabled: false },
+];
 
 export type Schedule = {
   timezone: string;
@@ -116,6 +146,7 @@ ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS attempts_per_day integer;
 ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS grace_minutes   integer;
 ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS selectors       jsonb;
 ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS emburse_url     text;
+ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS sources         jsonb;
 
 -- Turning the import from "once a day, retry until it works" into "keep up
 -- with Emburse all day", for a database that already has a schedule in it.
@@ -177,10 +208,10 @@ export async function readSettings(): Promise<ExportSettings> {
     timezone: string | null; first_run: string | null;
     retry_hours: number | null; attempts_per_day: number | null; grace_minutes: number | null;
     selectors: Record<string, string> | null; emburse_url: string | null;
-    all_day: boolean | null;
+    all_day: boolean | null; sources: ImportSource[] | null;
   }>(`SELECT sections, receipts_only, updated_at, updated_by,
              timezone, first_run, retry_hours, attempts_per_day, grace_minutes, selectors,
-             emburse_url, all_day
+             emburse_url, all_day, sources
         FROM export_settings WHERE id`);
 
   const row = rows[0];
@@ -188,6 +219,7 @@ export async function readSettings(): Promise<ExportSettings> {
   if (!row) {
     return {
       sections: DEFAULT_SECTIONS, receiptsOnly: true, schedule: fallback,
+      sources: DEFAULT_SOURCES.map((x) => ({ ...x })),
       selectors: { ...DEFAULT_SELECTORS }, emburseUrl: env.emburseLogin.url,
       updatedAt: null, updatedBy: null,
     };
@@ -210,6 +242,9 @@ export async function readSettings(): Promise<ExportSettings> {
     // deliberately changed that field.
     selectors: { ...DEFAULT_SELECTORS, ...liveOverrides(row.selectors) },
     emburseUrl: row.emburse_url || env.emburseLogin.url,
+    // Defaults first, so a list added in a later release appears for
+    // everybody rather than only on a fresh database.
+    sources: mergeSources(row.sources),
     updatedAt: row.updated_at.toISOString(),
     updatedBy: row.updated_by,
   };
@@ -222,6 +257,7 @@ export async function writeSettings(
   selectors: Record<string, string>,
   emburseUrl: string,
   updatedBy: string,
+  sources?: ImportSource[],
 ): Promise<ExportSettings> {
   await ensure();
   // Store in the dialog's own order so a round-trip never reshuffles the UI.
@@ -234,20 +270,60 @@ export async function writeSettings(
   await db().query(
     `INSERT INTO export_settings (id, sections, receipts_only, timezone, first_run,
                                   retry_hours, attempts_per_day, grace_minutes, selectors,
-                                  emburse_url, all_day, updated_at, updated_by)
-     VALUES (true, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), $11)
+                                  emburse_url, all_day, sources, updated_at, updated_by)
+     VALUES (true, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), $12)
      ON CONFLICT (id) DO UPDATE SET
        sections = EXCLUDED.sections, receipts_only = EXCLUDED.receipts_only,
        timezone = EXCLUDED.timezone, first_run = EXCLUDED.first_run,
        retry_hours = EXCLUDED.retry_hours, attempts_per_day = EXCLUDED.attempts_per_day,
        grace_minutes = EXCLUDED.grace_minutes, selectors = EXCLUDED.selectors,
        emburse_url = EXCLUDED.emburse_url, all_day = EXCLUDED.all_day,
+       sources = EXCLUDED.sources,
        updated_at = now(), updated_by = EXCLUDED.updated_by`,
     [ordered, receiptsOnly, schedule.timezone, schedule.firstRun, schedule.retryHours,
      schedule.attemptsPerDay, schedule.graceMinutes, JSON.stringify(overrides),
-     cleanUrl(emburseUrl, env.emburseLogin.url), schedule.allDay, updatedBy],
+     cleanUrl(emburseUrl, env.emburseLogin.url), schedule.allDay,
+     JSON.stringify(cleanSources(sources)), updatedBy],
   );
   return readSettings();
+}
+
+/**
+ * Only what a stored source may say: whether it runs, and where it lives.
+ *
+ * The key identifies rows already imported, so a changed one would orphan
+ * them; the label is ours to word. Neither is something a saved value gets
+ * to decide.
+ */
+function cleanSources(given: ImportSource[] | undefined): { key: string; path: string; enabled: boolean }[] {
+  const by = new Map((given ?? []).map((x) => [String(x?.key ?? ""), x]));
+  return DEFAULT_SOURCES.map((d) => {
+    const s = by.get(d.key);
+    return {
+      key: d.key,
+      path: typeof s?.path === "string" && s.path.trim() ? s.path.trim().slice(0, 200) : d.path,
+      enabled: typeof s?.enabled === "boolean" ? s.enabled : d.enabled,
+    };
+  });
+}
+
+/**
+ * Stored sources, over the shipped ones, by key.
+ *
+ * Only `enabled` and `path` are taken from the database: the key identifies
+ * rows already imported and the label is ours to word, so neither is
+ * something a stored value should be able to change.
+ */
+function mergeSources(stored: ImportSource[] | null): ImportSource[] {
+  const saved = new Map((stored ?? []).map((x) => [String(x.key ?? ""), x]));
+  return DEFAULT_SOURCES.map((d) => {
+    const s = saved.get(d.key);
+    return {
+      ...d,
+      path: typeof s?.path === "string" && s.path.trim() ? s.path.trim() : d.path,
+      enabled: typeof s?.enabled === "boolean" ? s.enabled : d.enabled,
+    };
+  });
 }
 
 /** A stored schedule can be edited to nonsense; clamp rather than trust. */

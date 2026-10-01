@@ -12,8 +12,11 @@ type Schedule = {
   allDay: boolean;
 };
 
+type ImportSource = { key: string; label: string; path: string; enabled: boolean };
+
 type Settings = {
   sections: string[];
+  sources: ImportSource[];
   selectors: Record<string, string>;
   selectorHelp: Record<string, string>;
   stepSelectors: Record<string, string[]>;
@@ -56,6 +59,7 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
   const [sections, setSections] = useState<string[] | null>(null);
   const [receiptsOnly, setReceiptsOnly] = useState(true);
   const [schedule, setSchedule] = useState<Schedule | null>(null);
+  const [sources, setSources] = useState<ImportSource[] | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
@@ -76,6 +80,7 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
       setSections(q.data.sections);
       setReceiptsOnly(q.data.receiptsOnly);
       setSchedule(q.data.schedule);
+      setSources(q.data.sources ?? []);
     }
   }, [q.data, sections]);
 
@@ -90,7 +95,8 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
   const dirty =
     JSON.stringify(sections) !== JSON.stringify(q.data?.sections) ||
     receiptsOnly !== q.data?.receiptsOnly ||
-    JSON.stringify(schedule) !== JSON.stringify(q.data?.schedule);
+    JSON.stringify(schedule) !== JSON.stringify(q.data?.schedule) ||
+    JSON.stringify(sources) !== JSON.stringify(q.data?.sources);
 
   const toggle = (name: string) =>
     setSections((prev) =>
@@ -104,7 +110,7 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
       const res = await fetch("/api/export-settings", {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ sections, receiptsOnly, schedule }),
+        body: JSON.stringify({ sections, receiptsOnly, schedule, sources }),
       });
       const body = (await res.json()) as Settings & { error?: string };
       if (!res.ok) throw new Error(body.error ?? `Save failed (${res.status})`);
@@ -197,6 +203,49 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
             code if Emburse stops trusting the browser, and only when somebody started it by hand; a
             scheduled run fails rather than waiting for an answer nobody is there to give.
           </span>
+        </p>
+      </div>
+
+      {/* WHICH Emburse lists to read, before when to read them.
+          Transactions is the queue this app was built around;
+          Reimbursements is a separate page with its own queue and the same
+          export dialog, so the whole run works on it once pointed at the
+          right path. Each list keeps its own rows and its own timeline —
+          one can never purge the other. */}
+      <div className="rounded-xl border border-border p-3.5">
+        <p className="text-sm font-bold">Which lists to import</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          Each one is read separately, on its own timeline, and keeps its own expenses — turning
+          one on cannot disturb the other.
+        </p>
+        <ul className="mt-2 space-y-2">
+          {(sources ?? []).map((src, i) => (
+            <li key={src.key} className="flex flex-wrap items-center gap-2">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={src.enabled}
+                  disabled={!isAdmin}
+                  onChange={(e) => setSources((prev) =>
+                    (prev ?? []).map((x, k) => (k === i ? { ...x, enabled: e.target.checked } : x)))}
+                  className="h-4 w-4 accent-emerald-600 disabled:opacity-60"
+                />
+                <span className="font-semibold">{src.label}</span>
+              </label>
+              <input
+                value={src.path}
+                disabled={!isAdmin}
+                onChange={(e) => setSources((prev) =>
+                  (prev ?? []).map((x, k) => (k === i ? { ...x, path: e.target.value } : x)))}
+                spellCheck={false}
+                className="ml-auto w-72 rounded-lg border border-border bg-transparent px-2 py-1 font-mono text-xs outline-none focus:border-sky-500 disabled:opacity-60"
+              />
+            </li>
+          ))}
+        </ul>
+        <p className="mt-2 text-xs text-muted-foreground">
+          The path is where that list lives in Emburse — correct it here rather than in code if
+          this tenant keeps it somewhere else.
         </p>
       </div>
 
@@ -310,7 +359,7 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
             const res = await fetch("/api/export-settings", {
               method: "PUT",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ sections, receiptsOnly, schedule, selectors: next }),
+              body: JSON.stringify({ sections, receiptsOnly, schedule, sources, selectors: next }),
             });
             const body = (await res.json()) as Settings & { error?: string };
             if (!res.ok) throw new Error(body.error ?? "Could not save selectors");
@@ -341,6 +390,7 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
                 setSections(q.data?.sections ?? []);
                 setReceiptsOnly(q.data?.receiptsOnly ?? true);
                 setSchedule(q.data?.schedule ?? null);
+                setSources(q.data?.sources ?? null);
               }}
               className="rounded-lg border border-amber-400 px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100"
             >

@@ -42,6 +42,10 @@ CREATE INDEX IF NOT EXISTS export_runs_day_idx ON export_runs (local_date, id DE
 -- question about one of them: counted across both, Eric's morning run
 -- spends Brian's attempts and Brian's queue never updates.
 ALTER TABLE export_runs ADD COLUMN IF NOT EXISTS reviewer text NOT NULL DEFAULT '';
+-- And which list it read. Two lists are two timelines for the same reason
+-- two reviewers are: "how many attempts today" is a question about one of
+-- them, and counted together the first spends the other's.
+ALTER TABLE export_runs ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS export_runs_reviewer_idx
   ON export_runs (reviewer, local_date, id DESC);
 
@@ -119,13 +123,13 @@ function offset(date: Date, tz: string): number {
 
 /** Attempts already made today, and whether any of them worked. */
 async function todaysAttempts(
-  day: string, reviewer = "",
+  day: string, reviewer = "", source = "",
 ): Promise<{ count: number; succeeded: boolean }> {
   const { rows } = await db().query<{ count: string; succeeded: boolean }>(
     `SELECT count(*)::text AS count, coalesce(bool_or(ok), false) AS succeeded
        FROM export_runs
-      WHERE local_date = $1 AND trigger = 'scheduled' AND reviewer = $2`,
-    [day, reviewer],
+      WHERE local_date = $1 AND trigger = 'scheduled' AND reviewer = $2 AND source = $3`,
+    [day, reviewer, source],
   );
   return { count: Number(rows[0]?.count ?? 0), succeeded: rows[0]?.succeeded ?? false };
 }
@@ -141,9 +145,11 @@ export async function nextDue(
   now = new Date(),
   /** Whose timeline this is. Each reviewer's runs are counted separately. */
   reviewer = "",
+  /** And which list. Transactions and Reimbursements each have their own. */
+  source = "",
 ): Promise<{ due: boolean; attempt: number; reason: string }> {
   const day = localDate(schedule, now);
-  const { count, succeeded } = await todaysAttempts(day, reviewer);
+  const { count, succeeded } = await todaysAttempts(day, reviewer, source);
 
   // Only when the slots are RETRIES does a success close the day. On an
   // all-day schedule they are not retries, they are the times the import
@@ -253,6 +259,13 @@ export async function attemptExport(
      * theirs, which is what keeps two reviewers' queues apart.
      */
     reviewer?: string;
+    /**
+     * Which Emburse list to export: blank for Transactions, or a key from
+     * the configured sources. Reimbursements is a separate page with its
+     * own queue and the same export dialog, so the whole run works on it
+     * unchanged once it is pointed at the right path.
+     */
+    source?: string;
   } = {},
 ): Promise<{ id: number; run: ExportRun; importId: number | null }> {
   await ensure();
@@ -260,11 +273,12 @@ export async function attemptExport(
   const day = localDate(settings.schedule);
 
   const { rows } = await db().query<{ id: string; attempt: number }>(
-    `INSERT INTO export_runs (local_date, attempt, trigger, reviewer)
+    `INSERT INTO export_runs (local_date, attempt, trigger, reviewer, source)
      VALUES ($1, (SELECT count(*) + 1 FROM export_runs
-                   WHERE local_date = $1 AND trigger = $2 AND reviewer = $3), $2, $3)
+                   WHERE local_date = $1 AND trigger = $2 AND reviewer = $3 AND source = $4),
+             $2, $3, $4)
      RETURNING id, attempt`,
-    [day, trigger, opts.reviewer ?? ""],
+    [day, trigger, opts.reviewer ?? "", opts.source ?? ""],
   );
   const id = Number(rows[0]!.id);
   opts.onStarted?.(id);
@@ -316,7 +330,24 @@ export async function attemptExport(
         : (ctx: { prompt: string; screenshot: string | null; attempt: number; lastError: string | null }) =>
             waitForCode({ ...ctx, owner: by, loginEmail: login?.email ?? null });
 
-    run = await runAutoExport(settings, settings.selectors as Selectors, login, {
+    /*
+     * The list to read, as a selector override rather than a new parameter.
+     *
+     * `gridPath` is already the one thing that says WHERE the grid is, and
+     * Reimbursements is the same dialog on a different page — so pointing
+     * the existing run at it is the whole change. Everything downstream
+     * (the item count, the section chips, the PDF, the download) is
+     * untouched and stays tested by the runs it already has.
+     */
+    const list = settings.sources.find((x) => x.key === (opts.source ?? ""));
+    if (opts.source && !list) {
+      throw new Error(`There is no import source called “${opts.source}”.`);
+    }
+    const forThisRun = list
+      ? ({ ...settings.selectors, gridPath: list.path } as Selectors)
+      : (settings.selectors as Selectors);
+
+    run = await runAutoExport(settings, forThisRun, login, {
       ...opts,
       onChallenge,
       // Written as they happen. A run can take twenty minutes, most of it
@@ -353,7 +384,8 @@ export async function attemptExport(
       // it imports as the blank reviewer exactly as a hand upload does.
       const reviewer = "userEmail" in login ? String(login.userEmail ?? "") : "";
       const imported = await ingestExport(
-        run.pdf, `emburse-${day}.pdf`, by, { sectionsVerified, reviewer });
+        run.pdf, `emburse-${day}.pdf`, by,
+        { sectionsVerified, reviewer, source: opts.source ?? "" });
       importId = imported.importId;
       // A duplicate file is not a failed run: it means Emburse produced the
       // same export twice, which is normal on a day nothing changed.
@@ -519,21 +551,30 @@ export function startExportScheduler(): void {
       // "is an import due" is a question about one person's queue — asked
       // across all of them, the first reviewer's morning run spends
       // everybody's attempts and the rest never update.
+      const lists = (await readSettings()).sources.filter((x) => x.enabled);
       for (const who of await reviewerImports()) {
         if (!who.enabled) continue;
-        const { due, attempt } = await nextDue(who.schedule, new Date(), who.userEmail);
-        if (!due) continue;
+        // One timeline per reviewer PER LIST. Transactions and
+        // Reimbursements are separate queues on separate pages, so sharing
+        // a count means the first one read spends the other's attempts and
+        // the second never updates — the same fault as sharing one between
+        // two reviewers, one level along.
+        for (const list of lists) {
+          const { due, attempt } = await nextDue(who.schedule, new Date(), who.userEmail, list.key);
+          if (!due) continue;
 
-        console.log(
-          `export: starting scheduled attempt ${attempt}` +
-          (who.userEmail ? ` for ${who.userEmail}` : ""));
-        const { run } = await attemptExport("scheduled", "scheduler", { reviewer: who.userEmail });
-        const failed = run.steps.find((s) => !s.ok);
-        console.log(
-          run.ok
-            ? `export: attempt ${attempt} succeeded (${run.itemLine ?? "no item count"})`
-            : `export: attempt ${attempt} failed at "${failed?.name ?? "start"}" — ${failed?.detail ?? "unknown"}`,
-        );
+          console.log(
+            `export: starting scheduled attempt ${attempt} of ${list.label}` +
+            (who.userEmail ? ` for ${who.userEmail}` : ""));
+          const { run } = await attemptExport(
+            "scheduled", "scheduler", { reviewer: who.userEmail, source: list.key });
+          const failed = run.steps.find((s) => !s.ok);
+          console.log(
+            run.ok
+              ? `export: attempt ${attempt} of ${list.label} succeeded (${run.itemLine ?? "no item count"})`
+              : `export: attempt ${attempt} of ${list.label} failed at "${failed?.name ?? "start"}" — ${failed?.detail ?? "unknown"}`,
+          );
+        }
       }
     } catch (err) {
       console.error("export scheduler:", err);

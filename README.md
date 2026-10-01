@@ -160,6 +160,14 @@ A hand-uploaded file imports as the blank reviewer, and can only purge other
 blank-reviewer rows, so nobody's scheduled queue is at the mercy of a PDF
 somebody dragged in.
 
+**Two lists, not one.** Transactions is the queue this app was built around;
+**Reimbursements** is a separate page with its own queue and the same export
+dialog, so the whole run works on it unchanged once pointed at the right
+path. Both are in Export settings, each with its own path, and each is read
+on its own timeline. Every row carries which list it came from, and the
+purge is scoped by it for exactly the reason it is scoped by reviewer:
+without that, each hourly run would delete everything the other brought.
+
 **Each reviewer has their own timeline.** The scheduler asks "is an import
 due" once per person with a stored Emburse login, counts their attempts
 separately in `export_runs`, and signs in as them — so the first reviewer's
