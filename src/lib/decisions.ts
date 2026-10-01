@@ -62,12 +62,28 @@ export type Challenge = {
   mine: boolean;
 };
 
+export type Correction = {
+  id: number;
+  dedupeKey: string;
+  from: string;
+  to: string;
+  requestedBy: string;
+  requestedAt: string;
+  state: "pending" | "applied" | "failed" | "cancelled";
+  appliedAt: string | null;
+  failedAt: string | null;
+  attempts: number;
+  error: string | null;
+};
+
 export type DecisionsResponse = {
   /** Whether this person has an Emburse login, without which they cannot decide. */
   canDecide: boolean;
   pending: QueuedDecision[];
   recent: QueuedDecision[];
   byExpense: Record<string, QueuedDecision>;
+  /** Category changes on their way to Emburse, keyed by expense. */
+  corrections?: Record<string, Correction>;
   browser: { holder: { label: string; since: number } | null; waiting: string[] };
   /** Whether the stage-by-stage trace is switched on in Configuration. */
   trace?: boolean;
@@ -111,7 +127,13 @@ export function useDecisions(keys: string[]) {
     // nothing pending has no reason to poll — except while a sign-in is parked
     // on a code, which is exactly when the page has to stay live.
     refetchInterval: (query) =>
-      (query.state.data?.pending.length ?? 0) > 0 || query.state.data?.challenge ? 3000 : false,
+      (query.state.data?.pending.length ?? 0) > 0
+      || query.state.data?.challenge
+      // A category change is the slowest thing this page starts, and the
+      // row has to stop saying "about a minute" when it lands.
+      || Object.values(query.state.data?.corrections ?? {}).some((c) => c.state === "pending")
+        ? 3000
+        : false,
     refetchIntervalInBackground: true,
   });
 
@@ -206,6 +228,7 @@ export function useDecisions(keys: string[]) {
     held: q.data?.held ?? false,
     importing: q.data?.importing ?? false,
     byExpense: q.data?.byExpense ?? {},
+    corrections: q.data?.corrections ?? {},
     pending: q.data?.pending ?? [],
     recent: q.data?.recent ?? [],
     browser: q.data?.browser,
@@ -352,18 +375,34 @@ export async function testDecision(id: number): Promise<{
  * about a minute — and the thing the person wants to know is whether it
  * took, which is not worth hiding behind a queue for one deliberate act.
  */
-export async function correctCategory(
-  target: { employee: string; merchant: string; amount: number; date: string | null },
-  category: string,
-): Promise<{ ok: boolean; was: string | null; detail: string }> {
+/**
+ * Ask for a category change. Returns as soon as it is written down.
+ *
+ * The run itself takes about a minute — sign in, find the row, edit, save,
+ * check — and used to be awaited here, which meant closing the drawer threw
+ * away the only thing that knew the answer. It is a record now: the queue
+ * shows it on the row until it lands, whoever is looking and whatever is
+ * open.
+ */
+export async function correctCategory(input: {
+  dedupeKey: string;
+  from: string;
+  category: string;
+}): Promise<Correction> {
   const res = await fetch("/api/decisions/correct-category", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ target, category }),
+    body: JSON.stringify(input),
   });
-  const body = await readJson<{
-    error?: string; ok: boolean; was: string | null; detail: string;
-  }>(res);
-  if (!res.ok) throw new Error(body.error ?? "Could not change the category.");
-  return body;
+  const body = await readJson<{ error?: string; correction: Correction }>(res);
+  if (!res.ok) throw new Error(body.error ?? "Could not ask for the change.");
+  return body.correction;
+}
+
+/** Put the failed corrections down. Nothing reaches Emburse. */
+export async function clearFailedCorrections(): Promise<number> {
+  const res = await fetch("/api/corrections/clear-failed", { method: "POST" });
+  const body = await readJson<{ error?: string; cleared?: number }>(res);
+  if (!res.ok) throw new Error(body.error ?? "Could not clear them.");
+  return body.cleared ?? 0;
 }

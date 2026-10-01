@@ -47,6 +47,8 @@ export type Row = {
    */
   dayGroups: { rule: string; day: string }[];
   ageDays: number | null;
+  /** A category change on its way to Emburse, or one that landed. */
+  correction?: { to: string; state: string } | undefined;
   /** The decision on this expense, when there is one. */
   decision?: {
     state: string; decision?: string; automatic?: boolean; notInQueue?: boolean;
@@ -102,7 +104,30 @@ const COLUMNS: Column[] = [
     render: (r) => <span className="whitespace-nowrap">{r.line.date ? shortDate(r.line.date) : "—"}</span> },
   { key: "employee", label: "Employee", pct: 11, value: (r) => r.employee },
   { key: "merchant", label: "Merchant", pct: 13, value: (r) => r.line.merchant },
-  { key: "category", label: "Category", pct: 9, value: (r) => r.line.category },
+  // What it is being changed TO, from the moment somebody asks.
+  //
+  // The import that would carry the new value is up to an hour away, and
+  // for that whole window the row showed the category everybody already
+  // knows is wrong — including to the person who had just corrected it,
+  // who has no way to tell their press from a press that did nothing.
+  { key: "category", label: "Category", pct: 9,
+    value: (r) => r.correction && r.correction.state !== "failed" && r.correction.state !== "cancelled"
+      ? r.correction.to
+      : r.line.category,
+    render: (r) => {
+      const c = r.correction;
+      if (!c || c.state === "failed" || c.state === "cancelled") {
+        return <span>{r.line.category}</span>;
+      }
+      return (
+        <span className="inline-flex flex-col">
+          <span>{c.to}</span>
+          <span className="text-[11px] text-muted-foreground">
+            {c.state === "pending" ? `changing from ${r.line.category || "none"}…` : `was ${r.line.category || "none"}`}
+          </span>
+        </span>
+      );
+    } },
   { key: "department", label: "Department", pct: 10, value: (r) => r.department },
   // Hidden by default: twelve columns already fill the width, and this one is
   // worth adding deliberately rather than shrinking everything else on its

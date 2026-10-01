@@ -35,7 +35,7 @@ export function QueuePage({
 
   const keys = useMemo(() => waiting.map((r) => r.line.id), [waiting]);
   const {
-    byExpense, pending, browser, canDecide, challenge, decide, cancel, answerCode,
+    byExpense, corrections, pending, browser, canDecide, challenge, decide, cancel, answerCode,
     held, importing,
   } = useDecisions(keys);
   const [error, setError] = useState("");
@@ -94,6 +94,7 @@ export function QueuePage({
         return {
           ...r,
           decision,
+          correction: corrections[r.line.id],
           // Tickable only when this person could decide it one at a time.
           // A bulk action must not be a way round a check the single path
           // makes — and a row already decided or in flight is not a
@@ -115,7 +116,7 @@ export function QueuePage({
           ),
         };
       }),
-    [waiting, byExpense, canDecide, decide, cancel],
+    [waiting, byExpense, corrections, canDecide, decide, cancel],
   );
 
   return (

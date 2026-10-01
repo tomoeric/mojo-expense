@@ -350,6 +350,17 @@ to fix. **Fix category** in the drawer changes it in Emburse — the choices
 offered are the categories this tenant actually uses, gathered from every
 import rather than typed into the code.
 
+**A correction is a record, not a button press.** The run takes about a
+minute, and the first version awaited it inside the request — so closing the
+drawer threw away the only thing that knew the answer. It is written down
+first now and applied by the worker that already holds the browser, which
+means the queue row shows the category it is being changed TO from the
+moment the button is pressed, whoever is looking and whatever is open. Two
+corrections on one expense at once are refused rather than raced. A failure
+keeps its reason and offers the whole run as markdown, because the cause is
+almost always a selector that no longer matches and the fix is a field in
+Export settings.
+
 It is the only path here that CHANGES a finance record rather than deciding
 on one, so: under the corrector's own Emburse login, never a fallback; never
 automatic, because a person picks the category; exactly ONE matching row, as
@@ -358,6 +369,15 @@ row is re-read afterwards rather than the save being assumed. Every control
 it touches is a stored selector, and one it cannot find is reported by
 listing what IS on the form, so the right value can be set from the failure
 instead of a second trip.
+
+**A denial's note is the point of denying.** It is the sentence the employee
+reads. The run used to fill Emburse's reason box when it found one and carry
+on silently when it did not — so the denial landed with no explanation
+attached while the record here said "denied, reason: …" about a reason
+nobody would ever see. A note with nowhere to go now stops the denial before
+anything is confirmed. And the failure report names the decision and carries
+the note, since a failed denial is the one failure where something was
+written as well as clicked, and losing it means retyping from memory.
 
 **Viewing as somebody must never become acting as them.** An admin can look
 at the app through another reviewer's eyes — the control is in the main

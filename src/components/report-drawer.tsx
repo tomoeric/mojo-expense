@@ -3,7 +3,7 @@ import { X, ReceiptText, AlertTriangle, ScanSearch, Loader2, Eye } from "lucide-
 import { type AuditResult, type ExpenseLine, type ExpenseReport } from "@/lib/api";
 import { receiptTotalOf, verdictFor } from "@/lib/receipt-verdict";
 import { moneyExact, shortDate, daysAgo } from "@/lib/format";
-import { useDecisions } from "@/lib/decisions";
+import { useDecisions, type Correction } from "@/lib/decisions";
 import { StatusPill } from "./ui";
 import { ReceiptPane, ReceiptViewer } from "./receipt-viewer";
 import { ReceiptItems, useReceiptItems, type ReceiptDetail } from "./receipt-items";
@@ -72,7 +72,7 @@ export function ReportDrawer({
   /** The receipts the button will read: the ones currently listed. */
   const toCheck = useMemo(() => ordered.filter((l) => l.hasReceipt), [ordered]);
   const lineIds = useMemo(() => report.lines.map((l) => l.id), [report.lines]);
-  const { byExpense, canDecide, decide, cancel } = useDecisions(lineIds);
+  const { byExpense, corrections, canDecide, decide, cancel } = useDecisions(lineIds);
 
 
   // Escape closes the drawer — it covers the table behind it, so a reviewer
@@ -222,6 +222,7 @@ export function ReportDrawer({
                   <LineCard
                     key={l.id}
                     line={l}
+                    correction={corrections[l.id]}
                     department={report.department}
                     employee={report.employeeName || report.employeeEmail}
                     ageDays={daysAgo(report.submittedDate)}
@@ -262,12 +263,9 @@ export function ReportDrawer({
                           denying it tells an employee off for a mistake
                           that is not theirs to fix. */}
                       <FixCategory
-                        target={{
-                          employee: report.employeeName,
-                          merchant: l.merchant, amount: l.amount, date: l.date,
-                        }}
+                        dedupeKey={l.id}
                         current={l.category}
-                        onDone={() => setDecideError("")}
+                        correction={corrections[l.id]}
                       />
                       {/* Reconnaissance for correcting a field in Emburse.
                           It opens this row's edit form, reports every
@@ -320,10 +318,12 @@ function receiptFact(line: ExpenseLine): string {
 }
 
 function LineCard({
-  line, department, employee, ageDays, flagged, audit, items, itemsLoading, itemsEnabled, onShow,
-  isShowing, decide,
+  line, correction, department, employee, ageDays, flagged, audit, items, itemsLoading,
+  itemsEnabled, onShow, isShowing, decide,
 }: {
   line: ExpenseLine;
+  /** A category change on its way to Emburse, or one that landed. */
+  correction: Correction | undefined;
   department: string;
   employee: string;
   /** Days since it was submitted, the same figure the queue's Age column shows. */
@@ -366,7 +366,13 @@ function LineCard({
     ["Amount", moneyExact(line.amount)],
     ["Location / Site", line.location],
     ["Department", department],
-    ["Category", line.category],
+    // What it is being changed TO, the moment somebody asks — not the one
+    // the last import brought, which is the thing they already know is
+    // wrong. The old value stays visible beside it, because a correction
+    // in flight is exactly when somebody wants to see both.
+    ["Category", correction && correction.state !== "cancelled" && correction.state !== "failed"
+      ? `${correction.to}  (was ${line.category || "none"}${correction.state === "pending" ? ", changing in Emburse" : ""})`
+      : line.category],
     ["Paid with", line.method],
     ["Section", line.section ?? ""],
     // Emburse's own count beside ours. "Receipt 1 of 2" against one stored

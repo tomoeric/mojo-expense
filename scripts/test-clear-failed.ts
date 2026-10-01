@@ -21,7 +21,7 @@ process.env.SESSION_SECRET ||= "test-secret";
 
 const { db, ensureSchema } = await import("../server/db.js");
 const {
-  queueDecision, settleDecision, decisionsFor, clearFailedDecisions, failureSummary,
+  queueDecision, settleDecision, decisionsFor, clearFailedDecisions, failureSummary, failureReport,
 } = await import("../server/emburse/decisions.js");
 
 let failures = 0;
@@ -152,6 +152,30 @@ try {
     /cleared by eric@example\.invalid/.test(
       (await db().query<{ error: string }>(
         "SELECT error FROM expense_decisions WHERE dedupe_key = $1", [BROKE])).rows[0]?.error ?? ""));
+
+  console.log("\n4b. A failed DENIAL keeps its note, where somebody can read it");
+  // The note is the sentence the employee reads, and it is the whole point
+  // of denying rather than leaving it. Every row of the report used to look
+  // the same whether it was an approval or a denial, and the note was
+  // nowhere at all — so a failed denial meant retyping it from memory.
+  {
+    const DENIED = `${TAG}-denied`;
+    await add(DENIED);
+    const q = await queueDecision({
+      dedupeKey: DENIED, decision: "deny", reason: "Personal items on a company card.",
+      decidedBy: "eric@example.invalid",
+      target: { employee: "Test Person", merchant: "DOLLARTREE", amount: 5.43, date: "2026-09-24" },
+    });
+    if (!q.ok) throw new Error(q.error);
+    await settleDecision(q.queued.id, { ok: false, error: "the Deny confirm button was not found" });
+    const md = await failureReport();
+    check("the report says it was a denial", /\*\*Deny\*\*/.test(md));
+    check("…and carries the note", /Personal items on a company card/.test(md));
+    check("…and who wrote it", /eric@example\.invalid/.test(md));
+    // Put it down again, so the counts below are about what they say.
+    await db().query(
+      "UPDATE expense_decisions SET state = 'cancelled' WHERE dedupe_key = $1", [DENIED]);
+  }
 
   console.log("\n5. What clearing must never touch");
   check("a decision on its way to Emburse is left alone", await stateOf(SENT) === "pending");

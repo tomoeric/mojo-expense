@@ -6,9 +6,12 @@ import { answerChallenge, cancelChallenge, currentChallenge, waitForCode } from 
 import { browserQueue, whyWaiting } from "./browser-lock.js";
 import { credentialForUser, hasCredential, noteResult } from "./credentials.js";
 import {
-  correctCategory, inspectEditForm, runDecision, testConnection,
+  inspectEditForm, runDecision, testConnection,
   type Decision, type Target,
 } from "./decide.js";
+import {
+  clearFailedCorrections, correctionReport, correctionsFor, queueCorrection,
+} from "./corrections.js";
 import {
   appliedCount, cancelDecision, decisionsFor, pendingDecisions, queueApprovalFor, queueDecision,
   clearFailedDecisions, failureReport, failureSummary, recentDecisions, retryFailedDecisions,
@@ -80,14 +83,16 @@ async function targetFor(dedupeKey: string): Promise<Target | null> {
 decisionRouter.post("/decisions/correct-category", requireAuth, async (req: Request, res: Response) => {
   if (!guard(res)) return;
   const who = req.user?.email ?? "";
-  const body = req.body as { target?: Target; category?: unknown };
+  const body = req.body as { dedupeKey?: unknown; from?: unknown; category?: unknown };
+  const dedupeKey = String(body?.dedupeKey ?? "").trim();
   const category = String(body?.category ?? "").trim();
-  if (!body?.target || !category) {
+  if (!dedupeKey || !category) {
     res.status(400).json({ error: "An expense and a category are both needed." });
     return;
   }
-  const login = await credentialForUser(who);
-  if (!login) {
+  // Said now rather than discovered in a minute's time by a worker nobody
+  // is watching. The rest of the refusals belong to the run itself.
+  if (!(await hasCredential(who))) {
     res.status(400).json({
       error:
         "You have no Emburse login stored, and a category change is recorded in Emburse against " +
@@ -96,17 +101,42 @@ decisionRouter.post("/decisions/correct-category", requireAuth, async (req: Requ
     return;
   }
   try {
-    const settings = await readSettings();
-    const run = await correctCategory(
-      body.target, category, settings.selectors, settings.emburseUrl, login,
-      { onChallenge: (ctx) => waitForCode({ ...ctx, owner: who, loginEmail: login.email }) },
-    );
-    res.json({
-      ok: run.ok,
-      was: run.was,
-      steps: run.steps,
-      detail: run.steps.find((st) => !st.ok)?.detail ?? run.steps.at(-1)?.detail ?? "",
+    const queued = await queueCorrection({
+      dedupeKey, from: String(body?.from ?? ""), to: category, requestedBy: who,
     });
+    if (!queued.ok) {
+      res.status(409).json({ error: queued.error });
+      return;
+    }
+    // Straight to the browser rather than at the next idle tick: somebody
+    // pressed a button and is watching the row.
+    nudgeDecisionWorker({ immediate: true });
+    res.json({ correction: queued.correction });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/**
+ * Every failed correction, as markdown.
+ *
+ * A correction that will not go through is almost always a control on
+ * Emburse's edit form that no longer matches its stored selector, and the
+ * thing needed to fix it is the sentence the run produced — which is
+ * otherwise a line on a screen nobody has open any more.
+ */
+decisionRouter.get("/corrections/report.md", requireAuth, async (_req: Request, res: Response) => {
+  try {
+    res.type("text/markdown").send(await correctionReport());
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+decisionRouter.post("/corrections/clear-failed", requireAuth, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  try {
+    res.json({ cleared: await clearFailedCorrections(req.user?.email ?? "unknown") });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
@@ -415,6 +445,13 @@ decisionRouter.get("/decisions", requireAuth, async (req: Request, res: Response
     // Keyed by expense, so the queue page can badge each row without a
     // request per row.
     byExpense: Object.fromEntries(await decisionsFor(keys)),
+    // Category changes on their way to Emburse, or that did not get there.
+    // Keyed the same way and on the same poll: the row has to show the
+    // category it is being changed TO, not the one the last import
+    // brought, from the moment the button is pressed until the change
+    // lands — which is minutes, and used to be invisible the instant the
+    // panel that asked for it was closed.
+    corrections: Object.fromEntries(await correctionsFor(keys)),
     browser: browserQueue(),
     // Expenses still in the local table that this app has already approved
     // or denied. The Live strip counts "awaiting a decision" off the

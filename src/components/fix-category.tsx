@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Loader2, Tag } from "lucide-react";
-import { correctCategory } from "@/lib/decisions";
+import { AlertTriangle, Check, Download, Loader2, Tag } from "lucide-react";
+import { correctCategory, type Correction } from "@/lib/decisions";
 import { useTaxonomy } from "@/lib/taxonomy";
 
 /**
@@ -10,25 +10,26 @@ import { useTaxonomy } from "@/lib/taxonomy";
  * A fuel purchase at an Exxon filed under Travel · Mileage & Ground
  * Transportation is not a thing to deny: the spend is fine and the coding is
  * wrong, and denying it sends an employee a message about a mistake that is
- * not theirs to fix. Until now the only honest options were deny it or go
- * and fix it in Emburse by hand, which is the errand this app exists to
- * save.
+ * not theirs to fix.
  *
- * The categories offered are the ones this tenant actually uses, gathered
- * from every import — not a list typed in here, which would drift from
- * Emburse's the first time somebody added one.
+ * The press writes a record and returns. The run — sign in, find the row,
+ * edit, save, check — takes about a minute and happens in the worker that
+ * already holds the browser, so closing this panel no longer throws away the
+ * only thing that knew the answer. What is on screen afterwards comes from
+ * that record, on the same poll as everything else.
  */
 export function FixCategory({
-  target, current, onDone,
+  dedupeKey, current, correction,
 }: {
-  target: { employee: string; merchant: string; amount: number; date: string | null };
+  dedupeKey: string;
   current: string;
-  onDone: () => void;
+  /** What is already happening to this expense's category, if anything. */
+  correction: Correction | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const [picked, setPicked] = useState("");
   const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const [error, setError] = useState("");
   const qc = useQueryClient();
   const categories = useTaxonomy("category");
 
@@ -39,22 +40,42 @@ export function FixCategory({
   async function run(): Promise<void> {
     if (!picked) return;
     setBusy(true);
-    setNote(null);
+    setError("");
     try {
-      const r = await correctCategory(target, picked);
-      setNote({ ok: r.ok, text: r.detail || (r.ok ? "Changed in Emburse." : "It did not go through.") });
-      if (r.ok) {
-        // The category is on the expense, the flag is about the category,
-        // and the next import carries the new one — so everything on screen
-        // is a sentence or two out of date.
-        await qc.invalidateQueries();
-        onDone();
-      }
+      await correctCategory({ dedupeKey, from: current, category: picked });
+      setOpen(false);
+      // The row has to show the new category from this moment, not from the
+      // next import, and the poll is what carries it.
+      await qc.invalidateQueries({ queryKey: ["decisions"] });
     } catch (e) {
-      setNote({ ok: false, text: (e as Error).message });
+      setError((e as Error).message);
     } finally {
       setBusy(false);
     }
+  }
+
+  // Something is already happening to this expense: say what, and offer
+  // nothing else until it is finished.
+  if (correction && correction.state === "pending") {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-xs font-semibold text-sky-700 dark:text-sky-300">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        Changing to “{correction.to}” in Emburse — about a minute
+      </span>
+    );
+  }
+
+  if (correction && correction.state === "failed") {
+    return <CorrectionFailed correction={correction} onRetry={() => setOpen(true)} />;
+  }
+
+  if (correction && correction.state === "applied") {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-600/40 bg-emerald-600/10 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+        <Check className="h-3.5 w-3.5" />
+        Category changed to “{correction.to}” in Emburse
+      </span>
+    );
   }
 
   if (!open) {
@@ -62,7 +83,7 @@ export function FixCategory({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        title="Change this expense's category in Emburse. Signs in as you; takes about a minute."
+        title="Change this expense's category in Emburse. Signs in as you; takes about a minute, and carries on if you close this."
         className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs font-semibold hover:bg-muted"
       >
         <Tag className="h-3.5 w-3.5" />
@@ -89,26 +110,81 @@ export function FixCategory({
         className="inline-flex items-center gap-1.5 rounded-lg bg-sky-700 px-2.5 py-1 font-semibold text-white disabled:opacity-50"
       >
         {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-        {busy ? "Changing in Emburse…" : "Send to Emburse"}
+        Send to Emburse
       </button>
       <button
         type="button"
         disabled={busy}
-        onClick={() => { setOpen(false); setNote(null); }}
+        onClick={() => { setOpen(false); setError(""); }}
         className="rounded-lg border border-border px-2 py-1 font-semibold hover:bg-muted disabled:opacity-50"
       >
         Cancel
       </button>
-      {busy && (
-        <span className="text-muted-foreground">
-          Signing in as you and editing the row — about a minute, and it queues behind any import.
+      <span className="w-full text-muted-foreground">
+        It goes to Emburse under your own login and takes about a minute. You can close this —
+        the row will show how it went.
+      </span>
+      {error && <span className="block w-full text-amber-700">{error}</span>}
+    </span>
+  );
+}
+
+/**
+ * A correction that did not land.
+ *
+ * Says what was asked for, what Emburse said back, and offers the file.
+ * Almost every failure here is a control on Emburse's edit form that no
+ * longer matches its stored selector, and the error usually names what IS
+ * on the form — which is the thing somebody needs in order to fix it, and
+ * is useless if it only exists on a screen nobody has open any more.
+ */
+function CorrectionFailed({
+  correction, onRetry,
+}: {
+  correction: Correction;
+  onRetry: () => void;
+}) {
+  const [show, setShow] = useState(false);
+  return (
+    <span className="block w-full rounded-lg border border-amber-500/50 bg-amber-500/10 px-2.5 py-2 text-xs text-amber-900 dark:text-amber-200">
+      <span className="flex flex-wrap items-center gap-2">
+        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+        <strong>
+          The change to “{correction.to}” did not reach Emburse.
+        </strong>
+        <button
+          type="button"
+          onClick={() => setShow((v) => !v)}
+          className="underline underline-offset-2 hover:no-underline"
+        >
+          {show ? "Hide what it said" : "What did it say?"}
+        </button>
+        <a
+          href="/api/corrections/report.md"
+          download="category-corrections.md"
+          className="inline-flex items-center gap-1 rounded-lg border border-amber-600/50 px-2 py-0.5 font-semibold hover:bg-amber-500/15"
+        >
+          <Download className="h-3.5 w-3.5" />
+          Download
+        </a>
+        <button
+          type="button"
+          onClick={onRetry}
+          className="rounded-lg border border-amber-600/50 px-2 py-0.5 font-semibold hover:bg-amber-500/15"
+        >
+          Try again
+        </button>
+      </span>
+      {show && (
+        <span className="mt-1.5 block rounded-lg border border-amber-600/30 bg-background/60 p-2 font-mono text-[11px] break-words">
+          {correction.error ?? "Nothing was recorded, which is itself worth reporting."}
         </span>
       )}
-      {note && (
-        <span className={`block w-full ${note.ok ? "text-emerald-700" : "text-amber-700"}`}>
-          {note.text}
-        </span>
-      )}
+      <span className="mt-1 block opacity-80">
+        Nothing in Emburse was changed. The file above has the whole run, step by step — it
+        usually names the control that could not be found, which is what the selector in
+        Export settings should be set to.
+      </span>
     </span>
   );
 }

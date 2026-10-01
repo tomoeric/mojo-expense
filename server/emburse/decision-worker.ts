@@ -1,7 +1,9 @@
 import { isDbConfigured } from "../db.js";
 import { readSettings } from "../import/settings.js";
 import { credentialForUser } from "./credentials.js";
-import { runDecisions, type BatchItem } from "./decide.js";
+import { correctCategory, runDecisions, type BatchItem, type Target } from "./decide.js";
+import { pendingCorrections, settleCorrection } from "./corrections.js";
+import { db } from "../db.js";
 import type { ChallengeHook } from "./auto-export.js";
 import { waitForCode } from "./challenge.js";
 import {
@@ -85,6 +87,15 @@ async function tick(): Promise<void> {
     // lifted. A batch already at the browser is not interrupted, because
     // abandoning a half-clicked approval is worse than letting it land.
     if (await getFlag("holdDecisions").catch(() => false)) return;
+
+    // Corrections first, and separately.
+    //
+    // They are not decisions — they change a field rather than settling an
+    // expense — but they want the same browser and the same sign-in, and
+    // running them here is what makes "Send to Emburse" survive the drawer
+    // being closed. First because a category change is usually the reason
+    // the expense has not been approved yet.
+    await runCorrections();
 
     let waiting = await pendingDecisions();
     if (waiting.length === 0) return;
@@ -283,6 +294,83 @@ async function tick(): Promise<void> {
  * whole batch, so one person present is enough to clear the device check for
  * everything in it.
  */
+/**
+ * Apply the corrections somebody asked for, under their own login.
+ *
+ * One at a time and one browser session each, which is slower than a batch
+ * and right: these are rare, deliberate, and each one changes a different
+ * person's record. Grouping them would also mean one bad selector taking
+ * down the rest of the queue with it.
+ *
+ * Never throws. A correction that cannot run is recorded as failed with the
+ * reason, because the whole point of writing it down was that somebody can
+ * read what happened later.
+ */
+async function runCorrections(): Promise<void> {
+  let waiting: Awaited<ReturnType<typeof pendingCorrections>>;
+  try {
+    waiting = await pendingCorrections();
+  } catch (err) {
+    console.error("corrections: could not read the queue:", err);
+    return;
+  }
+  if (waiting.length === 0) return;
+
+  const settings = await readSettings();
+  for (const c of waiting) {
+    try {
+      const login = await credentialForUser(c.requestedBy);
+      if (!login) {
+        await settleCorrection(c.id, {
+          ok: false,
+          error:
+            `${c.requestedBy} has no Emburse login stored, and a category change is recorded ` +
+            `against whoever made it. Add one under “Your Emburse login”, then ask again.`,
+        });
+        continue;
+      }
+      const target = await targetFor(c.dedupeKey);
+      if (!target) {
+        await settleCorrection(c.id, {
+          ok: false,
+          error: "This expense is no longer in the queue here, so there is nothing to correct.",
+        });
+        continue;
+      }
+      console.log(`corrections: setting ${c.dedupeKey} to “${c.to}” as ${c.requestedBy}`);
+      const run = await correctCategory(
+        target, c.to, settings.selectors, settings.emburseUrl, login);
+      await settleCorrection(
+        c.id,
+        run.ok
+          ? { ok: true }
+          : { ok: false, error: run.steps.find((s) => !s.ok)?.detail ?? "It did not go through." },
+        run.steps);
+    } catch (err) {
+      await settleCorrection(c.id, {
+        ok: false, error: err instanceof Error ? err.message : String(err),
+      }).catch(() => {});
+    }
+  }
+}
+
+/** The four fields a row is matched on, read back from our own table. */
+async function targetFor(dedupeKey: string): Promise<Target | null> {
+  const { rows } = await db().query<{
+    employee: string; merchant: string; amount_cents: string; expense_date: string | null;
+  }>(
+    `SELECT employee, merchant, amount_cents, to_char(expense_date, 'YYYY-MM-DD') AS expense_date
+       FROM expenses WHERE dedupe_key = $1`, [dedupeKey]);
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    employee: r.employee ?? "",
+    merchant: r.merchant ?? "",
+    amount: Number(r.amount_cents) / 100,
+    date: r.expense_date,
+  };
+}
+
 export const anybodyToAsk = (batch: readonly BatchItem[]): boolean =>
   batch.some((b) => b.automatic !== true);
 

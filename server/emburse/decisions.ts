@@ -534,10 +534,10 @@ export async function failureReport(): Promise<string> {
   const { rows } = await db().query<{
     error: string | null; decision: Decision; decided_at: Date; attempts: number;
     target: Target; matched_row: string | null; automatic: boolean; not_in_queue: boolean;
-    steps: DecisionStep[] | null;
+    steps: DecisionStep[] | null; reason: string | null; decided_by: string | null;
   }>(
     `SELECT d.error, d.decision, d.decided_at, d.attempts, d.target, d.matched_row,
-            d.automatic, d.not_in_queue, d.steps
+            d.automatic, d.not_in_queue, d.steps, d.reason, d.decided_by
        FROM (SELECT DISTINCT ON (dedupe_key) *
                FROM expense_decisions
               WHERE state <> 'cancelled'
@@ -573,8 +573,15 @@ export async function failureReport(): Promise<string> {
 
   for (const [reason, items] of groups) {
     out.push(`## ${items.length} · ${reason}`, ``);
-    out.push(`| Date | Employee | Merchant | Search term | Amount | Step | Tries | Auto | Error |`);
-    out.push(`| --- | --- | --- | --- | ---: | --- | ---: | :-: | --- |`);
+    // WHICH decision, and the note that went with it.
+    //
+    // Every row in this file used to read the same whether it was an
+    // approval or a denial, and a denial's note — the sentence the employee
+    // is going to read — was nowhere at all. A failed denial is the one
+    // kind of failure where something was WRITTEN as well as clicked, so
+    // losing the note means retyping it from memory, or not denying.
+    out.push(`| Date | Employee | Merchant | Search term | Amount | Decision | Note | By | Step | Tries | Auto | Error |`);
+    out.push(`| --- | --- | --- | --- | ---: | --- | --- | --- | --- | ---: | :-: | --- |`);
     for (const r of items) {
       // WHICH step failed, which a timeout badly needs: "page.goto timed
       // out" on the sign-in page and on a grid three navigations later are
@@ -582,7 +589,9 @@ export async function failureReport(): Promise<string> {
       const failed = (r.steps ?? []).find((st) => !st.ok)?.name ?? "—";
       out.push(`| ${cell(r.target.date ?? "—")} | ${cell(r.target.employee)} | ` +
         `${cell(r.target.merchant)} | ${cell(searchTerm(r.target.merchant))} | ` +
-        `${money(r.target.amount)} | ${cell(failed)} | ${r.attempts} | ` +
+        `${money(r.target.amount)} | ${r.decision === "deny" ? "**Deny**" : "Approve"} | ` +
+        `${cell(r.reason ?? "") || "—"} | ${cell(r.decided_by ?? "") || "—"} | ` +
+        `${cell(failed)} | ${r.attempts} | ` +
         `${r.automatic ? "yes" : "no"} | ${cell(r.error ?? "(nothing recorded)")} |`);
     }
     out.push(``);

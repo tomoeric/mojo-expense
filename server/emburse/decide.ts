@@ -2029,6 +2029,25 @@ async function applyOne(
     })();
     if (box) await box.fill(reason);
 
+    /**
+     * A note that went nowhere is not a denial with a note.
+     *
+     * The reason is the sentence the employee reads — it is the whole
+     * point of denying rather than leaving it — and this used to fill the
+     * box when it found one and carry on silently when it did not. The
+     * denial then landed in Emburse with no explanation attached, and the
+     * record here said "denied, reason: …" about a reason nobody will
+     * ever see. Refusing is the right way round: nothing has been
+     * confirmed yet, and a denial with no note is worse than one more
+     * minute's work.
+     */
+    if (reason.trim() && !box) {
+      throw new Error(
+        `Emburse offered no box to put the reason in, so the note — “${reason.trim()}” — would ` +
+        `have gone nowhere and the employee would be told nothing. Nothing was confirmed. ` +
+        `Check the denyReason selector in Export settings against the deny dialog.`);
+    }
+
     await clickFirstVisible(page, sel.denyConfirm!, "Deny confirm button", ms);
     const said = await confirmActioned(page, sel, target, "denied", matchedRows);
     return reason ? `${said}, reason: ${reason}` : said;
