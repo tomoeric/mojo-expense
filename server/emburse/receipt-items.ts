@@ -881,28 +881,45 @@ export type ReadingBacklog = {
   commonError: string | null;
 };
 
-export async function readingBacklog(): Promise<ReadingBacklog> {
+export async function readingBacklog(
+  /**
+   * Whose receipts, or null for every one of them.
+   *
+   * It had no such argument, so an admin viewing as Brian and watching
+   * "the AI is reading 340 receipts" was watching the whole deployment's
+   * — mostly Eric's — under Brian's name. A blob is shared by hash and
+   * belongs to nobody, but the EXPENSE pointing at it has an owner, and
+   * that is the question being asked: how far along is this person's
+   * queue.
+   */
+  who: string | null = null,
+): Promise<ReadingBacklog> {
   await ensure();
-  const [waiting, gaveUp] = await Promise.all([
+  const mine = (alias: string) => who === null ? "" : `
+      AND EXISTS (SELECT 1 FROM expense_receipts er
+                    JOIN expenses e ON e.dedupe_key = er.dedupe_key
+                   WHERE er.sha256 = ${alias}.sha256 AND lower(e.reviewer) = lower($2))`;
+  const args: unknown[] = who === null ? [MAX_ATTEMPTS] : [MAX_ATTEMPTS, who];
+
+  const [waiting, gaveUp, total] = await Promise.all([
     db().query<{ n: string }>(
       `SELECT count(*) AS n FROM receipt_blobs b
         WHERE NOT EXISTS (
                 SELECT 1 FROM receipt_readings r
                  WHERE r.sha256 = b.sha256
-                   AND (r.error IS NULL OR r.attempts >= $1))`, [MAX_ATTEMPTS]),
+                   AND (r.error IS NULL OR r.attempts >= $1))${mine("b")}`, args),
     db().query<{ error: string; n: string }>(
-      `SELECT error, count(*) AS n FROM receipt_readings
-        WHERE error IS NOT NULL AND attempts >= $1
-        GROUP BY error ORDER BY count(*) DESC LIMIT 1`, [MAX_ATTEMPTS]),
+      `SELECT error, count(*) AS n FROM receipt_readings rr
+        WHERE error IS NOT NULL AND attempts >= $1${mine("rr")}
+        GROUP BY error ORDER BY count(*) DESC LIMIT 1`, args),
+    db().query<{ n: string }>(
+      `SELECT count(*) AS n FROM receipt_readings rr
+        WHERE error IS NOT NULL AND attempts >= $1${mine("rr")}`, args),
   ]);
-  const top = gaveUp.rows[0];
-  const total = await db().query<{ n: string }>(
-    `SELECT count(*) AS n FROM receipt_readings WHERE error IS NOT NULL AND attempts >= $1`,
-    [MAX_ATTEMPTS]);
   return {
     waiting: Number(waiting.rows[0]?.n ?? 0),
     gaveUp: Number(total.rows[0]?.n ?? 0),
-    commonError: top?.error ?? null,
+    commonError: gaveUp.rows[0]?.error ?? null,
   };
 }
 

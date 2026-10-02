@@ -164,7 +164,7 @@ api.post("/ai-check", requireAuth, requireAdmin, async (_req, res) => {
  * Read from stored token counts and priced at display time, so a corrected
  * price needs no backfill.
  */
-api.get("/ai-usage", requireAuth, requireAdmin, async (_req, res) => {
+api.get("/ai-usage", requireAuth, requireAdmin, async (req, res) => {
   try {
     // The backlog rides along with the spend rather than getting its own
     // endpoint: "why is this climbing" is a question about the number on this
@@ -172,7 +172,11 @@ api.get("/ai-usage", requireAuth, requireAdmin, async (_req, res) => {
     const { readingBacklog } = await import("./emburse/receipt-items.js");
     const [spend, backlog] = await Promise.all([
       aiSpend(),
-      readingBacklog().catch(() => null),
+      // Inside a view, THEIR receipts. An admin checking whether Brian's
+      // receipts are being read wants Brian's backlog, not the
+      // deployment's total — which is mostly somebody else's and makes his
+      // queue look stuck when it is finished.
+      readingBacklog(req.viewingAs ? req.viewingAs.viewed : null).catch(() => null),
     ]);
     res.json({ ...spend, backlog });
   } catch (err) {
