@@ -38,6 +38,7 @@ const check = (label: string, ok: boolean, detail = ""): void => {
 };
 
 const clean = async (): Promise<void> => {
+  await db().query("DELETE FROM category_corrections WHERE dedupe_key LIKE 'fixcat-%'");
   await db().query("DELETE FROM expenses WHERE dedupe_key LIKE 'fixcat-%'");
   await db().query("DELETE FROM expense_rules WHERE name = $1", [RULE]);
 };
@@ -95,6 +96,51 @@ try {
     (await categoryOf(KEY)) === "Auto Fee & Fuel", await categoryOf(KEY));
   check("…the flag is gone", !(await flagged(KEY)));
   check("…without disturbing the other expense", !(await flagged(CLEAN)));
+
+  console.log("\n3b. It is not approved until EMBURSE says the change took");
+  /*
+   * A row showed "Changed in Emburse" and "Approved · auto" in the same
+   * second, on the strength of nothing but our own edit. Our run clicking
+   * Save and seeing the grid agree is not the same fact as Emburse's own
+   * export carrying the new category back — and the second is the one
+   * worth approving on.
+   */
+  {
+    const { autoApproveReport } = await import("../server/rules/auto-approve.js");
+    // A correction applied just now, with no import since.
+    await db().query(
+      `INSERT INTO category_corrections (dedupe_key, from_category, to_category,
+                                         requested_by, state, applied_at)
+       VALUES ($1,'Gas','Auto Fee & Fuel','eric.s@test.invalid','applied', now())`,
+      [KEY]);
+    await db().query(
+      "UPDATE expenses SET last_seen_at = now() - interval '1 hour' WHERE dedupe_key = $1",
+      [KEY]);
+
+    const held = await autoApproveReport();
+    check("it is counted as waiting on Emburse", held.counts.awaitingEmburse >= 1,
+      String(held.counts.awaitingEmburse));
+
+    // Now an import carries it back, saying the new category itself.
+    await db().query(
+      "UPDATE expenses SET last_seen_at = now() + interval '1 second' WHERE dedupe_key = $1",
+      [KEY]);
+    const freed = await autoApproveReport();
+    check("…and released once the import brings it back",
+      freed.counts.awaitingEmburse < held.counts.awaitingEmburse,
+      `${held.counts.awaitingEmburse} → ${freed.counts.awaitingEmburse}`);
+
+    // An import that brings it back with the OLD category is not a
+    // confirmation — the change did not stick, and it must keep waiting.
+    await db().query("UPDATE expenses SET category = 'Gas' WHERE dedupe_key = $1", [KEY]);
+    const stuck = await autoApproveReport();
+    check("…but not if the import still shows the old category",
+      stuck.counts.awaitingEmburse >= 1, String(stuck.counts.awaitingEmburse));
+
+    await db().query("DELETE FROM category_corrections WHERE dedupe_key = $1", [KEY]);
+    await db().query(
+      "UPDATE expenses SET category = 'Auto Fee & Fuel' WHERE dedupe_key = $1", [KEY]);
+  }
 
   console.log("\n4. And it is honest when the category is still wrong");
   // Correcting to another wrong category must NOT clear the flag — the

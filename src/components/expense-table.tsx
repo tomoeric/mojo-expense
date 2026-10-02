@@ -48,7 +48,7 @@ export type Row = {
   dayGroups: { rule: string; day: string }[];
   ageDays: number | null;
   /** A category change on its way to Emburse, or one that landed. */
-  correction?: { to: string; state: string } | undefined;
+  correction?: { to: string; state: string; confirmedByImport?: boolean } | undefined;
   /** The decision on this expense, when there is one. */
   decision?: {
     state: string; decision?: string; automatic?: boolean; notInQueue?: boolean;
@@ -127,19 +127,38 @@ const COLUMNS: Column[] = [
        * nine percent of the width it truncated mid-word. A change we made
        * in Emburse deserves to be as visible as a flag is.
        */
+      /*
+       * Three states, not two.
+       *
+       * "Changed in Emburse" meant our run clicked Save and saw the grid
+       * agree — which is not the same as Emburse's own export saying so,
+       * and the difference showed when a row read "Changed in Emburse"
+       * and "Approved · auto" in the same second, on the strength of
+       * nothing but our own edit. The automation now waits for the
+       * import, so the page has to say which of the two it is holding.
+       */
       const landed = c.state === "applied";
+      const confirmed = landed && c.confirmedByImport === true;
+      const label = !landed ? "Sending to Emburse"
+        : confirmed ? "Changed in Emburse"
+        : "Changed — awaiting import";
       return (
         <span className="inline-flex flex-col gap-0.5">
           <span>{c.to}</span>
           <span
             className={`inline-flex w-fit items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
-              landed
+              confirmed
                 ? "bg-emerald-600/15 text-emerald-700 dark:text-emerald-300"
                 : "bg-amber-500/20 text-amber-800 dark:text-amber-200"
             }`}
-            title={`${landed ? "Changed" : "Changing"} in Emburse from “${r.line.category || "none"}” to “${c.to}”`}
+            title={confirmed
+              ? `Emburse's own export has carried this back as “${c.to}”.`
+              : landed
+                ? `Saved in Emburse as “${c.to}”, from “${r.line.category || "none"}”. It is not `
+                  + "approved automatically until the next import brings it back saying so."
+                : `Changing from “${r.line.category || "none"}” to “${c.to}” — about a minute.`}
           >
-            {landed ? "Changed in Emburse" : "Sent to Emburse"}
+            {label}
           </span>
         </span>
       );
@@ -681,9 +700,11 @@ function FlagTabs({
 
       {tab === "sent" && (
         <p className="text-xs text-muted-foreground">
-          Category changes this app sent to Emburse under your own login. They stay here once
-          they have landed, so this is the record of what was changed and to what — including
-          the ones that have since been approved.
+          Category changes this app sent to Emburse under your own login. A change is not
+          approved automatically until the <strong>next import brings it back</strong> with the
+          new category — Emburse saying it in its own words, rather than us taking our own edit
+          as proof. They stay here afterwards, so this is the record of what was changed and to
+          what, including the ones since approved.
         </p>
       )}
 

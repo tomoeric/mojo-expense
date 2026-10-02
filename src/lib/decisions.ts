@@ -23,6 +23,8 @@ export type QueuedDecision = {
   state: DecisionState;
   attempts: number;
   appliedAt: string | null;
+  /** Emburse's own export has carried the new category back. */
+  confirmedByImport?: boolean;
   matchedRow: string | null;
   error: string | null;
   /**

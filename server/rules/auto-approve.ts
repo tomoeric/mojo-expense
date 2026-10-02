@@ -68,6 +68,36 @@ const TESTS = {
            WHERE h.dedupe_key = e.dedupe_key AND h.verdict = 'fail')`,
 
   /**
+   * We changed its category and Emburse has not said so back yet.
+   *
+   * A correction is applied, the flag it cleared disappears, and the
+   * expense becomes approvable in the same second — so an expense was
+   * showing "Changed in Emburse" and "Approved · auto" at the same moment,
+   * on the strength of nothing but our own edit. Nobody got to look, and
+   * more to the point nothing had confirmed the change except the run that
+   * made it.
+   *
+   * Emburse's own export is the witness. An import that carries this
+   * expense AFTER the correction landed, with the category the correction
+   * asked for, is Emburse saying it in its own words. Until then the
+   * expense waits — visible under Category sent, which is where somebody
+   * would go to look.
+   *
+   * It needs no new column: `last_seen_at` is stamped by every import that
+   * carries the row, and `category` is whatever that import said it was.
+   * The two together are the confirmation.
+   *
+   * If the change silently did not stick, this never clears and the
+   * expense stays unapproved and on screen — which is the right failure.
+   */
+  awaitingEmburse: `EXISTS (
+          SELECT 1 FROM category_corrections c
+           WHERE c.dedupe_key = e.dedupe_key
+             AND c.state = 'applied'
+             AND NOT (e.last_seen_at > c.applied_at
+                      AND lower(btrim(coalesce(e.category, ''))) = lower(btrim(c.to_category))))`,
+
+  /**
    * Some enabled rule has not run since this expense arrived.
    *
    * NOT "it has a hit row": a rule that does not apply writes no row, so
@@ -351,6 +381,7 @@ async function sweepFor(who: string | null): Promise<AutoApproveResult> {
         AND NOT ${TESTS.flagged}
         AND NOT ${TESTS.awaitingRules}
         AND NOT ${TESTS.decided}
+        AND NOT ${TESTS.awaitingEmburse}
         AND ($2::boolean = false OR NOT ${TESTS.awaitingReceipt})
       ORDER BY e.expense_date NULLS LAST, e.dedupe_key
       LIMIT $1`,
@@ -392,6 +423,8 @@ export type AutoApproveReport = {
     flagged: number;
     decided: number;
     awaitingRules: number;
+    /** Category changed by us, and the next import has not confirmed it yet. */
+    awaitingEmburse: number;
     awaitingReceipt: number;
     eligible: number;
   };
@@ -441,6 +474,7 @@ export async function autoApproveReport(who: string | null = null): Promise<Auto
        SELECT ${TESTS.flagged}        AS flagged,
               ${TESTS.decided}        AS decided,
               ${TESTS.awaitingRules}  AS awaiting_rules,
+              ${TESTS.awaitingEmburse} AS awaiting_emburse,
               ($1::boolean AND ${TESTS.awaitingReceipt}) AS awaiting_receipt
          FROM expenses e
         WHERE e.in_inbox = true
@@ -452,9 +486,14 @@ export async function autoApproveReport(who: string | null = null): Promise<Auto
                                    AND awaiting_rules)            AS awaiting_rules,
             count(*) FILTER (WHERE NOT flagged AND NOT decided
                                    AND NOT awaiting_rules
+                                   AND awaiting_emburse)          AS awaiting_emburse,
+            count(*) FILTER (WHERE NOT flagged AND NOT decided
+                                   AND NOT awaiting_rules
+                                   AND NOT awaiting_emburse
                                    AND awaiting_receipt)          AS awaiting_receipt,
             count(*) FILTER (WHERE NOT flagged AND NOT decided
                                    AND NOT awaiting_rules
+                                   AND NOT awaiting_emburse
                                    AND NOT awaiting_receipt)      AS eligible
        FROM q`,
     [s.receiptMatters, reviewer, ownsBlanks],
@@ -506,6 +545,7 @@ export async function autoApproveReport(who: string | null = null): Promise<Auto
       flagged: n("flagged"),
       decided: n("decided"),
       awaitingRules: n("awaiting_rules"),
+      awaitingEmburse: n("awaiting_emburse"),
       awaitingReceipt: n("awaiting_receipt"),
       eligible: n("eligible"),
     },

@@ -55,6 +55,8 @@ export type Correction = {
   requestedAt: string;
   state: CorrectionState;
   appliedAt: string | null;
+  /** Emburse's own export has carried the new category back. */
+  confirmedByImport?: boolean;
   failedAt: string | null;
   attempts: number;
   error: string | null;
@@ -169,15 +171,28 @@ export async function correctionsFor(keys: string[]): Promise<Map<string, Correc
   await ensure();
   const out = new Map<string, Correction>();
   if (keys.length === 0) return out;
+  /*
+   * And whether EMBURSE has said it back.
+   *
+   * An applied correction means our run clicked Save and saw the grid
+   * agree. An import carrying the expense afterwards, with the category
+   * the correction asked for, is Emburse saying it in its own export —
+   * which is a different and better fact, and the one the automation
+   * waits for before approving. The page shows which of the two it has.
+   */
   const { rows } = await db().query(
-    `SELECT DISTINCT ON (dedupe_key) ${COLUMNS}
-       FROM category_corrections
-      WHERE dedupe_key = ANY($1::text[]) AND state <> 'cancelled'
-      ORDER BY dedupe_key, id DESC`,
+    `SELECT DISTINCT ON (c.dedupe_key) c.${COLUMNS.split(", ").join(", c.")},
+            (c.state = 'applied' AND e.last_seen_at > c.applied_at
+             AND lower(btrim(coalesce(e.category, ''))) = lower(btrim(c.to_category)))
+              AS confirmed_by_import
+       FROM category_corrections c
+       LEFT JOIN expenses e ON e.dedupe_key = c.dedupe_key
+      WHERE c.dedupe_key = ANY($1::text[]) AND c.state <> 'cancelled'
+      ORDER BY c.dedupe_key, c.id DESC`,
     [keys]);
   for (const r of rows) {
     const c = shape(r);
-    out.set(c.dedupeKey, c);
+    out.set(c.dedupeKey, { ...c, confirmedByImport: r.confirmed_by_import === true });
   }
   return out;
 }
