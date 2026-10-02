@@ -21,6 +21,7 @@ process.env.SESSION_SECRET ||= "test-secret-schedules";
 import { db, ensureSchema } from "../server/db.js";
 import { deleteCredential, saveCredential } from "../server/emburse/credentials.js";
 import { gridPathFor, nextDue, reviewerImports, setReviewerImport } from "../server/emburse/export-scheduler.js";
+import { gridUrl } from "../server/emburse/auto-export.js";
 
 const ERIC = "eric.s@test.invalid";
 const BRIAN = "brian.c@test.invalid";
@@ -176,6 +177,48 @@ try {
       gridPathFor("reimbursements", other, { gridPath: "/transactions" }) === "/reimbursements");
     check("a reviewer with none still gets the default",
       gridPathFor("", def, { gridPath: null }) === "/transactions/team");
+  }
+  console.log("\n8. Which Emburse lists each of them imports");
+  // Transactions and Reimbursements are separate pages with separate
+  // queues, and which of them somebody has anything in is a fact about
+  // that person — Brian has two reimbursements waiting, Eric may have
+  // none. It was one global switch that turned a second import on for
+  // everybody at once.
+  check("they inherit the defaults until they choose",
+    (await mine(BRIAN))?.sources === null);
+  // Set again here on purpose: section 6 cleared them, and the point below
+  // is that choosing a LIST does not disturb the STAGES.
+  await setReviewerImport(BRIAN, { sections: ["Needs Review"] }, "test");
+  await setReviewerImport(BRIAN, { sources: ["", "reimbursements"] }, "test");
+  {
+    const b = await mine(BRIAN);
+    const e = await mine(ERIC);
+    check("Brian imports both lists",
+      JSON.stringify(b?.sources) === JSON.stringify(["", "reimbursements"]),
+      JSON.stringify(b?.sources));
+    check("…and Eric is untouched", e?.sources === null, JSON.stringify(e?.sources));
+    check("…and his stages survived it",
+      JSON.stringify(b?.sections) === JSON.stringify(["Needs Review"]),
+      JSON.stringify(b?.sections));
+  }
+  await setReviewerImport(BRIAN, { sources: [] }, "test");
+  check("an empty list is read as the defaults, not as importing nothing",
+    (await mine(BRIAN))?.sources === null);
+
+  console.log("\n9. A list with no section of its own is opened unfiltered");
+  // Reimbursements is a different page with different sections, so
+  // carrying Transactions' "inbox" across asks for a section that may not
+  // exist there and comes back empty.
+  {
+    const base = "https://spend.emburse.test";
+    const withSection = gridUrl(base, { path: "/transactions/team", section: "inbox" });
+    const none = gridUrl(base, { path: "/reimbursements", section: "" });
+    const fallback = gridUrl(base, { path: "/transactions/team" });
+    check("a named section is asked for", withSection.includes("filters%5Bsection%5D=inbox"),
+      withSection);
+    check("…a blank one is not asked for at all", !none.includes("filters%5Bsection%5D"), none);
+    check("…and no section at all still means inbox",
+      fallback.includes("filters%5Bsection%5D=inbox"), fallback);
   }
 } finally {
   await clean();

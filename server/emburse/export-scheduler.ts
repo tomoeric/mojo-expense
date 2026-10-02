@@ -141,6 +141,20 @@ ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS sections jsonb;
 --
 -- Null means the default, which is on.
 ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS receipts_only boolean;
+
+-- WHICH Emburse lists this reviewer imports: Transactions, Reimbursements,
+-- or both.
+--
+-- They are separate pages with separate queues, and which of them a person
+-- has anything in is a fact about that person — Brian has two
+-- reimbursements waiting and Eric may have none. It was one global switch
+-- that turned a second import on for everybody at once, buried in the
+-- defaults block, which is neither where it would be looked for nor what it
+-- means.
+--
+-- Null means the lists enabled in the defaults, which is how every existing
+-- deployment already behaves.
+ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS sources jsonb;
 `;
 
 let ready: Promise<void> | null = null;
@@ -521,11 +535,18 @@ export async function attemptExport(
       ? (await reviewerImports().catch(() => []))
           .find((r) => r.userEmail.toLowerCase() === opts.reviewer!.toLowerCase())
       : undefined;
+    const askedForAnotherList = Boolean(opts.source);
     const chosenPath = gridPathFor(opts.source, list, mine);
     const forThisRun = {
       ...settings.selectors,
       ...(chosenPath ? { gridPath: chosenPath } : {}),
-      ...(mine?.gridSection ? { gridSection: mine.gridSection } : {}),
+      // The reviewer's section belongs to the list it was chosen on. Ask for
+      // a DIFFERENT list and it does not travel: Reimbursements has its own
+      // sections, and "inbox" there is a filter for something else or for
+      // nothing at all.
+      ...(askedForAnotherList
+        ? (list?.section === undefined ? {} : { gridSection: list.section })
+        : (mine?.gridSection ? { gridSection: mine.gridSection } : {})),
       // The filters that pick this reviewer's queue out of a list their
       // login can see more of than their own.
       ...(mine?.gridQuery ? { gridQuery: mine.gridQuery } : {}),
@@ -702,6 +723,8 @@ export type ReviewerImport = {
   sections: string[] | null;
   /** Only expenses with a receipt attached, or null for the default. */
   receiptsOnly: boolean | null;
+  /** Which Emburse lists they import, by source key, or null for the defaults. */
+  sources: string[] | null;
   /** Extra filters that pick out their queue, copied from Emburse. */
   gridQuery: string | null;
   /** Whose Emburse login reads it. Null is themselves. */
@@ -785,7 +808,8 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
   if (people.length === 0) {
     return [{ userEmail: "", enabled: true, schedule: shared, shared: true,
               staggeredBy: 0, gridPath: null, gridSection: null, gridQuery: null,
-              sections: null, receiptsOnly: null, runAs: null, autoApprove: false,
+              sections: null, receiptsOnly: null, sources: null, runAs: null,
+              autoApprove: false,
               autoApprovePerRun: null }];
   }
 
@@ -795,7 +819,7 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
     all_day: boolean | null; grid_path: string | null; grid_section: string | null;
     auto_approve: boolean | null; auto_approve_per_run: number | null;
     grid_query: string | null; run_as: string | null; sections: unknown;
-    receipts_only: boolean | null;
+    receipts_only: boolean | null; sources: unknown;
   }>("SELECT * FROM reviewer_imports");
   const own = new Map(rows.map((r) => [r.user_email.toLowerCase(), r]));
 
@@ -835,6 +859,9 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
         ? (r!.sections as unknown[]).filter((x): x is string => typeof x === "string")
         : null,
       receiptsOnly: r?.receipts_only ?? null,
+      sources: Array.isArray(r?.sources)
+        ? (r!.sources as unknown[]).filter((x): x is string => typeof x === "string")
+        : null,
       runAs: r?.run_as ?? null,
       autoApprove: r?.auto_approve ?? false,
       autoApprovePerRun: r?.auto_approve_per_run ?? null,
@@ -878,6 +905,8 @@ export async function setReviewerImport(
     sections?: string[] | null;
     /** Only expenses with a receipt; null goes back to the default. */
     receiptsOnly?: boolean | null;
+    /** Which lists they import, by key. Null goes back to the defaults. */
+    sources?: string[] | null;
     /** Extra filters picking out their queue, copied from Emburse. */
     gridQuery?: string | null;
     /** Whose login reads it. Empty or null means themselves. */
@@ -909,6 +938,13 @@ export async function setReviewerImport(
       ? JSON.stringify(input.sections) : null;
   }
   if (input.receiptsOnly !== undefined) set.receipts_only = input.receiptsOnly;
+  if (input.sources !== undefined) {
+    // An empty array is a real answer — "import nothing" — but it is almost
+    // always a mis-click, and a reviewer who imports nothing simply stops
+    // without saying so. Null, the defaults, is the safer reading.
+    set.sources = input.sources && input.sources.length > 0
+      ? JSON.stringify(input.sources) : null;
+  }
   if (input.gridQuery !== undefined) set.grid_query = blank(input.gridQuery);
   if (input.runAs !== undefined) set.run_as = blank(input.runAs)?.toLowerCase() ?? null;
   if (input.autoApprove !== undefined) set.auto_approve = input.autoApprove;
@@ -944,9 +980,15 @@ export function startExportScheduler(): void {
       // "is an import due" is a question about one person's queue — asked
       // across all of them, the first reviewer's morning run spends
       // everybody's attempts and the rest never update.
-      const lists = (await readSettings()).sources.filter((x) => x.enabled);
+      const every = (await readSettings()).sources;
       for (const who of await reviewerImports()) {
         if (!who.enabled) continue;
+        // THEIR lists. Transactions and Reimbursements are separate pages
+        // with separate queues, and which of them somebody has anything in
+        // is a fact about that person, not about the deployment.
+        const lists = who.sources
+          ? every.filter((x) => who.sources!.includes(x.key))
+          : every.filter((x) => x.enabled);
         // One timeline per reviewer PER LIST. Transactions and
         // Reimbursements are separate queues on separate pages, so sharing
         // a count means the first one read spends the other's attempts and

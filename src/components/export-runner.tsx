@@ -102,6 +102,7 @@ type Run = {
 export function ExportRunner({
   isAdmin,
   reviewer,
+  lists,
   selectors,
   help,
   stepSelectors,
@@ -119,6 +120,15 @@ export function ExportRunner({
    * about a page nobody should have to learn.
    */
   reviewer: string | null;
+  /**
+   * The Emburse lists this reviewer imports.
+   *
+   * Without it the buttons could only run Transactions, so a second list
+   * could be configured and scheduled and never once tried by hand — and
+   * the only way to find out whether Reimbursements worked was to wait for
+   * tomorrow's scheduled run.
+   */
+  lists: { key: string; label: string }[];
   selectors: Record<string, string>;
   help: Record<string, string>;
   stepSelectors: Record<string, string[]>;
@@ -127,6 +137,9 @@ export function ExportRunner({
 }) {
   const qc = useQueryClient();
   const [busy, setBusy] = useState<"" | "dry" | "real">("");
+  /** Which list the buttons act on. The first one they have, by default. */
+  const [source, setSource] = useState<string | null>(null);
+  const onList = source ?? lists[0]?.key ?? "";
   const [error, setError] = useState("");
   const [open, setOpen] = useState<number | null>(null);
   const [fixing, setFixing] = useState<string | null>(null);
@@ -207,7 +220,10 @@ export function ExportRunner({
         // Whose import. The selected tab, so the buttons under it mean what
         // the tab says. The list itself is never sent — a real import that
         // took its list from a request is how it reads the wrong queue.
-        body: JSON.stringify(reviewer ? { reviewer } : {}),
+        body: JSON.stringify({
+          ...(reviewer ? { reviewer } : {}),
+          ...(onList ? { source: onList } : {}),
+        }),
       });
       const body = await readJson<{ error?: string; id?: number }>(res);
       if (!res.ok) throw new Error(body.error ?? `Run failed (${res.status})`);
@@ -312,6 +328,25 @@ export function ExportRunner({
         <Play className="h-4 w-4" />
         Run it
       </h3>
+      {/* Which list, when they import more than one. One pair of buttons
+          that silently meant Transactions made the second list untestable. */}
+      {lists.length > 1 && (
+        <div className="flex flex-wrap items-center gap-1 rounded-lg bg-muted p-1">
+          {lists.map((l) => (
+            <button
+              key={l.key}
+              type="button"
+              onClick={() => setSource(l.key)}
+              className={`rounded-md px-3 py-1 text-sm font-semibold ${
+                onList === l.key ? "bg-background shadow-sm" : "text-muted-foreground"
+              }`}
+            >
+              {l.label}
+            </button>
+          ))}
+        </div>
+      )}
+
       <p className="text-sm text-muted-foreground">
         A <strong>test run</strong> stops before exporting: nothing produced, nothing imported,
         nobody emailed — it just reads the item count off the list, which tells you whose queue

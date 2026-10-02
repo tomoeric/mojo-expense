@@ -37,6 +37,7 @@ type Reviewer = {
   gridQuery: string | null;
   sections: string[] | null;
   receiptsOnly: boolean | null;
+  sources: string[] | null;
   autoApprove: boolean;
   autoApprovePerRun: number | null;
   shared: boolean;
@@ -191,6 +192,7 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
           allSections={settings.data?.allSections ?? []}
           sharedSections={settings.data?.sections ?? []}
           sharedReceiptsOnly={settings.data?.receiptsOnly ?? true}
+          lists={settings.data?.sources ?? []}
           selectors={settings.data?.selectors ?? {}}
           help={settings.data?.selectorHelp ?? {}}
           stepSelectors={settings.data?.stepSelectors ?? {}}
@@ -215,7 +217,7 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
  * that is the order somebody sets one up in and the order they debug one in.
  */
 function ReviewerPanel({
-  row, isAdmin, everyone, allSections, sharedSections, sharedReceiptsOnly,
+  row, isAdmin, everyone, allSections, sharedSections, sharedReceiptsOnly, lists,
   selectors, help, stepSelectors, defaults, onPost,
 }: {
   row: Reviewer;
@@ -224,6 +226,7 @@ function ReviewerPanel({
   allSections: string[];
   sharedSections: string[];
   sharedReceiptsOnly: boolean;
+  lists: ImportSource[];
   selectors: Record<string, string>;
   help: Record<string, string>;
   stepSelectors: Record<string, string[]>;
@@ -239,6 +242,9 @@ function ReviewerPanel({
   // otherwise the deployment default they inherited.
   const stages = row.sections?.length ? row.sections : sharedSections;
   const receipts = row.receiptsOnly ?? sharedReceiptsOnly;
+  // Which Emburse lists this person imports. Theirs where they have chosen,
+  // otherwise whichever are switched on in the defaults.
+  const mineLists = row.sources ?? lists.filter((l) => l.enabled).map((l) => l.key);
   const reads = row.runAs ?? row.userEmail;
   const borrowed = Boolean(row.runAs && row.runAs !== row.userEmail);
 
@@ -340,6 +346,52 @@ function ReviewerPanel({
           {" "}Saved as you tick.
         </p>
 
+        {/* WHICH Emburse list, before which stages off it. Transactions and
+            Reimbursements are separate pages with separate queues — each
+            keeps its own rows and its own timeline, so turning one on
+            cannot disturb the other. */}
+        <div className="mt-3 rounded-xl border border-border p-3">
+          <p className="text-sm font-semibold">Which Emburse lists</p>
+          <div className="mt-2 space-y-2">
+            {lists.map((l) => {
+              const on = mineLists.includes(l.key);
+              return (
+                <label key={l.key} className="flex items-start gap-3 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    disabled={!isAdmin}
+                    onChange={() => onPost({
+                      sources: on
+                        ? mineLists.filter((k) => k !== l.key)
+                        : [...mineLists, l.key],
+                    })}
+                    className="mt-0.5 h-4 w-4 shrink-0 accent-emerald-600"
+                  />
+                  <span>
+                    <span className="font-semibold">{l.label}</span>
+                    <span className="ml-2 font-mono text-xs text-muted-foreground">{l.path}</span>
+                    <span className="mt-0.5 block text-xs text-muted-foreground">
+                      {l.key === ""
+                        ? "Card transactions — the main queue."
+                        : "A separate page in Emburse, with its own queue and its own timeline."}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {row.sources ? "Theirs." : "Inherited from the defaults below until you change one."}
+            {" "}Each list is read separately, on their schedule, one after the other.
+          </p>
+          {mineLists.length === 0 && (
+            <p className="mt-2 rounded-lg border border-red-500/40 bg-red-500/10 p-2.5 text-sm">
+              No list is ticked, so nothing is imported for {row.userEmail}.
+            </p>
+          )}
+        </div>
+
         {/* The receipt filter. Part of scope, not a footnote somewhere else
             on the page: it is what puts the receipt image in the export at
             all, and without it there is nothing for the receipt-vs-claim
@@ -391,6 +443,7 @@ function ReviewerPanel({
         <ExportRunner
           isAdmin={isAdmin}
           reviewer={row.userEmail}
+          lists={lists.filter((l) => mineLists.includes(l.key))}
           selectors={selectors}
           help={help}
           stepSelectors={stepSelectors}
@@ -714,7 +767,11 @@ function SharedDefaults({ data, viewingAs }: { data: Settings; viewingAs: string
       </label>
 
       <div className="mt-3">
-        <p className="text-xs font-semibold">Which Emburse lists exist</p>
+        <p className="text-xs font-semibold">The Emburse lists, and where they live</p>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">
+          Ticked here means a reviewer who has not chosen for themselves imports it. Who imports
+          which list is set in their tab.
+        </p>
         <ul className="mt-1 space-y-1.5">
           {sources.map((src, i) => (
             <li key={src.key} className="flex flex-wrap items-center gap-2">

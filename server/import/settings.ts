@@ -71,6 +71,16 @@ export type ImportSource = {
   label: string;
   /** The grid this list lives on. Filters are added as query parameters. */
   path: string;
+  /**
+   * The `filters[section]` value this list is opened with.
+   *
+   * Blank means none: the list's own default view. Transactions leaves this
+   * unset and takes the reviewer's own section, which is the whole Needs
+   * Review mechanism. Reimbursements is a different page with different
+   * sections, so carrying the Transactions one across asks for a section
+   * that may not exist there.
+   */
+  section?: string;
   enabled: boolean;
 };
 
@@ -78,7 +88,8 @@ export const DEFAULT_SOURCES: ImportSource[] = [
   // Blank key on purpose: it is what every row already in the table has, so
   // the list this app has always imported stays exactly where it was.
   { key: "", label: "Transactions", path: "/transactions/team", enabled: true },
-  { key: "reimbursements", label: "Reimbursements", path: "/reimbursements", enabled: false },
+  { key: "reimbursements", label: "Reimbursements", path: "/reimbursements",
+    section: "", enabled: false },
 ];
 
 export type Schedule = {

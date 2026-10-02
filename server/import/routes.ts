@@ -150,6 +150,7 @@ importRouter.post("/reviewer-imports", requireAuth, requireAdmin, async (req: Re
     email?: unknown; enabled?: unknown; gridPath?: unknown; gridSection?: unknown;
     autoApprove?: unknown; autoApprovePerRun?: unknown; schedule?: unknown;
     gridQuery?: unknown; runAs?: unknown; sections?: unknown; receiptsOnly?: unknown;
+    sources?: unknown;
   };
   const email = String(body.email ?? "").trim();
   if (!email) {
@@ -200,6 +201,12 @@ importRouter.post("/reviewer-imports", requireAuth, requireAdmin, async (req: Re
       // export at all.
       ...sent("receiptsOnly", () =>
         body.receiptsOnly === null ? null : body.receiptsOnly !== false),
+      // Which Emburse lists this person imports, by source key. Checked
+      // against the configured sources, so a key that is not a list cannot
+      // silently stop their import.
+      ...sent("sources", () =>
+        Array.isArray(body.sources) ? body.sources.filter((x): x is string =>
+          typeof x === "string") : null),
       // Whose login reads their queue. A stored setting, never a per-run
       // choice: a request that could name the login is a request that
       // could read anybody's queue as anybody.
@@ -397,6 +404,26 @@ importRouter.post("/export-run", requireAuth, requireAdmin, async (req: Request,
     //
     // So this returns as soon as the run has an id, and the page follows it
     // through the run list it already polls.
+    /*
+     * WHICH list, for a manual run.
+     *
+     * Without this the buttons could only ever run Transactions, so a
+     * second list could be configured and scheduled and never once tried —
+     * and "how do I get reimbursements" had no answer that did not involve
+     * waiting until tomorrow morning to find out whether it worked.
+     *
+     * Only a configured source. It chooses a list, not a URL; a request
+     * that could name the path is a request that could read any queue.
+     */
+    const wantSource = String((req.body as { source?: unknown })?.source ?? "").trim();
+    if (wantSource) {
+      const known = (await readSettings()).sources.some((x) => x.key === wantSource);
+      if (!known) {
+        res.status(400).json({ error: `There is no import list called “${wantSource}”.` });
+        return;
+      }
+    }
+
     const id = await new Promise<number>((resolve, reject) => {
       void attemptExport(
         dryRun ? "dry-run" : "manual",
@@ -406,6 +433,7 @@ importRouter.post("/export-run", requireAuth, requireAdmin, async (req: Request,
         // parked runs on a code with no valid answerer.
         { dryRun, onStarted: resolve, startedBy: real,
           ...(reviewer ? { reviewer } : {}),
+          ...(wantSource ? { source: wantSource } : {}),
           // Only a test run may be pointed at a list by the request, and
           // only for itself. attemptExport enforces that too.
           ...(dryRun ? { probe: {

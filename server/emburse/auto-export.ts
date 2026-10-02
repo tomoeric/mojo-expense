@@ -288,7 +288,12 @@ export function gridUrl(
   } = {},
 ): string {
   const url = new URL(opts.path ?? "/transactions/team", base);
-  url.searchParams.set("filters[section]", opts.section ?? "inbox");
+  // Blank means NO section filter — the list's own default view. That is the
+  // honest setting for a page whose sections this app does not know, and
+  // Reimbursements is one: forcing Transactions' "inbox" onto it asks for a
+  // section that may not exist there and comes back with nothing.
+  const section = opts.section ?? "inbox";
+  if (section) url.searchParams.set("filters[section]", section);
   if (opts.receiptsOnly) url.searchParams.set("filters[receipt]", "true");
   if (opts.userId) url.searchParams.append("filters[user_id][]", opts.userId);
   url.searchParams.set("filters[query]", opts.query ?? "");
