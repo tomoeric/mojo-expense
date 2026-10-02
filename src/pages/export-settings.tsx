@@ -229,6 +229,16 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
             Changes take effect on the next check — no restart. A run only asks for a verification
             code if Emburse stops trusting the browser, and only when somebody started it by hand; a
             scheduled run fails rather than waiting for an answer nobody is there to give.
+            {" "}
+            <strong className="text-foreground">
+              This one is shared — it is what a reviewer gets when they have no times of their
+              own.
+            </strong>{" "}
+            For a second reviewer on their own timetable, reading their own list, see{" "}
+            <a href="#per-reviewer" className="underline underline-offset-2">
+              Per-reviewer imports and approvals
+            </a>{" "}
+            at the bottom of this page.
           </span>
         </p>
       </div>
@@ -607,7 +617,33 @@ function ReviewerGrids() {
 
   const [draft, setDraft] = useState<Record<string, { path: string; section: string }>>({});
   const rows = q.data?.reviewers.filter((r) => r.userEmail) ?? [];
-  if (rows.length < 1) return null;
+
+  // Never render nothing. This returned null whenever the list was empty,
+  // which looks identical to the section not existing — and "I only see
+  // one schedule and scope" is exactly what that produces when somebody is
+  // looking for the second reviewer's. An empty list is a fact worth
+  // stating: it means nobody has stored an Emburse login yet.
+  if (q.isLoading) {
+    return (
+      <div id="per-reviewer" className="border-t border-border pt-5">
+        <h2 className="text-base font-bold">Per-reviewer imports and approvals</h2>
+        <p className="mt-1 text-sm text-muted-foreground">Loading…</p>
+      </div>
+    );
+  }
+  if (rows.length < 1) {
+    return (
+      <div id="per-reviewer" className="border-t border-border pt-5">
+        <h2 className="text-base font-bold">Per-reviewer imports and approvals</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {q.isError
+            ? "These could not be read just now."
+            : "Nobody has stored an Emburse login yet, so there is only the shared schedule above. " +
+              "A reviewer appears here once their login is saved under Your Emburse login."}
+        </p>
+      </div>
+    );
+  }
 
   const valueFor = (e: string, r: { gridPath: string | null; gridSection: string | null }) =>
     draft[e] ?? { path: r.gridPath ?? "", section: r.gridSection ?? "" };
@@ -682,8 +718,15 @@ function ReviewerGrids() {
   }
 
   return (
-    <div className="border-t border-border pt-5">
+    <div id="per-reviewer" className="border-t border-border pt-5">
       <h2 className="text-base font-bold">Per-reviewer imports and approvals</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        <strong className="text-foreground">
+          This is where a second reviewer gets their own schedule and their own list.
+        </strong>{" "}
+        Everything above is shared — one scope, one timetable, used by anybody with nothing of
+        their own here.
+      </p>
       <p className="mt-1 text-sm text-muted-foreground">
         Approval is a chain — one person approves and it goes to the next — so each reviewer has
         their own queue in Emburse. Leave these blank and everybody reads the shared list above,
