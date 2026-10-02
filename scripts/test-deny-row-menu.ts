@@ -148,9 +148,16 @@ try {
   await menu("none");
   {
     const run = await runDecision("approve", TARGET, "", SEL, mock.url, LOGIN, { dryRun: true });
-    const signIn = step(run, "sign in");
-    if (signIn && !signIn.ok) {
-      console.log("  skip  sign-in did not complete in this environment");
+    // Anything that fails before the grid is this container, not the
+    // change: a mock that has gone away, or a sign-in that did not
+    // complete. Guarding only on the sign-in step was not enough — the
+    // mock died outright once and the run failed at "open Emburse", where
+    // there is no sign-in step to look at, and it was reported as a
+    // failure of approving.
+    const early = run.steps.find((x) => !x.ok
+      && (x.name === "open Emburse" || x.name === "sign in"));
+    if (early) {
+      console.log(`  skip  ${early.name} did not complete in this environment`);
     } else {
       check("a dry-run approve still finds its row", run.ok,
         run.steps.filter((x) => !x.ok).map((x) => `${x.name}: ${x.detail}`).join(" | "));
