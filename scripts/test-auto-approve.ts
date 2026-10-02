@@ -161,6 +161,42 @@ try {
   check("…and it is that expense, not another",
     (await mine()).every((d) => d.dedupeKey === `${TAG}-1`),
     (await mine()).map((d) => d.dedupeKey).join(","));
+  console.log("\n6b. The two that can never clear, counted and named");
+  // Both sit inside "waiting for a receipt to be read", both are
+  // permanent, and both showed on the queue as plain Unflagged — so the
+  // card said "held back on purpose, not stuck" about rows that were
+  // exactly that. Emburse will not accept an expense without a receipt,
+  // so a row with none means the IMPORT lost it, which is a different
+  // problem from a reader that is merely behind.
+  {
+    // One the reader gave up on: a reading that is nothing but an error,
+    // on the only receipt the expense has.
+    const bad = "c".repeat(64);
+    await db().query(
+      `INSERT INTO receipt_blobs (sha256, bytes, content_type, byte_size)
+       VALUES ($1, '\\x00'::bytea, 'image/png', 1) ON CONFLICT DO NOTHING`, [bad]);
+    await db().query(
+      `INSERT INTO receipt_readings (sha256, model, legible, error, attempts)
+       VALUES ($1,'test',false,'unreadable',3)
+       ON CONFLICT (sha256) DO UPDATE SET error = 'unreadable', attempts = 3`, [bad]);
+    await db().query(
+      `INSERT INTO expense_receipts (dedupe_key, sha256) VALUES ($1,$2)
+       ON CONFLICT DO NOTHING`, [`${TAG}-2`, bad]);
+
+    const r = await autoApproveReport();
+    check("the unreadable one is counted", r.stuck.unreadable >= 1, String(r.stuck.unreadable));
+    // -3 has no receipt row at all, which is the import having lost one.
+    check("…and the one with no receipt stored is counted separately",
+      r.stuck.noReceipt >= 1, String(r.stuck.noReceipt));
+    check("…both still inside the awaiting-receipt total, not added to it",
+      r.stuck.unreadable + r.stuck.noReceipt <= r.counts.awaitingReceipt,
+      `${r.stuck.unreadable}+${r.stuck.noReceipt} vs ${r.counts.awaitingReceipt}`);
+    check("…and neither is called eligible",
+      r.counts.eligible + r.counts.awaitingReceipt + r.counts.flagged
+        + r.counts.decided + r.counts.awaitingRules === r.counts.inbox,
+      `${r.counts.eligible}+${r.counts.awaitingReceipt}+${r.counts.flagged}+${r.counts.decided}+${r.counts.awaitingRules} vs ${r.counts.inbox}`);
+  }
+
   console.log("\n7. One receipt read, another not");
   // An expense can carry several images, and a rule about alcohol is
   // answered by whichever one has the bar tab on it. Passing on the

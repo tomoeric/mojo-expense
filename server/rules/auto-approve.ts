@@ -126,6 +126,39 @@ const TESTS = {
                    AND NOT EXISTS (
                          SELECT 1 FROM receipt_readings rr
                           WHERE rr.sha256 = er.sha256 AND rr.error IS NULL)))`,
+
+  /**
+   * No receipt stored at all — which should be impossible.
+   *
+   * Emburse will not accept an expense without one, so every row in the
+   * queue has a receipt by the time it reaches us. A row with none means
+   * the IMPORT lost it: the export's receipt pages are matched to rows,
+   * and a page that matches nothing is skipped with a warning nobody
+   * reads twice.
+   *
+   * Split out from `awaitingReceipt` because the two need opposite
+   * things. Waiting is patience; this is a missing document on an expense
+   * somebody is going to approve, and it was silently unapprovable for
+   * ever while the queue showed it as plain Unflagged.
+   */
+  noReceipt: `NOT EXISTS (SELECT 1 FROM expense_receipts er WHERE er.dedupe_key = e.dedupe_key)`,
+
+  /**
+   * Every receipt on it was tried three times and could not be read.
+   *
+   * Also permanently unapprovable, also shown as Unflagged — and unlike
+   * the one above it drops out of the queue's "Receipt being read" bucket
+   * too, so nothing on screen marks it at all.
+   */
+  unreadableReceipt: `EXISTS (SELECT 1 FROM expense_receipts er WHERE er.dedupe_key = e.dedupe_key)
+        AND NOT EXISTS (
+              SELECT 1 FROM expense_receipts er
+                JOIN receipt_readings rr ON rr.sha256 = er.sha256 AND rr.error IS NULL
+               WHERE er.dedupe_key = e.dedupe_key)
+        AND NOT EXISTS (
+              SELECT 1 FROM expense_receipts er
+               WHERE er.dedupe_key = e.dedupe_key
+                 AND NOT EXISTS (SELECT 1 FROM receipt_readings rr WHERE rr.sha256 = er.sha256))`,
 } as const;
 
 export type AutoApproveResult = {
@@ -362,6 +395,15 @@ export type AutoApproveReport = {
     awaitingReceipt: number;
     eligible: number;
   };
+  /**
+   * The two that can never clear on their own, counted apart.
+   *
+   * Both sit inside `awaitingReceipt` above, and both are permanent — one
+   * is a receipt the import lost, the other one the reader gave up on.
+   * Lumped in with "waiting for a receipt to be read" they look like
+   * patience; named, they are a short list for somebody to deal with.
+   */
+  stuck: { noReceipt: number; unreadable: number };
   /** Each other reviewer's share of the queue, and whether theirs is on. */
   others: { reviewer: string; count: number; on: boolean }[];
   /**
@@ -418,6 +460,18 @@ export async function autoApproveReport(who: string | null = null): Promise<Auto
     [s.receiptMatters, reviewer, ownsBlanks],
   );
 
+  // The two permanent ones, named rather than left inside "waiting".
+  const { rows: stuck } = await db().query<{ none: string; bad: string }>(
+    `SELECT count(*) FILTER (WHERE ${TESTS.noReceipt})          AS none,
+            count(*) FILTER (WHERE ${TESTS.unreadableReceipt})  AS bad
+       FROM expenses e
+      WHERE e.in_inbox = true
+        AND ($1 = '' OR ${MINE(1, 2)})
+        AND NOT ${TESTS.flagged}
+        AND NOT ${TESTS.decided}`,
+    [reviewer, ownsBlanks],
+  );
+
   // Everybody else's, counted separately and never folded into the totals
   // above. It is the one number that explains a queue full of expenses and
   // an automation that does nothing: they are in another reviewer's Emburse
@@ -454,6 +508,10 @@ export async function autoApproveReport(who: string | null = null): Promise<Auto
       awaitingRules: n("awaiting_rules"),
       awaitingReceipt: n("awaiting_receipt"),
       eligible: n("eligible"),
+    },
+    stuck: {
+      noReceipt: Number(stuck[0]?.none ?? 0),
+      unreadable: Number(stuck[0]?.bad ?? 0),
     },
     elsewhere: others.reduce((a, r) => a + Number(r.n), 0),
     others: others.map((r) => ({

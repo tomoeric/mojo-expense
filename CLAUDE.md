@@ -498,6 +498,16 @@ Two separate things, and confusing them cost a queue full of failures.
   somebody reviewing the expense, and clearing it there would launder every
   automatic approval into a reviewed one the first time a batch had to be
   re-run.
+- **An expense with no receipt means the IMPORT lost it.** Emburse will not
+  accept one without, so every row in the queue has a receipt by the time
+  it reaches us — a row with none is a receipt page that matched no expense
+  and was skipped with a warning. It and the ones the reader gave up on are
+  both permanently unapprovable while any rule reads receipts, and both
+  showed on the queue as plain Unflagged, so the card said "held back on
+  purpose, not stuck" about rows that were exactly that. Counted apart now
+  (`stuck.noReceipt`, `stuck.unreadable`) and named on the card. They sit
+  INSIDE `awaitingReceipt` rather than beside it, so the buckets still sum
+  to the queue.
 - **One switch per reviewer, all off by default.** The global `autoApprove`
   flag still works exactly as it did — one owner, their own queue — and each
   reviewer with a stored login can now switch it on for theirs

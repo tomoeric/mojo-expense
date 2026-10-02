@@ -447,6 +447,30 @@ function WhyNothingMoved({ report }: { report: AutoReport }) {
           everything passed — so those are held back on purpose, not stuck.
         </p>
       )}
+      {/* The two inside that number which will never clear on their own.
+          Emburse will not accept an expense without a receipt, so a row
+          with none means our import lost it — a receipt page that matched
+          no row and was skipped. Neither of these is patience, and both
+          showed on the queue as plain Unflagged. */}
+      {(report.stuck?.noReceipt > 0 || report.stuck?.unreadable > 0) && (
+        <p className="mt-1 text-amber-700 dark:text-amber-300">
+          {report.stuck.noReceipt > 0 && (
+            <>
+              <strong className="tabular-nums">{report.stuck.noReceipt}</strong> have no receipt
+              stored at all. Emburse will not accept one without, so the import lost it — most
+              likely a receipt page that matched no row.{" "}
+            </>
+          )}
+          {report.stuck.unreadable > 0 && (
+            <>
+              <strong className="tabular-nums">{report.stuck.unreadable}</strong> have a receipt
+              the reader tried three times and gave up on.{" "}
+            </>
+          )}
+          Neither will clear by waiting, and neither can be approved automatically — they need
+          a person, or a re-import to fetch the receipt again.
+        </p>
+      )}
     </div>
   );
 }
@@ -462,6 +486,7 @@ type AutoReport = {
     inbox: number; flagged: number; decided: number;
     awaitingRules: number; awaitingReceipt: number; eligible: number;
   };
+  stuck: { noReceipt: number; unreadable: number };
   /** In the queue but in somebody else's Emburse account. Never touched. */
   elsewhere: number;
   others: { reviewer: string; count: number; on: boolean }[];
