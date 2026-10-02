@@ -101,6 +101,7 @@ type Run = {
  */
 export function ExportRunner({
   isAdmin,
+  reviewer,
   selectors,
   help,
   stepSelectors,
@@ -108,6 +109,16 @@ export function ExportRunner({
   onSaveSelectors,
 }: {
   isAdmin: boolean;
+  /**
+   * Whose import this section is for — the reviewer tab selected above.
+   *
+   * It had no such input: the buttons ran the signed-in person's import
+   * whatever tab was open, so pressing Run on Brian's tab imported Eric's
+   * queue. Three separate reports of the same thing, each answered with
+   * "that section is not part of that tab", which is a true sentence
+   * about a page nobody should have to learn.
+   */
+  reviewer: string | null;
   selectors: Record<string, string>;
   help: Record<string, string>;
   stepSelectors: Record<string, string[]>;
@@ -124,9 +135,10 @@ export function ExportRunner({
   const [codeError, setCodeError] = useState("");
 
   const q = useQuery({
-    queryKey: ["export-runs"],
+    queryKey: ["export-runs", reviewer ?? ""],
     queryFn: async () => {
-      const res = await fetch("/api/export-runs");
+      const res = await fetch(
+        `/api/export-runs${reviewer ? `?reviewer=${encodeURIComponent(reviewer)}` : ""}`);
       const body = await readJson<{
         error?: string;
         configured: boolean;
@@ -198,8 +210,13 @@ export function ExportRunner({
         headers: { "content-type": "application/json" },
         // Only a test run carries a list to try, and the server ignores it
         // on a real one. Nothing here is saved.
-        body: JSON.stringify(dry && (probePath || probeSection)
-          ? { gridPath: probePath, gridSection: probeSection } : {}),
+        body: JSON.stringify({
+          // Whose import. The selected tab, so the buttons under it mean
+          // what the tab says.
+          ...(reviewer ? { reviewer } : {}),
+          ...(dry && (probePath || probeSection)
+            ? { gridPath: probePath, gridSection: probeSection } : {}),
+        }),
       });
       const body = await readJson<{ error?: string; id?: number }>(res);
       if (!res.ok) throw new Error(body.error ?? `Run failed (${res.status})`);
@@ -299,11 +316,7 @@ export function ExportRunner({
       <div>
         <h2 className="flex items-center gap-2 text-base font-bold">
           <Play className="h-4 w-4" />
-          {q.data?.viewingAs
-            ? `Run the export — ${q.data.viewingAs}'s`
-            : q.data?.runsFor
-              ? `Run the export — yours (${q.data.runsFor})`
-              : "Run the export"}
+          {q.data?.runsFor ? `Run the export — ${q.data.runsFor}'s` : "Run the export"}
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
           The app signs into Emburse and fetches today&rsquo;s export itself. Start one here to see every
@@ -324,13 +337,11 @@ export function ExportRunner({
           reasonably read it as Brian's section and asked why it said
           Eric. A section that belongs to one person has to say so where
           the buttons are. */}
-      {!q.data?.viewingAs && q.data?.runsFor && (
+      {q.data?.runsFor && (
         <p className="rounded-lg border border-border bg-muted/50 p-3 text-sm">
-          <strong>This is your own import.</strong> It signs into Emburse as{" "}
-          <strong>{q.data.runsFor}</strong> and reads their Needs Review, whichever reviewer
-          tab is open above. To run somebody else&rsquo;s, use the buttons on{" "}
-          <a href="#per-reviewer" className="underline underline-offset-2">their tab</a>.
-          The history below is yours too.
+          This runs <strong>{q.data.runsFor}</strong>&rsquo;s import — signing into Emburse as
+          them and reading their Needs Review — because that is the tab open above. Switch
+          tabs to run somebody else&rsquo;s. The history below is theirs too.
         </p>
       )}
 

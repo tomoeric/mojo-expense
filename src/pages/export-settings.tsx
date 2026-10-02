@@ -70,7 +70,21 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
   // per-reviewer rows are shared, so saving them is refused inside a view —
   // and somebody trying to change one person's import time deserves to be
   // told which control does that rather than shown a flat refusal.
-  const viewingAs = useAuth().data?.viewingAs?.viewed ?? null;
+  const auth = useAuth();
+  const viewingAs = auth.data?.viewingAs?.viewed ?? null;
+  /*
+   * WHOSE import the whole page is about.
+   *
+   * The tabs sat at the top and nothing below them followed: the run
+   * buttons, their history, the due line and the device line were all the
+   * signed-in person's. So selecting Brian's tab and pressing Run two
+   * hundred lines down imported Eric's queue, three times, and each time
+   * the only honest answer was "that section is not part of that tab".
+   * A page with tabs at the top means the tab chooses; it is held here and
+   * handed down.
+   */
+  const [forWhom, setForWhom] = useState<string | null>(null);
+  const whose = forWhom ?? viewingAs ?? auth.data?.user?.email ?? null;
   const qc = useQueryClient();
   const [sections, setSections] = useState<string[] | null>(null);
   const [receiptsOnly, setReceiptsOnly] = useState(true);
@@ -148,7 +162,7 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
           second reviewer meant scrolling through settings that are not
           theirs to find the one control that is. Whose import this is is
           the first question this page answers now. */}
-      {isAdmin && <ReviewerGrids />}
+      {isAdmin && <ReviewerGrids selected={whose} onSelect={setForWhom} />}
 
       <div>
         <h2 className="text-base font-bold">Which stages to export — shared by everyone</h2>
@@ -414,6 +428,7 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
       <div className="border-t border-border pt-5">
         <ExportRunner
           isAdmin={isAdmin}
+          reviewer={whose}
           selectors={q.data?.selectors ?? {}}
           help={q.data?.selectorHelp ?? {}}
           stepSelectors={q.data?.stepSelectors ?? {}}
@@ -607,7 +622,12 @@ const clock = (minutes: number) => {
  * Test run — the "read the item count" step prints what that URL returns, so
  * a wrong guess costs one minute and produces no file and no email.
  */
-function ReviewerGrids() {
+function ReviewerGrids({
+  selected, onSelect,
+}: {
+  selected: string | null;
+  onSelect: (email: string) => void;
+}) {
   const qc = useQueryClient();
   const [error, setError] = useState("");
   // These ARE settable from inside a view — they are admin settings the
@@ -634,8 +654,7 @@ function ReviewerGrids() {
   // Default to YOU, not to whoever happens to sort first. Opening on
   // somebody else's tab is how a setting gets changed for the wrong
   // person by somebody who never noticed which tab they were on.
-  const meNow = (auth.data?.viewingAs?.viewed ?? auth.data?.user?.email ?? "").toLowerCase();
-  const [who, setWho] = useState<string | null>(null);
+  const meNow = (selected ?? "").toLowerCase();
 
   // Never render nothing. This returned null whenever the list was empty,
   // which looks identical to the section not existing — and "I only see one
@@ -664,8 +683,7 @@ function ReviewerGrids() {
   }
 
   const current =
-    rows.find((r) => r.userEmail === who)
-    ?? rows.find((r) => r.userEmail.toLowerCase() === meNow)
+    rows.find((r) => r.userEmail.toLowerCase() === meNow)
     ?? rows[0]!;
 
   async function post(body: Record<string, unknown>) {
@@ -748,7 +766,7 @@ function ReviewerGrids() {
           <button
             key={r.userEmail}
             type="button"
-            onClick={() => setWho(r.userEmail)}
+            onClick={() => onSelect(r.userEmail)}
             className={`-mb-px rounded-t-lg border-b-2 px-3 py-1.5 text-sm font-semibold ${
               r.userEmail === current.userEmail
                 ? "border-foreground text-foreground"
@@ -819,7 +837,7 @@ function ReviewerPanel({
       });
       const body = (await res.json()) as { error?: string; id?: number };
       setRan(res.ok
-        ? `Started. ${row.userEmail}'s last runs are below; the live steps are in Run the export.`
+        ? `Started as ${row.userEmail}. Watch the steps in Run the export, below — it follows this tab.`
         : body.error ?? "Could not start it.");
     } catch (e) {
       setRan((e as Error).message);
