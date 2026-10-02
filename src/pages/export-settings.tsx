@@ -770,35 +770,56 @@ function ReviewerPanel({
   onPost: (body: Record<string, unknown>) => void;
 }) {
   const [href, setHref] = useState("");
-  const path = row.gridPath ?? "(shared)";
-  const section = row.gridSection ?? "(shared)";
   const reads = row.runAs ?? row.userEmail;
+  /** Reading this queue with somebody else's login. */
+  const borrowed = Boolean(row.runAs && row.runAs !== row.userEmail);
   const sc = row.schedule;
 
   return (
     <div className="mt-3 space-y-4">
       {/* The state of this reviewer in one line, because "what will this
           actually pull" is the only question the page is ever asked. */}
-      {row.gridQuery ? (
+      {/*
+        Needs Review on the MANAGER tab is already per account: signed in
+        as Brian it is what is waiting on Brian. So the ordinary setup needs
+        no filter at all — his own login and his own slot, and he is done.
+        This panel used to call that "not set up" and push a URL at it,
+        which was advice for a problem this tenant does not have.
+
+        The case that IS wrong is the opposite one: somebody else's login
+        with no filter. That reads THEIR Needs Review and files it under
+        this person's name, which is the exact fault the whole separation
+        exists to prevent.
+      */}
+      {borrowed && !row.gridQuery ? (
+        <div className="rounded-lg bg-red-500/10 p-3 text-sm">
+          <strong>This reads the wrong queue.</strong> It signs in as {reads} with no filter,
+          so Needs Review is <em>{reads}&rsquo;s</em> — and it would be filed as{" "}
+          {row.userEmail}&rsquo;s. Either set the login below back to {row.userEmail}, or add a
+          filter that picks their rows out.
+        </div>
+      ) : (
         <div className="rounded-lg bg-emerald-500/10 p-3 text-sm">
-          <strong>Set up.</strong> Pulls only {row.userEmail}&rsquo;s expenses, signed in as{" "}
-          {reads}, at {sc.firstRun} and every {sc.retryHours}h
+          <strong>Set up.</strong>{" "}
+          {borrowed
+            ? `Pulls ${row.userEmail}'s rows, filtered, signed in as ${reads}`
+            : `Signs in as ${row.userEmail} and pulls their own Needs Review`}
+          , at {sc.firstRun} and every {sc.retryHours}h
           {row.shared && row.staggeredBy > 0
             ? ` (the shared times, ${row.staggeredBy} min later so two runs never collide)`
             : row.shared ? " (the shared times)" : " (their own times)"}.
         </div>
-      ) : (
-        <div className="rounded-lg bg-amber-500/10 p-3 text-sm">
-          <strong>Not set up.</strong> This pulls <em>everyone&rsquo;s</em> expenses, not just{" "}
-          {row.userEmail}&rsquo;s. Fix it with the box below.
-        </div>
       )}
 
       <div>
-        <p className="text-sm font-semibold">1. Which expenses</p>
+        <p className="text-sm font-semibold">
+          1. Which expenses <span className="font-normal text-muted-foreground">— usually nothing to do</span>
+        </p>
         <p className="mt-1 text-sm text-muted-foreground">
-          In Emburse: <strong>Needs Review</strong>, then <strong>Current Reviewer</strong> ={" "}
-          {row.userEmail}. Copy the address bar and paste it here.
+          Signed in as themselves, <strong>Needs Review</strong> on the MANAGER tab is already
+          only their own. Leave this blank unless somebody else&rsquo;s login is doing the
+          fetching below — then paste a URL from Emburse with{" "}
+          <strong>Current Reviewer</strong> = {row.userEmail} so their rows can be picked out.
         </p>
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <input
@@ -840,8 +861,10 @@ function ReviewerPanel({
       <div>
         <p className="text-sm font-semibold">2. Who signs in to fetch them</p>
         <p className="mt-1 text-sm text-muted-foreground">
-          Pick yourself to save them ever entering a verification code. Approving still uses
-          their own login.
+          Themselves is the simple answer and the right one here: Needs Review is per account,
+          so their own login already shows only their queue. Another login saves them a
+          verification code, but then it needs a filter above — otherwise it reads{" "}
+          <em>that</em> person&rsquo;s queue.
         </p>
         <select
           value={row.runAs ?? ""}

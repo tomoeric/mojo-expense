@@ -115,7 +115,30 @@ try {
       parts?.extra.includes("receipt") === false, parts?.extra);
   }
 
-  console.log("\n6. Rubbish in the box does not become a URL");
+  console.log("\n6. Somebody else's login with no filter is refused, not warned about");
+  // The one combination that silently imports the wrong queue: Needs
+  // Review is per account, so Eric's login reads Eric's rows however the
+  // run is labelled. Without a filter narrowing them back to Brian they
+  // would be stamped as his, with every step green.
+  {
+    await setReviewerImport(BRIAN, { runAs: ERIC, gridQuery: "" }, "test");
+    const b = await mine(BRIAN);
+    check("the setting is stored as asked", b?.runAs === ERIC && !b?.gridQuery);
+    // The refusal lives in attemptExport, which needs a browser; assert the
+    // shape of the condition here rather than driving Emburse for it.
+    const wouldRead = (b?.runAs ?? BRIAN).toLowerCase();
+    const unfiltered = !b?.gridQuery;
+    check("…and it is exactly the condition the run refuses",
+      wouldRead !== BRIAN && unfiltered);
+
+    await setReviewerImport(BRIAN, {
+      gridQuery: "filters[current_reviewer][]=brian-opaque-id",
+    }, "test");
+    const fixed = await mine(BRIAN);
+    check("…which a filter clears", Boolean(fixed?.gridQuery) && fixed?.runAs === ERIC);
+  }
+
+  console.log("\n7. Rubbish in the box does not become a URL");
   check("it refuses", partsOfGridUrl("not a url") === null);
 } finally {
   await clean();

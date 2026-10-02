@@ -764,6 +764,17 @@ Two separate things, and confusing them cost a queue full of failures.
   not at the screen, every time Emburse stops trusting the browser. The
   stamp follows the QUEUE (`opts.reviewer`), never the login, or an admin
   pulling for somebody else takes their expenses.
+- **Needs Review on the MANAGER tab is already per account.** Signed in as
+  Brian it is what is waiting on Brian — so the ordinary setup for a second
+  reviewer is nothing at all: their own login, their own slot, the shared
+  stage and the shared path. Do not send anybody to the PERSONAL tab (that
+  is their own card spending) and do not ask for a filter they do not need.
+- **Borrowing a login REQUIRES a filter, and the run refuses without one.**
+  Because Needs Review is per account, `run_as` somebody else with no
+  `grid_query` reads THEIR queue and files it under this reviewer's name,
+  green all the way down. Refused in `attemptExport` rather than warned
+  about: a warning on an unattended run is read after the queue has already
+  changed hands.
 - **Emburse's Current Reviewer dropdown is what separates two approvers**,
   and its values are opaque ids nobody can type. So they are not
   constructed, they are pasted: Export settings takes a URL copied from

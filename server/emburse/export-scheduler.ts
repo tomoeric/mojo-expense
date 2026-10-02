@@ -406,6 +406,29 @@ export async function attemptExport(
       : undefined;
     const signsIn = mineForLogin?.runAs?.trim() || opts.reviewer;
 
+    /*
+     * Somebody else's login AND no filter is the one combination that
+     * silently imports the wrong person's queue.
+     *
+     * Needs Review is per account: signed in as Eric it is Eric's, however
+     * the run is labelled. Borrowing his login to fetch Brian's queue only
+     * works if something narrows it back down to Brian — the Current
+     * Reviewer filter. Without that the run reads Eric's rows, stamps them
+     * as Brian's, and every step comes back green.
+     *
+     * Refused rather than warned about. A warning on an unattended run is
+     * read after the queue has already changed hands, and this one is
+     * recoverable only by working out which rows were never his.
+     */
+    if (opts.reviewer && signsIn && signsIn.toLowerCase() !== opts.reviewer.toLowerCase()
+        && !mineForLogin?.gridQuery) {
+      throw new Error(
+        `${opts.reviewer}'s import is set to sign in as ${signsIn}, with no filter to pick ` +
+        `${opts.reviewer}'s rows out. Needs Review is per account, so that would read ` +
+        `${signsIn}'s queue and file it as ${opts.reviewer}'s. Either set the login back to ` +
+        `${opts.reviewer}, or paste a URL from Emburse with Current Reviewer set to them.`);
+    }
+
     const login = opts.reviewer
       ? await credentialForUser(signsIn!).then((c) =>
           c ? {
