@@ -44,7 +44,7 @@ type State = {
    * fail. "none" is no menu at all, for the message that has to name what
    * IS on the row.
    */
-  menuStyle: "labelled" | "haspopup" | "none";
+  menuStyle: "labelled" | "haspopup" | "none" | "icon";
   pendingUser: string;
   loginOutcome: "ok" | "rejected" | "mfa" | "device" | "code" | "code-first";
   /**
@@ -371,6 +371,12 @@ const grid = (search: string) => {
      <td><button class="ap" data-k="${r.date}|${r.merchant}|${r.who}|${r.amount}">APPROVE</button> ` +
     (state.menuStyle === "none"
       ? ""
+      : state.menuStyle === "icon"
+        // Not a <button> at all, and no accessible name: an icon in a div,
+        // sitting in the action cell beside APPROVE. This is what the real
+        // tenant turned out to have, and no selector built from the names
+        // a menu button usually carries can find it.
+        ? `<div class="mn" data-ctl><svg width="4" height="14"></svg></div>`
       : state.menuStyle === "haspopup"
         // No label, no text, a popup attribute and an icon — the real shape.
         ? `<button aria-haspopup="menu" class="mn"><svg width="4" height="14"></svg></button>`
@@ -404,7 +410,7 @@ const grid = (search: string) => {
       var stale = ${state.staleGrid ? "true" : "false"};
       var target = null;
       document.addEventListener("click", function (e) {
-        var b = e.target.closest("button"); if (!b) return;
+        var b = e.target.closest("button, [data-ctl]"); if (!b) return;
         var row = b.closest("tr") || b.closest('[role="row"]');
         if (b.classList.contains("ap")) {
           if (!live) return;
@@ -1060,7 +1066,8 @@ app.post("/__actioned", (req, res) => {
 /** Pretend the browser is signed in as this address. */
 app.post("/__menu/:style", (req, res) => {
   const style = req.params.style;
-  state.menuStyle = style === "haspopup" || style === "none" ? style : "labelled";
+  state.menuStyle = style === "haspopup" || style === "none" || style === "icon"
+    ? style : "labelled";
   res.json({ ok: true, menuStyle: state.menuStyle });
 });
 

@@ -936,6 +936,71 @@ async function visibleOf(rows: Locator, indexes: number[]): Promise<number[]> {
  * the tag, the accessible name, the popup attribute and any text, for each
  * clickable thing on the row.
  */
+/**
+ * The row's ⋮, found by its neighbour when the selector cannot find it.
+ *
+ * Emburse PINS the Action column, so neither APPROVE nor the ⋮ is a
+ * descendant of the row — they live in a parallel container, aligned by
+ * pixel and unrelated in the DOM. `controlForRow` handles that by
+ * alignment, and for APPROVE it works: approving has never had this
+ * problem.
+ *
+ * The ⋮ is harder because it is an icon. On this tenant it is not a
+ * <button> at all under any of the names a menu button usually carries —
+ * six corrections failed in one morning, four with "no ⋮ row menu matched
+ * anywhere on the page" and one with "11 of the 11 are visible, none sits
+ * on this row's line". Widening the selector further is guessing at markup
+ * nobody here can see.
+ *
+ * So ask the one control that IS reliably found. The ⋮ sits in the same
+ * action cell as APPROVE, immediately after it — that is what the column
+ * is. Take APPROVE's own container and the clickable thing beside it, and
+ * the markup stops mattering.
+ */
+async function rowMenuFor(
+  page: Page, row: Locator, sel: Record<string, string>, ms: number,
+): Promise<Locator> {
+  try {
+    return await controlForRow(page, row, sel.rowMenu!, "\u22ee row menu", ms);
+  } catch (err) {
+    const beside = await besideApprove(page, row, sel, ms);
+    if (beside) return beside;
+    throw err;
+  }
+}
+
+/** The clickable element next to this row's APPROVE, if there is one. */
+async function besideApprove(
+  page: Page, row: Locator, sel: Record<string, string>, ms: number,
+): Promise<Locator | null> {
+  let approve: Locator;
+  try {
+    approve = await controlForRow(page, row, sel.approveButton!, "APPROVE button", ms);
+  } catch {
+    return null;
+  }
+  // Up to the action cell, then whatever else in it can be clicked. Two
+  // levels, because a cell may wrap its controls in a flex box.
+  for (const up of ["xpath=..", "xpath=../.."]) {
+    const cell = approve.locator(up);
+    const near = cell.locator(
+      'button, [role="button"], [aria-haspopup], [class*="menu" i], [class*="kebab" i], svg');
+    const n = await near.count().catch(() => 0);
+    // Last first: the ⋮ comes after APPROVE in every grid of this shape.
+    for (let i = n - 1; i >= 0; i--) {
+      const one = near.nth(i);
+      if (!(await one.isVisible().catch(() => false))) continue;
+      const text = (await one.innerText().catch(() => "")).trim();
+      // Not APPROVE itself, and not something with real words in it — the
+      // ⋮ is an icon, so anything wordy is a different control.
+      if (/approve/i.test(text) || text.length > 3) continue;
+      return one;
+    }
+  }
+  return null;
+}
+
+
 async function controlsOn(row: Locator): Promise<string[]> {
   const out: string[] = [];
   const all = row.locator('button, [role="button"], a[href]');
@@ -1391,7 +1456,7 @@ export async function inspectEditForm(
       }))) return { ok: false, steps, matchedRow: null, screenshot: null };
 
       if (!(await step("open the \u22ee menu", async () => {
-        await (await controlForRow(page!, row!, sel.rowMenu!, "\u22ee row menu", ms)).click();
+        await (await rowMenuFor(page!, row!, sel, ms)).click();
         await page!.waitForTimeout(400);
         const items = await countAll(page!, ['[role="menuitem"]', "[role=menu] button", "li button", "li"]);
         const seen = items.filter((i) => i.n > 0).map((i) => `${i.sel} \u00d7${i.n}`).join(", ");
@@ -2093,7 +2158,7 @@ async function applyOne(
         return "found the row and its APPROVE button; stopped without approving";
       }
 
-      const menu = await controlForRow(page, row!, sel.rowMenu!, "⋮ row menu", ms);
+      const menu = await rowMenuFor(page, row!, sel, ms);
       await menu.click();
       await page.waitForTimeout(300);
       const items = page.locator(sel.denyButton!);
@@ -2126,7 +2191,7 @@ async function applyOne(
   }
 
   return step("deny", async () => {
-    await (await controlForRow(page, row!, sel.rowMenu!, "⋮ row menu", ms)).click();
+    await (await rowMenuFor(page, row!, sel, ms)).click();
     await page.waitForTimeout(300);
     await clickFirstVisible(page, sel.denyButton!, "Deny item in the row menu", ms);
 
@@ -2362,7 +2427,7 @@ export async function correctCategory(
       }))) return { ok: false, steps, matchedRow: null, screenshot: null };
 
       if (!(await step("correct the category", async () => {
-        await (await controlForRow(page!, row!, sel.rowMenu!, "⋮ row menu", ms)).click();
+        await (await rowMenuFor(page!, row!, sel, ms)).click();
         await page!.waitForTimeout(400);
         await clickFirstVisible(page!, sel.editMenuItem!, "Edit in the row menu", ms);
         await page!.waitForTimeout(1200);
