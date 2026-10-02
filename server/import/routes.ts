@@ -148,6 +148,7 @@ importRouter.post("/reviewer-imports", requireAuth, requireAdmin, async (req: Re
   const body = req.body as {
     email?: unknown; enabled?: unknown; gridPath?: unknown; gridSection?: unknown;
     autoApprove?: unknown; autoApprovePerRun?: unknown; schedule?: unknown;
+    gridQuery?: unknown; runAs?: unknown;
   };
   const email = String(body.email ?? "").trim();
   if (!email) {
@@ -182,6 +183,13 @@ importRouter.post("/reviewer-imports", requireAuth, requireAdmin, async (req: Re
         typeof body.gridPath === "string" ? body.gridPath.slice(0, 200) : null),
       ...sent("gridSection", () =>
         typeof body.gridSection === "string" ? body.gridSection.slice(0, 80) : null),
+      ...sent("gridQuery", () =>
+        typeof body.gridQuery === "string" ? body.gridQuery.slice(0, 1000) : null),
+      // Whose login reads their queue. A stored setting, never a per-run
+      // choice: a request that could name the login is a request that
+      // could read anybody's queue as anybody.
+      ...sent("runAs", () =>
+        typeof body.runAs === "string" ? body.runAs.slice(0, 200) : null),
       // The one setting here that approves money. Explicitly true or it is
       // off: a missing field must never read as "switch it on".
       ...sent("autoApprove", () => body.autoApprove === true),

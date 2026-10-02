@@ -82,6 +82,7 @@ export type SelectorKey =
   | "adminTab" | "grid" | "itemCount"
   | "gridPath"
   | "gridSection"
+  | "gridQuery"
   | "exportButton" | "dialog" | "dialogRoot" | "dialogScope" | "formatSelect" | "formatOption"
   | "dialogExport" | "exportStarted"
   | "exportsNav" | "newestExportReady" | "newestExportDownload";
@@ -134,6 +135,7 @@ export const DEFAULT_SELECTORS: Selectors = {
   // A path, not a selector: the grid's filters live in the query string.
   gridPath: "/transactions/team",
   gridSection: "inbox",
+  gridQuery: "",
 
   exportButton: 'button:has-text("EXPORT")',
   dialog: 'text=Export Expenses',
@@ -180,7 +182,7 @@ export const STEP_SELECTORS: Record<string, SelectorKey[]> = {
   "sign in": ["loginEmail", "loginPassword", "loginSubmit", "loggedIn",
               "mfaCode", "mfaSubmit", "mfaRemember"],
   "switch to the team view": ["adminTab"],
-  "open the filtered grid": ["gridPath", "gridSection", "grid"],
+  "open the filtered grid": ["gridPath", "gridSection", "gridQuery", "grid"],
   "read the item count": ["itemCount"],
   "open the export dialog": ["exportButton", "dialog"],
   "set the sections": ["dialogRoot", "dialog"],
@@ -203,6 +205,7 @@ export const SELECTOR_HELP: Record<SelectorKey, string> = {
   grid: "The transactions table itself — used to tell the page has loaded. The item-count line is accepted instead, so this missing is not fatal.",
   itemCount: "The \u201cN items, $X\u201d line above the grid.",
   gridPath: "Path to the transactions grid. Filters are added as query parameters.",
+  gridQuery: "Any other filters, copied from Emburse\'s address bar — above all Current Reviewer, which is what separates two approvers in a chain. Use the dropdown in Emburse, copy the URL, paste it into a reviewer\'s row.",
   gridSection: "The section filter the grid is opened with — Emburse's own value, \"inbox\" for Needs Review. With a two-stage approval chain this is one of the two things that says WHOSE stage is being read.",
   exportButton: "The EXPORT button above the grid, not the one in the dialog.",
   dialog: "Text that proves the Export Expenses dialog is open.",
@@ -245,6 +248,23 @@ export function gridUrl(
      * return.
      */
     userId?: string;
+    /**
+     * Any other filters, verbatim, as a query string.
+     *
+     * The one that matters here is Emburse's **Current Reviewer** dropdown,
+     * which is what finally separates two approvers: an expense in a chain
+     * sits with exactly one reviewer at a time, and that filter is how the
+     * grid says which. Its parameter name and values are a tenant's own —
+     * opaque ids, not names — so they are not constructed here, they are
+     * copied out of the address bar after using the dropdown once. Exactly
+     * the same bargain as `filters[user_id][]` above, and worth it for the
+     * same reason: a filter returns the truth where a guess cannot.
+     *
+     * Applied LAST so a learned filter beats the defaults, and parsed
+     * rather than concatenated so a stray `?` or a duplicate key cannot
+     * produce a URL that quietly means something else.
+     */
+    extra?: string;
   } = {},
 ): string {
   const url = new URL(opts.path ?? "/transactions/team", base);
@@ -252,7 +272,44 @@ export function gridUrl(
   if (opts.receiptsOnly) url.searchParams.set("filters[receipt]", "true");
   if (opts.userId) url.searchParams.append("filters[user_id][]", opts.userId);
   url.searchParams.set("filters[query]", opts.query ?? "");
+  if (opts.extra) {
+    for (const [k, v] of new URLSearchParams(opts.extra.replace(/^[?]/, ""))) {
+      // Repeated keys are how Emburse expresses "any of these", so append
+      // for the array-shaped ones and replace for the rest.
+      if (k.endsWith("[]")) url.searchParams.append(k, v);
+      else url.searchParams.set(k, v);
+    }
+  }
   return url.toString();
+}
+
+/**
+ * Pull the path and filters out of a URL copied from Emburse.
+ *
+ * The whole point is that nobody should have to know which parameter the
+ * Current Reviewer dropdown sets. Use the dropdown, copy the address bar,
+ * paste it in: the path, the section and everything else come out of it.
+ *
+ * `query` and `receipt` are dropped deliberately — the first is a search
+ * box that belongs to whoever typed in it, the second is the app's own
+ * setting and a pasted URL must not silently flip it.
+ */
+export function partsOfGridUrl(href: string): {
+  path: string; section: string; extra: string;
+} | null {
+  try {
+    const url = new URL(href.trim());
+    const keep = new URLSearchParams();
+    let section = "";
+    for (const [k, v] of url.searchParams) {
+      if (k === "filters[section]") { section = v; continue; }
+      if (k === "filters[query]" || k === "filters[receipt]") continue;
+      keep.append(k, v);
+    }
+    return { path: url.pathname, section, extra: keep.toString() };
+  } catch {
+    return null;
+  }
 }
 
 /** The cardholder id Emburse put in a grid URL, if it is carrying one. */
@@ -1688,6 +1745,7 @@ async function runSteps(
     // FILTERS dialog and no toggle whose state could be misread and inverted.
     const target = gridUrl(url, {
       receiptsOnly: settings.receiptsOnly, path: sel.gridPath, section: sel.gridSection,
+      extra: sel.gridQuery,
     });
     await page.goto(target, { waitUntil: "domcontentloaded" });
 

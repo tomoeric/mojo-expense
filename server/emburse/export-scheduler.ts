@@ -101,6 +101,22 @@ ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS grid_section text;
 -- should start because a column appeared.
 ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS auto_approve boolean NOT NULL DEFAULT false;
 ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS auto_approve_per_run integer;
+
+-- The filters that pick out THIS reviewer's queue, copied from Emburse.
+-- Above all its Current Reviewer dropdown: an expense in an approval chain
+-- sits with exactly one reviewer at a time, and that filter is the only
+-- thing in the grid that says which. Opaque ids, so they are pasted, not
+-- constructed.
+ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS grid_query text;
+
+-- WHOSE LOGIN reads it, which is not the same question as whose queue it
+-- is. A manager can see the rows waiting on the people under them, so one
+-- login can pull everybody's queues — each filtered to its owner and
+-- stamped as theirs. That is worth more than tidiness: a second reviewer's
+-- login means a second verification code, from somebody who is not at the
+-- screen, every time the trust lapses. Null means they run as themselves,
+-- which is what a single-reviewer deployment has always done.
+ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS run_as text;
 `;
 
 let ready: Promise<void> | null = null;
@@ -369,15 +385,45 @@ export async function attemptExport(
     // THE reviewer's own login when one is named, so the export reads THEIR
     // Needs Review. Falling back to the shared choice would read somebody
     // else's queue and stamp it as theirs, which is worse than not running.
+    /*
+     * WHOSE LOGIN reads this, which is a different question from whose
+     * queue it is.
+     *
+     * A manager can see the rows waiting on the people under them, so one
+     * login can pull everybody's queues — each narrowed by that person's
+     * own filters and stamped as theirs. Worth far more than tidiness: a
+     * second reviewer's login means a second verification code, from
+     * somebody who is not at the screen, every time Emburse stops trusting
+     * the browser.
+     *
+     * `runAs` is only taken from the reviewer's own stored settings, never
+     * from a request. Defaults to themselves, which is what every
+     * deployment did before this existed.
+     */
+    const mineForLogin = opts.reviewer
+      ? (await reviewerImports().catch(() => []))
+          .find((r) => r.userEmail.toLowerCase() === opts.reviewer!.toLowerCase())
+      : undefined;
+    const signsIn = mineForLogin?.runAs?.trim() || opts.reviewer;
+
     const login = opts.reviewer
-      ? await credentialForUser(opts.reviewer).then((c) =>
-          c ? { ...c, userEmail: opts.reviewer!, chosen: `the import for ${opts.reviewer}` } : null)
+      ? await credentialForUser(signsIn!).then((c) =>
+          c ? {
+            ...c,
+            // The QUEUE's owner, not the login's. This is what the import
+            // stamps rows with, and conflating the two is how one person's
+            // pull landed in another's queue.
+            userEmail: opts.reviewer!,
+            chosen: signsIn!.toLowerCase() === opts.reviewer!.toLowerCase()
+              ? `the import for ${opts.reviewer}`
+              : `${opts.reviewer}'s queue, read with ${signsIn}'s login`,
+          } : null)
       : (await credentialForExport()) ?? envLogin();
     if (opts.reviewer && !login) {
       throw new Error(
-        `${opts.reviewer} has no Emburse login stored, so their Needs Review cannot be read. ` +
-        `Nothing else's queue will be used in its place — that would be a different set of ` +
-        `expenses recorded as theirs.`);
+        `${signsIn} has no Emburse login stored, so ${opts.reviewer}'s queue cannot be read. ` +
+        `Nothing else's login will be used in its place — that would read a different set of ` +
+        `expenses and record them as theirs.`);
     }
     if (!login) {
       throw new Error(
@@ -436,6 +482,9 @@ export async function attemptExport(
       // different stage, and asking for it means asking for it.
       ...(!list && mine?.gridPath ? { gridPath: mine.gridPath } : {}),
       ...(mine?.gridSection ? { gridSection: mine.gridSection } : {}),
+      // The filters that pick this reviewer's queue out of a list their
+      // login can see more of than their own.
+      ...(mine?.gridQuery ? { gridQuery: mine.gridQuery } : {}),
       // Last, and only on a dry run: a probe beats every stored setting
       // precisely because it is not one. A real run must never take a list
       // from a request — that is how an import reads the wrong queue.
@@ -497,7 +546,13 @@ export async function attemptExport(
       // reviewer's import from purging another's queue. `userEmail` is the
       // app user who owns the credential; the env fallback has no owner, so
       // it imports as the blank reviewer exactly as a hand upload does.
-      const reviewer = "userEmail" in login ? String(login.userEmail ?? "") : "";
+      // The queue's owner. `login.userEmail` is set to opts.reviewer above
+      // precisely so this stays the person whose queue was read and not
+      // whoever's login read it — those are now allowed to differ, and the
+      // stamp has to follow the queue or an admin pulling for somebody
+      // else takes their expenses.
+      const reviewer = opts.reviewer
+        ?? ("userEmail" in login ? String(login.userEmail ?? "") : "");
       const imported = await ingestExport(
         run.pdf, `emburse-${day}.pdf`, by,
         { sectionsVerified, reviewer, source: opts.source ?? "" });
@@ -580,6 +635,10 @@ export type ReviewerImport = {
   gridPath: string | null;
   /** The section filter it asks for, or null for the shared one. */
   gridSection: string | null;
+  /** Extra filters that pick out their queue, copied from Emburse. */
+  gridQuery: string | null;
+  /** Whose Emburse login reads it. Null is themselves. */
+  runAs: string | null;
   /** Whether the sweep approves their unflagged expenses, under their login. */
   autoApprove: boolean;
   /** How many per pass, or null for the shared number. */
@@ -607,8 +666,8 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
   const people = await listCredentials().catch(() => []);
   if (people.length === 0) {
     return [{ userEmail: "", enabled: true, schedule: shared, shared: true,
-              gridPath: null, gridSection: null, autoApprove: false,
-              autoApprovePerRun: null }];
+              gridPath: null, gridSection: null, gridQuery: null, runAs: null,
+              autoApprove: false, autoApprovePerRun: null }];
   }
 
   const { rows } = await db().query<{
@@ -616,6 +675,7 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
     retry_hours: number | null; attempts_per_day: number | null; grace_minutes: number | null;
     all_day: boolean | null; grid_path: string | null; grid_section: string | null;
     auto_approve: boolean | null; auto_approve_per_run: number | null;
+    grid_query: string | null; run_as: string | null;
   }>("SELECT * FROM reviewer_imports");
   const own = new Map(rows.map((r) => [r.user_email.toLowerCase(), r]));
 
@@ -629,6 +689,8 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
       shared: !set,
       gridPath: r?.grid_path ?? null,
       gridSection: r?.grid_section ?? null,
+      gridQuery: r?.grid_query ?? null,
+      runAs: r?.run_as ?? null,
       autoApprove: r?.auto_approve ?? false,
       autoApprovePerRun: r?.auto_approve_per_run ?? null,
       schedule: {
@@ -665,6 +727,10 @@ export async function setReviewerImport(
     /** Empty string clears it back to the shared setting. */
     gridPath?: string | null;
     gridSection?: string | null;
+    /** Extra filters picking out their queue, copied from Emburse. */
+    gridQuery?: string | null;
+    /** Whose login reads it. Empty or null means themselves. */
+    runAs?: string | null;
     autoApprove?: boolean;
     autoApprovePerRun?: number | null;
   },
@@ -687,6 +753,8 @@ export async function setReviewerImport(
   }
   if (input.gridPath !== undefined) set.grid_path = blank(input.gridPath);
   if (input.gridSection !== undefined) set.grid_section = blank(input.gridSection);
+  if (input.gridQuery !== undefined) set.grid_query = blank(input.gridQuery);
+  if (input.runAs !== undefined) set.run_as = blank(input.runAs)?.toLowerCase() ?? null;
   if (input.autoApprove !== undefined) set.auto_approve = input.autoApprove;
   if (input.autoApprovePerRun !== undefined) set.auto_approve_per_run = input.autoApprovePerRun;
   set.updated_by = by;

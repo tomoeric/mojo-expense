@@ -599,7 +599,8 @@ function ReviewerGrids() {
         reviewers: { userEmail: string; enabled: boolean; gridPath: string | null;
                      gridSection: string | null; autoApprove: boolean;
                      autoApprovePerRun: number | null; shared: boolean;
-                     schedule: Schedule }[];
+                     schedule: Schedule; gridQuery: string | null;
+                     runAs: string | null }[];
       };
     },
   });
@@ -610,6 +611,51 @@ function ReviewerGrids() {
 
   const valueFor = (e: string, r: { gridPath: string | null; gridSection: string | null }) =>
     draft[e] ?? { path: r.gridPath ?? "", section: r.gridSection ?? "" };
+
+  /**
+   * Paste the URL Emburse is showing, and take the filters out of it.
+   *
+   * Nobody should have to know which parameter the Current Reviewer
+   * dropdown sets — and nobody can, the values are opaque ids. Use the
+   * dropdown in Emburse, copy the address bar, paste it here.
+   */
+  async function pasteUrl(email: string, href: string) {
+    setError("");
+    try {
+      const u = new URL(href.trim());
+      const keep = new URLSearchParams();
+      let section = "";
+      for (const [k, val] of u.searchParams) {
+        if (k === "filters[section]") { section = val; continue; }
+        if (k === "filters[query]" || k === "filters[receipt]") continue;
+        keep.append(k, val);
+      }
+      const res = await fetch("/api/reviewer-imports", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          email, gridPath: u.pathname, gridSection: section, gridQuery: keep.toString(),
+        }),
+      });
+      if (!res.ok) throw new Error(((await res.json()) as { error?: string }).error ?? "Failed");
+      await qc.invalidateQueries({ queryKey: ["reviewer-imports"] });
+    } catch (e) {
+      setError(e instanceof TypeError
+        ? "That does not look like a URL. Copy the whole address from Emburse."
+        : (e as Error).message);
+    }
+  }
+
+  async function setRunAs(email: string, runAs: string) {
+    setError("");
+    const res = await fetch("/api/reviewer-imports", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email, runAs }),
+    });
+    if (!res.ok) setError(((await res.json()) as { error?: string }).error ?? "Failed");
+    await qc.invalidateQueries({ queryKey: ["reviewer-imports"] });
+  }
 
   async function save(
     email: string,
@@ -683,6 +729,48 @@ function ReviewerGrids() {
           Back to the shared team-wide list
         </button>
       </div>
+      {/* The decisive one, and the reason the boxes above are rarely
+          enough: Emburse's Current Reviewer dropdown is what says which of
+          two approvers an expense is sitting with, and its values are
+          opaque ids nobody can type. Use the dropdown, copy the address
+          bar, paste it. */}
+      <div className="mt-3 rounded-lg border border-border p-3">
+        <p className="text-sm">
+          <strong>Paste a URL from Emburse</strong> to set a reviewer&rsquo;s filters. In
+          Emburse, pick them in the <strong>Current Reviewer</strong> dropdown, copy the
+          address bar, and paste it against their name — the path, the section and the
+          reviewer filter all come out of it. The search box and the receipts setting are
+          ignored.
+        </p>
+        <div className="mt-2 space-y-2">
+          {rows.map((r) => (
+            <div key={r.userEmail} className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="min-w-56 font-medium">{r.userEmail}</span>
+              <input
+                placeholder="https://spend.emburse.com/transactions/team?filters…"
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter") return;
+                  void pasteUrl(r.userEmail, (e.target as HTMLInputElement).value);
+                  (e.target as HTMLInputElement).value = "";
+                }}
+                onPaste={(e) => {
+                  const text = e.clipboardData.getData("text");
+                  if (!/^https?:\/\//.test(text.trim())) return;
+                  e.preventDefault();
+                  void pasteUrl(r.userEmail, text);
+                }}
+                className="min-w-72 flex-1 rounded-lg border border-border bg-background px-2 py-1 font-mono text-xs"
+              />
+              {r.gridQuery && (
+                <span className="rounded bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-700 dark:text-emerald-300">
+                  filtered
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
       <p className="mt-1 text-xs text-muted-foreground">
         Try it, then press <strong>Test run</strong> below as each person. If the item count
         drops below the team-wide one and differs between them, that is their own queue. Nothing

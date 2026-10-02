@@ -734,6 +734,20 @@ Two separate things, and confusing them cost a queue full of failures.
   `attemptExport`, dry runs only, enforced there as well as at the route).
   Finding out which list is really somebody's should not require changing
   how the import works first.
+- **Whose LOGIN reads a queue is not whose queue it is** (`run_as` on
+  `reviewer_imports`). A manager sees the rows waiting on the people under
+  them, so one login can pull everybody's — each narrowed by that person's
+  own filters and stamped as theirs. Worth far more than tidiness: a second
+  reviewer's login means a second verification code, from somebody who is
+  not at the screen, every time Emburse stops trusting the browser. The
+  stamp follows the QUEUE (`opts.reviewer`), never the login, or an admin
+  pulling for somebody else takes their expenses.
+- **Emburse's Current Reviewer dropdown is what separates two approvers**,
+  and its values are opaque ids nobody can type. So they are not
+  constructed, they are pasted: Export settings takes a URL copied from
+  Emburse and pulls the path, section and filters out of it
+  (`partsOfGridUrl`, stored as `grid_query`). The search box and the
+  receipts setting are dropped from a paste on purpose.
 - **Approval is a CHAIN: Eric approves, then it goes to Brian.** Two stages,
   two queues, one at a time. Needs Review in Emburse IS per account — but the
   export clicks the team-wide tab and opens
