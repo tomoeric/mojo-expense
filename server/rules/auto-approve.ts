@@ -540,6 +540,29 @@ let timer: NodeJS.Timeout | null = null;
 
 async function sweep(): Promise<void> {
   try {
+    /*
+     * Categories first, approvals second.
+     *
+     * A fuel purchase filed wrongly is flagged, and the automation refuses
+     * anything flagged — so correcting it is what makes it approvable at
+     * all. Doing it the other way round means every fixed expense waits a
+     * further quarter of an hour for its turn.
+     *
+     * It does not make this pass approve them: the correction takes about
+     * a minute at the browser, and `applyCorrection` runs the rules and
+     * the sweep again the moment it lands. This ordering just means the
+     * work starts now rather than next time.
+     */
+    try {
+      const { sweepFuelCategories } = await import("./auto-category.js");
+      const fuel = await sweepFuelCategories();
+      if (fuel.queued > 0) console.log(`auto-category: sent ${fuel.queued} to Emburse`);
+      else if (fuel.skipped) console.log(`auto-category: ${fuel.skipped}`);
+    } catch (err) {
+      // An optional automation must not take the approvals down with it.
+      console.error("auto-category sweep:", err);
+    }
+
     const { queued, skipped } = await autoQueueApprovals();
     // Only when there is something to say. A switched-off automation
     // logging every fifteen minutes is noise that hides real lines.

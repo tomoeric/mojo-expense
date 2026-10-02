@@ -83,6 +83,29 @@ export const FLAGS = {
    * half-clicked approval is worse than letting it land.
    */
   holdDecisions: false,
+
+  /**
+   * Put the right category on a fuel purchase, without anybody clicking.
+   *
+   * Off, and deliberately narrow. Nine of the ten expenses under the Gas
+   * Category flag on one morning were the same thing: fuel, filed as
+   * Travel or Meals or Small Tools, with a note saying "gas" in as many
+   * words. Each needed somebody to open a picker, choose the category the
+   * rule had already named, and wait a minute. That is a correct
+   * instruction being re-stated by hand, which is what a machine is for.
+   *
+   * What makes it safe is that it invents nothing. The target category is
+   * the one the RULE demands — "category is Auto Fee & Fuel" is the rule's
+   * own expectation, so the fix is to make the rule true, not to decide
+   * anything. And it acts only where the receipt itself shows fuel, or
+   * came from a fuel merchant, AND the note says so. Either alone is not
+   * enough: a receipt from a Circle K can be a sandwich, and a note saying
+   * "gas" against a hotel bill is somebody typing in the wrong box.
+   *
+   * It changes a category. It never approves, never denies, and never
+   * touches an amount.
+   */
+  autoFixGasCategory: false,
 } as const;
 
 export type FlagKey = keyof typeof FLAGS;

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { allFlags, flagOwner, getLimit, setFlag, setLimit, FLAGS, type FlagKey } from "./flags.js";
+import { allFlags, flagOwner, getFlag, getLimit, setFlag, setLimit, FLAGS, type FlagKey } from "./flags.js";
 import { aiSpend } from "./ai/usage.js";
 import {
   DEFAULT_PER_RUN, MOST_PER_RUN, autoApproveReport, autoQueueApprovals,
@@ -212,6 +212,39 @@ api.get("/flags", requireAuth, async (_req, res) => {
  * user reads on every page load: this counts the whole inbox, and only an
  * admin has any use for the answer.
  */
+/**
+ * What the fuel-category automation would change, before switching it on.
+ *
+ * The whole case for it is "these are obviously the same thing", and the
+ * only honest way to make that case is to list them.
+ */
+api.get("/flags/autoFixGasCategory/report", requireAuth, requireAdmin, async (_req, res) => {
+  if (!isDbConfigured()) {
+    res.status(503).json({ error: "No database is configured." });
+    return;
+  }
+  try {
+    const { fuelFixes, categoryRules } = await import("./rules/auto-category.js");
+    res.json({
+      on: await getFlag("autoFixGasCategory"),
+      rules: await categoryRules(),
+      would: await fuelFixes(25),
+    });
+  } catch (err) {
+    res.status(500).json({ error: describe(err) });
+  }
+});
+
+/** Send them now, instead of at the next sweep. */
+api.post("/flags/autoFixGasCategory/run", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const { sweepFuelCategories } = await import("./rules/auto-category.js");
+    res.json(await sweepFuelCategories());
+  } catch (err) {
+    res.status(500).json({ error: describe(err) });
+  }
+});
+
 api.get("/flags/autoApprove/report", requireAuth, requireAdmin, async (req, res) => {
   if (!isDbConfigured()) {
     res.status(503).json({ error: "No database is configured." });

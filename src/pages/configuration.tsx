@@ -188,6 +188,7 @@ export function ConfigurationPage({ onOpen, isAdmin, viewingAs }: {
       <AiConnection isAdmin={isAdmin} />
 
       <AutoApprove isAdmin={isAdmin} viewingAs={viewingAs} />
+      <AutoFixGasCategory isAdmin={isAdmin} />
       <DecisionTrace isAdmin={isAdmin} />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -695,6 +696,141 @@ function AutoApprove({ isAdmin, viewingAs }: { isAdmin: boolean; viewingAs: stri
         means nothing when nothing is looking.
       </p>
     </div>
+  );
+}
+
+type FuelFix = {
+  dedupeKey: string; employee: string; merchant: string; note: string;
+  from: string; to: string; reviewer: string; because: string;
+};
+type FuelReport = {
+  on: boolean;
+  rules: { id: number; name: string; to: string }[];
+  would: FuelFix[];
+};
+
+/**
+ * Putting the right category on a fuel purchase, without anybody clicking.
+ *
+ * Shows its working before it is switched on, because the whole case for
+ * it is "these are obviously the same thing" and the only honest way to
+ * make that case is to list them. Nine of ten under the Gas Category flag
+ * on one morning were fuel filed as Travel or Meals or Small Tools, each
+ * needing somebody to choose the category the rule had already named.
+ */
+function AutoFixGasCategory({ isAdmin }: { isAdmin: boolean }) {
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const [said, setSaid] = useState("");
+  const report = useQuery<FuelReport>({
+    queryKey: ["fuel-category-report"],
+    enabled: isAdmin,
+    queryFn: async () => {
+      const res = await fetch("/api/flags/autoFixGasCategory/report");
+      if (!res.ok) throw new Error("Could not read it");
+      return (await res.json()) as FuelReport;
+    },
+  });
+  if (!isAdmin) return null;
+
+  const on = Boolean(report.data?.on);
+  const would = report.data?.would ?? [];
+  const rules = report.data?.rules ?? [];
+
+  async function set(enabled: boolean): Promise<void> {
+    setBusy(true);
+    try {
+      await fetch("/api/flags/autoFixGasCategory", {
+        method: "PUT", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      await qc.invalidateQueries({ queryKey: ["fuel-category-report"] });
+      await qc.invalidateQueries({ queryKey: ["flags"] });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runNow(): Promise<void> {
+    setBusy(true);
+    setSaid("");
+    try {
+      const res = await fetch("/api/flags/autoFixGasCategory/run", { method: "POST" });
+      const body = (await res.json()) as { queued?: number; skipped?: string; error?: string };
+      setSaid(body.error
+        ?? (body.queued ? `Sent ${body.queued} to Emburse.` : body.skipped ?? "Nothing qualified."));
+      await qc.invalidateQueries({ queryKey: ["fuel-category-report"] });
+      await qc.invalidateQueries({ queryKey: ["decisions"] });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-border p-4">
+      <h2 className="text-base font-bold">Fix a fuel category automatically</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        A rule that says a category <em>must be</em> something has already named the right
+        answer. This makes it true — but only where the receipt itself shows fuel, or came
+        from a merchant that sells it, <strong>and</strong> the note says so. Either alone is
+        not enough: a forecourt receipt can be a sandwich, and a note reading “gas” against a
+        hotel bill is somebody typing in the wrong box.
+      </p>
+      <p className="mt-1 text-sm text-muted-foreground">
+        It changes a category and nothing else — never approves, never denies, never touches an
+        amount. Each change goes to Emburse under the login of the reviewer whose queue it is
+        in, and appears under <strong>Category sent</strong> in the queue.
+      </p>
+
+      {rules.length === 0 && (
+        <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
+          No rule names a category as its expectation, so there is nothing for this to make
+          true. A rule whose <strong>must</strong> is “category is …” is what switches this on
+          in practice.
+        </p>
+      )}
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void set(!on)}
+          className={`rounded-lg border px-3 py-1.5 text-sm font-semibold disabled:opacity-50 ${
+            on ? "border-amber-500/50 bg-amber-500/15 text-amber-800 dark:text-amber-200"
+               : "border-border"
+          }`}
+        >
+          {on ? "On" : "Off"}
+        </button>
+        <button
+          type="button"
+          disabled={busy || would.length === 0}
+          onClick={() => void runNow()}
+          className="rounded-lg border border-border px-3 py-1.5 text-sm font-semibold disabled:opacity-40"
+        >
+          Send these now
+        </button>
+        {said && <span className="text-sm text-muted-foreground">{said}</span>}
+      </div>
+
+      <p className="mt-3 text-sm">
+        <strong className="tabular-nums">{would.length}</strong>
+        {" "}would change right now{would.length > 0 ? ":" : "."}
+      </p>
+      {would.length > 0 && (
+        <ul className="mt-1.5 space-y-1 text-xs text-muted-foreground">
+          {would.slice(0, 12).map((f) => (
+            <li key={f.dedupeKey}>
+              <span className="font-semibold text-foreground">{f.employee}</span>
+              {" · "}{f.merchant}{" · "}
+              <span className="line-through">{f.from || "no category"}</span>
+              {" → "}<span className="font-semibold text-foreground">{f.to}</span>
+              <span className="block pl-3 opacity-80">{f.because}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
