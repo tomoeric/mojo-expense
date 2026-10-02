@@ -761,7 +761,12 @@ export function ExportRunner({
  * it cost more — but not asking at all is cheaper than being capped.
  */
 function WatchBrowser({ live }: { live: boolean }) {
+  // Open itself when a run starts. The toggle existed and the picture did
+  // not appear, because nobody presses a button to see something they
+  // assumed was already showing.
   const [on, setOn] = useState(false);
+  const [why, setWhy] = useState("");
+  useEffect(() => { if (live) setOn(true); }, [live]);
   const [src, setSrc] = useState<string | null>(null);
   const [doing, setDoing] = useState("");
   const [gone, setGone] = useState(false);
@@ -775,8 +780,19 @@ function WatchBrowser({ live }: { live: boolean }) {
       try {
         const res = await fetch("/api/export-live.png", { cache: "no-store" });
         if (stopped) return;
-        if (!res.ok) { setGone(true); return; }
+        if (!res.ok) {
+          setGone(true);
+          // Say WHICH no. A 404 is "nothing running", a 403 is "not an
+          // admin", and a 500 is a bug — shown as one blank panel before.
+          setWhy(res.status === 404
+            ? "Nothing is running just now."
+            : res.status === 403
+              ? "Only an administrator can watch a run."
+              : `The server said ${res.status}.`);
+          return;
+        }
         setGone(false);
+        setWhy("");
         setDoing(res.headers.get("x-doing") ?? "");
         const blob = await res.blob();
         if (stopped) return;
@@ -815,8 +831,8 @@ function WatchBrowser({ live }: { live: boolean }) {
         <span className="text-xs text-muted-foreground">
           {on
             ? gone
-              ? "Nothing is running."
-              : doing ? `Now: ${doing}` : "Waiting for a frame…"
+              ? why || "Nothing is running."
+              : doing ? `Now: ${doing}` : "Taking the first picture…"
             : live
               ? "A run is going — see what it is looking at."
               : "A picture of the page, while a run is going."}
@@ -828,6 +844,11 @@ function WatchBrowser({ live }: { live: boolean }) {
           alt="What the Emburse browser is looking at"
           className="mt-2 w-full rounded-lg border border-border"
         />
+      )}
+      {on && !src && !gone && (
+        <div className="mt-2 flex h-40 items-center justify-center rounded-lg border border-dashed border-border text-sm text-muted-foreground">
+          Waiting for the first frame…
+        </div>
       )}
     </div>
   );

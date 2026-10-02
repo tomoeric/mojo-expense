@@ -151,7 +151,7 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
       {isAdmin && <ReviewerGrids />}
 
       <div>
-        <h2 className="text-base font-bold">Export scope</h2>
+        <h2 className="text-base font-bold">Which stages to export — shared by everyone</h2>
         <p className="mt-1 text-sm text-muted-foreground">
           Which Emburse sections the daily export covers. The app sets these in Emburse when it runs,
           then checks each import back against them — which is the only way to catch a section chip that
@@ -161,6 +161,15 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
             the list path says WHOSE. Two reviewers both ticking Needs Review
             and both reading the team-wide list get the same expenses, and
             the chips look like the thing that failed. */}
+        {!sections.includes("Needs Review") && (
+          <p className="mt-2 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm">
+            <strong>Needs Review is off.</strong> That is the reviewer queue — the expenses
+            waiting on somebody here. With it off, every import brings in expenses nobody on
+            this app has to decide, and the queue empties of the ones they do. This is shared,
+            so it applies to <em>every</em> reviewer. If you were trying to narrow one person
+            down, that is their tab at the top, not this.
+          </p>
+        )}
         <p className="mt-1 text-sm text-muted-foreground">
           <strong>Shared</strong> — used by anyone with nothing of their own set above. These
           pick the <strong>stage</strong>, not the person: Needs Review on the team-wide list is
