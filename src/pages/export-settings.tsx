@@ -142,6 +142,14 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
 
   return (
     <div className="max-w-2xl space-y-5">
+      {/* FIRST on the page, not last.
+          It was below the shared scope, the shared schedule and the day
+          preview — a long way past everything it overrides — so scoping a
+          second reviewer meant scrolling through settings that are not
+          theirs to find the one control that is. Whose import this is is
+          the first question this page answers now. */}
+      {isAdmin && <ReviewerGrids />}
+
       <div>
         <h2 className="text-base font-bold">Export scope</h2>
         <p className="mt-1 text-sm text-muted-foreground">
@@ -154,7 +162,9 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
             and both reading the team-wide list get the same expenses, and
             the chips look like the thing that failed. */}
         <p className="mt-1 text-sm text-muted-foreground">
-          These say <strong>which stage</strong>, not <strong>whose</strong>. Needs Review on the
+          <strong>Shared.</strong> Everything from here down applies to any reviewer with
+          nothing of their own set above. These say <strong>which stage</strong>, not{" "}
+          <strong>whose</strong>. Needs Review on the
           team-wide list is the whole company&rsquo;s review stage, and it is the same for every
           reviewer who can see it — which is why ticking it for two people does not give them two
           queues. Whose queue a run reads is the list path, in{" "}
@@ -234,11 +244,11 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
               This one is shared — it is what a reviewer gets when they have no times of their
               own.
             </strong>{" "}
-            For a second reviewer on their own timetable, reading their own list, see{" "}
+            For a second reviewer on their own timetable, reading their own list, use{" "}
             <a href="#per-reviewer" className="underline underline-offset-2">
-              Per-reviewer imports and approvals
+              their tab
             </a>{" "}
-            at the bottom of this page.
+            at the top of this page.
           </span>
         </p>
       </div>
@@ -392,7 +402,6 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
         </p>
       )}
 
-      {isAdmin && <ReviewerGrids />}
 
       {/* Below the settings it exercises: the run is how you find out whether
           what is configured above actually works against the real Emburse. */}
@@ -624,7 +633,7 @@ function ReviewerGrids() {
   // looking for the second reviewer's.
   if (q.isLoading) {
     return (
-      <div id="per-reviewer" className="border-t border-border pt-5">
+      <div id="per-reviewer" className="rounded-xl border border-border p-4">
         <h2 className="text-base font-bold">Each reviewer&rsquo;s import</h2>
         <p className="mt-1 text-sm text-muted-foreground">Loading…</p>
       </div>
@@ -632,7 +641,7 @@ function ReviewerGrids() {
   }
   if (rows.length < 1) {
     return (
-      <div id="per-reviewer" className="border-t border-border pt-5">
+      <div id="per-reviewer" className="rounded-xl border border-border p-4">
         <h2 className="text-base font-bold">Each reviewer&rsquo;s import</h2>
         <p className="mt-1 text-sm text-muted-foreground">
           {q.isError
@@ -685,11 +694,11 @@ function ReviewerGrids() {
   }
 
   return (
-    <div id="per-reviewer" className="border-t border-border pt-5">
+    <div id="per-reviewer" className="rounded-xl border border-border p-4">
       <h2 className="text-base font-bold">Each reviewer&rsquo;s import</h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        One tab each, so whose scope is whose is never in doubt. Everything above this is
-        shared — a reviewer with nothing set here uses it.
+        One tab each, so whose scope is whose is never in doubt. Everything{" "}
+        <em>below</em> this box is shared — a reviewer with nothing set here uses it.
       </p>
 
       {/* A tab per person. The whole reason this exists: a row-per-person
