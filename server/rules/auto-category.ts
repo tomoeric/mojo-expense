@@ -82,11 +82,56 @@ export type FuelFix = {
  * that denies or approves is not asking for a correction.
  */
 export async function categoryRules(): Promise<{ id: number; name: string; to: string }[]> {
-  return (await activeRules())
-    .filter((r) => r.action === "flag" && r.must
-      && r.must.field === "category" && r.must.op === "is"
-      && !r.must.compare && r.must.value.trim() !== "")
-    .map((r) => ({ id: r.id, name: r.name, to: r.must!.value.trim() }));
+  return (await rulesConsidered())
+    .filter((r): r is { id: number; name: string; to: string; why: string } => r.to !== null)
+    .map(({ id, name, to }) => ({ id, name, to }));
+}
+
+/**
+ * Every enabled rule, and what this made of it.
+ *
+ * The card said "no rule names a category as its expectation" over a Gas
+ * Category rule that was flagging nine expenses, and there was no way from
+ * the screen to tell WHY it was not counted. A verdict with no reasoning
+ * is the same defect as a refusal with no reasoning, and this file has
+ * already fixed that twice elsewhere.
+ */
+export async function rulesConsidered(): Promise<
+  { id: number; name: string; to: string | null; why: string }[]
+> {
+  return (await activeRules()).map((r) => {
+    if (r.action !== "flag") {
+      return { id: r.id, name: r.name, to: null, why: `it ${r.action}s rather than flags` };
+    }
+    /*
+     * Two ways a rule can name the right category, and both count.
+     *
+     * "must: category is X" says it outright. But "when: category is_not
+     * X" says exactly the same thing from the other side — flag this when
+     * the category is not X — and that is how the Gas Category rule here
+     * was actually written. Reading only the first form made the feature
+     * inert against the very rule it was built for.
+     */
+    const must = r.must;
+    if (must && must.field === "category" && must.op === "is"
+        && !must.compare && must.value.trim() !== "") {
+      return { id: r.id, name: r.name, to: must.value.trim(),
+               why: `its must is “category is ${must.value.trim()}”` };
+    }
+    const unless = r.when.find((c) =>
+      c.field === "category" && c.op === "is_not" && !c.compare && c.value.trim() !== "");
+    if (unless) {
+      return { id: r.id, name: r.name, to: unless.value.trim(),
+               why: `it flags when the category is not “${unless.value.trim()}”` };
+    }
+    return {
+      id: r.id, name: r.name, to: null,
+      why: must
+        ? `its must is “${must.field} ${must.op} ${must.value}”, which names no category`
+        : "it names no category — neither a must of “category is …” nor a when of "
+          + "“category is not …”",
+    };
+  });
 }
 
 /**

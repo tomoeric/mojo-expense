@@ -706,6 +706,7 @@ type FuelFix = {
 type FuelReport = {
   on: boolean;
   rules: { id: number; name: string; to: string }[];
+  considered: { id: number; name: string; to: string | null; why: string }[];
   would: FuelFix[];
 };
 
@@ -736,12 +737,16 @@ function AutoFixGasCategory({ isAdmin }: { isAdmin: boolean }) {
   const on = Boolean(report.data?.on);
   const would = report.data?.would ?? [];
   const rules = report.data?.rules ?? [];
+  const considered = report.data?.considered ?? [];
 
   async function set(enabled: boolean): Promise<void> {
     setBusy(true);
     try {
+      // POST, not PUT. The settings route is a POST and a PUT simply did
+      // not reach it, so the switch sat at Off however often it was
+      // pressed — "won't let me turn on", exactly as described.
       await fetch("/api/flags/autoFixGasCategory", {
-        method: "PUT", headers: { "content-type": "application/json" },
+        method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ enabled }),
       });
       await qc.invalidateQueries({ queryKey: ["fuel-category-report"] });
@@ -782,12 +787,32 @@ function AutoFixGasCategory({ isAdmin }: { isAdmin: boolean }) {
         in, and appears under <strong>Category sent</strong> in the queue.
       </p>
 
-      {rules.length === 0 && (
-        <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
-          No rule names a category as its expectation, so there is nothing for this to make
-          true. A rule whose <strong>must</strong> is “category is …” is what switches this on
-          in practice.
-        </p>
+      {/* What was made of every enabled rule, not just the verdict.
+          "No rule names a category" over a Gas Category rule that was
+          flagging nine expenses is a conclusion with no reasoning, and
+          there was no way from this screen to tell why. */}
+      {considered.length > 0 && (
+        <details className="mt-3 rounded-lg border border-border p-3 text-sm" open={rules.length === 0}>
+          <summary className="cursor-pointer font-semibold">
+            {rules.length === 0
+              ? "No rule names a category — here is what each one says"
+              : `${rules.length} of ${considered.length} rule(s) name a category`}
+          </summary>
+          <ul className="mt-2 space-y-1 text-xs">
+            {considered.map((r) => (
+              <li key={r.id} className={r.to ? "text-foreground" : "text-muted-foreground"}>
+                <strong>{r.name}</strong> — {r.to ? `→ “${r.to}”, because ${r.why}` : r.why}
+              </li>
+            ))}
+          </ul>
+          {rules.length === 0 && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              Give one of them a <strong>must</strong> of “category is …”, or a{" "}
+              <strong>when</strong> of “category is not …”. Either names the right answer, and
+              this only ever makes a rule&rsquo;s own expectation true.
+            </p>
+          )}
+        </details>
       )}
 
       <div className="mt-3 flex flex-wrap items-center gap-2">

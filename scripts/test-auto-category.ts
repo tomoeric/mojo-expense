@@ -41,7 +41,7 @@ const clean = async (): Promise<void> => {
   await db().query("DELETE FROM receipt_readings WHERE sha256 LIKE 'ac-%'");
   await db().query("DELETE FROM receipt_blobs WHERE sha256 LIKE 'ac-%'");
   await db().query("DELETE FROM expenses WHERE dedupe_key LIKE 'ac-%'");
-  await db().query("DELETE FROM expense_rules WHERE name = $1", [RULE]);
+  await db().query("DELETE FROM expense_rules WHERE name LIKE $1", [`${RULE}%`]);
   await deleteCredential(ERIC).catch(() => false);
 };
 
@@ -101,6 +101,43 @@ try {
     check("the rule is recognised as naming a category", mine !== undefined);
     check("…and the target comes from the rule itself", mine?.to === "Auto Fee & Fuel",
       mine?.to);
+  }
+
+  console.log("\n1b. Both ways a rule can name it");
+  /*
+   * The card said "no rule names a category as its expectation" over a
+   * Gas Category rule that was flagging nine expenses. Reading only
+   * `must: category is X` missed the other half: a rule that flags WHEN
+   * the category is not X has named X just as plainly, from the other
+   * side, and that is how the real one was written.
+   */
+  {
+    const onlyWhen = await store.saveRule({
+      name: `${RULE} (when only)`, enabled: true, match: "all",
+      when: [{ field: "category", op: "is_not", value: "Auto Fee & Fuel" },
+             { field: "note", op: "contains", value: "gas" }],
+      must: null, action: "flag", message: "Fuel Category Is Wrong",
+    }, "test");
+    check("a when-only rule saves", onlyWhen.ok, onlyWhen.ok ? "" : onlyWhen.error);
+
+    const { rulesConsidered } = await import("../server/rules/auto-category.js");
+    const seen = (await rulesConsidered()).find((r) => r.name === `${RULE} (when only)`);
+    check("…is recognised too", seen?.to === "Auto Fee & Fuel", JSON.stringify(seen));
+    check("…and says why", /category is not/.test(seen?.why ?? ""), seen?.why);
+
+    // And a rule that names no category is reported, not silently dropped.
+    const noneNamed = await store.saveRule({
+      name: `${RULE} (no category)`, enabled: true, match: "all",
+      when: [{ field: "merchant", op: "contains", value: "shell" }],
+      must: { field: "amount", op: "lt", value: "100" },
+      action: "flag", message: "Big fuel stop",
+    }, "test");
+    check("a rule naming no category saves", noneNamed.ok, noneNamed.ok ? "" : noneNamed.error);
+    const other = (await rulesConsidered()).find((r) => r.name === `${RULE} (no category)`);
+    check("…is listed with a reason rather than dropped",
+      other !== undefined && other.to === null && other.why.length > 0, JSON.stringify(other));
+
+    await db().query("DELETE FROM expense_rules WHERE name LIKE $1", [`${RULE} (%`]);
   }
 
   console.log("\n2. Two witnesses agree — it qualifies");

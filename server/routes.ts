@@ -224,10 +224,15 @@ api.get("/flags/autoFixGasCategory/report", requireAuth, requireAdmin, async (_r
     return;
   }
   try {
-    const { fuelFixes, categoryRules } = await import("./rules/auto-category.js");
+    const { fuelFixes, rulesConsidered } = await import("./rules/auto-category.js");
+    const considered = await rulesConsidered();
     res.json({
       on: await getFlag("autoFixGasCategory"),
-      rules: await categoryRules(),
+      rules: considered.filter((r) => r.to !== null),
+      // Every enabled rule and what was made of it. "No rule names a
+      // category" over a rule that is plainly flagging is a verdict with
+      // no reasoning, which is no better here than it is in a refusal.
+      considered,
       would: await fuelFixes(25),
     });
   } catch (err) {
