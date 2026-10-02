@@ -163,6 +163,8 @@ export function ExportRunner({
         runsFor: string | null;
         legacyDeviceAt: string | null;
         people: string[];
+        browser: { holder: { label: string; since: number } | null; waiting: string[] };
+        stopping: number[];
       }>(res);
       if (!res.ok) throw new Error(body.error ?? "Failed");
       return body as {
@@ -175,6 +177,8 @@ export function ExportRunner({
         runsFor: string | null;
         legacyDeviceAt: string | null;
         people: string[];
+        browser: { holder: { label: string; since: number } | null; waiting: string[] };
+        stopping: number[];
       };
     },
     // While a run is going, the list is the only progress indicator there is.
@@ -558,6 +562,20 @@ export function ExportRunner({
         const order = Object.keys(stepSelectors);
         const done = active.steps.length;
         const current = order[done] ?? "finishing up";
+        /*
+         * Not started is not the same as on step one.
+         *
+         * One browser runs everything in turn, so a run can be recorded,
+         * shown as running, and be doing nothing at all because a decision
+         * batch has the browser. With no step finished this said "Step 1 of
+         * 12 · open Emburse" and counted upwards, next to a watch panel
+         * reading "Nothing is running just now" — two true lines that
+         * together describe a hang that is not happening.
+         */
+        const holder = q.data?.browser?.holder ?? null;
+        const queued = done === 0 && holder !== null
+          && !holder.label.toLowerCase().includes("export");
+        const asked = (q.data?.stopping ?? []).includes(active.id);
         const elapsed = clock(now - new Date(active.startedAt).getTime());
         const stepStarted = active.steps.reduce((sum, st) => sum + st.ms, 0);
         const onStep = clock(now - new Date(active.startedAt).getTime() - stepStarted);
@@ -567,7 +585,9 @@ export function ExportRunner({
             <div className="flex flex-wrap items-center gap-2">
               <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-600" aria-hidden />
               <span className="font-semibold">
-                Step {Math.min(done + 1, order.length)} of {order.length} · {current}
+                {queued
+                  ? `Waiting for the browser — ${holder!.label} has it`
+                  : `Step ${Math.min(done + 1, order.length)} of ${order.length} · ${current}`}
               </span>
               <span className="tnum text-muted-foreground">
                 {onStep} on this step · {elapsed} total
@@ -575,10 +595,11 @@ export function ExportRunner({
               {isAdmin && (
                 <button
                   type="button"
+                  disabled={asked}
                   onClick={() => void stop(active.id)}
-                  className="ml-auto rounded-lg border border-border px-2.5 py-1 font-semibold hover:bg-muted"
+                  className="ml-auto rounded-lg border border-border px-2.5 py-1 font-semibold hover:bg-muted disabled:opacity-50"
                 >
-                  Stop this run
+                  {asked ? "Stopping…" : "Stop this run"}
                 </button>
               )}
             </div>
@@ -592,9 +613,13 @@ export function ExportRunner({
             </div>
 
             <p className="text-muted-foreground">
-              {current === "wait for the export and download it"
-                ? "Emburse is building the file. This is the long one — up to 15 minutes."
-                : "Running on the server. You can leave this page and come back."}
+              {asked
+                ? "Stopping — the browser is being shut, which ends whatever it was waiting on."
+                : queued
+                  ? "Nothing is wrong: one browser runs everything in turn, and this one starts as soon as it is free."
+                  : current === "wait for the export and download it"
+                    ? "Emburse is building the file. This is the long one — up to 15 minutes."
+                    : "Running on the server. You can leave this page and come back."}
             </p>
           </div>
         );

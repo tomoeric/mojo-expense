@@ -34,6 +34,43 @@ const refuses = (label: string, row: string, target: Target = TARGET) => {
   check(label, !r.ok, r.ok ? "ACCEPTED — it should not have" : r.why);
 };
 
+console.log("\n0. A date that disagrees says what the row actually shows");
+/*
+ * The real failure that prompted this: an automatic approval of Brad
+ * Hailstone's $21.95 Anthropic charge dated 2026-09-28 came back "none of
+ * the rows match … date 2026-09-28 not in the row". The date is the LAST
+ * check, so reaching it means the amount, the employee and the merchant
+ * all matched — the row was sitting right there with a different date, and
+ * the message sent somebody hunting for a row that was not missing.
+ */
+{
+  const brad = {
+    employee: "Brad Hailstone", merchant: "Anthropic, PBC",
+    amount: 21.95, date: "2026-09-28",
+  };
+  const row = "Sep 30, 2026 Anthropic, PBC $21.95 Software, Licenses Brad Hailstone";
+  const r = rowMatches(row, brad);
+  check("it is still refused", !r.ok, r.why);
+  check("…but it says everything else matched", /everything matches except the date/.test(r.why),
+    r.why);
+  check("…and quotes the date the row shows", r.why.includes("Sep 30, 2026"), r.why);
+  check("…and the one we hold", r.why.includes("2026-09-28"), r.why);
+
+  // The right date still matches, which is the thing this must not break.
+  check("the matching date is unaffected",
+    rowMatches("Sep 28, 2026 Anthropic, PBC $21.95 Software, Licenses Brad Hailstone", brad).ok);
+
+  // A row with no date at all is a different fault with a different fix —
+  // the Date column switched off in MANAGE COLUMNS — and saying so beats
+  // reporting it as a date that disagrees with nothing.
+  const noDate = rowMatches("Anthropic, PBC $21.95 Software, Licenses Brad Hailstone", brad);
+  check("a row showing no date says that instead", /no date at all/.test(noDate.why), noDate.why);
+
+  // The slash form is quoted too, not only the long one.
+  const slash = rowMatches("9/30/2026 Anthropic, PBC $21.95 Lic Brad Hailstone", brad);
+  check("a slash-dated row is quoted as it is written", slash.why.includes("9/30/2026"), slash.why);
+}
+
 console.log("\n1. The row it should match");
 accepts("the obvious form", "9/13/2026 DOORDASH INC. Brianna Ruth Meals $26.40");
 accepts("zero-padded date", "09/13/2026 DOORDASH INC. Brianna Ruth Meals $26.40");

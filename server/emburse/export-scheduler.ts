@@ -603,6 +603,7 @@ export async function attemptExport(
           .catch(() => {});
       },
       shouldStop: () => stopping.has(id),
+      onOpen: (close) => closers.set(id, close),
     });
 
     // Only the sign-in step says anything about the credential, and even then
@@ -671,8 +672,33 @@ export async function attemptExport(
  */
 const stopping = new Set<number>();
 
+/**
+ * How to shut each live run's browser, by run id.
+ *
+ * The flag alone could only stop a run BETWEEN steps, and the step that
+ * strands a run is "open Emburse" — three attempts at a 90-second
+ * navigation, six minutes inside one step with nobody reading the flag.
+ * Stop this run set it, returned 200, and the run carried on, which is
+ * worse than having no button.
+ */
+const closers = new Map<number, () => Promise<void>>();
+
 export function stopRun(id: number): void {
   stopping.add(id);
+  // Shut the browser too. Whatever the run is waiting on — a navigation, a
+  // selector, Emburse building a file — it fails immediately and the run
+  // records itself as stopped. Fire and forget: the caller is an HTTP
+  // handler and the close can take a moment.
+  const close = closers.get(id);
+  if (close) {
+    closers.delete(id);
+    void close().catch(() => {});
+  }
+}
+
+/** Whether a stop has been asked for, so the page can say "stopping". */
+export function isStopping(id: number): boolean {
+  return stopping.has(id);
 }
 
 let timer: NodeJS.Timeout | null = null;

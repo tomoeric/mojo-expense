@@ -10,8 +10,9 @@ import { ALL_SECTIONS, cleanSchedule, readSettings, writeSettings } from "./sett
 import { DEFAULT_SELECTORS, SELECTOR_HELP, STEP_SELECTORS, envLogin } from "../emburse/auto-export.js";
 import { claimUnclaimed, credentialStatus, deleteCredential, hasCredential, listCredentials, saveCredential,
          scopeFor, unclaimedExpenses } from "../emburse/credentials.js";
-import { attemptExport, nextDue, recentRuns, reviewerImports, runScreenshot, setReviewerImport,
-         stopRun } from "../emburse/export-scheduler.js";
+import { attemptExport, isStopping, nextDue, recentRuns, reviewerImports, runScreenshot,
+         setReviewerImport, stopRun } from "../emburse/export-scheduler.js";
+import { browserQueue } from "../emburse/browser-lock.js";
 import { answerChallenge, cancelChallenge, currentChallenge } from "../emburse/challenge.js";
 import { adoptLegacyDevice, cookiesSavedAt, forgetCookies, legacyDevice }
   from "../emburse/browser-state.js";
@@ -497,15 +498,28 @@ importRouter.get("/export-runs", requireAuth, async (req: Request, res: Response
       ?? (named || undefined)
       ?? ((req.user?.email && await hasCredential(req.user.email).catch(() => false))
             ? req.user.email : undefined);
+    const recent = await recentRuns(20, mine);
     res.json({
       configured: (await listCredentials()).length > 0 || envLogin() !== null,
       due: await nextDue(schedule, new Date(), mine ?? ""),
-      runs: await recentRuns(20, mine),
+      runs: recent,
       // Who this page is about, so it can say so rather than leaving somebody
       // to work it out from the rows.
       viewingAs: viewed ?? null,
       // Whose runs and whose timeline these are, so the page can say it.
       runsFor: mine ?? null,
+      /*
+       * What has the browser, and who is queued behind it.
+       *
+       * One browser runs everything in turn, so a run can be recorded and
+       * started and then sit doing nothing because a decision batch is
+       * mid-sign-in. The page showed that as "Step 1 of 12 · open Emburse"
+       * ticking upwards next to a watch panel reading "Nothing is running
+       * just now" — two true statements that together describe a hang.
+       */
+      browser: browserQueue(),
+      /** Runs a stop has been asked for, so the button can say "stopping". */
+      stopping: recent.filter((r) => isStopping(r.id)).map((r) => r.id),
       // Carried on the list rather than its own endpoint: this is already the
       // thing the page polls while a run is going, and a challenge is only
       // ever raised during one.

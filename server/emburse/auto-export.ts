@@ -612,6 +612,17 @@ export async function runAutoExport(
     onStep?: (steps: StepResult[]) => void;
     /** Checked between steps, so a run can be called off without a restart. */
     shouldStop?: () => boolean;
+    /**
+     * The browser, the moment it exists, so a stop can shut it.
+     *
+     * Between-steps is not good enough and the stuck run proved it. "Open
+     * Emburse" retries a 90-second navigation three times, so a run can sit
+     * inside ONE step for six minutes with the flag set and nothing reading
+     * it — Stop this run returned cheerfully and did nothing at all. Closing
+     * the context makes the in-flight goto reject at once, the step fails,
+     * and the run ends and is recorded like any other failure.
+     */
+    onOpen?: (close: () => Promise<void>) => void;
   } = {},
 ): Promise<ExportRun> {
   const steps: StepResult[] = [];
@@ -657,6 +668,7 @@ export async function runAutoExport(
   try {
     const opened = await openBrowser(login.email);
     close = opened.close;
+    opts.onOpen?.(opened.close);
     page = await opened.context.newPage();
     page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
 

@@ -367,7 +367,32 @@ export function rowMatches(rowText: string, t: Target): { ok: boolean; why: stri
       `${m}/${String(d).padStart(2, "0")}/${y}`,
     ];
     if (!forms.some((f) => text.includes(f))) {
-      return { ok: false, why: `date ${t.date} not in the row` };
+      /*
+       * Say what the row DOES say, not only what it does not.
+       *
+       * This is the last check, so reaching it means the amount, the
+       * employee and the merchant all matched — the row is almost
+       * certainly the right expense with a date we disagree about. "Date
+       * 2026-09-28 not in the row" sends somebody to look for a row that
+       * is sitting right there; "the row says Sep 30, 2026" is the whole
+       * diagnosis in four words.
+       *
+       * Not loosened into a tolerance. A date is one of the two things
+       * that identify an expense, and widening it is a decision about
+       * approving money that belongs to a person, not to this function.
+       */
+      const shows = [...new Set([
+        ...text.matchAll(/\b[A-Z][a-z]{2}\s+\d{1,2},?\s+\d{4}\b/g),
+        ...text.matchAll(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g),
+      ].map((m) => m[0].trim()))];
+      return {
+        ok: false,
+        why: shows.length > 0
+          ? `everything matches except the date: this expense is ${t.date} and the row says `
+            + `${shows.join(" / ")}`
+          : `date ${t.date} not in the row, and the row shows no date at all — if the Date `
+            + `column is switched off in Emburse's MANAGE COLUMNS, switch it back on`,
+      };
     }
   }
 
