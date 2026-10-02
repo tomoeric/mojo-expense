@@ -20,7 +20,7 @@ process.env.SESSION_SECRET ||= "test-secret-schedules";
 
 import { db, ensureSchema } from "../server/db.js";
 import { deleteCredential, saveCredential } from "../server/emburse/credentials.js";
-import { nextDue, reviewerImports, setReviewerImport } from "../server/emburse/export-scheduler.js";
+import { gridPathFor, nextDue, reviewerImports, setReviewerImport } from "../server/emburse/export-scheduler.js";
 
 const ERIC = "eric.s@test.invalid";
 const BRIAN = "brian.c@test.invalid";
@@ -134,6 +134,48 @@ try {
     check("he is shared again", b?.shared === true);
     check("…without losing his list", b?.gridPath === "/transactions");
     check("…or his switch", b?.autoApprove === true);
+  }
+  console.log("\n6. Stages belong to a reviewer, not to the deployment");
+  // The last shared thing on the import page. Unticking a stage while
+  // reading one person's tab changed every person's import — a shared
+  // setting wearing a per-reviewer tab's clothes.
+  check("Brian inherits until he sets his own", (await mine(BRIAN))?.sections === null);
+  await setReviewerImport(BRIAN, { sections: ["Needs Review"] }, "test");
+  await setReviewerImport(ERIC, { sections: ["Needs Review", "Denied"] }, "test");
+  {
+    const b = await mine(BRIAN);
+    const e = await mine(ERIC);
+    check("Brian's are his", JSON.stringify(b?.sections) === JSON.stringify(["Needs Review"]),
+      JSON.stringify(b?.sections));
+    check("…and Eric's are untouched by them",
+      JSON.stringify(e?.sections) === JSON.stringify(["Needs Review", "Denied"]),
+      JSON.stringify(e?.sections));
+    check("…and setting them kept his list", b?.gridPath === "/transactions");
+  }
+  // And the same no-clobber rule, in the other direction.
+  await setReviewerImport(BRIAN, { autoApprove: false }, "test");
+  check("a switch save leaves his stages alone",
+    JSON.stringify((await mine(BRIAN))?.sections) === JSON.stringify(["Needs Review"]));
+  await setReviewerImport(BRIAN, { sections: [] }, "test");
+  check("…and an empty list puts him back on the defaults",
+    (await mine(BRIAN))?.sections === null);
+  console.log("\n7. The list a reviewer picked is the list the run opens");
+  // It was not. The Transactions source has the EMPTY key, the scheduler
+  // passes source:"" for it, the lookup matched every time, and the guard
+  // that was meant to let a reviewer's own path through never fired — so
+  // picking a tab did nothing and the import kept reading the old list.
+  {
+    const def = { path: "/transactions/team" };
+    const other = { path: "/reimbursements" };
+    check("their own list wins over the default",
+      gridPathFor("", def, { gridPath: "/transactions" }) === "/transactions",
+      String(gridPathFor("", def, { gridPath: "/transactions" })));
+    check("…and over the default when the source is simply absent",
+      gridPathFor(undefined, def, { gridPath: "/transactions" }) === "/transactions");
+    check("…but never over a list that was actually asked for",
+      gridPathFor("reimbursements", other, { gridPath: "/transactions" }) === "/reimbursements");
+    check("a reviewer with none still gets the default",
+      gridPathFor("", def, { gridPath: null }) === "/transactions/team");
   }
 } finally {
   await clean();

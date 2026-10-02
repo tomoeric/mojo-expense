@@ -194,10 +194,6 @@ export function ExportRunner({
   // made a test run look like a real one.
   const kind = active ? (active.trigger === "dry-run" ? "dry" : "real") : busy;
 
-  /** A list to try for one test run only, saved nowhere. */
-  const [probePath, setProbePath] = useState("");
-  const [probeSection, setProbeSection] = useState("");
-
   async function run(dry: boolean) {
     setBusy(dry ? "dry" : "real");
     setError("");
@@ -208,15 +204,10 @@ export function ExportRunner({
       const res = await fetch(`/api/export-run${dry ? "?dryRun=1" : ""}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        // Only a test run carries a list to try, and the server ignores it
-        // on a real one. Nothing here is saved.
-        body: JSON.stringify({
-          // Whose import. The selected tab, so the buttons under it mean
-          // what the tab says.
-          ...(reviewer ? { reviewer } : {}),
-          ...(dry && (probePath || probeSection)
-            ? { gridPath: probePath, gridSection: probeSection } : {}),
-        }),
+        // Whose import. The selected tab, so the buttons under it mean what
+        // the tab says. The list itself is never sent — a real import that
+        // took its list from a request is how it reads the wrong queue.
+        body: JSON.stringify(reviewer ? { reviewer } : {}),
       });
       const body = await readJson<{ error?: string; id?: number }>(res);
       if (!res.ok) throw new Error(body.error ?? `Run failed (${res.status})`);
@@ -313,45 +304,19 @@ export function ExportRunner({
 
   return (
     <div className="space-y-3">
-      <div>
-        <h2 className="flex items-center gap-2 text-base font-bold">
-          <Play className="h-4 w-4" />
-          {q.data?.runsFor ? `Run the export — ${q.data.runsFor}'s` : "Run the export"}
-        </h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          The app signs into Emburse and fetches today&rsquo;s export itself. Start one here to see every
-          step — a <strong>test run</strong> stops just before clicking Export, so nothing is produced and
-          nobody is emailed.
-        </p>
-      </div>
-
-      {/* Whose import this page is about. An admin inside a view needs to
-          know the button pulls the queue of the person they are viewing,
-          and not to have to infer it from the rows underneath. */}
-      {/* Whose runs these are. Outside a view it is your own queue, which
-          is the whole point and was not obvious when the list mixed two
-          reviewers with nothing saying which was which. */}
-      {/* Said loudly, and in the heading too.
-          This was correct and in fine print two hundred lines below the
-          reviewer tabs, so somebody on Brian's tab who scrolled down here
-          reasonably read it as Brian's section and asked why it said
-          Eric. A section that belongs to one person has to say so where
-          the buttons are. */}
-      {q.data?.runsFor && (
-        <p className="rounded-lg border border-border bg-muted/50 p-3 text-sm">
-          This runs <strong>{q.data.runsFor}</strong>&rsquo;s import — signing into Emburse as
-          them and reading their Needs Review — because that is the tab open above. Switch
-          tabs to run somebody else&rsquo;s. The history below is theirs too.
-        </p>
-      )}
-
-      {q.data?.viewingAs && (
-        <p className="rounded-lg border border-sky-500/30 bg-sky-500/10 p-3 text-sm">
-          You are viewing as <strong>{q.data.viewingAs}</strong>. Running the export signs into
-          Emburse as <strong>them</strong> and imports <strong>their</strong> Needs Review — not
-          yours. The history below is theirs too.
-        </p>
-      )}
+      {/* No heading, no "whose is this" banner, no second description.
+          This sits inside that person's tab now, under their name — the
+          three paragraphs that used to say so were there because it did
+          not, and they were the bulk of what made the page unreadable. */}
+      <h3 className="flex items-center gap-2 text-sm font-bold">
+        <Play className="h-4 w-4" />
+        Run it
+      </h3>
+      <p className="text-sm text-muted-foreground">
+        A <strong>test run</strong> stops before exporting: nothing produced, nothing imported,
+        nobody emailed — it just reads the item count off the list, which tells you whose queue
+        it is. <strong>Run export now</strong> does the real import.
+      </p>
 
       {q.data && !q.data.configured && (
         <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
@@ -421,50 +386,6 @@ export function ExportRunner({
         </div>
       )}
 
-      {/* Finding out which list is really theirs, without changing
-          anything to find out. A test run stops before exporting: no file,
-          no email, nothing imported, nothing saved — it just prints what
-          that URL returns. Somebody sensibly nervous about changing how
-          the import works should not have to change how the import works
-          to check. */}
-      {isAdmin && (
-        <div className="rounded-lg border border-border p-3 text-sm">
-          <p className="text-muted-foreground">
-            Try a different list for <strong>one test run</strong> — nothing is saved and
-            nothing is imported. Leave blank to use the configured one. The item count it
-            reads tells you whose queue that URL is. While these are filled in,{" "}
-            <strong>Run export now</strong> is held back: a real import never takes its list
-            from this box.
-          </p>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <input
-              value={probePath}
-              onChange={(e) => setProbePath(e.target.value)}
-              placeholder="/transactions"
-              className="w-56 rounded-lg border border-border bg-background px-2 py-1 font-mono text-xs"
-            />
-            <input
-              value={probeSection}
-              onChange={(e) => setProbeSection(e.target.value)}
-              placeholder="inbox"
-              className="w-32 rounded-lg border border-border bg-background px-2 py-1 font-mono text-xs"
-            />
-            <span className="text-xs text-muted-foreground">
-              then press <strong>Test run</strong> below
-            </span>
-            {(probePath || probeSection) && (
-              <button
-                type="button"
-                onClick={() => { setProbePath(""); setProbeSection(""); }}
-                className="text-xs underline underline-offset-2"
-              >
-                Clear
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-
       {isAdmin && <WatchBrowser live={working} />}
 
       <div className="flex flex-wrap items-center gap-2">
@@ -486,10 +407,7 @@ export function ExportRunner({
             trial had been honoured and failed. */}
         <button
           type="button"
-          disabled={!isAdmin || working || Boolean(probePath || probeSection)}
-          title={probePath || probeSection
-            ? "A trial list only applies to a test run. Clear those boxes to run a real import, or press Test run."
-            : undefined}
+          disabled={!isAdmin || working}
           onClick={() => void run(false)}
           className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-3.5 py-2 text-sm font-semibold text-white transition-colors hover:bg-sky-500 disabled:opacity-40"
         >

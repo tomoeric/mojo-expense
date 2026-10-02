@@ -149,7 +149,7 @@ importRouter.post("/reviewer-imports", requireAuth, requireAdmin, async (req: Re
   const body = req.body as {
     email?: unknown; enabled?: unknown; gridPath?: unknown; gridSection?: unknown;
     autoApprove?: unknown; autoApprovePerRun?: unknown; schedule?: unknown;
-    gridQuery?: unknown; runAs?: unknown;
+    gridQuery?: unknown; runAs?: unknown; sections?: unknown;
   };
   const email = String(body.email ?? "").trim();
   if (!email) {
@@ -186,6 +186,16 @@ importRouter.post("/reviewer-imports", requireAuth, requireAdmin, async (req: Re
         typeof body.gridSection === "string" ? body.gridSection.slice(0, 80) : null),
       ...sent("gridQuery", () =>
         typeof body.gridQuery === "string" ? body.gridQuery.slice(0, 1000) : null),
+      // Which stages their export covers. Names, not ids — they are the
+      // chips in Emburse's export dialog, and the runner refuses any it
+      // cannot find rather than guessing.
+      ...sent("sections", () =>
+        Array.isArray(body.sections)
+          ? body.sections
+              .filter((x): x is string => typeof x === "string")
+              .map((x) => x.slice(0, 80))
+              .slice(0, 20)
+          : null),
       // Whose login reads their queue. A stored setting, never a per-run
       // choice: a request that could name the login is a request that
       // could read anybody's queue as anybody.
@@ -258,26 +268,30 @@ importRouter.put("/export-settings", requireAuth, requireAdmin, async (req: Requ
   if (!guard(res)) return;
 
   const body = req.body as { sections?: unknown; receiptsOnly?: unknown; schedule?: unknown; selectors?: unknown; emburseUrl?: unknown; sources?: unknown };
-  const sections = Array.isArray(body.sections) ? body.sections.filter((s): s is string => typeof s === "string") : null;
-  if (!sections) {
-    res.status(400).json({ error: "sections must be an array of section names." });
-    return;
-  }
-  const unknown = sections.filter((s) => !(ALL_SECTIONS as readonly string[]).includes(s));
-  if (unknown.length) {
-    res.status(400).json({ error: `Not an Emburse section: ${unknown.join(", ")}.` });
-    return;
-  }
-  if (sections.length === 0) {
-    res.status(400).json({ error: "Choose at least one section, or every import will be flagged." });
-    return;
+  const sent = Array.isArray(body.sections)
+    ? body.sections.filter((s): s is string => typeof s === "string") : null;
+  if (sent) {
+    const unknown = sent.filter((s) => !(ALL_SECTIONS as readonly string[]).includes(s));
+    if (unknown.length) {
+      res.status(400).json({ error: `Not an Emburse section: ${unknown.join(", ")}.` });
+      return;
+    }
+    if (sent.length === 0) {
+      res.status(400).json({ error: "Choose at least one section, or every import will be flagged." });
+      return;
+    }
   }
 
   try {
+    // Only what was sent. The selector editor saves selectors and nothing
+    // else, and a PUT that insisted on a whole settings object made it send
+    // a copy of every other field back — which is how a stale page quietly
+    // reverts a setting somebody changed in another tab.
     const current = await readSettings();
+    const sections = sent ?? current.sections;
     const saved = await writeSettings(
       sections,
-      body.receiptsOnly !== false,
+      "receiptsOnly" in body ? body.receiptsOnly !== false : current.receiptsOnly,
       cleanSchedule(body.schedule as never, current.schedule),
       cleanSelectors(body.selectors, current.selectors),
       (body.emburseUrl as string) ?? current.emburseUrl,

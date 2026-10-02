@@ -117,6 +117,20 @@ ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS grid_query text;
 -- screen, every time the trust lapses. Null means they run as themselves,
 -- which is what a single-reviewer deployment has always done.
 ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS run_as text;
+
+-- WHICH STAGES this reviewer's export covers, as the chips in Emburse's
+-- export dialog are named.
+--
+-- This was one shared list for everybody, and sharing it is wrong for the
+-- same reason sharing the grid URL was: the two reviewers are two stages of
+-- one approval chain, so one of them having Needs Review off is not a
+-- statement about the other. Worse, it was a shared setting that looked
+-- like a per-reviewer one — untick a chip while reading somebody's tab and
+-- it silently changed everybody's import.
+--
+-- Null means the shared list, which is what a single-reviewer tenant has
+-- always had.
+ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS sections jsonb;
 `;
 
 let ready: Promise<void> | null = null;
@@ -497,13 +511,10 @@ export async function attemptExport(
       ? (await reviewerImports().catch(() => []))
           .find((r) => r.userEmail.toLowerCase() === opts.reviewer!.toLowerCase())
       : undefined;
+    const chosenPath = gridPathFor(opts.source, list, mine);
     const forThisRun = {
       ...settings.selectors,
-      ...(list ? { gridPath: list.path } : {}),
-      // The reviewer's own path wins over the shared one, but never over an
-      // explicitly chosen list: Reimbursements is a different page, not a
-      // different stage, and asking for it means asking for it.
-      ...(!list && mine?.gridPath ? { gridPath: mine.gridPath } : {}),
+      ...(chosenPath ? { gridPath: chosenPath } : {}),
       ...(mine?.gridSection ? { gridSection: mine.gridSection } : {}),
       // The filters that pick this reviewer's queue out of a list their
       // login can see more of than their own.
@@ -533,7 +544,19 @@ export async function attemptExport(
       }
     })();
 
-    run = await runAutoExport(settings, forThisRun, login, {
+    /*
+     * And WHICH STAGES to export, by the same rule.
+     *
+     * The export dialog's chips used to come from one shared list, so
+     * unticking Needs Review while reading one reviewer's tab quietly
+     * changed every reviewer's import. They are part of a reviewer's scope,
+     * not the deployment's.
+     */
+    const forRun = mine?.sections?.length
+      ? { ...settings, sections: mine.sections }
+      : settings;
+
+    run = await runAutoExport(forRun, forThisRun, login, {
       ...opts,
       otherLogins,
       onChallenge,
@@ -578,7 +601,8 @@ export async function attemptExport(
         ?? ("userEmail" in login ? String(login.userEmail ?? "") : "");
       const imported = await ingestExport(
         run.pdf, `emburse-${day}.pdf`, by,
-        { sectionsVerified, reviewer, source: opts.source ?? "" });
+        { sectionsVerified, reviewer, source: opts.source ?? "",
+          sections: mine?.sections ?? undefined });
       importId = imported.importId;
       // A duplicate file is not a failed run: it means Emburse produced the
       // same export twice, which is normal on a day nothing changed.
@@ -660,6 +684,8 @@ export type ReviewerImport = {
   gridPath: string | null;
   /** The section filter it asks for, or null for the shared one. */
   gridSection: string | null;
+  /** Which export-dialog stages this reviewer exports, or null for shared. */
+  sections: string[] | null;
   /** Extra filters that pick out their queue, copied from Emburse. */
   gridQuery: string | null;
   /** Whose Emburse login reads it. Null is themselves. */
@@ -708,6 +734,33 @@ function shiftClock(hhmm: string, minutes: number): string {
   return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
 
+/**
+ * Which Emburse list one run opens.
+ *
+ * A reviewer's own list wins over the default; an explicitly chosen list
+ * wins over everything, because Reimbursements is a different page rather
+ * than a different stage and asking for it means asking for it.
+ *
+ * Pulled out of `attemptExport` because the bug it had was invisible in
+ * place. The Transactions source carries the EMPTY key — it is what every
+ * existing row has — so the scheduler passes `source: ""` for it and the
+ * lookup matched every time. The guard read `!list && mine.gridPath`, which
+ * was therefore never true, and a reviewer's own list was silently thrown
+ * away on every run. The tab somebody picked did nothing at all, which is
+ * exactly what "still pulling Eric's receipts even though scope was
+ * changed" looks like from the outside.
+ */
+export function gridPathFor(
+  source: string | undefined,
+  list: { path: string } | undefined,
+  mine: { gridPath: string | null } | undefined,
+): string | undefined {
+  // Only a NON-EMPTY source names a different list. The empty one is the
+  // default, which is not a request.
+  if (source) return list?.path;
+  return mine?.gridPath ?? list?.path;
+}
+
 export async function reviewerImports(): Promise<ReviewerImport[]> {
   await ensure();
   const { schedule: shared } = await readSettings();
@@ -716,7 +769,8 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
   if (people.length === 0) {
     return [{ userEmail: "", enabled: true, schedule: shared, shared: true,
               staggeredBy: 0, gridPath: null, gridSection: null, gridQuery: null,
-              runAs: null, autoApprove: false, autoApprovePerRun: null }];
+              sections: null, runAs: null, autoApprove: false,
+              autoApprovePerRun: null }];
   }
 
   const { rows } = await db().query<{
@@ -724,7 +778,7 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
     retry_hours: number | null; attempts_per_day: number | null; grace_minutes: number | null;
     all_day: boolean | null; grid_path: string | null; grid_section: string | null;
     auto_approve: boolean | null; auto_approve_per_run: number | null;
-    grid_query: string | null; run_as: string | null;
+    grid_query: string | null; run_as: string | null; sections: unknown;
   }>("SELECT * FROM reviewer_imports");
   const own = new Map(rows.map((r) => [r.user_email.toLowerCase(), r]));
 
@@ -760,6 +814,9 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
       gridPath: r?.grid_path ?? null,
       gridSection: r?.grid_section ?? null,
       gridQuery: r?.grid_query ?? null,
+      sections: Array.isArray(r?.sections)
+        ? (r!.sections as unknown[]).filter((x): x is string => typeof x === "string")
+        : null,
       runAs: r?.run_as ?? null,
       autoApprove: r?.auto_approve ?? false,
       autoApprovePerRun: r?.auto_approve_per_run ?? null,
@@ -799,6 +856,8 @@ export async function setReviewerImport(
     /** Empty string clears it back to the shared setting. */
     gridPath?: string | null;
     gridSection?: string | null;
+    /** The stages their export covers; null or empty goes back to shared. */
+    sections?: string[] | null;
     /** Extra filters picking out their queue, copied from Emburse. */
     gridQuery?: string | null;
     /** Whose login reads it. Empty or null means themselves. */
@@ -825,6 +884,10 @@ export async function setReviewerImport(
   }
   if (input.gridPath !== undefined) set.grid_path = blank(input.gridPath);
   if (input.gridSection !== undefined) set.grid_section = blank(input.gridSection);
+  if (input.sections !== undefined) {
+    set.sections = input.sections && input.sections.length > 0
+      ? JSON.stringify(input.sections) : null;
+  }
   if (input.gridQuery !== undefined) set.grid_query = blank(input.gridQuery);
   if (input.runAs !== undefined) set.run_as = blank(input.runAs)?.toLowerCase() ?? null;
   if (input.autoApprove !== undefined) set.auto_approve = input.autoApprove;

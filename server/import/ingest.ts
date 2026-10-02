@@ -106,6 +106,13 @@ export async function ingestExport(
      * uploaded by hand) have had no such check, so they keep the old one.
      */
     sectionsVerified?: boolean;
+    /**
+     * The stages THIS reviewer's export was asked for, where they have
+     * their own. The header check compares what came back against what was
+     * asked for, and asking for one thing while checking against the
+     * deployment-wide list reports a disagreement nobody has.
+     */
+    sections?: string[];
   } = {},
 ): Promise<ImportResult> {
   const fileHash = opts.fileHash ?? sha256(file);
@@ -116,9 +123,12 @@ export async function ingestExport(
   // yields a well-formed PDF of the wrong rows that passes every other check,
   // so the search line printed on page 1 is the only thing that can catch it.
   warnings.push(
-    ...checkAgainstSettings(parsed.header, await readSettings(), {
-      sectionsVerified: opts.sectionsVerified ?? false,
-    }),
+    ...checkAgainstSettings(
+      parsed.header,
+      await readSettings().then((st) =>
+        opts.sections?.length ? { ...st, sections: opts.sections } : st),
+      { sectionsVerified: opts.sectionsVerified ?? false },
+    ),
   );
 
   const reviewer = (opts.reviewer ?? "").trim().toLowerCase();
