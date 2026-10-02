@@ -441,6 +441,8 @@ export function ExportRunner({
         </div>
       )}
 
+      {isAdmin && <WatchBrowser live={working} />}
+
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
@@ -740,6 +742,92 @@ export function ExportRunner({
             );
           })}
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Watch the browser while it works.
+ *
+ * Not a window — the app runs headless on a VM with no display. A frame of
+ * the page, fetched while you are looking at it, which is the part of
+ * "show me the browser" that anybody actually wants: seeing what it is
+ * looking at when a step takes a minute and the log says nothing.
+ *
+ * Off by default and only polls while open, because each frame is a real
+ * screenshot taken by the same Chromium that is driving Emburse, on one
+ * vCPU. The server caps the rate too — the page asking faster cannot make
+ * it cost more — but not asking at all is cheaper than being capped.
+ */
+function WatchBrowser({ live }: { live: boolean }) {
+  const [on, setOn] = useState(false);
+  const [src, setSrc] = useState<string | null>(null);
+  const [doing, setDoing] = useState("");
+  const [gone, setGone] = useState(false);
+
+  useEffect(() => {
+    if (!on) { setSrc(null); return; }
+    let stopped = false;
+    let url: string | null = null;
+
+    const grab = async () => {
+      try {
+        const res = await fetch("/api/export-live.png", { cache: "no-store" });
+        if (stopped) return;
+        if (!res.ok) { setGone(true); return; }
+        setGone(false);
+        setDoing(res.headers.get("x-doing") ?? "");
+        const blob = await res.blob();
+        if (stopped) return;
+        // Revoke the previous frame's URL, or a long watch leaks one object
+        // URL every two seconds.
+        const next = URL.createObjectURL(blob);
+        if (url) URL.revokeObjectURL(url);
+        url = next;
+        setSrc(next);
+      } catch {
+        // A dropped poll is not worth reporting; the next one is 2s away.
+      }
+    };
+
+    void grab();
+    const t = setInterval(() => void grab(), 2000);
+    return () => {
+      stopped = true;
+      clearInterval(t);
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [on]);
+
+  return (
+    <div className="rounded-lg border border-border p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setOn((v) => !v)}
+          className={`rounded-lg border px-3 py-1 text-sm font-semibold ${
+            on ? "border-sky-500/50 bg-sky-500/10" : "border-border"
+          }`}
+        >
+          {on ? "Stop watching" : "Watch the browser"}
+        </button>
+        <span className="text-xs text-muted-foreground">
+          {on
+            ? gone
+              ? "Nothing is running."
+              : doing ? `Now: ${doing}` : "Waiting for a frame…"
+            : live
+              ? "A run is going — see what it is looking at."
+              : "A picture of the page, while a run is going."}
+        </span>
+      </div>
+      {on && src && (
+        <img
+          src={src}
+          alt="What the Emburse browser is looking at"
+          className="mt-2 w-full rounded-lg border border-border"
+        />
       )}
     </div>
   );

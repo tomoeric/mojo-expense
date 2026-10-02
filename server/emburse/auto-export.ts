@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { env } from "../env.js";
 import { rememberCookies, restoreCookies } from "./browser-state.js";
+import { nowDoing, watching } from "./live-view.js";
 import { withBrowser } from "./browser-lock.js";
 import type { ExportSettings } from "../import/settings.js";
 
@@ -592,6 +593,7 @@ export async function runAutoExport(
   const steps: StepResult[] = [];
   let close: (() => Promise<void>) | null = null;
   let page: Page | null = null;
+  let stopWatching: (() => void) | null = null;
   let pdf: Buffer | null = null;
   let itemLine: string | null = null;
   let credentialFault = false;
@@ -605,6 +607,8 @@ export async function runAutoExport(
       return false;
     }
     try {
+      // So anybody watching sees a caption that matches the picture.
+      nowDoing(name);
       const detail = await fn();
       steps.push({ name, ok: true, detail, ms: Date.now() - started });
       opts.onStep?.(steps);
@@ -632,6 +636,9 @@ export async function runAutoExport(
     page = await opened.context.newPage();
     page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
 
+    // Watchable while it runs. Costs nothing unless somebody is looking:
+    // frames are taken on request, not on a timer.
+    stopWatching = watching(page, "starting", login.email);
     const ok = await runSteps(
       page, settings, selectors, login, step, opts,
       (v) => (itemLine = v), (b) => (pdf = b), () => pdf !== null,
@@ -681,6 +688,9 @@ export async function runAutoExport(
     }
     return { ok: false, signInFailed: signInBroke(steps), credentialFault, steps, screenshot, pdf, itemLine };
   } finally {
+    // The last frame outlives the run on purpose — the interesting moment
+    // is usually the one just before it ended.
+    stopWatching?.();
     await close?.().catch(() => {});
   }
   });

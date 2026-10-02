@@ -5,6 +5,7 @@ import { requireAdmin, requireAuth } from "../auth/index.js";
 import { ingestExport } from "./ingest.js";
 import { describeSchedule } from "./schedule.js";
 import { reportsChanged } from "../reports-cache.js";
+import { liveFrame } from "../emburse/live-view.js";
 import { ALL_SECTIONS, cleanSchedule, readSettings, writeSettings } from "./settings.js";
 import { DEFAULT_SELECTORS, SELECTOR_HELP, STEP_SELECTORS, envLogin } from "../emburse/auto-export.js";
 import { claimUnclaimed, credentialStatus, deleteCredential, hasCredential, listCredentials, saveCredential,
@@ -546,6 +547,33 @@ importRouter.post("/export-device/adopt", requireAuth, requireAdmin, async (req:
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Could not keep it." });
   }
+});
+
+/**
+ * A picture of what the browser is looking at right now.
+ *
+ * Admin-only, unlike the stored run screenshot beside it, because this is a
+ * live finance session rather than the still of a run somebody already has
+ * in their list — and because taking it costs the run CPU.
+ *
+ * 404 when nothing is running and no recent frame is left. The rate limit
+ * lives in `liveFrame`, not here: several watchers must cost the same as
+ * one, and a page left open overnight must not tax tomorrow's import.
+ */
+importRouter.get("/export-live.png", requireAuth, requireAdmin, async (_req: Request, res: Response) => {
+  if (!guard(res)) return;
+  const frame = await liveFrame();
+  if (!frame) {
+    res.status(404).json({ error: "Nothing is running." });
+    return;
+  }
+  res.setHeader("content-type", "image/png");
+  // Never cached: the whole point is that the next request is a new picture.
+  res.setHeader("cache-control", "no-store");
+  res.setHeader("x-doing", frame.what);
+  res.setHeader("x-age-ms", String(frame.ageMs));
+  res.setHeader("x-running", frame.running ? "1" : "0");
+  res.send(frame.png);
 });
 
 /** Give up on a parked sign-in rather than waiting out its timeout. */

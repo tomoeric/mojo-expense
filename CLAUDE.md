@@ -708,6 +708,18 @@ Two separate things, and confusing them cost a queue full of failures.
   strength of Eric's approval and the sweep skips all of them, which is the
   most convincing possible way to be wrong. Covered by
   `scripts/test-approval-chain.ts`.
+- **You can watch the browser, but not literally see it.** Headless on a VM
+  with no display: a headful Chromium behind Xvfb and VNC is a system
+  package tree, a WebSocket path and a second auth surface in front of a
+  live finance session; `recordVideo` only yields a file once the context
+  closes, so a twenty-minute run shows nothing until it is over; tracing
+  stores whole API response bodies, i.e. the queue's contents in a zip. So
+  it is a frame on request (`live-view.ts`, `GET /api/export-live.png`,
+  admin-only). PULL, so nothing is captured unless somebody is looking, and
+  rate-limited IN THE SERVER so several watchers cost the same as one — a
+  1600x1000 encode is real CPU in the same Chromium that is driving the
+  run. A cached frame keeps its own caption rather than the step that has
+  started since.
 - **A run proves WHO it is signed in as** ("confirm who is signed in",
   right after sign-in). Every other step reports the account we MEANT to
   use, and sign-in returns early on "already signed in" without looking —
