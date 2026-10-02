@@ -137,6 +137,21 @@ try {
     check("…is listed with a reason rather than dropped",
       other !== undefined && other.to === null && other.why.length > 0, JSON.stringify(other));
 
+    // A rule that is switched OFF must still be explained. The card's
+    // whole job is "why did no rule match", and dropping the disabled
+    // ones meant the likeliest answer was the one it could not give.
+    const off = await store.saveRule({
+      name: `${RULE} (switched off)`, enabled: false, match: "all",
+      when: [{ field: "category", op: "is_not", value: "Auto Fee & Fuel" }],
+      must: null, action: "flag", message: "Fuel Category Is Wrong",
+    }, "test");
+    check("a switched-off rule saves", off.ok, off.ok ? "" : off.error);
+    const hidden = (await rulesConsidered()).find((r) => r.name === `${RULE} (switched off)`);
+    check("…is still listed", hidden !== undefined);
+    check("…saying it is off rather than nothing", /switched off/.test(hidden?.why ?? ""),
+      hidden?.why);
+    check("…and is not acted on", hidden?.to === null, String(hidden?.to));
+
     await db().query("DELETE FROM expense_rules WHERE name LIKE $1", [`${RULE} (%`]);
   }
 

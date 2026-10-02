@@ -29,7 +29,7 @@
 
 import { db } from "../db.js";
 import { getFlag, getLimit } from "../flags.js";
-import { activeRules } from "./store.js";
+import { activeRules, listRules, problems } from "./store.js";
 import { queueCorrection } from "../emburse/corrections.js";
 import { exportInFlight } from "../emburse/export-scheduler.js";
 
@@ -99,7 +99,26 @@ export async function categoryRules(): Promise<{ id: number; name: string; to: s
 export async function rulesConsidered(): Promise<
   { id: number; name: string; to: string | null; why: string }[]
 > {
-  return (await activeRules()).map((r) => {
+  /*
+   * EVERY rule, not only the live ones.
+   *
+   * This read `activeRules()`, which drops anything switched off or
+   * invalid — so a card whose entire job is "here is why no rule
+   * matched" would have said nothing at all about a Gas Category rule
+   * that was simply turned off. The one case the explanation exists for
+   * is the one it could not explain.
+   */
+  const live = new Set((await activeRules()).map((r) => r.id));
+  return (await listRules()).map((r) => {
+    if (!live.has(r.id)) {
+      const bad = problems(r);
+      return {
+        id: r.id, name: r.name, to: null,
+        why: r.enabled
+          ? `it cannot run as written — ${bad.join(" ")}`
+          : "it is switched off",
+      };
+    }
     if (r.action !== "flag") {
       return { id: r.id, name: r.name, to: null, why: `it ${r.action}s rather than flags` };
     }
