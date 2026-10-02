@@ -746,6 +746,16 @@ Two separate things, and confusing them cost a queue full of failures.
   `attemptExport`, dry runs only, enforced there as well as at the route).
   Finding out which list is really somebody's should not require changing
   how the import works first.
+- **Two reviewers never share an import slot.** One browser runs them one
+  at a time, so a shared minute means the second waits out the first — and
+  on an export Emburse takes fifteen minutes to build, that can push it
+  past its own grace window and be recorded as a miss it never had a
+  chance at. Worse when a run parks for a verification code. A reviewer on
+  the shared schedule is offset by their position in a SORTED list
+  (`STAGGER_MINUTES`, 02:00 / 02:20 / 02:40); sorted because
+  `listCredentials` orders by how recently a login worked, and a slot that
+  moved whenever somebody else signed in would be missed every time.
+  Anybody with their own times is left exactly where they put them.
 - **Whose LOGIN reads a queue is not whose queue it is** (`run_as` on
   `reviewer_imports`). A manager sees the rows waiting on the people under
   them, so one login can pull everybody's — each narrowed by that person's

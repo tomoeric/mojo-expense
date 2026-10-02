@@ -51,8 +51,31 @@ try {
   console.log("\n1. Both start on the shared schedule");
   check("Eric is shared", (await mine(ERIC))?.shared === true);
   check("Brian is shared", (await mine(BRIAN))?.shared === true);
-  check("…and they have the same first run",
-    (await mine(ERIC))?.schedule.firstRun === (await mine(BRIAN))?.schedule.firstRun);
+  // NOT the same first run, deliberately — see 1b. Two scopes cannot share
+  // import times, because one browser runs them one at a time.
+  check("…but not the same minute",
+    (await mine(ERIC))?.schedule.firstRun !== (await mine(BRIAN))?.schedule.firstRun,
+    `${(await mine(ERIC))?.schedule.firstRun} vs ${(await mine(BRIAN))?.schedule.firstRun}`);
+
+  console.log("\n1b. Two reviewers on the shared schedule never share a slot");
+  // One browser runs them one at a time, so a shared minute means the
+  // second waits out the first — and on an export Emburse takes fifteen
+  // minutes to build, that can push it past its own grace window and be
+  // recorded as a miss it never had a chance at.
+  {
+    const all = await reviewerImports();
+    const times = all.map((r) => r.schedule.firstRun);
+    check("their first runs differ", new Set(times).size === times.length, times.join(" vs "));
+    check("…and one of them is still the shared time",
+      times.includes((await mine(ERIC))!.schedule.firstRun));
+    check("…both still count as on the shared schedule",
+      all.every((r) => r.shared), all.map((r) => r.shared).join(","));
+    // Stable, or a reviewer whose slot moved whenever somebody else signed
+    // in would miss every one of them.
+    const again = (await reviewerImports()).map((r) => r.schedule.firstRun);
+    check("…and the offsets do not move between ticks",
+      again.join() === times.join(), `${times.join()} then ${again.join()}`);
+  }
 
   console.log("\n2. Brian gets his own times without touching Eric's");
   // The second stage of an approval chain is behind the first by

@@ -625,7 +625,7 @@ function ReviewerGrids() {
                      gridSection: string | null; autoApprove: boolean;
                      autoApprovePerRun: number | null; shared: boolean;
                      schedule: Schedule; gridQuery: string | null;
-                     runAs: string | null }[];
+                     runAs: string | null; staggeredBy: number }[];
       };
     },
   });
@@ -763,6 +763,7 @@ function ReviewerPanel({
     userEmail: string; gridPath: string | null; gridSection: string | null;
     gridQuery: string | null; runAs: string | null; autoApprove: boolean;
     autoApprovePerRun: number | null; shared: boolean; schedule: Schedule;
+    staggeredBy: number;
   };
   everyone: string[];
   onPaste: (href: string) => void;
@@ -781,7 +782,10 @@ function ReviewerPanel({
       {row.gridQuery ? (
         <div className="rounded-lg bg-emerald-500/10 p-3 text-sm">
           <strong>Set up.</strong> Pulls only {row.userEmail}&rsquo;s expenses, signed in as{" "}
-          {reads}, {row.shared ? "on the shared times" : `at ${sc.firstRun} and every ${sc.retryHours}h`}.
+          {reads}, at {sc.firstRun} and every {sc.retryHours}h
+          {row.shared && row.staggeredBy > 0
+            ? ` (the shared times, ${row.staggeredBy} min later so two runs never collide)`
+            : row.shared ? " (the shared times)" : " (their own times)"}.
         </div>
       ) : (
         <div className="rounded-lg bg-amber-500/10 p-3 text-sm">

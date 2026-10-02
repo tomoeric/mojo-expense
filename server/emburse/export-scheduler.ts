@@ -631,6 +631,8 @@ export type ReviewerImport = {
   schedule: Schedule;
   /** True where every field came from the shared schedule. */
   shared: boolean;
+  /** Minutes this reviewer's shared slots are offset, so two never collide. */
+  staggeredBy: number;
   /** The grid this reviewer's export reads, or null for the shared one. */
   gridPath: string | null;
   /** The section filter it asks for, or null for the shared one. */
@@ -659,6 +661,30 @@ export type ReviewerImport = {
  * blank reviewer stands in so a single-login deployment behaves exactly as
  * it did before any of this existed.
  */
+
+/**
+ * Minutes between one reviewer's shared-schedule slots and the next's.
+ *
+ * Two reviewers on the shared schedule are due at the same minute, and one
+ * browser serialises them — so the second waits out the first, which on an
+ * export that takes Emburse fifteen minutes to build can push it past its
+ * grace window and be recorded as a miss it never had a chance at. Worse
+ * when a run parks for a verification code: ten minutes of one person's
+ * sign-in is ten minutes the other is not running.
+ *
+ * Twenty minutes is comfortably longer than a normal run and far shorter
+ * than the gap between slots, so the staggered times stay recognisably
+ * "the 2am one".
+ */
+const STAGGER_MINUTES = 20;
+
+/** "02:00" plus n minutes, wrapping at midnight. */
+function shiftClock(hhmm: string, minutes: number): string {
+  const [h, m] = hhmm.split(":").map(Number) as [number, number];
+  const total = (((h * 60 + m + minutes) % 1440) + 1440) % 1440;
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+
 export async function reviewerImports(): Promise<ReviewerImport[]> {
   await ensure();
   const { schedule: shared } = await readSettings();
@@ -666,8 +692,8 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
   const people = await listCredentials().catch(() => []);
   if (people.length === 0) {
     return [{ userEmail: "", enabled: true, schedule: shared, shared: true,
-              gridPath: null, gridSection: null, gridQuery: null, runAs: null,
-              autoApprove: false, autoApprovePerRun: null }];
+              staggeredBy: 0, gridPath: null, gridSection: null, gridQuery: null,
+              runAs: null, autoApprove: false, autoApprovePerRun: null }];
   }
 
   const { rows } = await db().query<{
@@ -679,10 +705,31 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
   }>("SELECT * FROM reviewer_imports");
   const own = new Map(rows.map((r) => [r.user_email.toLowerCase(), r]));
 
-  return people.map((p) => {
+  /*
+   * Sorted, so the stagger below is the same on every tick.
+   *
+   * listCredentials orders by how recently each login worked, which moves
+   * — and a reviewer whose slot time changed every time somebody else
+   * signed in would miss them all.
+   */
+  const ordered = [...people].sort((a, b) =>
+    a.userEmail.toLowerCase() < b.userEmail.toLowerCase() ? -1 : 1);
+
+  return ordered.map((p, i) => {
     const r = own.get(p.userEmail.toLowerCase());
     const set = [r?.timezone, r?.first_run, r?.retry_hours, r?.attempts_per_day,
                  r?.grace_minutes, r?.all_day].some((v) => v !== null && v !== undefined);
+    /*
+     * Nobody shares a slot, even on the shared schedule.
+     *
+     * Two scopes cannot share import times: one browser runs them one at a
+     * time, so the second waits out the first and can lose its own window.
+     * A reviewer with no times of their own gets the shared ones offset by
+     * their position — 02:00, 02:20, 02:40 — which keeps the shared
+     * schedule meaning what it says while giving each run a clear slot.
+     * Anybody who sets their own times is left exactly where they put them.
+     */
+    const stagger = set ? 0 : i * STAGGER_MINUTES;
     return {
       userEmail: p.userEmail,
       enabled: r?.enabled ?? true,
@@ -693,9 +740,11 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
       runAs: r?.run_as ?? null,
       autoApprove: r?.auto_approve ?? false,
       autoApprovePerRun: r?.auto_approve_per_run ?? null,
+      /** True where every field came from the shared schedule (stagger aside). */
+      staggeredBy: stagger,
       schedule: {
         timezone: r?.timezone ?? shared.timezone,
-        firstRun: r?.first_run ?? shared.firstRun,
+        firstRun: r?.first_run ?? shiftClock(shared.firstRun, stagger),
         retryHours: r?.retry_hours ?? shared.retryHours,
         attemptsPerDay: r?.attempts_per_day ?? shared.attemptsPerDay,
         graceMinutes: r?.grace_minutes ?? shared.graceMinutes,
