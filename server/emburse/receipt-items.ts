@@ -479,6 +479,28 @@ export function chargedTotal(r: ReceiptReading): ReceiptReading {
   // added 11.83 to it. An invoice that states what it was paid, twice, was
   // reported as $11.83 of underclaiming.
   if (paid !== null && paid > 0 && total !== null && near(total, paid)) return r;
+
+  /*
+   * The restaurant slip, where the payment line is the PRE-AUTHORISATION.
+   *
+   * Couyon's BBQ prints "Dine In Total 50.15", then "Amex …1001 50.15",
+   * then a pen line "Tip 6.59", then "Total 56.74". Amex was charged
+   * 56.74. Taking the card line as the charge — which is right on every
+   * other receipt — turned the real total into the pre-auth, wrote "the
+   * printed total of 56.74 is not what the card paid; the amount charged
+   * is 50.15" (backwards in both halves), and flagged a tipped meal that
+   * accounted for every cent of its claim.
+   *
+   * Narrow on purpose: only when the receipt's OWN tip is exactly the
+   * difference between the two figures. That is a tip written on after
+   * printing and nothing else looks like it, so this cannot rescue a
+   * receipt whose numbers genuinely disagree.
+   */
+  if (paid !== null && paid > 0 && total !== null && tip !== null && tip > 0
+      && near(total, Number((paid + tip).toFixed(2)))) {
+    return r;
+  }
+
   if (paid !== null && paid > 0 && (total === null || !near(total, paid))) {
     return note(total, paid, "is not what the card paid");
   }

@@ -79,14 +79,35 @@ export function verdictFor(
  * Several, none of them the charge: the distinct ones added up.
  */
 export function receiptTotalOf(
-  details: { total: number | null; error: string | null }[] | undefined,
+  details: { total: number | null; error: string | null; tip?: number | null }[] | undefined,
   claimed: number,
 ): number | null {
   if (!details || details.length === 0) return null;
   const cents: number[] = [];
+  /**
+   * The same receipts with the tip added on.
+   *
+   * A restaurant prints its slip BEFORE the tip is written on it. Couyon's
+   * BBQ: "Dine In Total 50.15", then a pen line "Tip 6.59", then "Total
+   * 56.74" — and 56.74 is what Amex was charged. The printed total is the
+   * pre-authorisation, not the charge, so comparing it to the claim says
+   * "the receipt totals $50.15, less than the $56.74 claimed" about a
+   * receipt that accounts for every cent of it. Every tipped meal in the
+   * queue was flagged that way, and a flag that is wrong on a whole
+   * category of expense teaches people to wave the category through.
+   *
+   * Candidates, never a replacement — exactly like the arithmetic ones the
+   * rules use. A tipped total is only ever preferred when it ANSWERS THE
+   * CHARGE and the printed one does not, so it can resolve the pre-auth
+   * case and cannot excuse a real overclaim.
+   */
+  const tipped: number[] = [];
   for (const d of details) {
     if (d.error !== null || d.total === null) continue;
-    cents.push(Math.round(d.total * 100));
+    const c = Math.round(d.total * 100);
+    cents.push(c);
+    const tip = d.tip ?? null;
+    if (tip !== null && Math.round(tip * 100) !== 0) tipped.push(c + Math.round(tip * 100));
   }
   if (cents.length === 0) return null;
   // A refund prints as a positive total against a negative charge — see
@@ -102,7 +123,12 @@ export function receiptTotalOf(
 
   if (cents.length === 1) {
     const only = cents[0]!;
-    return (answers(only) ? asCharged(only) : only) / 100;
+    if (answers(only)) return asCharged(only) / 100;
+    // The printed total did not answer the charge. A tip written on after
+    // printing is the commonest reason, and the receipt itself says so.
+    const withTip = tipped.find(answers);
+    if (withTip !== undefined) return asCharged(withTip) / 100;
+    return only / 100;
   }
 
   // The same slack the rules use: two cents, or one percent, whichever is
@@ -115,6 +141,14 @@ export function receiptTotalOf(
   }
   if (covers !== null) return asCharged(covers) / 100;
 
+  // Then the tipped readings, for the same reason as above. After the
+  // printed ones, so a receipt that answers on its own always wins.
+  const tippedCovers = tipped.find(answers);
+  if (tippedCovers !== undefined) return asCharged(tippedCovers) / 100;
+
+  // Summed from the PRINTED totals only. A tipped variant is a second
+  // reading of one receipt, not a second receipt, and adding it to the sum
+  // would count the same bill twice.
   let sum = 0;
   for (const c of new Set(cents)) sum += c;
   return sum / 100;

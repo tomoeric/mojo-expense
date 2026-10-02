@@ -364,13 +364,35 @@ export async function subjects(
             -- Never the answer on its own; only ever preferred over the
             -- printed figure when it is the one that answers the charge.
             -- See chosenReceiptTotal for why the charge has to decide.
-            (SELECT array_agg(DISTINCT rr.subtotal_cents
-                              + coalesce(rr.tax_cents, 0) + coalesce(rr.tip_cents, 0))
-               FROM expense_receipts r
-               JOIN receipt_readings rr ON rr.sha256 = r.sha256
-              WHERE r.dedupe_key = e.dedupe_key
-                AND rr.error IS NULL AND rr.legible
-                AND rr.subtotal_cents IS NOT NULL) AS receipt_arithmetic,
+            -- Two ways, both candidates: the parts added up, and the
+            -- printed total with the TIP added on.
+            --
+            -- The second is the restaurant case and it was missing. A slip
+            -- is printed BEFORE the tip is written on it — Couyon's BBQ
+            -- prints "Dine In Total 50.15", then a pen line "Tip 6.59",
+            -- then "Total 56.74", and 56.74 is what Amex was charged. The
+            -- printed total is the pre-authorisation, not the charge, so
+            -- every tipped meal was flagged "receipt totals less than
+            -- claimed" against a receipt accounting for every cent. The
+            -- parts-added-up figure does not rescue it either: a non-cash
+            -- fee or any line outside subtotal+tax is missing from it.
+            (SELECT array_agg(DISTINCT c) FROM (
+               SELECT rr.subtotal_cents
+                      + coalesce(rr.tax_cents, 0) + coalesce(rr.tip_cents, 0) AS c
+                 FROM expense_receipts r
+                 JOIN receipt_readings rr ON rr.sha256 = r.sha256
+                WHERE r.dedupe_key = e.dedupe_key
+                  AND rr.error IS NULL AND rr.legible
+                  AND rr.subtotal_cents IS NOT NULL
+               UNION
+               SELECT rr.total_cents + rr.tip_cents AS c
+                 FROM expense_receipts r
+                 JOIN receipt_readings rr ON rr.sha256 = r.sha256
+                WHERE r.dedupe_key = e.dedupe_key
+                  AND rr.error IS NULL AND rr.legible
+                  AND rr.total_cents IS NOT NULL
+                  AND coalesce(rr.tip_cents, 0) <> 0
+             ) AS candidates) AS receipt_arithmetic,
             -- Alcohol on any line the reader saw. NULL when no reading with
             -- usable lines exists, so "cannot say" stays distinct from "no".
             (SELECT bool_or(i.alcohol)
