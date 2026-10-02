@@ -408,7 +408,9 @@ export function ExportRunner({
           <p className="text-muted-foreground">
             Try a different list for <strong>one test run</strong> — nothing is saved and
             nothing is imported. Leave blank to use the configured one. The item count it
-            reads tells you whose queue that URL is.
+            reads tells you whose queue that URL is. While these are filled in,{" "}
+            <strong>Run export now</strong> is held back: a real import never takes its list
+            from this box.
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <input
@@ -424,8 +426,17 @@ export function ExportRunner({
               className="w-32 rounded-lg border border-border bg-background px-2 py-1 font-mono text-xs"
             />
             <span className="text-xs text-muted-foreground">
-              then press Test run below
+              then press <strong>Test run</strong> below
             </span>
+            {(probePath || probeSection) && (
+              <button
+                type="button"
+                onClick={() => { setProbePath(""); setProbeSection(""); }}
+                className="text-xs underline underline-offset-2"
+              >
+                Clear
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -441,9 +452,18 @@ export function ExportRunner({
           {kind === "dry" ? "Testing…" : "Test run"}
         </button>
 
+        {/* A trial list applies to a TEST run only — the server ignores it on
+            a real one, deliberately, because an import taking its list from
+            a request is how it reads the wrong queue. Silently ignoring it
+            was worse than refusing: a run went off with "/transactions" in
+            the box, used the configured team-wide list, and looked like the
+            trial had been honoured and failed. */}
         <button
           type="button"
-          disabled={!isAdmin || working}
+          disabled={!isAdmin || working || Boolean(probePath || probeSection)}
+          title={probePath || probeSection
+            ? "A trial list only applies to a test run. Clear those boxes to run a real import, or press Test run."
+            : undefined}
           onClick={() => void run(false)}
           className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-3.5 py-2 text-sm font-semibold text-white transition-colors hover:bg-sky-500 disabled:opacity-40"
         >
