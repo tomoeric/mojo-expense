@@ -1982,7 +1982,32 @@ async function runSteps(
         return null;
       };
 
-      const found = await askTheNav();
+      /*
+       * The tenant's own naming scheme, before asking the nav.
+       *
+       * Transactions lives at /transactions/team on the MANAGER tab and at
+       * /transactions on PERSONAL — so a list's team-wide view is
+       * "<list>/team" here. The nav beside the 404 reads "MANAGER …
+       * Transactions … Reimbursements", which makes /reimbursements/team
+       * the obvious candidate for the same tab, and it costs one
+       * navigation to find out.
+       *
+       * Tried before the nav because it is cheaper and more precise: the
+       * nav link may well point at the PERSONAL view, which is a different
+       * queue from the one a reviewer approves out of.
+       */
+      const sameScheme = /\/team\b/.test(sel.gridPath)
+        ? null
+        : `${sel.gridPath.replace(/\/$/, "")}/team`;
+      let found: string | null = null;
+      if (sameScheme) {
+        await page.goto(gridUrl(url, {
+          receiptsOnly: settings.receiptsOnly, path: sameScheme,
+          section: sel.gridSection, extra: sel.gridQuery,
+        }), { waitUntil: "domcontentloaded" }).catch(() => {});
+        if (await gridLoaded(page, sel)) found = sameScheme;
+      }
+      found ??= await askTheNav();
       // Back through gridUrl, so the list is opened with this reviewer's
       // filters rather than whatever the nav's own default view is.
       if (found && found !== sel.gridPath) {
