@@ -299,7 +299,11 @@ export function ExportRunner({
       <div>
         <h2 className="flex items-center gap-2 text-base font-bold">
           <Play className="h-4 w-4" />
-          Run the export
+          {q.data?.viewingAs
+            ? `Run the export — ${q.data.viewingAs}'s`
+            : q.data?.runsFor
+              ? `Run the export — yours (${q.data.runsFor})`
+              : "Run the export"}
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
           The app signs into Emburse and fetches today&rsquo;s export itself. Start one here to see every
@@ -314,10 +318,19 @@ export function ExportRunner({
       {/* Whose runs these are. Outside a view it is your own queue, which
           is the whole point and was not obvious when the list mixed two
           reviewers with nothing saying which was which. */}
+      {/* Said loudly, and in the heading too.
+          This was correct and in fine print two hundred lines below the
+          reviewer tabs, so somebody on Brian's tab who scrolled down here
+          reasonably read it as Brian's section and asked why it said
+          Eric. A section that belongs to one person has to say so where
+          the buttons are. */}
       {!q.data?.viewingAs && q.data?.runsFor && (
-        <p className="text-xs text-muted-foreground">
-          Your own import — signs into Emburse as <strong>{q.data.runsFor}</strong> and reads
-          their Needs Review. The history below is yours.
+        <p className="rounded-lg border border-border bg-muted/50 p-3 text-sm">
+          <strong>This is your own import.</strong> It signs into Emburse as{" "}
+          <strong>{q.data.runsFor}</strong> and reads their Needs Review, whichever reviewer
+          tab is open above. To run somebody else&rsquo;s, use the buttons on{" "}
+          <a href="#per-reviewer" className="underline underline-offset-2">their tab</a>.
+          The history below is yours too.
         </p>
       )}
 
