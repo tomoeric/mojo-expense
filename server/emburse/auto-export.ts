@@ -1961,27 +1961,56 @@ async function runSteps(
     let viaNav: string | null = null;
     if (!how && sel.gridPath) {
       const name = (sel.gridPath.split("/").filter(Boolean).pop() ?? "").replace(/[-_]/g, " ");
-      if (name) {
-        const link = page.locator(`a:has-text("${name}")`).first();
-        const href = await link.getAttribute("href").catch(() => null);
-        if (href && !href.startsWith("#")) {
-          const retry = gridUrl(url, {
-            receiptsOnly: settings.receiptsOnly,
-            path: new URL(href, page.url()).pathname,
-            section: sel.gridSection, extra: sel.gridQuery,
-          });
-          await page.goto(retry, { waitUntil: "domcontentloaded" }).catch(() => {});
-          how = await gridLoaded(page, sel);
-          if (how) viaNav = new URL(href, page.url()).pathname;
+      /** Where the nav says that list lives, by href or by going there. */
+      const askTheNav = async (): Promise<string | null> => {
+        if (!name) return null;
+        // An anchor if there is one — cheap, and it needs no navigation.
+        // Emburse's nav is a single-page app, though, so the item may be a
+        // button or a div with a click handler and no href at all. Then the
+        // only way to learn the path is to press it, which is what a person
+        // does.
+        for (const how2 of ["a", '[role="link"]', "button", '[role="button"]', "li"]) {
+          const item = page.locator(`${how2}:has-text("${name}")`).first();
+          if (!(await item.isVisible().catch(() => false))) continue;
+          const href = await item.getAttribute("href").catch(() => null);
+          if (href && !href.startsWith("#")) return new URL(href, page.url()).pathname;
+          const before = page.url();
+          await item.click({ timeout: 5_000 }).catch(() => {});
+          await page.waitForURL((u) => u.toString() !== before, { timeout: 8_000 }).catch(() => {});
+          if (page.url() !== before) return new URL(page.url()).pathname;
         }
+        return null;
+      };
+
+      const found = await askTheNav();
+      // Back through gridUrl, so the list is opened with this reviewer's
+      // filters rather than whatever the nav's own default view is.
+      if (found && found !== sel.gridPath) {
+        await page.goto(gridUrl(url, {
+          receiptsOnly: settings.receiptsOnly, path: found,
+          section: sel.gridSection, extra: sel.gridQuery,
+        }), { waitUntil: "domcontentloaded" }).catch(() => {});
+        how = await gridLoaded(page, sel);
+        if (how) viaNav = found;
       }
     }
 
     if (!how) {
+      // A 404 is not a selector problem, and reporting it as one sends
+      // somebody to fix the thing that is right. /reimbursements was a
+      // guessed path that this tenant does not have; the page says so in
+      // as many words, and the fix is one setting, not a selector.
+      const text = await pageText(page);
+      const missing = /\b404\b|not found/i.test(text);
       throw new Error(
-        `the grid did not appear at ${safeUrl(page.url())}. Tried the grid selector ` +
-          `(${sel.grid}) and the item-count line (${sel.itemCount}); neither matched anything ` +
-          `visible. The page reads: "${snippet(await pageText(page))}"`,
+        missing
+          ? `${safeUrl(page.url())} does not exist on this tenant — the page says 404. This is ` +
+            `the wrong path for that list, not a selector problem. Open the list in Emburse, ` +
+            `copy the address, and put its path into that list under Export settings. ` +
+            `The page reads: "${snippet(text)}"`
+          : `the grid did not appear at ${safeUrl(page.url())}. Tried the grid selector ` +
+            `(${sel.grid}) and the item-count line (${sel.itemCount}); neither matched anything ` +
+            `visible. The page reads: "${snippet(text)}"`,
       );
     }
     const scope = settings.receiptsOnly ? "receipts only, via the URL" : "unfiltered, via the URL";
