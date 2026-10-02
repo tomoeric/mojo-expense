@@ -85,6 +85,12 @@ await ensureReceiptItems();
 try {
   await clean();
   await saveCredential(ERIC, ERIC, ERIC, "pw");
+  // The target has to be a category this tenant actually has — the rule's
+  // value may be a fragment, and setting a category that does not exist
+  // would fail at the Emburse form after a minute of browsing.
+  await db().query(
+    `INSERT INTO expense_taxonomy (kind, name) VALUES ('category','Auto Fee & Fuel')
+     ON CONFLICT DO NOTHING`);
 
   const saved = await store.saveRule({
     name: RULE, enabled: true, match: "all",
@@ -124,6 +130,35 @@ try {
     const seen = (await rulesConsidered()).find((r) => r.name === `${RULE} (when only)`);
     check("…is recognised too", seen?.to === "Auto Fee & Fuel", JSON.stringify(seen));
     check("…and says why", /category is not/.test(seen?.why ?? ""), seen?.why);
+
+    // THE REAL RULE: "does not contain", which is what the tenant wrote
+    // and what the first attempt could not read.
+    const notContains = await store.saveRule({
+      name: `${RULE} (does not contain)`, enabled: true, match: "all",
+      when: [{ field: "note", op: "contains", value: "Gas" },
+             { field: "category", op: "not_contains", value: "Auto Fee & Fuel" }],
+      must: null, action: "flag", message: "Fuel Category Is Wrong",
+    }, "test");
+    check("the real rule's shape saves", notContains.ok,
+      notContains.ok ? "" : notContains.error);
+    const real = (await rulesConsidered())
+      .find((r) => r.name === `${RULE} (does not contain)`);
+    check("…is recognised", real?.to === "Auto Fee & Fuel", JSON.stringify(real));
+    check("…and says which spelling it read",
+      /does not contain/.test(real?.why ?? ""), real?.why);
+
+    // A fragment is not a category. Setting one would fail at the Emburse
+    // form after a minute of browsing; this says so on the card instead.
+    const fragment = await store.saveRule({
+      name: `${RULE} (fragment)`, enabled: true, match: "all",
+      when: [{ field: "category", op: "not_contains", value: "Fuel" }],
+      must: null, action: "flag", message: "Fuel Category Is Wrong",
+    }, "test");
+    check("a fragment rule saves", fragment.ok, fragment.ok ? "" : fragment.error);
+    const frag = (await rulesConsidered()).find((r) => r.name === `${RULE} (fragment)`);
+    check("…is NOT acted on, because “Fuel” is not a category", frag?.to === null,
+      String(frag?.to));
+    check("…and says so", /not one of your categories/.test(frag?.why ?? ""), frag?.why);
 
     // And a rule that names no category is reported, not silently dropped.
     const noneNamed = await store.saveRule({

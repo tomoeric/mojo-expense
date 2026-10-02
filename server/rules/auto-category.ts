@@ -30,6 +30,7 @@
 import { db } from "../db.js";
 import { getFlag, getLimit } from "../flags.js";
 import { activeRules, listRules, problems } from "./store.js";
+import { listTaxonomy } from "../import/taxonomy.js";
 import { queueCorrection } from "../emburse/corrections.js";
 import { exportInFlight } from "../emburse/export-scheduler.js";
 
@@ -109,6 +110,10 @@ export async function rulesConsidered(): Promise<
    * is the one it could not explain.
    */
   const live = new Set((await activeRules()).map((r) => r.id));
+  // The tenant's own category names, to check a derived target against.
+  const known = new Set(
+    (await listTaxonomy("category").catch(() => ({ entries: [] as { name: string }[] })))
+      .entries.map((e) => e.name.trim().toLowerCase()));
   return (await listRules()).map((r) => {
     if (!live.has(r.id)) {
       const bad = problems(r);
@@ -132,23 +137,57 @@ export async function rulesConsidered(): Promise<
      * inert against the very rule it was built for.
      */
     const must = r.must;
+    const named = (value: string, why: string) => {
+      const want = value.trim();
+      /*
+       * It has to be a category this tenant actually has.
+       *
+       * The second form is a NEGATIVE — "does not contain X" — and the
+       * value there may be a fragment rather than a whole name. A rule
+       * reading "category does not contain Fuel" would otherwise have
+       * this setting the category to the literal word "Fuel", which the
+       * Emburse form would reject after a minute of browsing. Checking
+       * it against the tenant's own list turns that into a sentence on
+       * the card instead of a failed run.
+       */
+      if (!known.has(want.toLowerCase())) {
+        return {
+          id: r.id, name: r.name, to: null,
+          why: `${why}, but “${want}” is not one of your categories — this can only set a `
+            + "category that exists, so make the rule name the whole one",
+        };
+      }
+      return { id: r.id, name: r.name, to: want, why };
+    };
+
     if (must && must.field === "category" && must.op === "is"
         && !must.compare && must.value.trim() !== "") {
-      return { id: r.id, name: r.name, to: must.value.trim(),
-               why: `its must is “category is ${must.value.trim()}”` };
+      return named(must.value, `its must is “category is ${must.value.trim()}”`);
     }
+    /*
+     * The negative, which is how the real rule is written.
+     *
+     * "Flag when the category is not X" and "flag when it does not
+     * contain X" both name X as the right answer, from the other side.
+     * I read only `is not`, and the Gas Category rule here uses `does
+     * not contain` — so the card reported "no rule names a category"
+     * about the one rule the whole feature was built for. Twice now the
+     * gap has been reading one spelling of the same statement.
+     */
     const unless = r.when.find((c) =>
-      c.field === "category" && c.op === "is_not" && !c.compare && c.value.trim() !== "");
+      c.field === "category" && (c.op === "is_not" || c.op === "not_contains")
+      && !c.compare && c.value.trim() !== "");
     if (unless) {
-      return { id: r.id, name: r.name, to: unless.value.trim(),
-               why: `it flags when the category is not “${unless.value.trim()}”` };
+      return named(unless.value,
+        `it flags when the category ${unless.op === "is_not" ? "is not" : "does not contain"} `
+        + `“${unless.value.trim()}”`);
     }
     return {
       id: r.id, name: r.name, to: null,
       why: must
         ? `its must is “${must.field} ${must.op} ${must.value}”, which names no category`
         : "it names no category — neither a must of “category is …” nor a when of "
-          + "“category is not …”",
+          + "“category is not …” or “does not contain …”",
     };
   });
 }
