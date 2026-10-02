@@ -615,18 +615,17 @@ function ReviewerGrids() {
     },
   });
 
-  const [draft, setDraft] = useState<Record<string, { path: string; section: string }>>({});
   const rows = q.data?.reviewers.filter((r) => r.userEmail) ?? [];
+  const [who, setWho] = useState<string | null>(null);
 
   // Never render nothing. This returned null whenever the list was empty,
-  // which looks identical to the section not existing — and "I only see
-  // one schedule and scope" is exactly what that produces when somebody is
-  // looking for the second reviewer's. An empty list is a fact worth
-  // stating: it means nobody has stored an Emburse login yet.
+  // which looks identical to the section not existing — and "I only see one
+  // schedule and scope" is exactly what that produces when somebody is
+  // looking for the second reviewer's.
   if (q.isLoading) {
     return (
       <div id="per-reviewer" className="border-t border-border pt-5">
-        <h2 className="text-base font-bold">Per-reviewer imports and approvals</h2>
+        <h2 className="text-base font-bold">Each reviewer&rsquo;s import</h2>
         <p className="mt-1 text-sm text-muted-foreground">Loading…</p>
       </div>
     );
@@ -634,7 +633,7 @@ function ReviewerGrids() {
   if (rows.length < 1) {
     return (
       <div id="per-reviewer" className="border-t border-border pt-5">
-        <h2 className="text-base font-bold">Per-reviewer imports and approvals</h2>
+        <h2 className="text-base font-bold">Each reviewer&rsquo;s import</h2>
         <p className="mt-1 text-sm text-muted-foreground">
           {q.isError
             ? "These could not be read just now."
@@ -645,107 +644,74 @@ function ReviewerGrids() {
     );
   }
 
-  const valueFor = (e: string, r: { gridPath: string | null; gridSection: string | null }) =>
-    draft[e] ?? { path: r.gridPath ?? "", section: r.gridSection ?? "" };
+  const current = rows.find((r) => r.userEmail === who) ?? rows[0]!;
 
-  /**
-   * Paste the URL Emburse is showing, and take the filters out of it.
-   *
-   * Nobody should have to know which parameter the Current Reviewer
-   * dropdown sets — and nobody can, the values are opaque ids. Use the
-   * dropdown in Emburse, copy the address bar, paste it here.
-   */
-  async function pasteUrl(email: string, href: string) {
-    setError("");
-    try {
-      const u = new URL(href.trim());
-      const keep = new URLSearchParams();
-      let section = "";
-      for (const [k, val] of u.searchParams) {
-        if (k === "filters[section]") { section = val; continue; }
-        if (k === "filters[query]" || k === "filters[receipt]") continue;
-        keep.append(k, val);
-      }
-      const res = await fetch("/api/reviewer-imports", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          email, gridPath: u.pathname, gridSection: section, gridQuery: keep.toString(),
-        }),
-      });
-      if (!res.ok) throw new Error(((await res.json()) as { error?: string }).error ?? "Failed");
-      await qc.invalidateQueries({ queryKey: ["reviewer-imports"] });
-    } catch (e) {
-      setError(e instanceof TypeError
-        ? "That does not look like a URL. Copy the whole address from Emburse."
-        : (e as Error).message);
-    }
-  }
-
-  async function setRunAs(email: string, runAs: string) {
+  async function post(body: Record<string, unknown>) {
     setError("");
     const res = await fetch("/api/reviewer-imports", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email, runAs }),
+      body: JSON.stringify(body),
     });
-    if (!res.ok) setError(((await res.json()) as { error?: string }).error ?? "Failed");
+    if (!res.ok) setError(((await res.json()) as { error?: string }).error ?? "Could not save.");
     await qc.invalidateQueries({ queryKey: ["reviewer-imports"] });
   }
 
-  async function save(
-    email: string,
-    v: { path: string; section: string },
-    auto?: boolean,
-  ) {
-    setError("");
-    const now = rows.find((r) => r.userEmail === email);
+  /**
+   * Take the filters out of a URL copied from Emburse.
+   *
+   * Nobody should have to know which parameter the Current Reviewer
+   * dropdown sets — and nobody can, the values are opaque ids. Use the
+   * dropdown, copy the address bar, paste it here.
+   */
+  async function pasteUrl(email: string, href: string) {
+    let u: URL;
     try {
-      const res = await fetch("/api/reviewer-imports", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          email, gridPath: v.path, gridSection: v.section,
-          autoApprove: auto ?? now?.autoApprove ?? false,
-        }),
-      });
-      if (!res.ok) throw new Error(((await res.json()) as { error?: string }).error ?? "Failed");
-      await qc.invalidateQueries({ queryKey: ["reviewer-imports"] });
-      setDraft((d) => { const n = { ...d }; delete n[email]; return n; });
-    } catch (e) {
-      setError((e as Error).message);
+      u = new URL(href.trim());
+    } catch {
+      setError("That does not look like a URL. Copy the whole address from Emburse.");
+      return;
     }
+    const keep = new URLSearchParams();
+    let section = "";
+    for (const [k, val] of u.searchParams) {
+      if (k === "filters[section]") { section = val; continue; }
+      // The search box belongs to whoever typed in it, and the receipts
+      // setting is the app's own — a pasted URL must not flip either.
+      if (k === "filters[query]" || k === "filters[receipt]") continue;
+      keep.append(k, val);
+    }
+    await post({ email, gridPath: u.pathname, gridSection: section, gridQuery: keep.toString() });
   }
 
   return (
     <div id="per-reviewer" className="border-t border-border pt-5">
-      <h2 className="text-base font-bold">Per-reviewer imports and approvals</h2>
+      <h2 className="text-base font-bold">Each reviewer&rsquo;s import</h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        <strong className="text-foreground">
-          This is where a second reviewer gets their own schedule and their own list.
-        </strong>{" "}
-        Everything above is shared — one scope, one timetable, used by anybody with nothing of
-        their own here.
-      </p>
-      <p className="mt-1 text-sm text-muted-foreground">
-        Approval is a chain — one person approves and it goes to the next — so each reviewer has
-        their own queue in Emburse. Leave these blank and everybody reads the shared list above,
-        which is the team-wide one: every stage at once, the same rows for everybody.
-      </p>
-      <p className="mt-1 text-sm text-muted-foreground">
-        To fill one in: sign into Emburse as that person, open the list that holds what is
-        waiting on <em>them</em>, and copy the path (the part after the host, e.g.{" "}
-        <code className="rounded bg-muted px-1">/transactions</code>) and the{" "}
-        <code className="rounded bg-muted px-1">filters[section]</code> value out of the address
-        bar. Then press <strong>Test run</strong> below — it stops before exporting anything and
-        prints how many items that URL returns, so you can see at a glance whether it is their
-        queue or everybody&rsquo;s.
+        One tab each, so whose scope is whose is never in doubt. Everything above this is
+        shared — a reviewer with nothing set here uses it.
       </p>
 
-      {/* The whole setting, as one button, because under a two-stage chain
-          there is only one sensible answer: each reviewer reads their own
-          Needs Review. The per-row fields below stay for the case this
-          tenant spells the path differently. */}
+      {/* A tab per person. The whole reason this exists: a row-per-person
+          grid made it hard to tell at a glance which scope belonged to
+          whom, which is the exact confusion that cost a day. */}
+      <div className="mt-3 flex flex-wrap gap-1 border-b border-border">
+        {rows.map((r) => (
+          <button
+            key={r.userEmail}
+            type="button"
+            onClick={() => setWho(r.userEmail)}
+            className={`-mb-px rounded-t-lg border-b-2 px-3 py-1.5 text-sm font-semibold ${
+              r.userEmail === current.userEmail
+                ? "border-foreground text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {r.userEmail}
+          </button>
+        ))}
+      </div>
+
       {viewingAs && (
         <p className="mt-2 rounded-lg bg-sky-500/10 p-2 text-sm">
           Viewing as <strong>{viewingAs}</strong>. These are settable from here and the change
@@ -754,127 +720,162 @@ function ReviewerGrids() {
         </p>
       )}
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={() => void Promise.all(
-            rows.map((r) => save(r.userEmail, { path: "/transactions", section: "inbox" })))}
-          className="rounded-lg bg-foreground px-3 py-1 text-sm font-semibold text-background disabled:opacity-50"
-        >
-          Everyone reads their own Needs Review
-        </button>
-        <button
-          type="button"
-          onClick={() => void Promise.all(
-            rows.map((r) => save(r.userEmail, { path: "", section: "" })))}
-          className="rounded-lg border border-border px-3 py-1 text-sm font-semibold disabled:opacity-50"
-        >
-          Back to the shared team-wide list
-        </button>
-      </div>
-      {/* The decisive one, and the reason the boxes above are rarely
-          enough: Emburse's Current Reviewer dropdown is what says which of
-          two approvers an expense is sitting with, and its values are
-          opaque ids nobody can type. Use the dropdown, copy the address
-          bar, paste it. */}
-      <div className="mt-3 rounded-lg border border-border p-3">
-        <p className="text-sm">
-          <strong>Paste a URL from Emburse</strong> to set a reviewer&rsquo;s filters. In
-          Emburse, pick them in the <strong>Current Reviewer</strong> dropdown, copy the
-          address bar, and paste it against their name — the path, the section and the
-          reviewer filter all come out of it. The search box and the receipts setting are
-          ignored.
-        </p>
-        <div className="mt-2 space-y-2">
-          {rows.map((r) => (
-            <div key={r.userEmail} className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="min-w-56 font-medium">{r.userEmail}</span>
-              <input
-                placeholder="https://spend.emburse.com/transactions/team?filters…"
-                onKeyDown={(e) => {
-                  if (e.key !== "Enter") return;
-                  void pasteUrl(r.userEmail, (e.target as HTMLInputElement).value);
-                  (e.target as HTMLInputElement).value = "";
-                }}
-                onPaste={(e) => {
-                  const text = e.clipboardData.getData("text");
-                  if (!/^https?:\/\//.test(text.trim())) return;
-                  e.preventDefault();
-                  void pasteUrl(r.userEmail, text);
-                }}
-                className="min-w-72 flex-1 rounded-lg border border-border bg-background px-2 py-1 font-mono text-xs"
-              />
-              {r.gridQuery && (
-                <span className="rounded bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-700 dark:text-emerald-300">
-                  filtered
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
+      <ReviewerPanel
+        key={current.userEmail}
+        row={current}
+        everyone={rows.map((r) => r.userEmail)}
+        onPaste={(href) => void pasteUrl(current.userEmail, href)}
+        onPost={(body) => void post({ email: current.userEmail, ...body })}
+      />
 
-      <p className="mt-1 text-xs text-muted-foreground">
-        Try it, then press <strong>Test run</strong> below as each person. If the item count
-        drops below the team-wide one and differs between them, that is their own queue. Nothing
-        is exported and nobody is emailed by a test run, and an import that came back nearly
-        empty would be refused by the truncation fence rather than wiping anything.
-      </p>
-
-      <div className="mt-3 space-y-2">
-        {rows.map((r) => {
-          const v = valueFor(r.userEmail, r);
-          const dirty = Boolean(draft[r.userEmail]);
-          return (
-            <div key={r.userEmail} className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="min-w-56 font-medium">{r.userEmail}</span>
-              <input
-                value={v.path}
-                onChange={(e) => setDraft((d) => ({ ...d, [r.userEmail]: { ...v, path: e.target.value } }))}
-                placeholder="shared (/transactions/team)"
-                className="w-64 rounded-lg border border-border bg-background px-2 py-1 font-mono text-xs"
-              />
-              <input
-                value={v.section}
-                onChange={(e) => setDraft((d) => ({ ...d, [r.userEmail]: { ...v, section: e.target.value } }))}
-                placeholder="shared (inbox)"
-                className="w-36 rounded-lg border border-border bg-background px-2 py-1 font-mono text-xs"
-              />
-              <button
-                type="button"
-                disabled={!dirty}
-                onClick={() => void save(r.userEmail, v)}
-                className="rounded-lg bg-foreground px-3 py-1 text-xs font-semibold text-background disabled:opacity-40"
-              >
-                Save
-              </button>
-              {/* The one control that approves money without anybody
-                  clicking, so it says whose login it would use and starts
-                  off for everybody. */}
-              <ReviewerSchedule
-                row={r}
-                onSaved={() => void qc.invalidateQueries({ queryKey: ["reviewer-imports"] })}
-              />
-              <button
-                type="button"
-                onClick={() => void save(r.userEmail, v, !r.autoApprove)}
-                title={`Approve ${r.userEmail}'s unflagged expenses automatically, signed in as them.`}
-                className={`rounded-lg border px-3 py-1 text-xs font-semibold disabled:opacity-50 ${
-                  r.autoApprove
-                    ? "border-amber-500/50 bg-amber-500/15 text-amber-800 dark:text-amber-200"
-                    : "border-border"
-                }`}
-              >
-                Auto-approve {r.autoApprove ? "on" : "off"}
-              </button>
-            </div>
-          );
-        })}
-      </div>
       {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
     </div>
   );
 }
+
+/**
+ * Everything about one reviewer's import, in one place.
+ *
+ * The order is the order somebody sets them up in: what it reads, whose
+ * login reads it, when, and whether approvals happen by themselves. The
+ * line at the top is the whole configuration in one sentence, because the
+ * question being asked of this page is always "what will this actually
+ * pull" and it was previously answerable only by reading five controls.
+ */
+function ReviewerPanel({
+  row, everyone, onPaste, onPost,
+}: {
+  row: {
+    userEmail: string; gridPath: string | null; gridSection: string | null;
+    gridQuery: string | null; runAs: string | null; autoApprove: boolean;
+    autoApprovePerRun: number | null; shared: boolean; schedule: Schedule;
+  };
+  everyone: string[];
+  onPaste: (href: string) => void;
+  onPost: (body: Record<string, unknown>) => void;
+}) {
+  const [href, setHref] = useState("");
+  const path = row.gridPath ?? "(shared)";
+  const section = row.gridSection ?? "(shared)";
+  const reads = row.runAs ?? row.userEmail;
+  const sc = row.schedule;
+
+  return (
+    <div className="mt-3 space-y-4">
+      {/* The one-sentence answer to "what will this pull". */}
+      <div className="rounded-lg bg-muted/50 p-3 text-sm">
+        <p>
+          Reads <code className="rounded bg-background px-1">{path}</code>
+          {row.gridSection ? <> · section <code className="rounded bg-background px-1">{section}</code></> : null}
+          {row.gridQuery ? <> · <strong>filtered to them</strong></> : <> · <strong className="text-amber-700 dark:text-amber-300">not filtered to them</strong></>}
+        </p>
+        <p className="mt-1 text-muted-foreground">
+          Signed in as <strong className="text-foreground">{reads}</strong>
+          {row.runAs ? " (their queue, somebody else's login)" : ""} ·{" "}
+          {row.shared ? "on the shared schedule" : `own times from ${sc.firstRun}, ${sc.attemptsPerDay}× every ${sc.retryHours}h`} ·{" "}
+          automatic approvals {row.autoApprove ? "on" : "off"}
+        </p>
+        {!row.gridQuery && (
+          <p className="mt-1 text-amber-700 dark:text-amber-300">
+            Without a filter this reads the same list as everybody else, so two reviewers get
+            the same expenses. Paste their URL below.
+          </p>
+        )}
+      </div>
+
+      <div>
+        <p className="text-sm font-semibold">What it reads</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          In Emburse, pick <strong>{row.userEmail}</strong> in the <strong>Current Reviewer</strong>{" "}
+          dropdown with <strong>Needs Review</strong> selected, then copy the address bar and
+          paste it here. The path, the section and the reviewer filter all come out of it.
+        </p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <input
+            value={href}
+            onChange={(e) => setHref(e.target.value)}
+            onPaste={(e) => {
+              const text = e.clipboardData.getData("text");
+              if (!/^https?:\/\//.test(text.trim())) return;
+              e.preventDefault();
+              setHref(text);
+              onPaste(text);
+            }}
+            placeholder="https://spend.emburse.com/transactions/team?filters…"
+            className="min-w-72 flex-1 rounded-lg border border-border bg-background px-2 py-1 font-mono text-xs"
+          />
+          <button
+            type="button"
+            disabled={!href.trim()}
+            onClick={() => onPaste(href)}
+            className="rounded-lg bg-foreground px-3 py-1 text-sm font-semibold text-background disabled:opacity-40"
+          >
+            Use this
+          </button>
+          {(row.gridPath || row.gridQuery) && (
+            <button
+              type="button"
+              onClick={() => { setHref(""); onPost({ gridPath: "", gridSection: "", gridQuery: "" }); }}
+              className="rounded-lg border border-border px-3 py-1 text-sm font-semibold"
+            >
+              Back to shared
+            </button>
+          )}
+        </div>
+        {row.gridQuery && (
+          <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{row.gridQuery}</p>
+        )}
+      </div>
+
+      <div>
+        <p className="text-sm font-semibold">Whose login reads it</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          A manager can see the rows waiting on the people under them, so one login can pull
+          everybody&rsquo;s. Reading somebody else&rsquo;s queue this way saves them a
+          verification code; deciding still needs their own login.
+        </p>
+        <select
+          value={row.runAs ?? ""}
+          onChange={(e) => onPost({ runAs: e.target.value })}
+          className="mt-2 rounded-lg border border-border bg-background px-2 py-1 text-sm"
+        >
+          <option value="">{row.userEmail} (themselves)</option>
+          {everyone.filter((o) => o !== row.userEmail).map((o) => (
+            <option key={o} value={o}>{o}</option>
+          ))}
+        </select>
+      </div>
+
+      <div>
+        <p className="text-sm font-semibold">When</p>
+        <ReviewerSchedule
+          row={row}
+          onSaved={() => { /* the list refetches on the parent's invalidate */ }}
+        />
+      </div>
+
+      <div>
+        <p className="text-sm font-semibold">Automatic approvals</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Approves expenses no enabled rule flagged, under <strong>{row.userEmail}</strong>&rsquo;s
+          own Emburse login — not whoever imports for them. Off until switched on.
+        </p>
+        <button
+          type="button"
+          onClick={() => onPost({ autoApprove: !row.autoApprove })}
+          className={`mt-2 rounded-lg border px-3 py-1 text-sm font-semibold ${
+            row.autoApprove
+              ? "border-amber-500/50 bg-amber-500/15 text-amber-800 dark:text-amber-200"
+              : "border-border"
+          }`}
+        >
+          {row.autoApprove ? "On" : "Off"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 
 /**
  * One reviewer's own import times, or the shared ones.

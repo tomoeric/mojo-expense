@@ -43,6 +43,8 @@ export function nudgeReceiptReader(): void {
 async function tick(): Promise<void> {
   if (running) return;
   running = true;
+  /** Set when this pass asked to come back promptly, so `finally` leaves it. */
+  let soon = false;
   try {
     if (!canReadReceipts()) return;
 
@@ -81,13 +83,24 @@ async function tick(): Promise<void> {
     if (more || (await unreadReceipts(1)).length > 0) {
       clearTimeout(timer!);
       timer = setTimeout(() => void tick(), 30_000);
+      soon = true;
     }
   } catch (err) {
     console.error("receipt reader:", err);
   } finally {
     running = false;
-    if (timer) {
-      clearTimeout(timer);
+    /*
+     * Only when nothing sooner was asked for.
+     *
+     * This cancelled the timer unconditionally and replaced it with the
+     * half-hourly one — including the 30-second "there is more waiting"
+     * re-tick set moments earlier, which made that whole branch dead code.
+     * The reader therefore drained at most one batch every thirty minutes
+     * however much was queued, which for a few dozen receipts is most of a
+     * day and reads exactly like a count that is not moving.
+     */
+    if (!soon) {
+      if (timer) clearTimeout(timer);
       timer = setTimeout(() => void tick(), 30 * 60_000);
     }
   }

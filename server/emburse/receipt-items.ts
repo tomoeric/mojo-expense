@@ -609,7 +609,20 @@ export async function extractReceipt(
 
   if (!opts.force) {
     const existing = await receiptDetail(sha256);
-    if (existing && !existing.error) return existing;
+    /*
+     * AND read by the CURRENT reader. Without that last clause this was a
+     * livelock, and a silent one.
+     *
+     * `unreadReceipts` deliberately counts a reading from an older reader
+     * as unread — that is how a fixed prompt reaches receipts that were
+     * already done. But this short-circuit returned the stale reading
+     * anyway and never rewrote `reader_version`. So the blob came back in
+     * the very next batch, and the next, for ever: it occupied one of the
+     * twenty-five slots in every pass, was never re-read, and never left
+     * the "Receipt being read" bucket. Bumping READER_VERSION — which is
+     * meant to improve things — was what jammed the queue.
+     */
+    if (existing && !existing.error && existing.readerVersion >= READER_VERSION) return existing;
   }
 
   const { rows } = await db().query<{ bytes: Buffer; content_type: string }>(
