@@ -437,7 +437,18 @@ importRouter.get("/export-runs", requireAuth, async (req: Request, res: Response
     // reviewers' runs is where this went wrong twice: a 320-item success
     // sitting above your own run, and no way to tell whose it was.
     const viewed = req.viewingAs?.viewed;
+    /*
+     * An admin may ask for one reviewer's runs.
+     *
+     * Their tab starts a run for that person, and the history further down
+     * is filtered to the SIGNED-IN person's — so the run they just started
+     * appeared nowhere, and the button that started it pointed at a list
+     * it could never show up in. The tab asks for its own.
+     */
+    const asked = String((req.query as { reviewer?: string }).reviewer ?? "").trim();
+    const named = asked && await hasCredential(asked).catch(() => false) ? asked : "";
     const mine = viewed
+      ?? (named || undefined)
       ?? ((req.user?.email && await hasCredential(req.user.email).catch(() => false))
             ? req.user.email : undefined);
     res.json({

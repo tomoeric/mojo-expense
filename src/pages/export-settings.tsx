@@ -631,6 +631,10 @@ function ReviewerGrids() {
   });
 
   const rows = q.data?.reviewers.filter((r) => r.userEmail) ?? [];
+  // Default to YOU, not to whoever happens to sort first. Opening on
+  // somebody else's tab is how a setting gets changed for the wrong
+  // person by somebody who never noticed which tab they were on.
+  const meNow = (auth.data?.viewingAs?.viewed ?? auth.data?.user?.email ?? "").toLowerCase();
   const [who, setWho] = useState<string | null>(null);
 
   // Never render nothing. This returned null whenever the list was empty,
@@ -659,7 +663,10 @@ function ReviewerGrids() {
     );
   }
 
-  const current = rows.find((r) => r.userEmail === who) ?? rows[0]!;
+  const current =
+    rows.find((r) => r.userEmail === who)
+    ?? rows.find((r) => r.userEmail.toLowerCase() === meNow)
+    ?? rows[0]!;
 
   async function post(body: Record<string, unknown>) {
     setError("");
@@ -812,7 +819,7 @@ function ReviewerPanel({
       });
       const body = (await res.json()) as { error?: string; id?: number };
       setRan(res.ok
-        ? "Started — watch it in Run the export, below."
+        ? `Started. ${row.userEmail}'s last runs are below; the live steps are in Run the export.`
         : body.error ?? "Could not start it.");
     } catch (e) {
       setRan((e as Error).message);
@@ -970,6 +977,8 @@ function ReviewerPanel({
         </div>
       </div>
 
+      <ReviewerRuns email={row.userEmail} nudge={ran} />
+
       <div>
         <p className="text-sm font-semibold">4. Approve automatically</p>
         <p className="mt-1 text-sm text-muted-foreground">
@@ -1098,6 +1107,50 @@ function ReviewerSchedule({
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * The last few runs for ONE reviewer, inside their tab.
+ *
+ * The run history further down the page is the signed-in person's, so a
+ * run started here for somebody else appeared nowhere — and the button
+ * that started it said to go and watch it in a list it could never show
+ * up in. Short on purpose: the live step-by-step belongs to the runner,
+ * this answers "did it go, and what did it read".
+ */
+function ReviewerRuns({ email, nudge }: { email: string; nudge: string }) {
+  const q = useQuery({
+    queryKey: ["reviewer-runs", email, nudge],
+    queryFn: async () => {
+      const res = await fetch(`/api/export-runs?reviewer=${encodeURIComponent(email)}`);
+      if (!res.ok) throw new Error("Failed");
+      return (await res.json()) as {
+        runs: { id: number; startedAt: string; ok: boolean | null; trigger: string;
+                itemLine: string | null; source: string }[];
+      };
+    },
+    refetchInterval: 5000,
+  });
+  const runs = (q.data?.runs ?? []).slice(0, 4);
+  if (runs.length === 0) return null;
+
+  return (
+    <div>
+      <p className="text-sm font-semibold">Their last runs</p>
+      <ul className="mt-1 space-y-1 text-sm">
+        {runs.map((r) => (
+          <li key={r.id} className="text-muted-foreground">
+            <span className={r.ok === null ? "" : r.ok ? "text-emerald-700 dark:text-emerald-400" : "text-red-600"}>
+              {r.ok === null ? "Running" : r.ok ? "Succeeded" : "Failed"}
+            </span>{" "}
+            · {r.trigger} · {new Date(r.startedAt).toLocaleString()}
+            {r.itemLine ? ` · ${r.itemLine}` : ""}
+            {r.source ? ` · ${r.source}` : ""}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
