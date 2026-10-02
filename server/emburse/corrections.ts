@@ -137,6 +137,39 @@ export async function correctionsFor(keys: string[]): Promise<Map<string, Correc
   return out;
 }
 
+
+/**
+ * Take a correction that landed in Emburse back into our own copy.
+ *
+ * The whole point of the correction, and it was missing. A fuel purchase
+ * filed under the wrong category is flagged by a rule; the fix is to put
+ * the right category on it in Emburse. That worked — and then nothing on
+ * this side knew. Our copy still said "Gas", the rule still had its hit,
+ * the row stayed in Flagged, and automatic approval skipped it, because
+ * the automation refuses anything flagged. It cleared at the NEXT IMPORT,
+ * which is tomorrow.
+ *
+ * So the change comes back: our copy takes the new category, the rules are
+ * re-run for that one expense — which deletes the hit that no longer
+ * applies — and the sweep is asked to look again rather than waiting out
+ * its quarter of an hour.
+ *
+ * The rules decide, not the act of having corrected something: setting a
+ * category that is ALSO wrong leaves the expense flagged, as it should.
+ *
+ * Returns how many approvals the sweep queued as a result, which is 0 in
+ * the ordinary case where the automation is off.
+ */
+export async function applyCorrection(dedupeKey: string, to: string): Promise<number> {
+  await ensure();
+  await db().query(
+    "UPDATE expenses SET category = $2 WHERE dedupe_key = $1", [dedupeKey, to]);
+  const { runRules } = await import("../rules/run.js");
+  await runRules({ keys: [dedupeKey] });
+  const { autoQueueApprovals } = await import("../rules/auto-approve.js");
+  return (await autoQueueApprovals()).queued;
+}
+
 export async function settleCorrection(
   id: number,
   outcome: { ok: true } | { ok: false; error: string },

@@ -2,7 +2,7 @@ import { isDbConfigured } from "../db.js";
 import { readSettings } from "../import/settings.js";
 import { credentialForUser } from "./credentials.js";
 import { correctCategory, runDecisions, type BatchItem, type Target } from "./decide.js";
-import { pendingCorrections, settleCorrection } from "./corrections.js";
+import { applyCorrection, pendingCorrections, settleCorrection } from "./corrections.js";
 import { db } from "../db.js";
 import type { ChallengeHook } from "./auto-export.js";
 import { waitForCode } from "./challenge.js";
@@ -346,6 +346,35 @@ async function runCorrections(): Promise<void> {
           ? { ok: true }
           : { ok: false, error: run.steps.find((s) => !s.ok)?.detail ?? "It did not go through." },
         run.steps);
+
+      // The whole point of the correction, and it was missing.
+      //
+      // A fuel purchase filed under the wrong category is flagged by a
+      // rule; the fix is to put the right category on it in Emburse. That
+      // worked — and then nothing here knew. Our copy still said "Gas", the
+      // rule still had its hit, the row stayed in Flagged, and automatic
+      // approval skipped it, because the automation refuses anything
+      // flagged. It cleared at the NEXT IMPORT, which is tomorrow.
+      //
+      // So the change comes back: our copy takes the new category, the
+      // rules are re-run for that one expense — which deletes the hit that
+      // no longer applies — and the sweep is asked to look again rather
+      // than waiting out its quarter of an hour. The expense is unflagged
+      // and approvable within seconds of the edit landing, which is what
+      // "edit it and it moves to unflagged" means.
+      if (run.ok) {
+        try {
+          const freed = await applyCorrection(c.dedupeKey, c.to);
+          console.log(
+            `corrections: ${c.dedupeKey} is now “${c.to}” here too, re-judged` +
+            (freed > 0 ? `, and that freed ${freed} automatic approval(s)` : ""));
+        } catch (err) {
+          // The edit DID land in Emburse; only our side is behind, and the
+          // next import corrects it. Worth a line, not worth failing a
+          // correction that succeeded.
+          console.error(`corrections: ${c.dedupeKey} was changed in Emburse but not re-judged here:`, err);
+        }
+      }
     } catch (err) {
       await settleCorrection(c.id, {
         ok: false, error: err instanceof Error ? err.message : String(err),
