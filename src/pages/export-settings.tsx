@@ -162,13 +162,10 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
             and both reading the team-wide list get the same expenses, and
             the chips look like the thing that failed. */}
         <p className="mt-1 text-sm text-muted-foreground">
-          <strong>Shared.</strong> Everything from here down applies to any reviewer with
-          nothing of their own set above. These say <strong>which stage</strong>, not{" "}
-          <strong>whose</strong>. Needs Review on the
-          team-wide list is the whole company&rsquo;s review stage, and it is the same for every
-          reviewer who can see it — which is why ticking it for two people does not give them two
-          queues. Whose queue a run reads is the list path, in{" "}
-          <em>Per-reviewer imports and approvals</em> below.
+          <strong>Shared</strong> — used by anyone with nothing of their own set above. These
+          pick the <strong>stage</strong>, not the person: Needs Review on the team-wide list is
+          the whole company&rsquo;s, and the same for everyone who can see it. Who gets what is
+          set in their tab.
         </p>
       </div>
 
@@ -695,10 +692,9 @@ function ReviewerGrids() {
 
   return (
     <div id="per-reviewer" className="rounded-xl border border-border p-4">
-      <h2 className="text-base font-bold">Each reviewer&rsquo;s import</h2>
+      <h2 className="text-base font-bold">Who imports what</h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        One tab each, so whose scope is whose is never in doubt. Everything{" "}
-        <em>below</em> this box is shared — a reviewer with nothing set here uses it.
+        One tab each. Anything left blank uses the shared settings below.
       </p>
 
       {/* A tab per person. The whole reason this exists: a row-per-person
@@ -771,33 +767,25 @@ function ReviewerPanel({
 
   return (
     <div className="mt-3 space-y-4">
-      {/* The one-sentence answer to "what will this pull". */}
-      <div className="rounded-lg bg-muted/50 p-3 text-sm">
-        <p>
-          Reads <code className="rounded bg-background px-1">{path}</code>
-          {row.gridSection ? <> · section <code className="rounded bg-background px-1">{section}</code></> : null}
-          {row.gridQuery ? <> · <strong>filtered to them</strong></> : <> · <strong className="text-amber-700 dark:text-amber-300">not filtered to them</strong></>}
-        </p>
-        <p className="mt-1 text-muted-foreground">
-          Signed in as <strong className="text-foreground">{reads}</strong>
-          {row.runAs ? " (their queue, somebody else's login)" : ""} ·{" "}
-          {row.shared ? "on the shared schedule" : `own times from ${sc.firstRun}, ${sc.attemptsPerDay}× every ${sc.retryHours}h`} ·{" "}
-          automatic approvals {row.autoApprove ? "on" : "off"}
-        </p>
-        {!row.gridQuery && (
-          <p className="mt-1 text-amber-700 dark:text-amber-300">
-            Without a filter this reads the same list as everybody else, so two reviewers get
-            the same expenses. Paste their URL below.
-          </p>
-        )}
-      </div>
+      {/* The state of this reviewer in one line, because "what will this
+          actually pull" is the only question the page is ever asked. */}
+      {row.gridQuery ? (
+        <div className="rounded-lg bg-emerald-500/10 p-3 text-sm">
+          <strong>Set up.</strong> Pulls only {row.userEmail}&rsquo;s expenses, signed in as{" "}
+          {reads}, {row.shared ? "on the shared times" : `at ${sc.firstRun} and every ${sc.retryHours}h`}.
+        </div>
+      ) : (
+        <div className="rounded-lg bg-amber-500/10 p-3 text-sm">
+          <strong>Not set up.</strong> This pulls <em>everyone&rsquo;s</em> expenses, not just{" "}
+          {row.userEmail}&rsquo;s. Fix it with the box below.
+        </div>
+      )}
 
       <div>
-        <p className="text-sm font-semibold">What it reads</p>
+        <p className="text-sm font-semibold">1. Which expenses</p>
         <p className="mt-1 text-sm text-muted-foreground">
-          In Emburse, pick <strong>{row.userEmail}</strong> in the <strong>Current Reviewer</strong>{" "}
-          dropdown with <strong>Needs Review</strong> selected, then copy the address bar and
-          paste it here. The path, the section and the reviewer filter all come out of it.
+          In Emburse: <strong>Needs Review</strong>, then <strong>Current Reviewer</strong> ={" "}
+          {row.userEmail}. Copy the address bar and paste it here.
         </p>
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <input
@@ -837,11 +825,10 @@ function ReviewerPanel({
       </div>
 
       <div>
-        <p className="text-sm font-semibold">Whose login reads it</p>
+        <p className="text-sm font-semibold">2. Who signs in to fetch them</p>
         <p className="mt-1 text-sm text-muted-foreground">
-          A manager can see the rows waiting on the people under them, so one login can pull
-          everybody&rsquo;s. Reading somebody else&rsquo;s queue this way saves them a
-          verification code; deciding still needs their own login.
+          Pick yourself to save them ever entering a verification code. Approving still uses
+          their own login.
         </p>
         <select
           value={row.runAs ?? ""}
@@ -856,7 +843,7 @@ function ReviewerPanel({
       </div>
 
       <div>
-        <p className="text-sm font-semibold">When</p>
+        <p className="text-sm font-semibold">3. When</p>
         <ReviewerSchedule
           row={row}
           onSaved={() => { /* the list refetches on the parent's invalidate */ }}
@@ -864,10 +851,9 @@ function ReviewerPanel({
       </div>
 
       <div>
-        <p className="text-sm font-semibold">Automatic approvals</p>
+        <p className="text-sm font-semibold">4. Approve automatically</p>
         <p className="mt-1 text-sm text-muted-foreground">
-          Approves expenses no enabled rule flagged, under <strong>{row.userEmail}</strong>&rsquo;s
-          own Emburse login — not whoever imports for them. Off until switched on.
+          Approves anything no rule flagged, as {row.userEmail}.
         </p>
         <button
           type="button"

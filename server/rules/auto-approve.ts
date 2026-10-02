@@ -255,28 +255,41 @@ export async function autoQueueApprovals(): Promise<AutoApproveResult> {
  * keep working.
  */
 async function owners(): Promise<(string | null)[]> {
-  const out: (string | null)[] = [null];
+  /** Reviewers with a switch of their own, by lowered email. */
+  const named = new Map<string, string>();
   try {
     const { reviewerImports } = await import("../emburse/export-scheduler.js");
     for (const r of await reviewerImports()) {
-      if (r.autoApprove && r.userEmail) out.push(r.userEmail);
+      if (r.autoApprove && r.userEmail) named.set(r.userEmail.toLowerCase(), r.userEmail);
     }
-  } catch {
+  } catch (err) {
     // The table may not exist yet on a cold install. The global switch is
     // unaffected, and an optional automation must not break the import it
-    // runs on the back of.
+    // runs on the back of. Logged, though: the previous bare `catch {}`
+    // turned a permanent failure into a sweep that silently did nothing
+    // for everybody with no line anywhere saying why.
+    console.error("auto-approve: could not read the per-reviewer switches:", err);
   }
-  // The global owner may also have a switch of their own; sweeping twice
-  // would just double their per-pass limit without telling anybody.
-  const seen = new Set<string>();
-  const globalOwner = (await flagOwner("autoApprove").catch(() => null))?.toLowerCase();
-  return out.filter((o) => {
-    const k = (o ?? globalOwner ?? "").toLowerCase();
-    if (o !== null && k === globalOwner) return false;
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
+
+  const globalOwner = (await flagOwner("autoApprove").catch(() => null))?.trim().toLowerCase();
+
+  /*
+   * When one person has both switches, THEIRS wins.
+   *
+   * This filtered the other way round: it dropped the named entry and kept
+   * `null`, which reads the GLOBAL switch. So a reviewer who happened to
+   * own the global flag had their own setting ignored — their tab says on,
+   * the sweep reads a different switch, and nothing is queued with nothing
+   * logged. The per-reviewer switch is the more specific of the two and
+   * the one somebody just pressed, so it is the one that counts.
+   *
+   * Sweeping both is not the answer either: same person, same queue, twice
+   * the per-pass limit, and no way to tell from the outside.
+   */
+  const out: (string | null)[] = [];
+  if (!globalOwner || !named.has(globalOwner)) out.push(null);
+  for (const email of named.values()) out.push(email);
+  return out;
 }
 
 /** One person's pass. `who` null means the global switch and its owner. */
