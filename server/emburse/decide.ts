@@ -1117,6 +1117,77 @@ async function controlForRow(
   );
 }
 
+/**
+ * Press SAVE on the edit form, with the option list out of the way.
+ *
+ * The run got all the way here — "chose Auto Fee & Fuel from 2 offered" —
+ * and then "locator.click: Timeout 30000ms exceeded" on a button that is
+ * plainly on the panel. A click that times out on a visible control is
+ * almost never the control: it is something lying over it. Choosing from
+ * a dropdown leaves the option list and its backdrop on screen for a
+ * moment, and a backdrop swallows the click that follows.
+ *
+ * So: dismiss what is open, prefer the button that actually says SAVE over
+ * whatever else is a submit, wait for it to be enabled rather than merely
+ * present, and try more than once — each attempt short, so three of them
+ * cost less than the one thirty-second wait did.
+ *
+ * It never forces the click. A forced click lands on whatever is on top,
+ * which on a finance form is the one thing worse than not saving.
+ */
+async function pressSave(
+  page: Page, selector: string, timeoutMs: number,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  let last = "";
+
+  for (let attempt = 1; Date.now() < deadline; attempt++) {
+    // Whatever the dropdown left behind. Escape is what a person presses,
+    // and it closes a listbox without touching the value just chosen.
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.locator('[role="listbox"], [role="presentation"] [role="option"]')
+      .first().waitFor({ state: "hidden", timeout: 2_000 }).catch(() => {});
+
+    const all = page.locator(selector);
+    const n = await all.count().catch(() => 0);
+    const visible: { at: Locator; text: string; enabled: boolean }[] = [];
+    for (let i = 0; i < n; i++) {
+      const one = all.nth(i);
+      if (!(await one.isVisible().catch(() => false))) continue;
+      visible.push({
+        at: one,
+        text: (await one.innerText().catch(() => "")).replace(/\s+/g, " ").trim(),
+        enabled: await one.isEnabled().catch(() => false),
+      });
+    }
+    if (visible.length === 0) {
+      last = "nothing matching Save is visible on the form";
+    } else {
+      // The one that says SAVE, then any other enabled one. A generic
+      // submit button elsewhere on the page is a worse guess than the
+      // button with the word on it.
+      const named = visible.filter((v) => /^save$/i.test(v.text) && v.enabled);
+      const other = visible.filter((v) => v.enabled);
+      const pick = named[0] ?? other[other.length - 1];
+      if (!pick) {
+        last = `Save is on the form but disabled — it reads "${visible.map((v) => v.text).join(" / ")}"`;
+      } else {
+        try {
+          await pick.at.click({ timeout: 8_000 });
+          return attempt === 1 ? "saved" : `saved, on attempt ${attempt}`;
+        } catch (err) {
+          last = err instanceof Error ? err.message.split("\n")[0]! : String(err);
+        }
+      }
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error(
+    `could not press Save on the edit form — ${last}. The category was chosen, so nothing was ` +
+    `saved and nothing was changed in Emburse. A click that times out on a visible button is ` +
+    `usually something lying over it, such as the category list still being open.`);
+}
+
 async function clickFirstVisible(
   scope: Locator | Page,
   selector: string,
@@ -2486,9 +2557,9 @@ export async function correctCategory(
       }))) return { ok: false, steps, matchedRow: null, screenshot: null };
 
       if (!(await step("save it", async () => {
-        await clickFirstVisible(page!, sel.editSave!, "Save on the edit form", ms);
+        const how = await pressSave(page!, sel.editSave!, ms);
         await page!.waitForTimeout(1500);
-        return "saved";
+        return how;
       }))) return { ok: false, steps, matchedRow: null, screenshot: null };
 
       // Said rather than assumed. A save that silently did nothing looks

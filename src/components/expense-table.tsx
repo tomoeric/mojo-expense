@@ -119,11 +119,27 @@ const COLUMNS: Column[] = [
       if (!c || c.state === "failed" || c.state === "cancelled") {
         return <span>{r.line.category}</span>;
       }
+      /*
+       * A badge, not grey small print.
+       *
+       * "changing from Travel - Mile…" under the category was the only
+       * sign that this app had edited somebody's finance record, and at
+       * nine percent of the width it truncated mid-word. A change we made
+       * in Emburse deserves to be as visible as a flag is.
+       */
+      const landed = c.state === "applied";
       return (
-        <span className="inline-flex flex-col">
+        <span className="inline-flex flex-col gap-0.5">
           <span>{c.to}</span>
-          <span className="text-[11px] text-muted-foreground">
-            {c.state === "pending" ? `changing from ${r.line.category || "none"}…` : `was ${r.line.category || "none"}`}
+          <span
+            className={`inline-flex w-fit items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+              landed
+                ? "bg-emerald-600/15 text-emerald-700 dark:text-emerald-300"
+                : "bg-amber-500/20 text-amber-800 dark:text-amber-200"
+            }`}
+            title={`${landed ? "Changed" : "Changing"} in Emburse from “${r.line.category || "none"}” to “${c.to}”`}
+          >
+            {landed ? "Changed in Emburse" : "Sent to Emburse"}
           </span>
         </span>
       );
@@ -500,7 +516,7 @@ function BandRows({
   );
 }
 
-export type Tab = "all" | "reading" | "flagged" | "clean" | "approved" | "denied";
+export type Tab = "all" | "reading" | "flagged" | "clean" | "sent" | "approved" | "denied";
 
 /**
  * Still waiting for its receipt to be read.
@@ -512,6 +528,17 @@ export type Tab = "all" | "reading" | "flagged" | "clean" | "approved" | "denied
  * Unflagged row, which reads as "nothing wrong with this one" when the
  * truth is "nobody has looked yet".
  */
+/**
+ * A category change this app sent to Emburse and is standing behind.
+ *
+ * Pending or applied, not failed or cancelled — a correction that did not
+ * land is not a change, and grouping it with the ones that did would make
+ * the tab a lie about what is in Emburse.
+ */
+const correcting = (r: { correction?: { to: string; state: string } | undefined }): boolean =>
+  r.correction !== undefined
+  && (r.correction.state === "pending" || r.correction.state === "applied");
+
 const beingRead = (r: Row): boolean => r.line.receiptUnread === true;
 
 /**
@@ -571,6 +598,11 @@ function FlagTabs({
   const denied = rows.filter((r) => r.decision?.state === "applied" && r.decision.decision === "deny");
   const flagged = waiting.filter((r) => r.flags.length > 0);
   const reading = waiting.filter(beingRead);
+  // Across EVERY row, not only the undecided ones: a correction that
+  // landed and was then approved is still a change this app made, and
+  // dropping it the moment it is approved would empty the tab of its
+  // successes and leave only what has not finished.
+  const sent = rows.filter(correcting);
   const groups = useMemo(() => {
     const counts = new Map<string, number>();
     for (const r of flagged) for (const g of r.flagGroups) counts.set(g, (counts.get(g) ?? 0) + 1);
@@ -591,6 +623,20 @@ function FlagTabs({
     // in thirty seconds.
     { key: "clean" as const, label: "Unflagged",
       n: waiting.filter((r) => r.flags.length === 0 && !beingRead(r)).length },
+    /*
+     * Category changes this app sent to Emburse, in their own tab.
+     *
+     * They were findable only by scrolling the flagged list and spotting
+     * the small "changing from …" under a category — ten of them scattered
+     * through twenty-eight rows. A correction is a thing the app DID, on
+     * somebody's finance record, and the set of them is exactly as worth
+     * seeing in one place as the set of approvals is.
+     *
+     * Only while there are any, like the other conditional tabs.
+     */
+    ...(sent.length > 0
+      ? [{ key: "sent" as const, label: "Category sent", n: sent.length }]
+      : []),
     { key: "approved" as const, label: "Approved", n: approved.length },
     // Only when there are any. An always-empty tab is a permanent
     // reminder of something nobody did.
@@ -632,6 +678,14 @@ function FlagTabs({
           </p>
         );
       })()}
+
+      {tab === "sent" && (
+        <p className="text-xs text-muted-foreground">
+          Category changes this app sent to Emburse under your own login. They stay here once
+          they have landed, so this is the record of what was changed and to what — including
+          the ones that have since been approved.
+        </p>
+      )}
 
       {tab === "flagged" && groups.length > 1 && (
         <div className="flex flex-wrap items-center gap-1.5">
@@ -929,7 +983,11 @@ export function ExpenseTable({
       ? rows.filter((r) => r.employee === group.employee && r.line.date === group.date)
       : rows;
     // Decided expenses live in their own tabs and nowhere else.
-    if (tab === "approved") {
+    if (tab === "sent") {
+      // Its own axis, not a slice of the undecided ones: a correction that
+      // has since been approved belongs here too.
+      base = base.filter(correcting);
+    } else if (tab === "approved") {
       base = base.filter((r) => isDone(r) && r.decision?.decision !== "deny");
     } else if (tab === "denied") {
       base = base.filter((r) => isDone(r) && r.decision?.decision === "deny");
