@@ -1939,7 +1939,44 @@ async function runSteps(
     // it is one guess. The count line is the sturdier of the two — "34 items,
     // $42,249.94" is Emburse's own words about its own grid, and it cannot be
     // there unless the rows are.
-    const how = await gridLoaded(page, sel);
+    let how = await gridLoaded(page, sel);
+
+    /*
+     * The configured path is not where this tenant keeps that list.
+     *
+     * /reimbursements is a 404 here — "404 Not found" with the nav beside
+     * it listing "Reimbursements 8" as a link. Both reviewers' reimbursement
+     * imports failed that way, on a path that was a guess written into
+     * DEFAULT_SOURCES and never checked against the real tenant.
+     *
+     * The answer is on the page. The nav links to the list by name, so
+     * rather than make somebody read a 404 and go hunting, follow the link
+     * whose name matches the path we were told to open, and SAY what it
+     * turned out to be so the setting can be corrected once.
+     *
+     * Only after the configured path has failed, and only to a link on
+     * Emburse's own nav — this widens nothing about which queue is read,
+     * it finds the page the setting was pointing at.
+     */
+    let viaNav: string | null = null;
+    if (!how && sel.gridPath) {
+      const name = (sel.gridPath.split("/").filter(Boolean).pop() ?? "").replace(/[-_]/g, " ");
+      if (name) {
+        const link = page.locator(`a:has-text("${name}")`).first();
+        const href = await link.getAttribute("href").catch(() => null);
+        if (href && !href.startsWith("#")) {
+          const retry = gridUrl(url, {
+            receiptsOnly: settings.receiptsOnly,
+            path: new URL(href, page.url()).pathname,
+            section: sel.gridSection, extra: sel.gridQuery,
+          });
+          await page.goto(retry, { waitUntil: "domcontentloaded" }).catch(() => {});
+          how = await gridLoaded(page, sel);
+          if (how) viaNav = new URL(href, page.url()).pathname;
+        }
+      }
+    }
+
     if (!how) {
       throw new Error(
         `the grid did not appear at ${safeUrl(page.url())}. Tried the grid selector ` +
@@ -1948,7 +1985,11 @@ async function runSteps(
       );
     }
     const scope = settings.receiptsOnly ? "receipts only, via the URL" : "unfiltered, via the URL";
-    return `${scope} — ${how}`;
+    return `${scope} — ${how}` +
+      (viaNav
+        ? ` — NOTE: ${sel.gridPath} did not load, so this followed the nav link to ${viaNav}. ` +
+          `Set this list's path to ${viaNav} under Export settings so it goes straight there.`
+        : "");
   }))) return false;
 
   await step("read the item count", async () => {

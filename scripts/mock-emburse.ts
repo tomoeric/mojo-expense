@@ -35,6 +35,16 @@ type State = {
   whoami: string;
   /** A tenant whose sign-out we do not know: every route refuses to end it. */
   noSignOut: boolean;
+  /**
+   * How the row's ⋮ menu is marked up.
+   *
+   * "labelled" is aria-label="more", which the shipped default matched.
+   * "haspopup" is what the real tenant draws — an icon button with no text
+   * and no "more" anywhere, which matched nothing and made every DENY
+   * fail. "none" is no menu at all, for the message that has to name what
+   * IS on the row.
+   */
+  menuStyle: "labelled" | "haspopup" | "none";
   pendingUser: string;
   loginOutcome: "ok" | "rejected" | "mfa" | "device" | "code" | "code-first";
   /**
@@ -210,6 +220,7 @@ const state: State = {
   /** The address an account menu would show. Empty renders none. */
   whoami: "",
   noSignOut: false,
+  menuStyle: "labelled",
   pendingUser: "",
   loginOutcome: "ok",
   codeAttempts: 0,
@@ -358,7 +369,12 @@ const grid = (search: string) => {
      <td>${state.categories.get(`${r.date}|${r.merchant}|${r.who}|${r.amount}`) ?? ""}</td>
      <td>${"site" in r && r.site ? r.site : ""}</td>
      <td><button class="ap" data-k="${r.date}|${r.merchant}|${r.who}|${r.amount}">APPROVE</button> ` +
-    `<button aria-label="more" class="mn">&#8942;</button>`;
+    (state.menuStyle === "none"
+      ? ""
+      : state.menuStyle === "haspopup"
+        // No label, no text, a popup attribute and an icon — the real shape.
+        ? `<button aria-haspopup="menu" class="mn"><svg width="4" height="14"></svg></button>`
+        : `<button aria-label="more" class="mn">&#8942;</button>`);
 
   // A grid whose buttons DO something. Approving or confirming a denial
   // takes the row out of Needs Review, which is how the run now confirms
@@ -1042,6 +1058,12 @@ app.post("/__actioned", (req, res) => {
 });
 
 /** Pretend the browser is signed in as this address. */
+app.post("/__menu/:style", (req, res) => {
+  const style = req.params.style;
+  state.menuStyle = style === "haspopup" || style === "none" ? style : "labelled";
+  res.json({ ok: true, menuStyle: state.menuStyle });
+});
+
 app.post("/__no-sign-out/:on", (req, res) => {
   state.noSignOut = req.params.on === "1";
   res.json({ ok: true, noSignOut: state.noSignOut });
@@ -1073,7 +1095,7 @@ const reset = () =>
     gridShape: "table", padRows: 0, actionsWork: true, ghostButtons: false, ghostRows: false, twinRows: false, staleGrid: false, actioned: new Set<string>(), categories: new Map<string, string>(), searchMode: "substring",
     hiddenFromSearch: false, userFilter: "", hangOpens: 0, hangAll: false, oidcHop: false,
     formatControl: "links",
-    chipsUnmatchable: false, appPaintMs: 0, showNavLabel: true,
+    chipsUnmatchable: false, appPaintMs: 0, showNavLabel: true, menuStyle: "labelled",
     sections: {
       "Needs Review": true, "Needs Manager Review": false,
       "Pending Submission": false, Denied: true, Completed: false,

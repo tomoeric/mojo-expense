@@ -82,7 +82,23 @@ export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
   // well is refused rather than guessed at.
   resultRow: 'table tbody tr, [role="rowgroup"] [role="row"]',
   approveButton: 'button:has-text("APPROVE")',
-  rowMenu: 'button[aria-label*="more" i], button:has-text("⋮")',
+  /*
+   * The ⋮ at the end of a row. Emburse draws it as an icon button with no
+   * text and, on this tenant, no "more" in its label — so a default of
+   * `aria-label*="more"` plus a literal ⋮ matched nothing and every DENY
+   * failed with "no ⋮ row menu matched anywhere on the page", on a grid
+   * with the menu plainly on every row. (Approving never needed it.)
+   *
+   * Widened to the ways a menu button is actually marked up: the popup
+   * attributes first, which are what the control IS rather than what it
+   * happens to be called, then the labels and the three glyphs that get
+   * used for it.
+   */
+  rowMenu: 'button[aria-haspopup="menu"], button[aria-haspopup="true"], '
+    + '[role="button"][aria-haspopup], button[aria-label*="more" i], '
+    + 'button[aria-label*="action" i], button[aria-label*="option" i], '
+    + 'button[aria-label*="menu" i], button:has-text("⋮"), button:has-text("⋯"), '
+    + 'button:has-text("…")',
   denyButton: 'text=/^\\s*Deny\\s*$/i',
   denyReason: 'textarea, input[placeholder*="reason" i]',
   denyConfirm: 'button:has-text("Deny")',
@@ -911,6 +927,39 @@ async function visibleOf(rows: Locator, indexes: number[]): Promise<number[]> {
   return on;
 }
 
+
+/**
+ * Every control on one row, described the way a selector would address it.
+ *
+ * For the message when nothing matched. A person fixing a selector needs
+ * the markup and cannot see it; this is the cheapest honest substitute —
+ * the tag, the accessible name, the popup attribute and any text, for each
+ * clickable thing on the row.
+ */
+async function controlsOn(row: Locator): Promise<string[]> {
+  const out: string[] = [];
+  const all = row.locator('button, [role="button"], a[href]');
+  const n = Math.min(await all.count().catch(() => 0), 12);
+  for (let i = 0; i < n; i++) {
+    const one = all.nth(i);
+    const [tag, label, popup, testId, text] = await Promise.all([
+      one.evaluate((e) => e.tagName.toLowerCase()).catch(() => "?"),
+      one.getAttribute("aria-label").catch(() => null),
+      one.getAttribute("aria-haspopup").catch(() => null),
+      one.getAttribute("data-testid").catch(() => null),
+      one.innerText().catch(() => ""),
+    ]);
+    const bits = [
+      label ? `aria-label="${label}"` : null,
+      popup ? `aria-haspopup="${popup}"` : null,
+      testId ? `data-testid="${testId}"` : null,
+      text.trim() ? `text "${text.replace(/\s+/g, " ").trim().slice(0, 24)}"` : null,
+    ].filter(Boolean);
+    out.push(`<${tag}${bits.length ? " " + bits.join(" ") : " no label, no text"}>`);
+  }
+  return [...new Set(out)];
+}
+
 async function controlForRow(
   page: Page,
   row: Locator,
@@ -973,7 +1022,24 @@ async function controlForRow(
     ? " Approving would still work; only denying needs this."
     : "";
   if (anywhere === 0) {
-    throw new Error(`no ${what} matched “${selector}” anywhere on the page.${denyOnly}`);
+    /*
+     * Say what IS on the row, which is the thing needed to fix it.
+     *
+     * "No ⋮ row menu matched" names only what we looked for, and the
+     * selector is the one thing the reader already has. What they cannot
+     * get at is the markup — so the row's own controls go in the message,
+     * exactly as the corrections report promises ("the error usually lists
+     * what IS on the form, which is what the selector should be set to").
+     */
+    const found = await controlsOn(row);
+    throw new Error(
+      `no ${what} matched “${selector}” anywhere on the page.${denyOnly}` +
+      (found.length > 0
+        ? ` The controls on this row are: ${found.join(" · ")}. Set the selector to whichever of `
+          + `those is the menu, under Export settings.`
+        : " Nothing button-shaped is on this row at all, which usually means the row selector is "
+          + "matching a header or a spacer rather than a data row."),
+    );
   }
   throw new Error(
     visible === 0
@@ -1944,10 +2010,28 @@ async function applyOne(
       // is guessing with somebody else's money.
       const held = opts.peers ?? 1;
       if (opts.automatic && held < chosen.length) {
+        /*
+         * Name the rows it would not choose between.
+         *
+         * "2 rows match this expense equally well and we hold only 1 like
+         * it" is a correct refusal and an unreadable one: whether those two
+         * rows are a charge and its refund, the same bill entered twice, or
+         * two different sites is the whole question, and the person reading
+         * the report has no way to find out. Three of these landed at once
+         * on Paul Deaux II's car washes, all saying the same nothing.
+         *
+         * Printing them turns the refusal into a diagnosis.
+         */
+        const shown: string[] = [];
+        for (const i of chosen.slice(0, 4)) {
+          const t = await rows.nth(i).innerText().catch(() => "");
+          shown.push(`“${t.replace(/\s+/g, " ").trim().slice(0, 110)}”`);
+        }
         throw new Error(
           `${chosen.length} rows match this expense equally well and we hold only ${held} like ` +
           `it, so the automation cannot say which is which; refusing to guess which one to ` +
-          `${decision}. Approve it yourself if any of them will do.`,
+          `${decision}. Approve it yourself if any of them will do. The rows are: ` +
+          `${shown.join(" / ")}`,
         );
       }
       several = chosen.length;
