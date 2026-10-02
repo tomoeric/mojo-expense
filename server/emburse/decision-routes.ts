@@ -11,6 +11,7 @@ import {
 } from "./decide.js";
 import {
   clearFailedCorrections, correctionReport, correctionsFor, queueCorrection,
+  retryFailedCorrections,
 } from "./corrections.js";
 import {
   appliedCount, cancelDecision, decisionsFor, pendingDecisions, queueApprovalFor, queueDecision,
@@ -128,6 +129,22 @@ decisionRouter.post("/decisions/correct-category", requireAuth, async (req: Requ
 decisionRouter.get("/corrections/report.md", requireAuth, async (_req: Request, res: Response) => {
   try {
     res.type("text/markdown").send(await correctionReport());
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/**
+ * Ask again for every failed correction, as it was originally asked.
+ *
+ * The counterpart to clear-failed: one is "give up on these", this is "the
+ * reason they failed is fixed, go". Re-stating six correct instructions by
+ * hand because the tool could not follow them is work the tool should do.
+ */
+decisionRouter.post("/corrections/retry-failed", requireAuth, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  try {
+    res.json({ queued: await retryFailedCorrections(req.user?.email ?? "unknown") });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }

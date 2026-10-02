@@ -111,6 +111,51 @@ export async function queueCorrection(input: {
   return { ok: true, correction: shape(rows[0]!) };
 }
 
+/**
+ * Ask again for every correction that failed, exactly as it was asked.
+ *
+ * Six failed in one morning on the same cause — the ⋮ the run could not
+ * find — and the only way back was to reopen each row's picker and choose
+ * the same category again, six times, from a list of dozens. Nothing about
+ * the correction was wrong; the app's ability to carry it out was. Having
+ * somebody re-state a correct instruction because the tool could not
+ * follow it is work the tool should do.
+ *
+ * A fresh row each time, not a flipped state: the failed attempt is the
+ * record of what happened, and overwriting it loses the thing the report
+ * is for. Only while the expense is still in the queue — a correction to
+ * something that has left Emburse has nothing to act on.
+ */
+export async function retryFailedCorrections(by: string): Promise<number> {
+  await ensure();
+  const { rows } = await db().query<{
+    dedupe_key: string; from_category: string; to_category: string; requested_by: string;
+  }>(
+    `SELECT DISTINCT ON (c.dedupe_key)
+            c.dedupe_key, c.from_category, c.to_category, c.requested_by
+       FROM category_corrections c
+       JOIN expenses e ON e.dedupe_key = c.dedupe_key AND e.in_inbox
+      WHERE c.state = 'failed'
+        AND NOT EXISTS (SELECT 1 FROM category_corrections p
+                         WHERE p.dedupe_key = c.dedupe_key AND p.state = 'pending')
+      ORDER BY c.dedupe_key, c.id DESC`);
+
+  let again = 0;
+  for (const r of rows) {
+    // Under the ORIGINAL requester, never whoever pressed the button: a
+    // category change is recorded in Emburse against the account that
+    // makes it, and retrying one under somebody else's name would put the
+    // wrong person on somebody's finance record.
+    const out = await queueCorrection({
+      dedupeKey: r.dedupe_key, from: r.from_category,
+      to: r.to_category, requestedBy: r.requested_by,
+    });
+    if (out.ok) again++;
+  }
+  if (again > 0) console.log(`corrections: ${by} asked for ${again} failed one(s) again`);
+  return again;
+}
+
 /** Everything still waiting to reach Emburse, oldest first. */
 export async function pendingCorrections(): Promise<Correction[]> {
   await ensure();

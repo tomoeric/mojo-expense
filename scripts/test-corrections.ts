@@ -13,7 +13,7 @@
 import { db } from "../server/db.js";
 import {
   clearFailedCorrections, correctionReport, correctionsFor, pendingCorrections,
-  queueCorrection, settleCorrection,
+  queueCorrection, retryFailedCorrections, settleCorrection,
 } from "../server/emburse/corrections.js";
 
 const TAG = `zz-corr-${Date.now()}`;
@@ -87,6 +87,39 @@ try {
   // because a selector no longer matches, and the fix is in Export settings.
   check("…and where the fix goes", /Export settings/.test(md));
   check("…with the run step by step", /step by step/.test(md));
+
+  console.log("\n4b. Asking again, exactly as it was asked");
+  /*
+   * Six corrections failed in one morning on one cause — a ⋮ the run
+   * could not find. Nothing about any of them was wrong; the app's
+   * ability to carry them out was. The only way back was to reopen each
+   * row's picker and choose the same category again, six times, from a
+   * list of dozens.
+   */
+  {
+    const mine = (await correctionsFor([KEY])).get(KEY);
+    check("it is sitting there failed", mine?.state === "failed", mine?.state);
+
+    const again = await retryFailedCorrections("somebody.else@test.invalid");
+    check("it is asked for again", again === 1, String(again));
+
+    const now = (await correctionsFor([KEY])).get(KEY);
+    check("…as pending", now?.state === "pending", now?.state);
+    check("…to the same category", now?.to === mine?.to, `${now?.to} vs ${mine?.to}`);
+    // The one thing that must not drift. Emburse records a category change
+    // against whichever account makes it, so retrying under the person who
+    // pressed the button would put the wrong name on somebody's record.
+    check("…and under the ORIGINAL requester, not whoever pressed it",
+      now?.requestedBy === mine?.requestedBy, `${now?.requestedBy} vs ${mine?.requestedBy}`);
+
+    // Idempotent: one already on its way is not asked for twice.
+    check("asking again while it is in flight does nothing",
+      (await retryFailedCorrections("somebody.else@test.invalid")) === 0);
+
+    // Put it back to failed for the clearing section below.
+    const pend = (await pendingCorrections()).find((c) => c.dedupeKey === KEY);
+    if (pend) await settleCorrection(pend.id, { ok: false, error: "still cannot find the menu" });
+  }
 
   console.log("\n5. Clearing puts it down without touching Emburse");
   check("one is cleared", await clearFailedCorrections("eric.s@mammothholdings.com") >= 1);

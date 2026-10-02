@@ -145,6 +145,25 @@ function CorrectionFailed({
   onRetry: () => void;
 }) {
   const [show, setShow] = useState(false);
+  const [again, setAgain] = useState(false);
+  const [failed, setFailed] = useState("");
+  const qc = useQueryClient();
+
+  async function sendAgain(): Promise<void> {
+    setAgain(true);
+    setFailed("");
+    try {
+      await correctCategory({
+        dedupeKey: correction.dedupeKey, from: correction.from, category: correction.to,
+      });
+      await qc.invalidateQueries({ queryKey: ["decisions"] });
+    } catch (e) {
+      setFailed((e as Error).message);
+    } finally {
+      setAgain(false);
+    }
+  }
+
   return (
     <span className="block w-full rounded-lg border border-amber-500/50 bg-amber-500/10 px-2.5 py-2 text-xs text-amber-900 dark:text-amber-200">
       <span className="flex flex-wrap items-center gap-2">
@@ -167,17 +186,37 @@ function CorrectionFailed({
           <Download className="h-3.5 w-3.5" />
           Download
         </a>
+        {/* The SAME change again, not a fresh pick.
+            Nothing about the correction was wrong — the app's ability to
+            carry it out was — so re-choosing the category from a list of
+            dozens is work this button should do. Six failed on one cause
+            in a morning, which is six re-selections of something already
+            stated correctly. Changing it to something else is still
+            there, one click further on. */}
+        <button
+          type="button"
+          disabled={again}
+          onClick={() => void sendAgain()}
+          className="rounded-lg border border-amber-600/50 px-2 py-0.5 font-semibold hover:bg-amber-500/15 disabled:opacity-50"
+        >
+          {again ? "Sending…" : `Send “${correction.to}” again`}
+        </button>
         <button
           type="button"
           onClick={onRetry}
-          className="rounded-lg border border-amber-600/50 px-2 py-0.5 font-semibold hover:bg-amber-500/15"
+          className="underline underline-offset-2 hover:no-underline"
         >
-          Try again
+          Change it to something else
         </button>
       </span>
       {show && (
         <span className="mt-1.5 block rounded-lg border border-amber-600/30 bg-background/60 p-2 font-mono text-[11px] break-words">
           {correction.error ?? "Nothing was recorded, which is itself worth reporting."}
+        </span>
+      )}
+      {failed && (
+        <span className="mt-1.5 block rounded-lg border border-red-500/40 bg-red-500/10 p-2">
+          {failed}
         </span>
       )}
       <span className="mt-1 block opacity-80">

@@ -400,6 +400,14 @@ export async function correctCategory(input: {
 }
 
 /** Put the failed corrections down. Nothing reaches Emburse. */
+/** Ask again for every failed correction, exactly as it was asked. */
+export async function retryFailedCorrections(): Promise<number> {
+  const res = await fetch("/api/corrections/retry-failed", { method: "POST" });
+  const body = (await res.json()) as { queued?: number; error?: string };
+  if (!res.ok) throw new Error(body.error ?? "Could not ask again.");
+  return body.queued ?? 0;
+}
+
 export async function clearFailedCorrections(): Promise<number> {
   const res = await fetch("/api/corrections/clear-failed", { method: "POST" });
   const body = await readJson<{ error?: string; cleared?: number }>(res);
