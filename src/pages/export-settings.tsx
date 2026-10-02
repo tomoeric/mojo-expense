@@ -706,6 +706,33 @@ function ReviewerGrids() {
         One tab each. Anything left blank uses the shared settings below.
       </p>
 
+      {/* Everyone's first run, side by side.
+          "Both scopes share the first run times. Can't have that" — they
+          do not, but you could only tell by opening each tab in turn and
+          remembering, and the shared schedule above shows one time for
+          everybody. One browser runs them one at a time, so the times
+          being distinct is load-bearing, not cosmetic: say it where it
+          cannot be missed. */}
+      {rows.length > 1 && (
+        <p className="mt-2 rounded-lg bg-muted/50 p-2 text-sm">
+          <strong>First run:</strong>{" "}
+          {[...rows]
+            .sort((a, b) => (a.schedule.firstRun < b.schedule.firstRun ? -1 : 1))
+            .map((r) => `${r.userEmail} ${r.schedule.firstRun}`)
+            .join(" · ")}
+          {new Set(rows.map((r) => r.schedule.firstRun)).size === rows.length ? (
+            <span className="text-muted-foreground">
+              {" "}— no two the same, which is required: one browser runs them in turn.
+            </span>
+          ) : (
+            <span className="text-red-600">
+              {" "}— two of these are the same minute. One will wait for the other and may
+              miss its window. Give one of them their own times.
+            </span>
+          )}
+        </p>
+      )}
+
       {/* A tab per person. The whole reason this exists: a row-per-person
           grid made it hard to tell at a glance which scope belonged to
           whom, which is the exact confusion that cost a day. */}
@@ -770,6 +797,30 @@ function ReviewerPanel({
   onPost: (body: Record<string, unknown>) => void;
 }) {
   const [href, setHref] = useState("");
+  const [running, setRunning] = useState<"" | "dry" | "real">("");
+  const [ran, setRan] = useState("");
+
+  /** Start a run for THIS reviewer, whoever is signed in. */
+  async function runFor(dry: boolean) {
+    setRunning(dry ? "dry" : "real");
+    setRan("");
+    try {
+      const res = await fetch(`/api/export-run${dry ? "?dryRun=1" : ""}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reviewer: row.userEmail }),
+      });
+      const body = (await res.json()) as { error?: string; id?: number };
+      setRan(res.ok
+        ? "Started — watch it in Run the export, below."
+        : body.error ?? "Could not start it.");
+    } catch (e) {
+      setRan((e as Error).message);
+    } finally {
+      setRunning("");
+    }
+  }
+
   const reads = row.runAs ?? row.userEmail;
   /** Reading this queue with somebody else's login. */
   const borrowed = Boolean(row.runAs && row.runAs !== row.userEmail);
@@ -886,6 +937,39 @@ function ReviewerPanel({
         />
       </div>
 
+      {/* A run for THIS reviewer, beside their settings.
+          The runner lower down the page is the signed-in person's own — so
+          with Brian's tab open, pressing Test run there signed in as Eric
+          and read Eric's queue, which is exactly what the tabs exist to
+          keep apart. */}
+      <div>
+        <p className="text-sm font-semibold">Try it</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Runs <strong>{row.userEmail}</strong>&rsquo;s import, not yours. A test run stops
+          before exporting: no file, nothing imported, nobody emailed — it just reads the item
+          count off their list, which tells you whose queue it is.
+        </p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={running !== ""}
+            onClick={() => void runFor(true)}
+            className="rounded-lg border border-border px-3 py-1 text-sm font-semibold disabled:opacity-40"
+          >
+            {running === "dry" ? "Running…" : `Test run as ${row.userEmail}`}
+          </button>
+          <button
+            type="button"
+            disabled={running !== ""}
+            onClick={() => void runFor(false)}
+            className="rounded-lg bg-sky-600 px-3 py-1 text-sm font-semibold text-white disabled:opacity-40"
+          >
+            {running === "real" ? "Running…" : "Import theirs now"}
+          </button>
+          {ran && <span className="text-sm text-muted-foreground">{ran}</span>}
+        </div>
+      </div>
+
       <div>
         <p className="text-sm font-semibold">4. Approve automatically</p>
         <p className="mt-1 text-sm text-muted-foreground">
@@ -963,13 +1047,20 @@ function ReviewerSchedule({
   );
 
   return (
-    <>
+    <div className="mt-1 flex flex-wrap items-center gap-2">
+      {/* A button labelled "Shared times" reads as a status, not a
+          control — "what is this" was the entirely fair response. Say the
+          times, then offer to change them. */}
+      <span className="text-sm text-muted-foreground">
+        {sc.firstRun}, then every {sc.retryHours}h · {sc.attemptsPerDay} a day
+        {row.shared ? " — the shared times" : " — their own"}
+      </span>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         className="rounded-lg border border-border px-3 py-1 text-xs font-semibold"
       >
-        {row.shared ? "Shared times" : "Own times"}
+        {open ? "Close" : row.shared ? "Give them their own times" : "Change their times"}
       </button>
       {open && (
         <div className="flex w-full flex-wrap items-center gap-3 rounded-lg bg-muted/50 p-2">
@@ -1007,6 +1098,6 @@ function ReviewerSchedule({
           </button>
         </div>
       )}
-    </>
+    </div>
   );
 }

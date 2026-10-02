@@ -344,9 +344,31 @@ importRouter.post("/export-run", requireAuth, requireAdmin, async (req: Request,
    * deployment and the env fallback, both of which have one queue anyway.
    */
   const asker = req.user?.email ?? "";
+
+  /*
+   * An admin may name whose import this is, so a button beside a
+   * reviewer's settings runs THAT reviewer's import.
+   *
+   * Without it the only run on the page was the caller's own, while the
+   * tabs above it configured somebody else — so selecting Brian's tab and
+   * pressing Test run signed in as Eric and read Eric's queue, which is
+   * precisely the thing the tabs exist to keep apart.
+   *
+   * Only a stored reviewer, and only from an admin (requireAdmin guards
+   * the route). It changes whose queue is READ and whose name the rows are
+   * stamped with; it approves nothing.
+   */
+  const asked = String((req.body as { reviewer?: unknown })?.reviewer ?? "").trim();
+  const named = asked && await hasCredential(asked).catch(() => false) ? asked : "";
+  if (asked && !named) {
+    res.status(400).json({ error: `${asked} has no Emburse login stored.` });
+    return;
+  }
+
   const reviewer = req.viewingAs
     ? req.viewingAs.viewed
-    : (asker && await hasCredential(asker).catch(() => false)) ? asker : "";
+    : named
+      || ((asker && await hasCredential(asker).catch(() => false)) ? asker : "");
   try {
     // Start it, do not wait for it. A run takes minutes — longer still when it
     // stops to ask somebody for a verification code — and the proxy in front
