@@ -131,6 +131,16 @@ ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS run_as text;
 -- Null means the shared list, which is what a single-reviewer tenant has
 -- always had.
 ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS sections jsonb;
+
+-- And whether their export is filtered to expenses that HAVE a receipt.
+--
+-- Part of scope for the same reason the stages are: it decides what comes
+-- back. It is also the switch that gets the receipt image downloaded at
+-- all, so it belongs beside the list and the stages in one person's tab,
+-- not in a deployment-wide block somewhere else on the page.
+--
+-- Null means the default, which is on.
+ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS receipts_only boolean;
 `;
 
 let ready: Promise<void> | null = null;
@@ -552,9 +562,12 @@ export async function attemptExport(
      * changed every reviewer's import. They are part of a reviewer's scope,
      * not the deployment's.
      */
-    const forRun = mine?.sections?.length
-      ? { ...settings, sections: mine.sections }
-      : settings;
+    const forRun = {
+      ...settings,
+      ...(mine?.sections?.length ? { sections: mine.sections } : {}),
+      ...(mine?.receiptsOnly !== null && mine?.receiptsOnly !== undefined
+        ? { receiptsOnly: mine.receiptsOnly } : {}),
+    };
 
     run = await runAutoExport(forRun, forThisRun, login, {
       ...opts,
@@ -602,7 +615,8 @@ export async function attemptExport(
       const imported = await ingestExport(
         run.pdf, `emburse-${day}.pdf`, by,
         { sectionsVerified, reviewer, source: opts.source ?? "",
-          sections: mine?.sections ?? undefined });
+          sections: mine?.sections ?? undefined,
+          receiptsOnly: mine?.receiptsOnly ?? undefined });
       importId = imported.importId;
       // A duplicate file is not a failed run: it means Emburse produced the
       // same export twice, which is normal on a day nothing changed.
@@ -686,6 +700,8 @@ export type ReviewerImport = {
   gridSection: string | null;
   /** Which export-dialog stages this reviewer exports, or null for shared. */
   sections: string[] | null;
+  /** Only expenses with a receipt attached, or null for the default. */
+  receiptsOnly: boolean | null;
   /** Extra filters that pick out their queue, copied from Emburse. */
   gridQuery: string | null;
   /** Whose Emburse login reads it. Null is themselves. */
@@ -769,7 +785,7 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
   if (people.length === 0) {
     return [{ userEmail: "", enabled: true, schedule: shared, shared: true,
               staggeredBy: 0, gridPath: null, gridSection: null, gridQuery: null,
-              sections: null, runAs: null, autoApprove: false,
+              sections: null, receiptsOnly: null, runAs: null, autoApprove: false,
               autoApprovePerRun: null }];
   }
 
@@ -779,6 +795,7 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
     all_day: boolean | null; grid_path: string | null; grid_section: string | null;
     auto_approve: boolean | null; auto_approve_per_run: number | null;
     grid_query: string | null; run_as: string | null; sections: unknown;
+    receipts_only: boolean | null;
   }>("SELECT * FROM reviewer_imports");
   const own = new Map(rows.map((r) => [r.user_email.toLowerCase(), r]));
 
@@ -817,6 +834,7 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
       sections: Array.isArray(r?.sections)
         ? (r!.sections as unknown[]).filter((x): x is string => typeof x === "string")
         : null,
+      receiptsOnly: r?.receipts_only ?? null,
       runAs: r?.run_as ?? null,
       autoApprove: r?.auto_approve ?? false,
       autoApprovePerRun: r?.auto_approve_per_run ?? null,
@@ -858,6 +876,8 @@ export async function setReviewerImport(
     gridSection?: string | null;
     /** The stages their export covers; null or empty goes back to shared. */
     sections?: string[] | null;
+    /** Only expenses with a receipt; null goes back to the default. */
+    receiptsOnly?: boolean | null;
     /** Extra filters picking out their queue, copied from Emburse. */
     gridQuery?: string | null;
     /** Whose login reads it. Empty or null means themselves. */
@@ -888,6 +908,7 @@ export async function setReviewerImport(
     set.sections = input.sections && input.sections.length > 0
       ? JSON.stringify(input.sections) : null;
   }
+  if (input.receiptsOnly !== undefined) set.receipts_only = input.receiptsOnly;
   if (input.gridQuery !== undefined) set.grid_query = blank(input.gridQuery);
   if (input.runAs !== undefined) set.run_as = blank(input.runAs)?.toLowerCase() ?? null;
   if (input.autoApprove !== undefined) set.auto_approve = input.autoApprove;

@@ -33,6 +33,8 @@ type State = {
   rowsTicked: number;
   /** The address an account menu would show, for the who-is-signed-in check. */
   whoami: string;
+  /** A tenant whose sign-out we do not know: every route refuses to end it. */
+  noSignOut: boolean;
   pendingUser: string;
   loginOutcome: "ok" | "rejected" | "mfa" | "device" | "code" | "code-first";
   /**
@@ -207,6 +209,7 @@ const state: State = {
   rowsTicked: 0,
   /** The address an account menu would show. Empty renders none. */
   whoami: "",
+  noSignOut: false,
   pendingUser: "",
   loginOutcome: "ok",
   codeAttempts: 0,
@@ -666,12 +669,35 @@ app.post("/login", (req, res) => {
     return;
   }
   state.signedIn = true;
+  // The account menu names whoever just signed in, like a real tenant. It
+  // is what makes "sign out of somebody else's session and sign in as the
+  // right person" provable end to end: the menu changes names.
+  state.whoami = state.pendingUser;
   // A session cookie on every successful sign-in, like any real app. The
   // mock only ever set one on the device-verification path, so a plain
   // sign-in ended with an empty jar and "a successful sign-in saves its
   // session" could not be tested at all — the check that exists for it was
   // passing or failing on whether an EARLIER run had left a row behind.
   res.setHeader("set-cookie", "mock_session=1; Path=/; Max-Age=86400");
+  res.redirect("/");
+});
+
+/**
+ * Sign out — the SESSION ends, the trusted device does not.
+ *
+ * That distinction is the whole reason the app signs out rather than
+ * clearing cookies: a wipe takes the remembered device with it, and the
+ * person whose verification code it would then need is not sitting at the
+ * screen. Modelled here so the claim is tested rather than assumed.
+ */
+app.get("/users/sign_out", (_req, res) => {
+  // A tenant this app does not know how to sign out of. The run must then
+  // export nothing rather than use the session it cannot vouch for.
+  if (state.noSignOut) { res.redirect("/"); return; }
+  state.signedIn = false;
+  state.whoami = "";
+  state.pendingUser = "";
+  res.setHeader("set-cookie", "mock_session=; Path=/; Max-Age=0");
   res.redirect("/");
 });
 
@@ -1016,6 +1042,11 @@ app.post("/__actioned", (req, res) => {
 });
 
 /** Pretend the browser is signed in as this address. */
+app.post("/__no-sign-out/:on", (req, res) => {
+  state.noSignOut = req.params.on === "1";
+  res.json({ ok: true, noSignOut: state.noSignOut });
+});
+
 app.post("/__whoami/:email", (req, res) => {
   state.whoami = decodeURIComponent(req.params.email ?? "");
   res.json({ ok: true, whoami: state.whoami });

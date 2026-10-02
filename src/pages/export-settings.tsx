@@ -36,6 +36,7 @@ type Reviewer = {
   gridSection: string | null;
   gridQuery: string | null;
   sections: string[] | null;
+  receiptsOnly: boolean | null;
   autoApprove: boolean;
   autoApprovePerRun: number | null;
   shared: boolean;
@@ -189,6 +190,7 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
           everyone={rows.map((r) => r.userEmail)}
           allSections={settings.data?.allSections ?? []}
           sharedSections={settings.data?.sections ?? []}
+          sharedReceiptsOnly={settings.data?.receiptsOnly ?? true}
           selectors={settings.data?.selectors ?? {}}
           help={settings.data?.selectorHelp ?? {}}
           stepSelectors={settings.data?.stepSelectors ?? {}}
@@ -213,7 +215,7 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
  * that is the order somebody sets one up in and the order they debug one in.
  */
 function ReviewerPanel({
-  row, isAdmin, everyone, allSections, sharedSections,
+  row, isAdmin, everyone, allSections, sharedSections, sharedReceiptsOnly,
   selectors, help, stepSelectors, defaults, onPost,
 }: {
   row: Reviewer;
@@ -221,6 +223,7 @@ function ReviewerPanel({
   everyone: string[];
   allSections: string[];
   sharedSections: string[];
+  sharedReceiptsOnly: boolean;
   selectors: Record<string, string>;
   help: Record<string, string>;
   stepSelectors: Record<string, string[]>;
@@ -235,6 +238,7 @@ function ReviewerPanel({
   // What this import covers today: their own stages where they have them,
   // otherwise the deployment default they inherited.
   const stages = row.sections?.length ? row.sections : sharedSections;
+  const receipts = row.receiptsOnly ?? sharedReceiptsOnly;
   const reads = row.runAs ?? row.userEmail;
   const borrowed = Boolean(row.runAs && row.runAs !== row.userEmail);
 
@@ -335,6 +339,32 @@ function ReviewerPanel({
           {row.sections?.length ? "Theirs." : "Inherited from the defaults below until you change one — then it is theirs."}
           {" "}Saved as you tick.
         </p>
+
+        {/* The receipt filter. Part of scope, not a footnote somewhere else
+            on the page: it is what puts the receipt image in the export at
+            all, and without it there is nothing for the receipt-vs-claim
+            check to read. */}
+        <label
+          className={`mt-3 flex items-start gap-3 rounded-xl border p-3 text-sm ${
+            isAdmin ? "cursor-pointer hover:bg-muted" : "cursor-not-allowed opacity-70"
+          } ${receipts ? "border-border" : "border-amber-500/50 bg-amber-500/10"}`}
+        >
+          <input
+            type="checkbox"
+            checked={receipts}
+            disabled={!isAdmin}
+            onChange={(e) => onPost({ receiptsOnly: e.target.checked })}
+            className="mt-0.5 h-4 w-4 shrink-0 accent-sky-600"
+          />
+          <span>
+            <span className="font-semibold">Receipt image</span>
+            <span className="mt-0.5 block text-xs text-muted-foreground">
+              {receipts
+                ? "On — the export is filtered to Receipts: true, so every expense it brings in has an image to read."
+                : "Off — the export is not filtered to Receipts: true. Expenses with no image come in too, and the receipt-vs-claim check has nothing to read for them."}
+            </span>
+          </span>
+        </label>
 
         {!stages.includes("Needs Review") && (
           <p className="mt-2 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm">

@@ -63,23 +63,72 @@ try {
       /confirmed as|could not confirm/.test(who?.detail ?? ""), who?.detail);
   }
 
-  console.log("\nThe mock now shows Eric's address while we sign in as Brian");
-  // The exact failure: a browser holding somebody else's session, and a
-  // run that would otherwise export their queue under Brian's name.
+  console.log("\nThe browser is holding Eric's session while we run as Brian");
+  /*
+   * The exact run that went wrong, reproduced.
+   *
+   * "sign in — already signed in as brian.c@… — their session was still
+   * open", 1.7 seconds, no password typed, and 95 rows exported of which 91
+   * were Eric's. The session in Brian's profile was Eric's, carried there by
+   * adopting the legacy device, and an open session was being treated as
+   * proof of whose it was.
+   *
+   * What must happen now: Brian's credentials get used. Not a refusal — a
+   * sign-in. The one thing that must never happen is the export going ahead
+   * on somebody else's session.
+   */
   await fetch(`${mock.url}/__whoami/${encodeURIComponent(ERIC)}`, { method: "POST" })
     .catch(() => {});
   {
     const run = await runAutoExport(settings, sel as never,
       { userId: BRIAN, email: BRIAN, password: "x" },
       { dryRun: true, otherLogins: [ERIC] });
+    const signIn = step(run, "sign in");
     const who = step(run, "confirm who is signed in");
+
+    check("it did not accept the open session",
+      !/already signed in/.test(signIn?.detail ?? ""), signIn?.detail);
+    check("…it signed Eric out and signed Brian in",
+      signIn?.ok === true && (signIn?.detail ?? "").includes(BRIAN), signIn?.detail);
+    check("…and the account menu now names Brian",
+      who?.ok === true && (who?.detail ?? "").includes(BRIAN), who?.detail);
+    // As far as reading a list, which is the point: the recovery is not a
+    // refusal, it is a sign-in, and the run goes on to do its job. Not
+    // `run.ok` — this mock's export dialog has its own unrelated gap, and
+    // hanging an identity test on it would make it fail for the wrong
+    // reason.
+    check("…so the run carries on and reads a list",
+      step(run, "read the item count")?.ok === true,
+      run.steps.filter((x) => !x.ok).map((x) => x.name).join(", "));
+    // The device cookie is what a wipe would have destroyed, and the person
+    // who would then have to read out a code is not at the screen.
+    const trusted = await fetch(`${mock.url}/__state`).then((r) => r.json())
+      .catch(() => null) as { whoami?: string } | null;
+    check("…and the session now belongs to Brian",
+      trusted?.whoami === BRIAN, JSON.stringify(trusted?.whoami));
+  }
+
+  console.log("\nAnd if it cannot sign that session out, it stops");
+  // The remaining danger: a tenant whose sign-out this does not know. The
+  // answer is to export nothing, because the alternative is importing
+  // Eric's expenses under Brian's name.
+  await fetch(`${mock.url}/__no-sign-out/1`, { method: "POST" }).catch(() => {});
+  await fetch(`${mock.url}/__whoami/${encodeURIComponent(ERIC)}`, { method: "POST" })
+    .catch(() => {});
+  {
+    const run = await runAutoExport(settings, sel as never,
+      { userId: BRIAN, email: BRIAN, password: "x" },
+      { dryRun: true, otherLogins: [ERIC] });
+    const signIn = step(run, "sign in");
     check("the run is stopped", run.ok === false);
-    check("…at the check, not somewhere downstream", who?.ok === false,
+    check("…at sign in, before anything is read", signIn?.ok === false,
       run.steps.filter((s) => !s.ok).map((s) => s.name).join(", "));
-    check("…naming who it really is", (who?.detail ?? "").includes(ERIC), who?.detail);
+    check("…saying whose session it is", (signIn?.detail ?? "").includes(ERIC), signIn?.detail);
     check("…and nothing was exported",
       !run.steps.some((s) => s.name === "start the export" && s.ok));
   }
+  await fetch(`${mock.url}/__no-sign-out/0`, { method: "POST" }).catch(() => {});
+
 } finally {
   await mock.close();
 }

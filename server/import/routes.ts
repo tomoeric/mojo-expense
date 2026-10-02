@@ -149,7 +149,7 @@ importRouter.post("/reviewer-imports", requireAuth, requireAdmin, async (req: Re
   const body = req.body as {
     email?: unknown; enabled?: unknown; gridPath?: unknown; gridSection?: unknown;
     autoApprove?: unknown; autoApprovePerRun?: unknown; schedule?: unknown;
-    gridQuery?: unknown; runAs?: unknown; sections?: unknown;
+    gridQuery?: unknown; runAs?: unknown; sections?: unknown; receiptsOnly?: unknown;
   };
   const email = String(body.email ?? "").trim();
   if (!email) {
@@ -196,6 +196,10 @@ importRouter.post("/reviewer-imports", requireAuth, requireAdmin, async (req: Re
               .map((x) => x.slice(0, 80))
               .slice(0, 20)
           : null),
+      // Part of their scope: it is what gets the receipt image into the
+      // export at all.
+      ...sent("receiptsOnly", () =>
+        body.receiptsOnly === null ? null : body.receiptsOnly !== false),
       // Whose login reads their queue. A stored setting, never a per-run
       // choice: a request that could name the login is a request that
       // could read anybody's queue as anybody.

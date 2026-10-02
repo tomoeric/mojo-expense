@@ -79,6 +79,7 @@ export type Selectors = Record<SelectorKey, string>;
 
 export type SelectorKey =
   | "loginEmail" | "loginPassword" | "loginSubmit" | "loggedIn"
+  | "accountMenu" | "signOutPath"
   | "mfaCode" | "mfaSubmit" | "mfaRemember"
   | "adminTab" | "grid" | "itemCount"
   | "gridPath"
@@ -110,6 +111,21 @@ export const DEFAULT_SELECTORS: Selectors = {
   loginPassword: 'input[type="password"]',
   loginSubmit: 'button[type="submit"], button:has-text("Continue"), button:has-text("Sign in")',
   loggedIn: 'text=Transactions',
+
+  // WHERE the signed-in account is named. Emburse puts it top right, and it
+  // prints the person's NAME — "Eric Schlicht" — never their email, which
+  // is the whole reason the old check could not tell one reviewer from
+  // another and waved a run through on somebody else's session.
+  //
+  // Scoped on purpose. The grid below is full of other people's names, so
+  // searching the whole page for "brian" would find a cardholder and call
+  // it a sign-in.
+  accountMenu: 'header, [class*="header" i], [class*="navbar" i], [data-testid*="user" i], [aria-label*="account" i]',
+  // Ends the Emburse SESSION without untrusting the browser: "remember this
+  // device" is a separate long-lived cookie, which is why this is a sign-out
+  // and not a cookie wipe. Wiping them is what lost Brian's device trust
+  // last time, and nobody can read his code out on demand.
+  signOutPath: "/users/sign_out",
 
   // The device-verification screen. Its code box is usually one field, but some
   // tenants split it into six single-character boxes — the selector matches
@@ -181,7 +197,8 @@ export type Login = { userId: string | null; email: string; password: string };
 export const STEP_SELECTORS: Record<string, SelectorKey[]> = {
   "open Emburse": [],
   "sign in": ["loginEmail", "loginPassword", "loginSubmit", "loggedIn",
-              "mfaCode", "mfaSubmit", "mfaRemember"],
+              "mfaCode", "mfaSubmit", "mfaRemember", "accountMenu", "signOutPath"],
+  "confirm who is signed in": ["accountMenu"],
   "switch to the team view": ["adminTab"],
   "open the filtered grid": ["gridPath", "gridSection", "gridQuery", "grid"],
   "read the item count": ["itemCount"],
@@ -199,6 +216,8 @@ export const SELECTOR_HELP: Record<SelectorKey, string> = {
   loginPassword: "The password box.",
   loginSubmit: "The sign-in button.",
   loggedIn: "Something that only appears once signed in.",
+  accountMenu: "Where Emburse prints WHO is signed in \u2014 the account menu, top right. Scoped rather than the whole page, because the grid is full of other people's names.",
+  signOutPath: "Path that ends the Emburse session, used when a session was found already open and could not be proved to be this account's. Device trust survives it; a cookie wipe would not.",
   mfaCode: "The box for the verification code, on the \u201cverify this device\u201d screen.",
   mfaSubmit: "The button that submits that code.",
   mfaRemember: "The \u201cremember this device\u201d tick box. Ticking it is what stops the code being asked for every run.",
@@ -960,6 +979,115 @@ export async function gridLoaded(page: Page, sel: Selectors): Promise<string | n
   return late.some(Boolean) ? "the grid is on screen, after a slow render" : null;
 }
 
+
+/**
+ * The words that stand for one login's owner on an Emburse page.
+ *
+ * Emburse's account menu prints a NAME — "Eric Schlicht" — and never the
+ * email, so the check that looked for an email address could never confirm
+ * or deny anything and said "could not confirm" on every single run. A
+ * login's local part is the one piece of their name we hold:
+ * `brian.c@mojocarwash.com` gives "brian", `eric.s@…` gives "eric", and
+ * that is enough to tell those two apart.
+ *
+ * Initials and other one- or two-letter fragments are dropped — "c" would
+ * match almost any page.
+ */
+export function nameTokens(email: string): string[] {
+  const local = (email.split("@")[0] ?? "").toLowerCase();
+  return [...new Set(local.split(/[^a-z]+/).filter((t) => t.length >= 3))];
+}
+
+/**
+ * Who the page says is signed in: us, somebody else we know, or no answer.
+ *
+ * Pure, so the three outcomes can be tested without a browser. Takes the
+ * text of the ACCOUNT MENU rather than the whole page — the grid is full of
+ * cardholders' names, and "Brian" appearing in somebody's expense list is
+ * not a sign-in.
+ */
+export function readsAs(
+  text: string,
+  mine: string,
+  others: string[],
+): { mine: boolean; other: string | null; how: string } {
+  const hay = text.toLowerCase();
+  const me = mine.trim().toLowerCase();
+  const peers = others.map((e) => e.trim().toLowerCase()).filter((e) => e && e !== me);
+
+  if (hay.includes(me)) return { mine: true, other: null, how: "their address is on the page" };
+
+  const theirs = peers.find((e) => hay.includes(e))
+    ?? peers.find((e) => nameTokens(e).some((t) => hay.includes(t)));
+  const ours = nameTokens(me).some((t) => hay.includes(t));
+
+  // Ours AND somebody else's is not a confirmation. It means the text picked
+  // up more than the account menu, and the honest answer is "cannot tell".
+  if (ours && !theirs) return { mine: true, other: null, how: "their name is in the account menu" };
+  if (theirs && !ours) return { mine: false, other: theirs, how: `${theirs} is in the account menu` };
+  return { mine: false, other: null, how: "the account menu names nobody we know" };
+}
+
+/** The account menu's text, falling back to the page when it is not found. */
+async function accountText(page: Page, sel: Selectors): Promise<string> {
+  const menu = page.locator(sel.accountMenu).first();
+  const scoped = await menu.innerText({ timeout: 2_000 }).catch(() => "");
+  if (scoped.trim()) return scoped;
+  return page.locator("body").innerText().catch(() => "");
+}
+
+
+/**
+ * End the Emburse session without untrusting the browser.
+ *
+ * Device trust is a separate, long-lived cookie, so a sign-out keeps it and
+ * a cookie wipe does not. That distinction is the whole reason this exists
+ * as a navigation rather than `context.clearCookies()`: clearing them is
+ * what lost Brian's remembered device before, and nobody can read his
+ * verification code out on demand.
+ *
+ * Never throws. The caller decides what an unsuccessful sign-out means,
+ * and it can tell by looking for the form afterwards.
+ */
+async function signOutOf(page: Page, sel: Selectors, appUrl: string): Promise<string> {
+  const base = (() => {
+    try { return new URL(page.url()).origin; } catch { return appUrl; }
+  })();
+  const emailBox = page.locator(sel.loginEmail).first();
+  /** Did that work? The sign-in form appearing is the only proof. */
+  const out = async (): Promise<boolean> => {
+    await page.goto(appUrl, { waitUntil: "domcontentloaded" }).catch(() => {});
+    await emailBox.waitFor({ state: "visible", timeout: 8_000 }).catch(() => {});
+    return emailBox.isVisible().catch(() => false);
+  };
+
+  // The configured path first, then the handful this kind of app uses. One
+  // guess would have made Brian's import depend on a URL nobody has
+  // verified; a wrong guess here costs one navigation.
+  const paths = [...new Set([
+    sel.signOutPath?.trim() || "/users/sign_out",
+    "/users/sign_out", "/logout", "/sign_out", "/users/logout", "/session/destroy",
+  ].filter(Boolean))];
+
+  for (const path of paths) {
+    await page.goto(new URL(path, base).toString(), { waitUntil: "domcontentloaded" })
+      .catch(() => {});
+    if (await out()) return `signed out via ${path}`;
+  }
+
+  // Failing that, do it the way a person would: open the account menu and
+  // click the item that says so. Tenant-correct by construction, which the
+  // paths above are not.
+  const menu = page.locator(sel.accountMenu).first();
+  await menu.click({ timeout: 3_000 }).catch(() => {});
+  const link = page.locator('a:has-text("Sign out"), a:has-text("Log out"), '
+    + 'button:has-text("Sign out"), button:has-text("Log out")').first();
+  await link.click({ timeout: 3_000 }).catch(() => {});
+  if (await out()) return "signed out from the account menu";
+
+  return "could not sign out";
+}
+
 export async function signIn(
   page: Page,
   sel: Selectors,
@@ -967,6 +1095,8 @@ export async function signIn(
   /** The app's own address, used to tell "back in the app" from "still at the identity host". */
   appUrl: string,
   challenge?: ChallengeHook,
+  /** Every other Emburse login we hold, so a session can be recognised as not ours. */
+  others: string[] = [],
 ): Promise<string> {
   const loggedIn = page.locator(sel.loggedIn).first();
   const emailBox = page.locator(sel.loginEmail).first();
@@ -1007,29 +1137,56 @@ export async function signIn(
   if (!(await emailBox.isVisible().catch(() => false))) {
     if (await loggedIn.isVisible().catch(() => false)) {
       /*
-       * Name the account, always.
+       * A session was already open. WHOSE is a question, not an assumption.
        *
-       * This said "already signed in" and nothing else — no email — which
-       * is precisely the line where the account matters most, because this
-       * is the branch that did NOT type a password. Asked "is this
-       * importing from Brian or Eric", the step log had no answer, and the
-       * only way to tell was to recognise the item count further down.
+       * It used to be an assumption, written down as one: "the browser
+       * profile and the cookie jar are both this account's, so a live
+       * session here can only be theirs". That is false the moment anything
+       * copies a profile between accounts — which adopting the legacy
+       * device does, by design, to carry device trust forward. Brian's
+       * folder ended up holding Eric's session, this branch returned
+       * "already signed in as brian.c@…" in 1.7 seconds without typing a
+       * password, and the run exported 95 rows of which 91 were Eric's.
+       * Every step was green.
        *
-       * The name is authoritative now rather than a hope: the browser
-       * profile and the cookie jar are both this account's, and the
-       * context's cookies are cleared before that account's are restored,
-       * so a live session here can only be theirs. It still says "the
-       * session already open" rather than claiming a fresh sign-in,
-       * because those are different facts and conflating them is how this
-       * went unnoticed.
+       * So: prove it, or do not use it. An unproven session is signed out
+       * of and replaced with a real sign-in, which costs about a minute and
+       * makes the account certain. Signing out does not untrust the
+       * browser — "remember this device" is a separate long-lived cookie —
+       * which is why this is a sign-out and not the cookie wipe that lost
+       * Brian's trust last time.
        */
-      return `already signed in as ${login.email} — their session was still open`;
-    }
+      const seen = readsAs(await accountText(page, sel), login.email, others);
+      if (seen.mine) {
+        return `already signed in as ${login.email} — ${seen.how}`;
+      }
 
-    // Straight to a verification code, before any form. Clearable by a person,
-    // so ask — and if nobody is there to ask, say THAT rather than blaming a
-    // selector for a page it was never meant to match.
-    if (challengeKind(await pageText(page), page.url()) !== null) {
+      const whose = seen.other
+        ? `the open session is ${seen.other}'s, not ${login.email}'s`
+        : `the open session could not be proved to be ${login.email}'s`;
+      const how = await signOutOf(page, sel, appUrl);
+      await settle();
+
+      if (!(await emailBox.isVisible().catch(() => false))) {
+        throw new SignInFailed(
+          `${whose}, and ${how} — no sign-in form appeared, still at ` +
+            `${safeUrl(page.url())}. Nothing was exported, deliberately: using that session ` +
+            `would have imported somebody else's expenses under ${login.email}'s name. ` +
+            `Check the signOutPath selector against this tenant.`,
+          false,
+        );
+      }
+      // The form is up. Fall through to it — it types the password, so
+      // whatever happens next, the account is this one.
+    } else if (challengeKind(await pageText(page), page.url()) !== null) {
+      // Straight to a verification code, before any form. Clearable by a
+      // person, so ask — and if nobody is there to ask, say THAT rather
+      // than blaming a selector for a page it was never meant to match.
+      //
+      // An `else if`, not a second `if`. It used to be one, and the
+      // sign-out-and-retry path above walked straight through it into the
+      // "no sign-in form" throw below — reporting a broken loginEmail
+      // selector about a page that was showing the sign-in form.
       if (challenge) {
         const how = await passChallenge(page, sel, challenge);
         if (how) {
@@ -1049,12 +1206,12 @@ export async function signIn(
           "trusted and later runs go straight through.",
         false,
       );
+    } else {
+      throw new Error(
+        `no sign-in form and the app is not loaded after waiting — at ${safeUrl(page.url())}. ` +
+          "Check the loginEmail selector against that page.",
+      );
     }
-
-    throw new Error(
-      `no sign-in form and the app is not loaded after waiting — at ${safeUrl(page.url())}. ` +
-        "Check the loginEmail selector against that page.",
-    );
   }
 
   await emailBox.fill(login.email);
@@ -1668,7 +1825,9 @@ async function runSteps(
 
   if (!(await step("open Emburse", () => openEmburse(page, url)))) return false;
 
-  if (!(await step("sign in", async () => signIn(page, sel, login, url, opts.onChallenge)))) return false;
+  if (!(await step("sign in",
+    async () => signIn(page, sel, login, url, opts.onChallenge, opts.otherLogins ?? []))))
+    return false;
 
   /*
    * WHO is actually signed in — asked of the page, not of our intentions.
@@ -1692,21 +1851,21 @@ async function runSteps(
    *   - neither → cannot tell, which is honest and not a reason to refuse.
    */
   if (!(await step("confirm who is signed in", async () => {
-    const text = (await page.locator("body").innerText().catch(() => "")).toLowerCase();
-    const mine = login.email.trim().toLowerCase();
-    const others = (opts.otherLogins ?? [])
-      .map((e) => e.trim().toLowerCase())
-      .filter((e) => e && e !== mine);
-
-    const wrong = others.find((e) => text.includes(e));
-    if (wrong && !text.includes(mine)) {
+    const seen = readsAs(await accountText(page, sel), login.email, opts.otherLogins ?? []);
+    if (seen.other) {
       throw new Error(
-        `this run is signed in as ${wrong}, not ${login.email} — ${wrong} is on the page and ` +
-        `${login.email} is not. Nothing was exported. The browser kept somebody else's session; ` +
-        `clear the remembered device for ${login.email} and run it again.`);
+        `this run is signed in as ${seen.other}, not ${login.email} — ${seen.how}. Nothing was ` +
+        `exported. Sign-in should have replaced that session; check the signOutPath and ` +
+        `accountMenu selectors against this tenant.`);
     }
-    if (text.includes(mine)) return `confirmed as ${login.email} — their address is on the page`;
-    return `could not confirm from the page, which shows no login address; proceeding as ${login.email}`;
+    if (seen.mine) return `confirmed as ${login.email} — ${seen.how}`;
+    // Not fatal here. The sign-in step above already refuses to USE a
+    // session it could not prove, so by this point either the password was
+    // typed this run or the run has stopped. This is the backstop, and a
+    // backstop that cannot read the account menu should say so rather than
+    // refuse a run that is in fact correct.
+    return `the account menu named nobody we know, so this could not be confirmed from the page; ` +
+      `the password was typed this run, so the account is ${login.email}`;
   }))) return false;
 
   if (!(await step("switch to the team view", async () => {

@@ -113,6 +113,8 @@ export async function ingestExport(
      * deployment-wide list reports a disagreement nobody has.
      */
     sections?: string[];
+    /** And whether theirs was asked for with the receipts filter on. */
+    receiptsOnly?: boolean;
   } = {},
 ): Promise<ImportResult> {
   const fileHash = opts.fileHash ?? sha256(file);
@@ -125,8 +127,11 @@ export async function ingestExport(
   warnings.push(
     ...checkAgainstSettings(
       parsed.header,
-      await readSettings().then((st) =>
-        opts.sections?.length ? { ...st, sections: opts.sections } : st),
+      await readSettings().then((st) => ({
+        ...st,
+        ...(opts.sections?.length ? { sections: opts.sections } : {}),
+        ...(opts.receiptsOnly === undefined ? {} : { receiptsOnly: opts.receiptsOnly }),
+      })),
       { sectionsVerified: opts.sectionsVerified ?? false },
     ),
   );
