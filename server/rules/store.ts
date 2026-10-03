@@ -392,6 +392,27 @@ export async function subjects(
                   AND rr.error IS NULL AND rr.legible
                   AND rr.total_cents IS NOT NULL
                   AND coalesce(rr.tip_cents, 0) <> 0
+               UNION
+               -- What the LINES add up to, ignoring credits.
+               --
+               -- A Gwinnett Chamber invoice: "General Membership Dues
+               -- $2,276.30", then "Upgrade Requested -$2,276.30", then
+               -- "Total 0.00 · Balance Due 0.00". The card was charged
+               -- $2,276.30; the printed total is the balance still owed,
+               -- which is nil because it was paid. Reading that as the
+               -- receipt total reported $2,276.30 of overclaiming against
+               -- a receipt that states the charge on its first line.
+               --
+               -- Positive lines only, and only as a candidate: a credit
+               -- is a real thing on other receipts, and the charge is
+               -- what decides whether this figure is the right one.
+               SELECT sum(i.amount_cents) AS c
+                 FROM expense_receipts r
+                 JOIN receipt_readings rr ON rr.sha256 = r.sha256
+                 JOIN receipt_items i ON i.sha256 = r.sha256
+                WHERE r.dedupe_key = e.dedupe_key
+                  AND rr.error IS NULL AND rr.legible
+                  AND i.amount_cents > 0
              ) AS candidates) AS receipt_arithmetic,
             -- Alcohol on any line the reader saw. NULL when no reading with
             -- usable lines exists, so "cannot say" stays distinct from "no".

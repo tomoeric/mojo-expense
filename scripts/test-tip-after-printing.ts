@@ -101,6 +101,46 @@ console.log("\n4. It cannot excuse a real overclaim");
     verdict?.verdict === "claimed-more", verdict?.message);
 }
 
+console.log("\n4b. An invoice whose Total is the BALANCE DUE, not the charge");
+/*
+ * Gwinnett Chamber, $2,276.30 claimed. The invoice prints:
+ *
+ *   General Membership Dues … 2,276.30
+ *   Upgrade Requested        -2,276.30
+ *   Total 0.00 · Amt Paid 0.00 · Balance Due 0.00
+ *
+ * The card was charged $2,276.30. The printed total is what is still
+ * OWED, which is nil because it was paid — and reading it as the receipt
+ * total reported "$2,276.30 more than the receipt" against a receipt
+ * that states the charge on its first line.
+ */
+{
+  const claimed = 2276.30;
+  const invoice = [{
+    total: 0, error: null, tip: null,
+    items: [{ amount: 2276.30 }, { amount: -2276.30 }],
+  }];
+  const client = receiptTotalOf(invoice, claimed);
+  check("the lines answer the charge, so they are used", client === 2276.30, String(client));
+  check("…and the badge is a match",
+    verdictFor(claimed, client, "x")?.verdict === "match");
+
+  // The server reaches the same figure through its arithmetic candidates.
+  const server = chosenReceiptTotal(227630, [0], [227630]);
+  check("the server agrees", server === 227630, String(server));
+
+  // A genuinely zero receipt against a zero charge is untouched: there is
+  // nothing to answer, and nothing is preferred over a printed 0.
+  const comped = receiptTotalOf([{ total: 0, error: null, items: [{ amount: 0 }] }], 0);
+  check("a zero receipt against a zero charge stays zero", comped === 0, String(comped));
+
+  // And the lines must not rescue a claim they do not account for.
+  const over = receiptTotalOf(invoice, 5000);
+  check("lines that do not answer the claim are not chosen", over === 0, String(over));
+  check("…so it is still reported as over",
+    verdictFor(5000, over, "x")?.verdict === "claimed-more");
+}
+
 console.log("\n5. A receipt with no tip is untouched");
 {
   const client = receiptTotalOf([{ total: 50.15, error: null, tip: null }], 56.74);

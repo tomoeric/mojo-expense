@@ -79,7 +79,10 @@ export function verdictFor(
  * Several, none of them the charge: the distinct ones added up.
  */
 export function receiptTotalOf(
-  details: { total: number | null; error: string | null; tip?: number | null }[] | undefined,
+  details: {
+    total: number | null; error: string | null; tip?: number | null;
+    items?: { amount: number | null }[];
+  }[] | undefined,
   claimed: number,
 ): number | null {
   if (!details || details.length === 0) return null;
@@ -101,6 +104,7 @@ export function receiptTotalOf(
    * CHARGE and the printed one does not, so it can resolve the pre-auth
    * case and cannot excuse a real overclaim.
    */
+  /** Second readings of the same receipt: with the tip on, or by its lines. */
   const tipped: number[] = [];
   for (const d of details) {
     if (d.error !== null || d.total === null) continue;
@@ -108,6 +112,25 @@ export function receiptTotalOf(
     cents.push(c);
     const tip = d.tip ?? null;
     if (tip !== null && Math.round(tip * 100) !== 0) tipped.push(c + Math.round(tip * 100));
+
+    /*
+     * And what the LINES add up to, ignoring credits.
+     *
+     * A Gwinnett Chamber invoice prints "General Membership Dues
+     * $2,276.30", then "Upgrade Requested -$2,276.30", then "Total 0.00 ·
+     * Balance Due 0.00". The card was charged $2,276.30; the printed
+     * total is the balance still OWED, nil because it was paid. Taken as
+     * the receipt total it reported $2,276.30 of overclaiming against a
+     * receipt that states the charge on its first line.
+     *
+     * A candidate like the others: preferred only where it answers the
+     * charge and the printed figure does not, so a genuinely zero
+     * receipt against a zero charge is untouched.
+     */
+    const lines = (d.items ?? [])
+      .map((i) => Math.round((i.amount ?? 0) * 100))
+      .filter((n) => n > 0);
+    if (lines.length > 0) tipped.push(lines.reduce((a, b) => a + b, 0));
   }
   if (cents.length === 0) return null;
   // A refund prints as a positive total against a negative charge — see
