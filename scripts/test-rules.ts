@@ -27,7 +27,8 @@ const check = (label: string, ok: boolean, detail = "") => {
 };
 
 const expense = (over: Partial<Subject> = {}): Subject => ({
-  dedupeKey: "k", employee: "Christopher Allen", merchant: "RW6708RACETRAC INC",
+  dedupeKey: "k", employee: "Christopher Allen", title: "Store Manager",
+  merchant: "RW6708RACETRAC INC",
   note: "Gas for truck", category: "Auto Fee & Fuel", location: "Richland",
   department: "Operations and Field", method: "Corporate card", amountCents: 4512,
   hasReceipt: true, receiptItems: "UNLEADED REGULAR | MONSTER ENERGY", inInbox: true,

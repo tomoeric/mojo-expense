@@ -189,6 +189,7 @@ export function ConfigurationPage({ onOpen, isAdmin, viewingAs }: {
 
       <AutoApprove isAdmin={isAdmin} viewingAs={viewingAs} />
       <AutoFixGasCategory isAdmin={isAdmin} />
+      <JobTitles isAdmin={isAdmin} />
       <DecisionTrace isAdmin={isAdmin} />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -696,6 +697,129 @@ function AutoApprove({ isAdmin, viewingAs }: { isAdmin: boolean; viewingAs: stri
         means nothing when nothing is looking.
       </p>
     </div>
+  );
+}
+
+type TitleCoverage = {
+  matched: { employee: string; title: string }[];
+  unmatched: string[];
+  stored: number;
+  updatedAt: string | null;
+  canRead: boolean;
+};
+
+/**
+ * Job titles, so a rule can act on what somebody's job is.
+ *
+ * The match rate is the point of this card. The expense export carries a
+ * NAME and no email, so the join is name to directory name, and a deny
+ * rule resting on a two-thirds match is worse than one resting on
+ * nothing — the third it misses is invisible in its results. So the
+ * people it could not match are listed, by name, before anything leans
+ * on it.
+ */
+function JobTitles({ isAdmin }: { isAdmin: boolean }) {
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const [said, setSaid] = useState("");
+  const q = useQuery<TitleCoverage>({
+    queryKey: ["titles"],
+    enabled: isAdmin,
+    queryFn: async () => {
+      const res = await fetch("/api/titles");
+      if (!res.ok) throw new Error("Could not read them");
+      return (await res.json()) as TitleCoverage;
+    },
+  });
+  if (!isAdmin) return null;
+
+  const matched = q.data?.matched ?? [];
+  const unmatched = q.data?.unmatched ?? [];
+  const total = matched.length + unmatched.length;
+
+  async function pull(): Promise<void> {
+    setBusy(true);
+    setSaid("");
+    try {
+      const res = await fetch("/api/titles/pull", { method: "POST" });
+      const body = (await res.json()) as
+        { read?: number; stored?: number; withoutTitle?: number; error?: string };
+      setSaid(body.error
+        ?? `Read ${body.read ?? 0} people, stored ${body.stored ?? 0} titles`
+           + (body.withoutTitle ? `, ${body.withoutTitle} had none set` : "") + ".");
+      await qc.invalidateQueries({ queryKey: ["titles"] });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-border p-4">
+      <h2 className="text-base font-bold">Job titles</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Read from Microsoft Entra, so a rule can test <strong>Job title</strong> the way it tests
+        a note or a category. Names and titles only — the export carries no email, so the name is
+        the join, and nothing else about anybody is stored here.
+      </p>
+      <p className="mt-1 text-sm text-muted-foreground">
+        A title we could not match is <strong>unknown</strong>, not blank. A rule asking about an
+        unknown title does not fire either way — so “title is not … → deny” skips the people
+        below rather than denying them, which is the only safe way for an unattended denial to
+        fail.
+      </p>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          disabled={busy || q.data?.canRead === false}
+          onClick={() => void pull()}
+          className="rounded-lg border border-border px-3 py-1.5 text-sm font-semibold disabled:opacity-40"
+        >
+          {busy ? "Reading the directory…" : "Read titles from Entra"}
+        </button>
+        {q.data?.updatedAt && (
+          <span className="text-xs text-muted-foreground">
+            Last read {new Date(q.data.updatedAt).toLocaleString()} · {q.data.stored} stored
+          </span>
+        )}
+      </div>
+      {said && <p className="mt-2 text-sm text-muted-foreground">{said}</p>}
+      {q.data?.canRead === false && (
+        <p className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
+          Microsoft sign-in is not configured here, so there is no directory to read.
+        </p>
+      )}
+
+      {total > 0 && (
+        <>
+          <p className="mt-3 text-sm">
+            <strong className="tabular-nums">{matched.length}</strong> of{" "}
+            <strong className="tabular-nums">{total}</strong> people in the queue have a title.
+          </p>
+          {unmatched.length > 0 && (
+            <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+              No title for: {unmatched.join(" · ")} — a rule about job titles will not apply to
+              them at all. Either their name differs from the directory, or the directory has no
+              title set for them.
+            </p>
+          )}
+          {matched.length > 0 && (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-xs font-semibold text-muted-foreground">
+                Show the {matched.length} matched
+              </summary>
+              <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+                {matched.map((m) => (
+                  <li key={m.employee}>
+                    <span className="font-semibold text-foreground">{m.employee}</span> — {m.title}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 

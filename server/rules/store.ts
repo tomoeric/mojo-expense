@@ -1,6 +1,7 @@
 import type pg from "pg";
 import { db, ensureSchema } from "../db.js";
 import { ensureReceiptItems } from "../emburse/receipt-items.js";
+import { KEY_SQL, ensureTitles } from "../people/titles.js";
 import {
   ACTIONS, FIELDS, OPS, centsDiffer, chosenReceiptTotal, comparableTo, isGroupField, opsFor,
   problems, summarise,
@@ -65,6 +66,10 @@ export const ensureRules = (): Promise<void> =>
       // Rules can test receipt line items, so that table has to exist before
       // one is evaluated — see ensureReceiptItems for why it might not.
       await ensureReceiptItems();
+      // And they can test a job title, which `subjects` LEFT JOINs. A
+      // missing table there is not "no titles", it is every rule run
+      // failing on a relation that does not exist.
+      await ensureTitles();
     })
     .catch((err) => {
       ready = null;
@@ -306,6 +311,7 @@ export async function subjects(
     dedupe_key: string; employee: string; merchant: string; note: string | null;
     category: string | null; location: string | null; department: string | null;
     method: string | null; amount_cents: string; receipts: string; items: string | null;
+    title: string;
     in_inbox: boolean; expense_date: string | null; receipt_totals: string[] | null;
     receipt_arithmetic: string[] | null;
     share_peers: string; share_total_cents: string | null; share_sites: string;
@@ -314,6 +320,11 @@ export async function subjects(
   }>(
     `SELECT e.dedupe_key, e.employee, e.merchant, e.note, e.category, e.location,
             e.department, e.method, e.amount_cents, e.in_inbox,
+            -- The person's job title, matched on a normalised name. The
+            -- export carries no email, so the name is the only join there
+            -- is; NULL here means "we could not match them", which the
+            -- engine reads as unanswerable rather than as a blank title.
+            coalesce(t.title, '') AS title,
             to_char(e.expense_date, 'YYYY-MM-DD') AS expense_date,
             (SELECT count(*) FROM expense_receipts r WHERE r.dedupe_key = e.dedupe_key) AS receipts,
             (SELECT string_agg(i.description, ' | ')
@@ -446,12 +457,14 @@ export async function subjects(
               WHERE r.dedupe_key = e.dedupe_key
                 AND rr.merchant IS NOT NULL AND rr.merchant <> '') AS receipt_merchant
        FROM expenses e
+       LEFT JOIN employee_titles t ON t.name_key = ${KEY_SQL("e.employee")}
       ${keys ? "WHERE e.dedupe_key = ANY($1::text[])" : ""}`,
     keys ? [keys] : [],
   );
 
   return rows.map((r) => ({
     dedupeKey: r.dedupe_key,
+    title: r.title ?? "",
     employee: r.employee ?? "",
     merchant: r.merchant ?? "",
     note: r.note ?? "",

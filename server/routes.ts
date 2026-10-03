@@ -321,6 +321,41 @@ api.post("/flags/:key", requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
+/**
+ * Who has a job title and who does not.
+ *
+ * The match rate is the whole question before a rule depends on this. A
+ * deny rule that silently covers two thirds of the company is worse than
+ * one covering none, because the gap is invisible from its results.
+ */
+api.get("/titles", requireAuth, requireAdmin, async (_req, res) => {
+  if (!isDbConfigured()) {
+    res.status(503).json({ error: "No database is configured." });
+    return;
+  }
+  try {
+    const { titleCoverage } = await import("./people/titles.js");
+    const { canReadDirectory } = await import("./people/entra.js");
+    res.json({ ...(await titleCoverage()), canRead: canReadDirectory() });
+  } catch (err) {
+    res.status(500).json({ error: describe(err) });
+  }
+});
+
+/** Read the directory again now. */
+api.post("/titles/pull", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const { pullEntraTitles } = await import("./people/entra.js");
+    const out = await pullEntraTitles();
+    const { titleCoverage } = await import("./people/titles.js");
+    res.json({ ...out, coverage: await titleCoverage() });
+  } catch (err) {
+    // Straight through, including Graph's own words about a missing
+    // consent: "no titles found" would send somebody to look at names.
+    res.status(500).json({ error: describe(err) });
+  }
+});
+
 api.get("/taxonomy", requireAuth, async (_req, res) => {
   if (!isDbConfigured()) {
     res.status(503).json({ error: "No database is configured, so there are no lists yet." });

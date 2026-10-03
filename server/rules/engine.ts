@@ -24,7 +24,7 @@
  */
 
 export const FIELDS = [
-  "note", "merchant", "category", "location", "department", "employee",
+  "note", "merchant", "category", "location", "department", "employee", "title",
   "amount", "method", "receipt", "receiptItems", "receiptTotal",
   "receiptAlcohol", "receiptReadable", "date", "receiptDate", "receiptMerchant",
   "receiptShared", "receiptSplitAddsUp",
@@ -39,6 +39,7 @@ export const FIELD_LABEL: Record<Field, string> = {
   location: "Location / Site",
   department: "Department",
   employee: "Employee",
+  title: "Job title",
   amount: "Amount",
   method: "Payment method",
   receipt: "Receipt",
@@ -292,6 +293,9 @@ export function comparableTo(field: Field): Field[] {
 export const YES_NO: ReadonlySet<Field> = new Set<Field>(
   ["receiptAlcohol", "receiptReadable", "receiptShared", "receiptSplitAddsUp"]);
 
+/** Fields whose empty value is "not known", never "blank". See `holds`. */
+const UNKNOWN_WHEN_EMPTY = new Set<Field>(["title"]);
+
 export const FIELD_LIST: Partial<Record<Field, "category" | "location" | "department">> = {
   category: "category",
   location: "location",
@@ -403,6 +407,16 @@ export type RuleBody = {
 export type Subject = {
   dedupeKey: string;
   employee: string;
+  /**
+   * The person's job title, from the directory — "" when unknown.
+   *
+   * Not from the expense: an export says who spent the money and in
+   * which department, neither of which is what somebody's job is. The
+   * empty string is "we could not match this name", and the engine
+   * treats an empty text field as unanswerable, so no rule fires either
+   * way on it.
+   */
+  title: string;
   merchant: string;
   note: string;
   category: string;
@@ -560,6 +574,15 @@ function textOf(subject: Subject, field: Field): string {
     case "location": return subject.location;
     case "department": return subject.department;
     case "employee": return subject.employee;
+    /*
+     * Empty when we do not know it, and that is load-bearing.
+     *
+     * An empty text field makes a condition "cannot say" (see below),
+     * so a rule reading "title is not Store Manager → deny" skips the
+     * people it could not match rather than denying them. For an
+     * unattended denial that is the only acceptable way to fail.
+     */
+    case "title": return subject.title;
     case "method": return subject.method;
     case "receiptItems": return subject.receiptItems;
     case "receipt": return subject.hasReceipt ? "receipt" : "";
@@ -674,6 +697,30 @@ export function test(subject: Subject, c: Condition, group?: Group): boolean | n
   // which reads as "there is no alcohol on this receipt" — the exact claim
   // this field must never make about a receipt nobody could read.
   if (YES_NO.has(c.field)) {
+    const known = textOf(subject, c.field) !== "";
+    if (c.op === "is_blank") return !known;
+    if (c.op === "is_not_blank") return known;
+    if (!known) return null;
+  }
+
+  /*
+   * Fields where EMPTY means "we could not find out", not "it is blank".
+   *
+   * A note can genuinely be empty, and "note is not X" matching it is
+   * right. A job title cannot: an empty one means the name did not match
+   * the directory, and "title is not Store Manager" matching that person
+   * is this app concluding something about somebody it never found.
+   *
+   * It came within one test of mattering. The rule this field was built
+   * for is "corporate title → DENY", and the inverse — "not a store
+   * title → deny" — would have denied every unmatched person in the
+   * queue, unattended, with a reason the employee reads. Unknown has to
+   * mean unknown in both directions.
+   *
+   * is_blank and is_not_blank still answer, and on this field they ask a
+   * useful question of their own: do we know what this person does?
+   */
+  if (UNKNOWN_WHEN_EMPTY.has(c.field)) {
     const known = textOf(subject, c.field) !== "";
     if (c.op === "is_blank") return !known;
     if (c.op === "is_not_blank") return known;
