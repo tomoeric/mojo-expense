@@ -1001,6 +1001,41 @@ async function besideApprove(
 }
 
 
+/**
+ * Put the reason in the box, then ASK THE BOX WHAT IT SAYS.
+ *
+ * A fill that went nowhere looks exactly like one that worked. The box
+ * can be read-only, it can be a rich-text component that ignores a plain
+ * fill, it can clear itself on blur, or the selector can have matched a
+ * different field — and in every one of those the denial still goes
+ * through, with no explanation attached, while this app records
+ * "denied, reason: …" about a reason nobody will ever see. The employee
+ * is then told their expense was refused and nothing else.
+ *
+ * Reading it back costs one call and turns all of that into a refusal
+ * before anything is confirmed.
+ *
+ * Takes the two methods it uses rather than a Locator, so the rule can be
+ * tested without a browser — the browser-driven suite cannot complete
+ * repeated sign-ins in this container, and a check this important should
+ * not be the one that depends on it.
+ */
+export async function putReasonIn(
+  box: { fill: (v: string) => Promise<void>; inputValue: () => Promise<string> },
+  reason: string,
+): Promise<void> {
+  await box.fill(reason);
+  const want = reason.trim();
+  if (!want) return;
+  const got = (await box.inputValue().catch(() => "")).trim();
+  if (got === want) return;
+  throw new Error(
+    `the reason did not go into the box: it was typed as “${want}” and the box now reads `
+    + `“${got || "(empty)"}”. Nothing was confirmed — a denial with no explanation tells the `
+    + `employee only that it was refused. Check the denyReason selector in Export settings `
+    + `against the deny dialog.`);
+}
+
 async function controlsOn(row: Locator): Promise<string[]> {
   const out: string[] = [];
   const all = row.locator('button, [role="button"], a[href]');
@@ -2276,7 +2311,22 @@ async function applyOne(
       }
       return null;
     })();
-    if (box) await box.fill(reason);
+    /*
+     * Fill it, then READ IT BACK before confirming.
+     *
+     * A fill that went nowhere looks exactly like one that worked. The
+     * box can be read-only, it can be a rich-text component that ignores
+     * a plain fill, it can clear itself on blur, or the match can have
+     * landed on a different field entirely — and in every one of those
+     * the denial still goes through, with no explanation attached, and
+     * this app reports "denied, reason: …" about a reason nobody will
+     * ever see. The employee is then told their expense was refused and
+     * nothing else.
+     *
+     * Asking the box what it now contains costs one call and turns all
+     * of that into a refusal before anything is confirmed.
+     */
+    if (box) await putReasonIn(box, reason);
 
     /**
      * A note that went nowhere is not a denial with a note.
@@ -2299,7 +2349,12 @@ async function applyOne(
 
     await clickFirstVisible(page, sel.denyConfirm!, "Deny confirm button", ms);
     const said = await confirmActioned(page, sel, target, "denied", matchedRows);
-    return reason ? `${said}, reason: ${reason}` : said;
+    // Says it was READ BACK, not merely typed. The difference is the
+    // whole point of the check above, and a step log that does not make
+    // it is a step log somebody has to take on trust.
+    return reason
+      ? `${said}, with the reason read back out of the box: “${reason.trim()}”`
+      : said;
   });
 }
 

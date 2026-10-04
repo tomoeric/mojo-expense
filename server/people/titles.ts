@@ -92,6 +92,38 @@ export async function setTitles(
   return n;
 }
 
+/**
+ * Titles pasted by hand, for a tenant that cannot read its directory.
+ *
+ * The directory is the right source and this is not a rival to it — but
+ * granting an application permission is a wait on somebody else, and 88
+ * people with no title is a deny rule that cannot be written at all in
+ * the meantime. Two columns, name and title, comma or tab separated,
+ * one per line; a header row is ignored if it looks like one.
+ *
+ * Stored under source "pasted", so a later directory read simply
+ * overwrites each name it also knows about and the two never argue.
+ */
+export function parsePasted(text: string): { name: string; title: string }[] {
+  const out: { name: string; title: string }[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    // Tab first: a name like "Pashley, Scott" has a comma in it, and
+    // splitting on that would make the surname the title.
+    const parts = line.includes("\t") ? line.split("\t") : line.split(",");
+    if (parts.length < 2) continue;
+    const name = parts[0]!.trim();
+    const title = parts.slice(1).join(",").trim();
+    if (!name || !title) continue;
+    if (/^(name|employee|person)$/i.test(name) && /^(title|job ?title|role)$/i.test(title)) {
+      continue; // a header row
+    }
+    out.push({ name, title });
+  }
+  return out;
+}
+
 export async function allTitles(): Promise<(Title & { updatedAt: string })[]> {
   await ensure();
   const { rows } = await db().query<{

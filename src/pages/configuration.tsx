@@ -706,6 +706,7 @@ type TitleCoverage = {
   stored: number;
   updatedAt: string | null;
   canRead: boolean;
+  ownCredential: boolean;
 };
 
 /**
@@ -722,6 +723,8 @@ function JobTitles({ isAdmin }: { isAdmin: boolean }) {
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [said, setSaid] = useState("");
+  const [paste, setPaste] = useState("");
+  const [pasting, setPasting] = useState(false);
   const q = useQuery<TitleCoverage>({
     queryKey: ["titles"],
     enabled: isAdmin,
@@ -782,8 +785,59 @@ function JobTitles({ isAdmin }: { isAdmin: boolean }) {
             Last read {new Date(q.data.updatedAt).toLocaleString()} · {q.data.stored} stored
           </span>
         )}
+        {q.data?.ownCredential === false && (
+          <span className="text-xs text-muted-foreground">
+            Using the sign-in app. Set TITLES_AZURE_TENANT_ID / _CLIENT_ID / _CLIENT_SECRET to
+            read the directory with a different one.
+          </span>
+        )}
       </div>
       {said && <p className="mt-2 text-sm text-muted-foreground">{said}</p>}
+
+      {/* The directory is the right source, and granting an application
+          permission is a wait on somebody else. Eighty-eight people with
+          no title is a deny rule that cannot be written in the meantime. */}
+      <details className="mt-3 rounded-lg border border-border p-3">
+        <summary className="cursor-pointer text-sm font-semibold">
+          Paste them instead
+        </summary>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Two columns per line — name, then title — comma or tab separated, so a column pair
+          out of a spreadsheet pastes straight in. A later read from Entra overwrites each name
+          it also knows, so this never argues with the directory.
+        </p>
+        <textarea
+          value={paste}
+          onChange={(e) => setPaste(e.target.value)}
+          rows={5}
+          spellCheck={false}
+          placeholder={"Scott Pashley, Marketing Director\nJonathan Roath, Store Manager"}
+          className="mt-2 w-full rounded-lg border border-border bg-background px-2 py-1.5 font-mono text-xs"
+        />
+        <button
+          type="button"
+          disabled={pasting || !paste.trim()}
+          onClick={() => void (async () => {
+            setPasting(true);
+            setSaid("");
+            try {
+              const res = await fetch("/api/titles/paste", {
+                method: "POST", headers: { "content-type": "application/json" },
+                body: JSON.stringify({ text: paste }),
+              });
+              const body = (await res.json()) as { stored?: number; error?: string };
+              setSaid(body.error ?? `Stored ${body.stored ?? 0} titles.`);
+              if (!body.error) setPaste("");
+              await qc.invalidateQueries({ queryKey: ["titles"] });
+            } finally {
+              setPasting(false);
+            }
+          })()}
+          className="mt-2 rounded-lg border border-border px-3 py-1.5 text-xs font-semibold disabled:opacity-40"
+        >
+          {pasting ? "Storing…" : "Store these titles"}
+        </button>
+      </details>
       {q.data?.canRead === false && (
         <p className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
           Microsoft sign-in is not configured here, so there is no directory to read.

@@ -36,6 +36,14 @@ type State = {
   /** A tenant whose sign-out we do not know: every route refuses to end it. */
   noSignOut: boolean;
   /**
+   * A reason box that silently refuses what is typed into it.
+   *
+   * Read-only fields, rich-text components that ignore a plain fill, and
+   * boxes that clear on blur all look identical to a working one from
+   * the outside: the denial goes through and the explanation does not.
+   */
+  deafReasonBox: boolean;
+  /**
    * How the row's ⋮ menu is marked up.
    *
    * "labelled" is aria-label="more", which the shipped default matched.
@@ -220,6 +228,7 @@ const state: State = {
   /** The address an account menu would show. Empty renders none. */
   whoami: "",
   noSignOut: false,
+  deafReasonBox: false,
   menuStyle: "labelled",
   pendingUser: "",
   loginOutcome: "ok",
@@ -404,7 +413,7 @@ const grid = (search: string) => {
 
   const behaviour = `<div id="menu" hidden><button class="dn">Deny</button><button class="ed">Edit</button></div>
     ${EDIT_FORM}
-    <div id="dlg" hidden><textarea placeholder="Reason"></textarea><button class="dc">Deny</button></div>
+    <div id="dlg" hidden><textarea placeholder="Reason"${state.deafReasonBox ? " readonly" : ""}></textarea><button class="dc">Deny</button></div>
     <script>
       var live = ${state.actionsWork ? "true" : "false"};
       var stale = ${state.staleGrid ? "true" : "false"};
@@ -1064,6 +1073,11 @@ app.post("/__actioned", (req, res) => {
 });
 
 /** Pretend the browser is signed in as this address. */
+app.post("/__deaf-reason/:on", (req, res) => {
+  state.deafReasonBox = req.params.on === "1";
+  res.json({ ok: true, deafReasonBox: state.deafReasonBox });
+});
+
 app.post("/__menu/:style", (req, res) => {
   const style = req.params.style;
   state.menuStyle = style === "haspopup" || style === "none" || style === "icon"
@@ -1103,6 +1117,7 @@ const reset = () =>
     hiddenFromSearch: false, userFilter: "", hangOpens: 0, hangAll: false, oidcHop: false,
     formatControl: "links",
     chipsUnmatchable: false, appPaintMs: 0, showNavLabel: true, menuStyle: "labelled",
+    deafReasonBox: false,
     sections: {
       "Needs Review": true, "Needs Manager Review": false,
       "Pending Submission": false, Denied: true, Completed: false,

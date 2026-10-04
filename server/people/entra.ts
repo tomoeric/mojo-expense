@@ -21,14 +21,32 @@ import { setTitles } from "./titles.js";
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
 
+/**
+ * Which app registration reads the directory.
+ *
+ * TITLES_AZURE_* first, falling back to the sign-in app. They are
+ * different jobs and often different registrations: signing in needs
+ * delegated scopes and a redirect URI, reading the directory needs
+ * User.Read.All as an APPLICATION permission with admin consent. This
+ * tenant already has an app that does the second — the sister app reads
+ * jobTitle from Graph every day — so pointing at it is a secret to
+ * paste, where granting a new consent is a wait on somebody else.
+ *
+ * Keeping them separate also keeps the sign-in app as small as it is.
+ * Nothing that only signs people in should acquire the ability to read
+ * every person in the company because this feature needed it.
+ */
+const pick = (a: string, b: string): string =>
+  (process.env[a] ?? "").trim() || (process.env[b] ?? "").trim();
+
 async function token(): Promise<string> {
-  const tenant = (process.env.AZURE_TENANT_ID ?? "").trim();
-  const id = (process.env.AZURE_CLIENT_ID ?? "").trim();
-  const secret = (process.env.AZURE_CLIENT_SECRET ?? "").trim();
+  const tenant = pick("TITLES_AZURE_TENANT_ID", "AZURE_TENANT_ID");
+  const id = pick("TITLES_AZURE_CLIENT_ID", "AZURE_CLIENT_ID");
+  const secret = pick("TITLES_AZURE_CLIENT_SECRET", "AZURE_CLIENT_SECRET");
   if (!tenant || !id || !secret) {
     throw new Error(
-      "Microsoft sign-in is not configured (AZURE_TENANT_ID / AZURE_CLIENT_ID / "
-      + "AZURE_CLIENT_SECRET), so there is no directory to read titles from.");
+      "No Microsoft credentials are configured (TITLES_AZURE_* or AZURE_*), so there is no "
+      + "directory to read titles from.");
   }
   const res = await fetch(
     `https://login.microsoftonline.com/${encodeURIComponent(tenant)}/oauth2/v2.0/token`,
@@ -75,8 +93,10 @@ export async function pullEntraTitles(): Promise<EntraPull> {
       throw new Error(
         `Graph refused to list users: ${body.error?.message ?? res.status}`
         + (body.error?.code === "Authorization_RequestDenied"
-          ? " — the app registration needs the User.Read.All APPLICATION permission, "
-            + "admin-consented. Signing in uses delegated scopes, which cannot read other people."
+          ? " — this app registration needs User.Read.All as an APPLICATION permission, "
+            + "admin-consented. Signing in uses delegated scopes, which cannot read other "
+            + "people. Either grant it, or point TITLES_AZURE_TENANT_ID / _CLIENT_ID / "
+            + "_CLIENT_SECRET at an app that already has it."
           : ""));
     }
     for (const u of body.value ?? []) {
@@ -97,6 +117,10 @@ export async function pullEntraTitles(): Promise<EntraPull> {
 
 /** Whether this deployment could even try. */
 export const canReadDirectory = (): boolean =>
-  Boolean((process.env.AZURE_TENANT_ID ?? "").trim()
-    && (process.env.AZURE_CLIENT_ID ?? "").trim()
-    && (process.env.AZURE_CLIENT_SECRET ?? "").trim() && env);
+  Boolean(pick("TITLES_AZURE_TENANT_ID", "AZURE_TENANT_ID")
+    && pick("TITLES_AZURE_CLIENT_ID", "AZURE_CLIENT_ID")
+    && pick("TITLES_AZURE_CLIENT_SECRET", "AZURE_CLIENT_SECRET") && env);
+
+/** Whether a credential of its own is in use, for the card to say so. */
+export const ownCredential = (): boolean =>
+  Boolean((process.env.TITLES_AZURE_CLIENT_ID ?? "").trim());

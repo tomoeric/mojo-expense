@@ -17,6 +17,11 @@
  * nothing matches at all, the message names the controls that ARE on the
  * row, because the selector is the one thing the reader already has and the
  * markup is the thing they cannot get at.
+ *
+ * The denial NOTE is not checked here. It was, and both sections only ever
+ * skipped — this container cannot complete the repeated sign-ins, and a
+ * check that important should not depend on one. It lives in
+ * test-deny-note.ts, which needs no browser and passes.
  */
 
 export {};
@@ -68,6 +73,20 @@ async function deny(reason = "Wrong amount") {
 }
 
 try {
+  /*
+   * A throwaway run first, and its result ignored.
+   *
+   * The mock draws its sign-in form 1200ms after the page loads — on
+   * purpose, because that shape once broke a real run — and a cold
+   * Chromium on one vCPU loses that race often enough that whichever
+   * scenario happens to be first gets skipped. Paying the cold start on
+   * a run nobody checks is cheaper than reordering the file around the
+   * flakiness, which I tried twice and which only moved the skip.
+   */
+  mock.reset();
+  await runDecision("approve", TARGET, "", SEL, mock.url, LOGIN, { dryRun: true })
+    .catch(() => undefined);
+
   console.log("\n1. Not a button at all — an icon in a div beside APPROVE");
   // What this tenant actually has. Six corrections failed in one morning
   // against it, four with "no ⋮ row menu matched anywhere on the page".
@@ -95,7 +114,7 @@ try {
     }
   }
 
-  console.log("\n1b. The other icon shape: a button with only a popup attribute");
+  console.log("\n2. The other icon shape: a button with only a popup attribute");
   mock.reset();
   await menu("haspopup");
   {
@@ -109,7 +128,7 @@ try {
       run.steps.filter((s) => !s.ok).map((s) => `${s.name}: ${s.detail}`).join(" | "));
   }
 
-  console.log("\n2. The old markup still works");
+  console.log("\n3. The old markup still works");
   mock.reset();
   await menu("labelled");
   {

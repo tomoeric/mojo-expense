@@ -335,8 +335,12 @@ api.get("/titles", requireAuth, requireAdmin, async (_req, res) => {
   }
   try {
     const { titleCoverage } = await import("./people/titles.js");
-    const { canReadDirectory } = await import("./people/entra.js");
-    res.json({ ...(await titleCoverage()), canRead: canReadDirectory() });
+    const { canReadDirectory, ownCredential } = await import("./people/entra.js");
+    res.json({
+      ...(await titleCoverage()),
+      canRead: canReadDirectory(),
+      ownCredential: ownCredential(),
+    });
   } catch (err) {
     res.status(500).json({ error: describe(err) });
   }
@@ -352,6 +356,32 @@ api.post("/titles/pull", requireAuth, requireAdmin, async (_req, res) => {
   } catch (err) {
     // Straight through, including Graph's own words about a missing
     // consent: "no titles found" would send somebody to look at names.
+    res.status(500).json({ error: describe(err) });
+  }
+});
+
+/**
+ * Titles pasted by hand, when the directory cannot be read.
+ *
+ * Not a rival to Entra: stored under its own source, and a later
+ * directory read overwrites each name it also knows, so the two never
+ * argue about the same person.
+ */
+api.post("/titles/paste", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const text = String((req.body as { text?: unknown })?.text ?? "");
+    const { parsePasted, setTitles, titleCoverage } = await import("./people/titles.js");
+    const people = parsePasted(text);
+    if (people.length === 0) {
+      res.status(400).json({
+        error: "Nothing in that looked like a name and a title. Two columns per line, "
+          + "comma or tab separated.",
+      });
+      return;
+    }
+    const stored = await setTitles(people, "pasted");
+    res.json({ stored, coverage: await titleCoverage() });
+  } catch (err) {
     res.status(500).json({ error: describe(err) });
   }
 });
