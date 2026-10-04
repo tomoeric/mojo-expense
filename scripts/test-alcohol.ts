@@ -178,6 +178,41 @@ try {
   check("…and the IPA still is", after.rows[2]?.alcohol === true);
   check("…running it again changes nothing", await items.reapplyAlcoholFloor() === 0);
 
+  console.log("\n6b. The marked line comes back out of the database");
+  /*
+   * The flag read "Receipt shows alcohol yes is yes" over a list of a
+   * dozen items with nothing saying which one, so the reviewer had to
+   * read the receipt themselves to find the drink — the work the reader
+   * had already done. It was stored per line from the start and simply
+   * never selected.
+   */
+  {
+    const { db } = await import("../server/db.js");
+    const { receiptDetail } = await import("../server/emburse/receipt-items.js");
+    const sha = `alc-line-${Date.now()}`;
+    await db().query(
+      `INSERT INTO receipt_blobs (sha256, bytes, byte_size, content_type)
+       VALUES ($1,'\\x00'::bytea,1,'image/png') ON CONFLICT DO NOTHING`, [sha]);
+    await db().query(
+      `INSERT INTO receipt_readings (sha256, model, legible) VALUES ($1,'test',true)
+       ON CONFLICT (sha256) DO NOTHING`, [sha]);
+    await db().query(
+      `INSERT INTO receipt_items (sha256, line_no, description, amount_cents, alcohol)
+       VALUES ($1,1,'Minute Maid Lemonade',1400,false),
+              ($1,2,'Pabst Blue Ribbon',1600,true)
+       ON CONFLICT DO NOTHING`, [sha]);
+
+    const got = await receiptDetail(sha);
+    const beer = got?.items.find((i) => i.description.includes("Pabst"));
+    const pop = got?.items.find((i) => i.description.includes("Lemonade"));
+    check("the drink comes back marked", beer?.alcohol === true, String(beer?.alcohol));
+    check("…and the soft drink does not", pop?.alcohol === false, String(pop?.alcohol));
+
+    await db().query("DELETE FROM receipt_items WHERE sha256 = $1", [sha]);
+    await db().query("DELETE FROM receipt_readings WHERE sha256 = $1", [sha]);
+    await db().query("DELETE FROM receipt_blobs WHERE sha256 = $1", [sha]);
+  }
+
   console.log("\n7. The reader was bumped, so stored readings are done again");
   check("reader version is 6", items.READER_VERSION === 6, String(items.READER_VERSION));
 } finally {

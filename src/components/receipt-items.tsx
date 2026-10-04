@@ -23,6 +23,8 @@ export type ReceiptItem = {
   quantity: number | null;
   unitPrice: number | null;
   amount: number | null;
+  /** Whether the reader judged this line an alcoholic drink. */
+  alcohol?: boolean;
 };
 
 export type ReceiptDetail = {
@@ -242,12 +244,34 @@ export function ReceiptItems({
       )}
 
       <ul className="divide-y divide-border rounded-lg border border-border text-sm">
+        {/* THE line, marked.
+            The flag says "Receipt shows alcohol yes is yes" above a list
+            of a dozen items with nothing saying which one — so the
+            reviewer reads the receipt themselves to find the drink,
+            which is the work the reader had already done and stored.
+            It was stored per line from the start and simply never sent. */}
         {detail.items.map((i) => (
-          <li key={i.lineNo} className="flex items-baseline justify-between gap-3 px-2.5 py-1.5">
+          <li
+            key={i.lineNo}
+            className={`flex items-baseline justify-between gap-3 px-2.5 py-1.5 ${
+              i.alcohol ? "bg-amber-300/35 dark:bg-amber-400/20" : ""
+            }`}
+          >
             <span className="min-w-0">
-              <span className="break-words">{i.description}</span>
+              <span className={`break-words ${i.alcohol ? "font-semibold" : ""}`}>
+                {i.description}
+              </span>
               {i.quantity !== null && i.quantity !== 1 && (
                 <span className="ml-1.5 text-xs text-muted-foreground">×{i.quantity}</span>
+              )}
+              {i.alcohol && (
+                // Named as well as coloured: a highlight alone says
+                // "look here" and leaves why to be guessed, and this one
+                // is the difference between a flagged expense and a
+                // clean one.
+                <span className="ml-1.5 rounded-full bg-amber-500/25 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900 dark:text-amber-100">
+                  alcohol
+                </span>
               )}
             </span>
             <span className="tnum shrink-0 text-muted-foreground">

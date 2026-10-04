@@ -107,6 +107,16 @@ export type ReceiptItem = {
   quantity: number | null;
   unitPrice: number | null;
   amount: number | null;
+  /**
+   * Whether the reader judged THIS line an alcoholic drink.
+   *
+   * Stored per line since the flag existed, and never sent — so the
+   * expense said "Receipt shows alcohol yes is yes" above a list of
+   * twelve items with nothing saying which one. The reviewer's job at
+   * that point is to find the drink by reading the receipt themselves,
+   * which is the work the reader had already done.
+   */
+  alcohol: boolean;
 };
 
 export type ReceiptDetail = {
@@ -748,7 +758,7 @@ export async function receiptDetail(sha256: string): Promise<ReceiptDetail | nul
   if (!r) return null;
 
   const { rows: items } = await db().query<Record<string, never>>(
-    `SELECT line_no, description, quantity, unit_cents, amount_cents
+    `SELECT line_no, description, quantity, unit_cents, amount_cents, alcohol
        FROM receipt_items WHERE sha256 = $1 ORDER BY line_no`, [sha256]);
 
   return {
@@ -771,12 +781,13 @@ export async function receiptDetail(sha256: string): Promise<ReceiptDetail | nul
       ? (r.totals as unknown as { label: string; amount: number }[])
       : [],
     readerVersion: Number(r.reader_version ?? 1),
-    items: (items as unknown as Record<string, string | number | null>[]).map((i) => ({
+    items: (items as unknown as Record<string, string | number | boolean | null>[]).map((i) => ({
       lineNo: Number(i.line_no),
       description: String(i.description),
       quantity: i.quantity === null ? null : Number(i.quantity),
       unitPrice: dollars(i.unit_cents as string | null),
       amount: dollars(i.amount_cents as string | null),
+      alcohol: i.alcohol === true,
     })),
   };
 }
