@@ -224,7 +224,12 @@ function FailureDialog({
           <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold">{word} — did not go through</p>
             <p className="text-xs break-words text-muted-foreground">
-              {decision.matchedRow ?? "no row was matched"}
+              {/* Never "no row was matched" as a fallback: a null here means
+                  the row was not RECORDED, which is not the same claim, and
+                  asserting the search failed sent people to debug the wrong
+                  step on nine denials that had matched their row perfectly.
+                  What actually went wrong is in the error bar below. */}
+              {decision.matchedRow ?? "which row it matched was not recorded"}
               {decision.attempts > 1 && ` · tried ${decision.attempts} times`}
               {` · last tried ${tried.relative}, ${tried.exact}`}
             </p>

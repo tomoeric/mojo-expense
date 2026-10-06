@@ -875,7 +875,27 @@ export async function settleDecision(
      * `notInQueue` says the run established the expense is not in Emburse's
      * Needs Review — not that something went wrong. See the column comment.
      */
-    | { ok: false; error: string; notInQueue?: boolean },
+    | {
+        ok: false;
+        error: string;
+        notInQueue?: boolean;
+        /**
+         * The row the run DID match, when it got that far.
+         *
+         * This used to be stored only on success, and the screen reads
+         * `matchedRow ?? "no row was matched"` — so every failure, whatever
+         * its cause, announced that the search had found nothing. Nine
+         * denials that failed on the last click each said "no row was
+         * matched" directly above their own step list saying "verify it is
+         * the right row ✓ — employee, merchant, amount and date all match".
+         *
+         * That headline is the first thing read and it sent the reader to
+         * debug the search instead of the button. A run that matched a row
+         * and then failed knows exactly which row it was; refusing to keep
+         * it threw away the one fact that made the failure legible.
+         */
+        matchedRow?: string | null;
+      },
   /**
    * The browser run, step by step. Stored only when the trace flag is on, and
    * on a SUCCESS as well as a failure — "it worked, here is how" is what makes
@@ -916,7 +936,7 @@ export async function settleDecision(
     [
       id,
       outcome.ok ? "applied" : gone ? "cancelled" : "failed",
-      outcome.ok ? outcome.matchedRow : null,
+      outcome.matchedRow ?? null,
       outcome.ok ? null : outcome.error.slice(0, 1000),
       steps && steps.length > 0 ? JSON.stringify(steps) : null,
       // Capped rather than trusted: a full-page PNG of a long grid can run

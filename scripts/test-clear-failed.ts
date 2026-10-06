@@ -177,6 +177,34 @@ try {
       "UPDATE expense_decisions SET state = 'cancelled' WHERE dedupe_key = $1", [DENIED]);
   }
 
+  console.log("\n4c. A failure that MATCHED its row says which row");
+  // The screen reads `matchedRow ?? "no row was matched"`, and the row used
+  // to be stored only on success — so a denial that found its row and then
+  // died on the last click announced that the search had found nothing,
+  // directly above its own step list saying the row matched on employee,
+  // merchant, amount and date. That headline is the first thing read, and it
+  // sent people to debug the search instead of the button.
+  {
+    const LATE = `${TAG}-late`;
+    await add(LATE);
+    const q = await queueDecision({
+      dedupeKey: LATE, decision: "deny", reason: "Incorrect receipt.",
+      decidedBy: "eric@example.invalid",
+      target: { employee: "Test Person", merchant: "DOLLARTREE", amount: 5.43, date: "2026-09-24" },
+    });
+    if (!q.ok) throw new Error(q.error);
+    const row = "Sep 30, 2026 CITY OF WINDER $2.00 Susan Conway";
+    await settleDecision(q.queued.id, {
+      ok: false, error: 'no Deny confirm button matched "button:has-text(\"Deny\")".',
+      matchedRow: row,
+    });
+    const got = (await decisionsFor([LATE])).get(LATE);
+    check("the failure kept the row it matched", got?.matchedRow === row);
+    check("…and still reads as failed", got?.state === "failed");
+    await db().query(
+      "UPDATE expense_decisions SET state = 'cancelled' WHERE dedupe_key = $1", [LATE]);
+  }
+
   console.log("\n5. What clearing must never touch");
   check("a decision on its way to Emburse is left alone", await stateOf(SENT) === "pending");
   check("…and one that already landed is left alone", await stateOf(DONE) === "applied");

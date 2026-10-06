@@ -413,7 +413,14 @@ const grid = (search: string) => {
 
   const behaviour = `<div id="menu" hidden><button class="dn">Deny</button><button class="ed">Edit</button></div>
     ${EDIT_FORM}
-    <div id="dlg" hidden><textarea placeholder="Reason"${state.deafReasonBox ? " readonly" : ""}></textarea><button class="dc">Deny</button></div>
+    <!-- The deny dialog as spend.emburse.com actually builds it: titled
+         "Return Transactions", with CANCEL and SEND BACK. The word "Deny"
+         appears only on the menu ITEM that opens it. The mock used to put a
+         Deny button here, which is why every deny test passed green for
+         weeks while nine real denials died on this exact click. A mock that
+         agrees with our assumption instead of with the tenant tests
+         nothing. -->
+    <div id="dlg" hidden><h2>Return Transactions</h2><textarea placeholder="Reason"${state.deafReasonBox ? " readonly" : ""}></textarea><button class="cx" type="button">CANCEL</button><button class="dc">SEND BACK</button></div>
     <script>
       var live = ${state.actionsWork ? "true" : "false"};
       var stale = ${state.staleGrid ? "true" : "false"};

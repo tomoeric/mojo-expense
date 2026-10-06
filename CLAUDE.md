@@ -190,6 +190,25 @@ Two separate things, and confusing them cost a queue full of failures.
   in the queue, under the login of whoever presses it (never the original
   decider's — Emburse records the approval against the login it is applied
   under, and the strip says so).
+- **Emburse does not call it Deny — the mock must say what the tenant says.**
+  The ⋮ menu item reads "Deny", but the dialog it opens is titled **Return
+  Transactions** and its buttons are **CANCEL** and **SEND BACK**. The word
+  "Deny" is nowhere on that dialog, so the shipped `denyConfirm` default of
+  `button:has-text("Deny")` matched nothing and every manual denial died on
+  the final click — nine of them over seven weeks, including $8,255.78, each
+  with the reason already typed and read back, each still in Needs Review and
+  returning on every import, with the employee never told. Every deny test
+  was green throughout, because `mock-emburse.ts` had put a `Deny` button on
+  that dialog: **a mock built to agree with our assumption tests the
+  assumption, not the tenant.** When a selector default is written, the mock
+  gets the tenant's real markup, not ours.
+- **A failure keeps the row it matched.** `matched_row` used to be stored only
+  on success, and the dialog reads `matchedRow ?? "no row was matched"` — so
+  every failure announced that the search had found nothing, including the
+  nine above, directly above their own step list confirming employee,
+  merchant, amount and date all matched. The headline is read first and it
+  sends people to debug the wrong step. A null there means "not recorded",
+  never "nothing matched", and the two must never share a sentence.
 - **A hidden copy of a row is not a second expense.** The grid reports seven
   rows for a four-row page: it keeps copies to measure itself, and a copy
   carries the same date, merchant, cardholder and amount. Matching now narrows

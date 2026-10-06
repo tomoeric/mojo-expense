@@ -101,7 +101,33 @@ export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
     + 'button:has-text("…")',
   denyButton: 'text=/^\\s*Deny\\s*$/i',
   denyReason: 'textarea, input[placeholder*="reason" i]',
-  denyConfirm: 'button:has-text("Deny")',
+  /*
+   * The button that COMMITS the denial — which on spend.emburse.com does not
+   * say "Deny" anywhere.
+   *
+   * Clicking Deny in the ⋮ menu opens a dialog titled "Return
+   * Transactions" whose two buttons are CANCEL and SEND BACK. So a default of
+   * `button:has-text("Deny")` matched nothing on the page, and every manual
+   * denial died on the last click with the reason already typed into the box
+   * and read back. Nine of them over seven weeks, including an $8,255.78
+   * charge — each still sitting in Needs Review, returning on every import,
+   * with the employee never told. The failure was invisible precisely because
+   * every earlier step passed.
+   *
+   * `:has-text` is case-insensitive substring, so this matches whether the DOM
+   * carries "SEND BACK" or "Send back" under a text-transform. The role
+   * fallback is there because a dialog footer need not be built from real
+   * <button> elements — the same assumption that cost us the ⋮ menu once
+   * already.
+   */
+  denyConfirm: 'button:has-text("Send back"), [role="button"]:has-text("Send back")',
+  /*
+   * NOT READ BY ANYTHING. A decision is confirmed by `confirmActioned`, which
+   * counts matching rows before and after the click — "has the expense left
+   * Needs Review" — and never looks at this. Kept so a tenant that has already
+   * saved a value for it does not error, but taken out of the step map below
+   * so Export settings stops offering a box that changes nothing.
+   */
   decisionApplied: "text=/approved|denied/i",
   // The cardholder filter, which is a FILTER and not the text search — and
   // that distinction is the whole point of it. Emburse's text search
@@ -148,7 +174,7 @@ export const DECISION_SELECTOR_HELP: Record<DecisionSelectorKey, string> = {
   rowMenu: "The ⋮ menu at the end of a row, which holds Deny.",
   denyButton: "Deny, inside that menu.",
   denyReason: "The reason box, if Emburse asks for one.",
-  denyConfirm: "The button that confirms the denial.",
+  denyConfirm: "The button that commits the denial \u2014 on Emburse, SEND BACK in the Return Transactions dialog.",
   decisionApplied: "Confirmation that the decision was recorded.",
   userFilter: "The users dropdown above the grid — the one reading “All users”.",
   userFilterInput: "The box inside that dropdown you type a name into.",
@@ -162,8 +188,8 @@ export const DECISION_SELECTOR_HELP: Record<DecisionSelectorKey, string> = {
 export const DECISION_STEP_SELECTORS: Record<string, DecisionSelectorKey[]> = {
   "search for the expense": ["resultRow", "userFilter", "userFilterInput", "userFilterOption"],
   "verify it is the right row": ["resultRow"],
-  approve: ["approveButton", "decisionApplied"],
-  deny: ["rowMenu", "denyButton", "denyReason", "denyConfirm", "decisionApplied"],
+  approve: ["approveButton"],
+  deny: ["rowMenu", "denyButton", "denyReason", "denyConfirm"],
   "correct the category": ["rowMenu", "editMenuItem", "editCategory", "editCategoryOption", "editSave"],
 };
 

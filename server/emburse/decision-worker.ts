@@ -207,6 +207,10 @@ async function tick(): Promise<void> {
             : {
                 ok: false,
                 error: run.steps.find((s) => !s.ok)?.detail ?? "The decision did not go through.",
+                // Kept on failure too: a run that matched the row and then
+                // died on a later step knows which row it was, and that is
+                // what makes the failure readable.
+                matchedRow: run.matchedRow,
                 // Not a failure to fix: Emburse has nothing matching this in
                 // Needs Review. Kept apart so it neither invites a retry nor
                 // buries the handful of failures that do need somebody.
