@@ -103,6 +103,11 @@ export const SUPERSEDED_SELECTORS: Record<string, string[]> = {
   loginEmail: ['input[type="email"], input[name="email"]'],
   loginPassword: ['input[type="password"], input[name="password"]'],
   loginSubmit: ['button[type="submit"]'],
+  // Emburse's deny dialog is "Return Transactions" with CANCEL and SEND
+  // BACK; the word "Deny" is only on the menu item that opens it. Anyone
+  // who saved the old default before it was corrected would keep it for
+  // ever, because a stored value beats the compiled one.
+  denyConfirm: ['button:has-text("Deny")'],
 };
 
 export const DEFAULT_SELECTORS: Selectors = {

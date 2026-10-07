@@ -1,6 +1,7 @@
 import { db, ensureSchema } from "../db.js";
 import { env } from "../env.js";
 import { DEFAULT_SELECTORS, SUPERSEDED_SELECTORS } from "../emburse/auto-export.js";
+import { DECISION_SELECTORS } from "../emburse/decide.js";
 
 /**
  * What the daily Emburse export is supposed to contain.
@@ -429,8 +430,14 @@ function liveOverrides(stored: Record<string, string> | null): Record<string, st
     // A selector that no longer exists is not an override, it is litter from a
     // step that was removed. Dropping it here means retiring a step also
     // retires whatever somebody once typed into it.
-    if (!(k in DEFAULT_SELECTORS)) continue;
-    if (v === DEFAULT_SELECTORS[k as keyof typeof DEFAULT_SELECTORS]) continue;
+    // Both halves, or an override saved for one of them is silently thrown
+    // away. The decision selectors are offered in Export settings and were
+    // NOT in this map, so typing a corrected denyConfirm there did nothing
+    // at all and the run went on using the compiled one — advice to "just
+    // change it in settings, no deploy needed" was wrong twice over.
+    const fallback = { ...DEFAULT_SELECTORS, ...DECISION_SELECTORS } as Record<string, string>;
+    if (!(k in fallback)) continue;
+    if (v === fallback[k]) continue;
     if ((SUPERSEDED_SELECTORS[k] ?? []).includes(v)) continue;
     out[k] = v;
   }
