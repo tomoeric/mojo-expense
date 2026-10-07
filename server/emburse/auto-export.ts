@@ -5,6 +5,7 @@ import { rememberCookies, restoreCookies } from "./browser-state.js";
 import { nowDoing, watching } from "./live-view.js";
 import { withBrowser } from "./browser-lock.js";
 import type { ExportSettings } from "../import/settings.js";
+import { clearCodeAsked, noteCodeAsked } from "./challenge-log.js";
 
 /**
  * Drive the Emburse UI and fetch the daily export, from the server.
@@ -1105,7 +1106,34 @@ async function signOutOf(page: Page, sel: Selectors, appUrl: string): Promise<st
   return "could not sign out";
 }
 
+/**
+ * Sign in, and keep the lockout record honest on the way through.
+ *
+ * A thin wrapper so "a sign-in worked" clears the record in ONE place.
+ * `signInHere` has four ways of succeeding — already signed in, signed in,
+ * verified with a code, landed after a retry — and clearing at each of them
+ * is how one gets missed and the app tells somebody to go and sign in long
+ * after they did.
+ */
 export async function signIn(
+  page: Page,
+  sel: Selectors,
+  login: Login,
+  appUrl: string,
+  challenge?: ChallengeHook,
+  others: string[] = [],
+  /**
+   * What is running, for the record written when Emburse asks for a code
+   * and there is nobody to ask. Only ever read on that path.
+   */
+  during = "an unattended run",
+): Promise<string> {
+  const how = await signInHere(page, sel, login, appUrl, challenge, others, during);
+  await clearCodeAsked(login.email, how);
+  return how;
+}
+
+async function signInHere(
   page: Page,
   sel: Selectors,
   login: Login,
@@ -1114,6 +1142,7 @@ export async function signIn(
   challenge?: ChallengeHook,
   /** Every other Emburse login we hold, so a session can be recognised as not ours. */
   others: string[] = [],
+  during = "an unattended run",
 ): Promise<string> {
   const loggedIn = page.locator(sel.loggedIn).first();
   const emailBox = page.locator(sel.loginEmail).first();
@@ -1217,6 +1246,12 @@ export async function signIn(
           false,
         );
       }
+      // Recorded, not just thrown. Thrown, this reaches a run log nobody
+      // reads at 5am; the only thing that ever surfaced was Emburse's own
+      // email to the reviewer, and the app itself said nothing at all.
+      await noteCodeAsked({
+        loginEmail: login.email, during, prompt: snippet(await pageText(page)),
+      });
       throw new SignInFailed(
         "Emburse is asking for a verification code before it will sign in, and this run had nobody " +
           "to ask. Start it yourself so the code can be entered — once answered, this device stays " +
@@ -1264,6 +1299,12 @@ export async function signIn(
   if (challenge) {
     const how = await passChallenge(page, sel, challenge);
     if (how) return `signed in as ${login.email} — ${how}`;
+  } else if (challengeKind(await pageText(page), page.url()) !== null) {
+    // The password went in and Emburse answered with the verification
+    // screen. Same lockout as the one above, reached by the other road.
+    await noteCodeAsked({
+      loginEmail: login.email, during, prompt: snippet(await pageText(page)),
+    });
   }
   throw new SignInFailed(
     `signed in as ${login.email} but the app did not appear — ${await whyStuck(page)}`,
@@ -1843,7 +1884,11 @@ async function runSteps(
   if (!(await step("open Emburse", () => openEmburse(page, url)))) return false;
 
   if (!(await step("sign in",
-    async () => signIn(page, sel, login, url, opts.onChallenge, opts.otherLogins ?? []))))
+    async () => signIn(page, sel, login, url, opts.onChallenge, opts.otherLogins ?? [],
+      // No hook means the scheduler withheld one, which it does for exactly
+      // one trigger. Naming it here is what turns "a run was locked out"
+      // into "the morning import is locked out".
+      "the scheduled import"))))
     return false;
 
   /*

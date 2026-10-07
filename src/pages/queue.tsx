@@ -7,6 +7,7 @@ import { DecideButtons } from "@/components/decide-controls";
 import { approveMany, clearFailed, holdDecisions, retryAllFailed } from "@/lib/decisions";
 import { useDecisions } from "@/lib/decisions";
 import { CodePrompt } from "@/components/code-prompt";
+import { LockedOut } from "@/components/locked-out";
 import { WhileAway } from "@/components/while-away";
 
 /**
@@ -35,7 +36,7 @@ export function QueuePage({
 
   const keys = useMemo(() => waiting.map((r) => r.line.id), [waiting]);
   const {
-    byExpense, corrections, pending, browser, canDecide, challenge, decide, cancel, answerCode,
+    byExpense, corrections, pending, browser, canDecide, challenge, codeAsked, decide, cancel, answerCode,
     held, importing,
   } = useDecisions(keys);
   const [error, setError] = useState("");
@@ -135,6 +136,12 @@ export function QueuePage({
           onAnswer={(code) => answerCode.mutate(code)}
         />
       )}
+
+      {/* Under the live prompt and above everything else: a locked-out
+          sign-in is the reason the list below is stale, so it has to be
+          read before the list is. Unlike the prompt above it, this survives
+          the run that hit it — the 5am import is still locked out at nine. */}
+      <LockedOut rows={codeAsked} />
 
       {/* Before the queue itself: the first question on coming back to a
           shorter list is what happened to it. */}

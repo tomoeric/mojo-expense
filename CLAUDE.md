@@ -190,6 +190,22 @@ Two separate things, and confusing them cost a queue full of failures.
   in the queue, under the login of whoever presses it (never the original
   decider's — Emburse records the approval against the login it is applied
   under, and the strip says so).
+- **A code nobody can answer still has to reach the app.** `challenge.ts`
+  parks a live browser while somebody types six digits, and it is wired up
+  only when somebody is watching — a scheduled run is given no prompt hook on
+  purpose, because parking a browser for a prompt nobody will see just delays
+  the same failure while holding the profile lock. That reasoning is right and
+  the consequence was not: the unattended case left **no trace in the app at
+  all**. A 5am import hit the verification screen, Emburse mailed a code to
+  the reviewer, the run stopped, and the only signal anybody got was an email
+  at five in the morning. The import just looked as though it had not run.
+  `challenge-log.ts` is the durable half: one open row per login, counted
+  rather than repeated, cleared by the next successful sign-in for that login.
+  The banner does NOT ask for the mailed code — it expired hours ago and
+  asking for it teaches people the banner lies — it starts a fresh sign-in so
+  the live prompt can appear. Anything new that signs in unattended inherits
+  this through `signIn`, which clears on every success in one place because
+  it has four ways of succeeding and clearing at each is how one gets missed.
 - **Emburse does not call it Deny — the mock must say what the tenant says.**
   The ⋮ menu item reads "Deny", but the dialog it opens is titled **Return
   Transactions** and its buttons are **CANCEL** and **SEND BACK**. The word

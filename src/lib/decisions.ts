@@ -47,6 +47,29 @@ export type QueuedDecision = {
   failedAt?: string | null;
 };
 
+/**
+ * Emburse asked an UNATTENDED run for a verification code.
+ *
+ * Not the same thing as `Challenge`: that one is a live browser parked
+ * mid-sign-in while somebody types. This is the record left behind when
+ * there was nobody to park for — a scheduled import, an automatic approval
+ * sweep — and it outlives the run, the browser and a restart. The code it
+ * was asking for is long expired by the time anybody reads this, so the
+ * only useful answer is to start a fresh sign-in.
+ */
+export type CodeAsked = {
+  id: number;
+  /** The inbox Emburse mailed the code to, which is who has to act. */
+  loginEmail: string;
+  firstAskedAt: string;
+  lastAskedAt: string;
+  /** How many runs have been turned away. One morning each, usually. */
+  times: number;
+  /** The job that was locked out: "the scheduled import". */
+  during: string;
+  prompt: string | null;
+};
+
 export type Challenge = {
   prompt: string;
   screenshot: string | null;
@@ -93,6 +116,14 @@ export type DecisionsResponse = {
   applied?: number;
   /** Set when a decision is parked waiting for a device-verification code. */
   challenge: Challenge | null;
+  /**
+   * Emburse asked an unattended run for a code and nobody could answer.
+   *
+   * Outlives the run that hit it, unlike `challenge` above: a 5am import
+   * that was locked out is still locked out at nine, and the app has to say
+   * so rather than leaving the reviewer's inbox as the only sign.
+   */
+  codeAsked?: CodeAsked[];
   /** Paused by hand — nothing is queued automatically and no batch starts. */
   held?: boolean;
   /** An import is running, which holds automatic approvals by itself. */
@@ -235,6 +266,7 @@ export function useDecisions(keys: string[]) {
     recent: q.data?.recent ?? [],
     browser: q.data?.browser,
     challenge: q.data?.challenge ?? null,
+    codeAsked: q.data?.codeAsked ?? [],
     decide,
     cancel,
     applyNow,

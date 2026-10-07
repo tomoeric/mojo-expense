@@ -1821,7 +1821,11 @@ async function signInOnce(
   // The same sign-in the export uses, not a second copy of it: the subtleties
   // (two-step identity page, absence not meaning success) are worth having in
   // exactly one place.
-  if (!(await step("sign in", async () => signIn(page, sel as never, login, emburseUrl, onChallenge)))) return false;
+  if (!(await step("sign in", async () =>
+    signIn(page, sel as never, login, emburseUrl, onChallenge, [],
+      // Likewise: a decision batch is only given no prompt hook when every
+      // item in it is automatic.
+      "automatic approvals")))) return false;
 
   if (!(await step("switch to the team view", async () => {
     const tab = page.locator(sel.adminTab!).first();

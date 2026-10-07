@@ -3,6 +3,7 @@ import { db, isDbConfigured } from "../db.js";
 import { readSettings } from "../import/settings.js";
 import { requireAuth } from "../auth/index.js";
 import { answerChallenge, cancelChallenge, currentChallenge, waitForCode } from "../emburse/challenge.js";
+import { openCodeRequests } from "../emburse/challenge-log.js";
 import { browserQueue, whyWaiting } from "./browser-lock.js";
 import { credentialForUser, hasCredential, noteResult } from "./credentials.js";
 import {
@@ -464,6 +465,11 @@ decisionRouter.get("/decisions", requireAuth, async (req: Request, res: Response
           (req.viewingAs?.real.email ?? req.user?.email ?? "").trim().toLowerCase(),
       };
     })(),
+    // Emburse asked an UNATTENDED run for a verification code and there was
+    // nobody to ask. The live `challenge` above only exists while somebody
+    // is watching; this one outlives the run, which is the whole point —
+    // the 5am lockout used to reach nobody but the reviewer's inbox.
+    codeAsked: await openCodeRequests(),
     pending: await pendingDecisions(req.user?.email ?? ""),
     recent: await recentDecisions(50, req.user?.email ?? ""),
     // Keyed by expense, so the queue page can badge each row without a
