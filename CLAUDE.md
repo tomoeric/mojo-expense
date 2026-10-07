@@ -190,6 +190,23 @@ Two separate things, and confusing them cost a queue full of failures.
   in the queue, under the login of whoever presses it (never the original
   decider's — Emburse records the approval against the login it is applied
   under, and the strip says so).
+- **Sign-in is OIDC, and a stale cookie jar poisons it.** Emburse signs in
+  through a redirect chain ending at `/login/oidc/assertion?state=…&code=…`.
+  An OIDC flow is stateful: the `state` nonce is tied to a cookie set at the
+  START of it. We restore a saved jar into a fresh browser before every run,
+  so a jar carrying a dead session hands the identity host something it
+  cannot reconcile and it answers with its own error page — "Oops! Something
+  went wrong … the page is missing or the url has been assembled
+  incorrectly" — which has NO FORM ON IT. The run reported "check the
+  loginEmail selector against that page" and that sentence cost a day spent
+  hunting an Emburse account lockout that did not exist; the account was
+  signed in fine in an ordinary browser the whole time. Worse, the state was
+  PERMANENT: the jar that caused it is the jar restored next time, so one
+  reviewer sat stuck across eight scheduled runs over a full day while the
+  other healed on his own, for no reason but which jar happened to be stale.
+  `StrandedAtIdentity` now carries it as a type, and `signIn` drops that
+  login's jar and retries once from nothing. The jar is a cache and never a
+  credential, so the cost of being wrong is one password sign-in.
 - **A code nobody can answer still has to reach the app.** `challenge.ts`
   parks a live browser while somebody types six digits, and it is wired up
   only when somebody is watching — a scheduled run is given no prompt hook on

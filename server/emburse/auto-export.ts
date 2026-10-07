@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { env } from "../env.js";
-import { rememberCookies, restoreCookies } from "./browser-state.js";
+import { forgetCookies, rememberCookies, restoreCookies } from "./browser-state.js";
 import { nowDoing, watching } from "./live-view.js";
 import { withBrowser } from "./browser-lock.js";
 import type { ExportSettings } from "../import/settings.js";
@@ -1128,9 +1128,47 @@ export async function signIn(
    */
   during = "an unattended run",
 ): Promise<string> {
-  const how = await signInHere(page, sel, login, appUrl, challenge, others, during);
-  await clearCodeAsked(login.email, how);
-  return how;
+  try {
+    const how = await signInHere(page, sel, login, appUrl, challenge, others, during);
+    await clearCodeAsked(login.email, how);
+    return how;
+  } catch (err) {
+    if (!(err instanceof StrandedAtIdentity)) throw err;
+
+    /*
+     * Drop the saved session and try once more, from nothing.
+     *
+     * Emburse signs in through an OIDC redirect chain, and an OIDC flow is
+     * stateful: its `state` nonce is tied to a cookie set at the START of
+     * the flow. We restore a saved cookie jar into a fresh browser before
+     * every run, so a jar carrying a dead session or a half-finished flow
+     * gives the identity host something it cannot reconcile, and it answers
+     * with an error page that has no form on it.
+     *
+     * Left alone that state is PERMANENT, which is the actual defect: the
+     * jar that caused it is the jar restored next time. One reviewer sat
+     * stuck for a full day across eight scheduled runs while the other
+     * healed on his own, for no reason but which jar happened to be stale.
+     *
+     * Safe because the jar is a cache and never a credential — the password
+     * is sealed in its own table and is what signs in from here. The cost of
+     * being wrong is one password sign-in, and possibly one verification
+     * code, which is strictly better than a reviewer being locked out until
+     * somebody notices.
+     *
+     * Once. A second strand is a real failure and must be reported as one.
+     */
+    console.log(
+      `emburse: ${login.email} was stranded at the identity host — ` +
+      "clearing the saved session and signing in from scratch");
+    await forgetCookies(login.email).catch(() => {});
+    await page.context().clearCookies().catch(() => {});
+    await openEmburse(page, appUrl).catch(() => "");
+
+    const how = await signInHere(page, sel, login, appUrl, challenge, others, during);
+    await clearCodeAsked(login.email, how);
+    return `${how} — after clearing a stale saved session`;
+  }
 }
 
 async function signInHere(
@@ -1259,9 +1297,19 @@ async function signInHere(
         false,
       );
     } else {
-      throw new Error(
-        `no sign-in form and the app is not loaded after waiting — at ${safeUrl(page.url())}. ` +
-          "Check the loginEmail selector against that page.",
+      // Emburse's own error page, which is NOT a sign-in page and has no
+      // form on it to match. Saying "check the loginEmail selector" about
+      // it cost a day of looking for an account lockout that did not
+      // exist, while the page itself read "the url has been assembled
+      // incorrectly".
+      const text = await pageText(page);
+      throw new StrandedAtIdentity(
+        BROKEN_PAGE.test(text)
+          ? `Emburse answered with its own error page at ${safeUrl(page.url())} — it says the page ` +
+            `is missing or the URL was assembled wrongly. That is not a sign-in screen and there is ` +
+            `no form on it: the sign-in is an OIDC redirect chain and it landed somewhere dead, ` +
+            `which a stale saved session can cause.`
+          : `no sign-in form and the app is not loaded after waiting — at ${safeUrl(page.url())}.`,
       );
     }
   }
@@ -1380,6 +1428,20 @@ export class SignInFailed extends Error {
     super(message);
   }
 }
+
+/**
+ * The sign-in went nowhere: neither a form nor the app, on a page that is
+ * neither.
+ *
+ * Its own type because the RECOVERY is specific and automatic — see
+ * `signIn`. Matching on the wording would break the first time somebody
+ * improved the sentence, which this file has said once already.
+ */
+export class StrandedAtIdentity extends Error {}
+
+/** Emburse's "Oops! Something went wrong" page, in its own words. */
+const BROKEN_PAGE =
+  /page is missing|assembled incorrectly|something went wrong/i;
 
 /**
  * Asked for a verification code while a sign-in is parked, and given one back.
