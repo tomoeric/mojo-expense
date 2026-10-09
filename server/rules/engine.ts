@@ -27,6 +27,7 @@ export const FIELDS = [
   "note", "merchant", "category", "location", "department", "employee", "title",
   "amount", "method", "receipt", "receiptItems", "receiptTotal",
   "receiptAlcohol", "receiptReadable", "receiptItemised", "receiptSubstitute",
+  "receiptFuel",
   "date", "receiptDate", "receiptMerchant",
   "receiptShared", "receiptSplitAddsUp",
   "dayCount", "dayTotal",
@@ -48,6 +49,7 @@ export const FIELD_LABEL: Record<Field, string> = {
   receiptAlcohol: "Receipt shows alcohol",
   receiptItemised: "Receipt lists what was bought",
   receiptSubstitute: "Receipt is a lost-receipt form",
+  receiptFuel: "Receipt shows a fuel purchase",
   receiptReadable: "Receipt could be read",
   date: "Transaction date",
   receiptDate: "Date on the receipt",
@@ -295,7 +297,7 @@ export function comparableTo(field: Field): Field[] {
 /** Fields whose values are a fixed yes/no, so the UI offers exactly those. */
 export const YES_NO: ReadonlySet<Field> = new Set<Field>(
   ["receiptAlcohol", "receiptReadable", "receiptItemised", "receiptSubstitute",
-   "receiptShared", "receiptSplitAddsUp"]);
+   "receiptFuel", "receiptShared", "receiptSplitAddsUp"]);
 
 /** Fields whose empty value is "not known", never "blank". See `holds`. */
 const UNKNOWN_WHEN_EMPTY = new Set<Field>(["title"]);
@@ -369,7 +371,8 @@ export function opsFor(field: Field): Op[] {
   // on these means the reader never got far enough to say — an unread
   // receipt, an unreadable one, or one with no line items on it.
   if (field === "receiptAlcohol" || field === "receiptReadable"
-      || field === "receiptItemised" || field === "receiptSubstitute") {
+      || field === "receiptItemised" || field === "receiptSubstitute"
+      || field === "receiptFuel") {
     return ["is", "is_not", "is_blank", "is_not_blank"];
   }
   // A date is not a string to search inside. ISO dates sort lexically, so
@@ -458,6 +461,16 @@ export type Subject = {
    * which is the thing a reviewer is meant to decide about.
    */
   receiptSubstitute: boolean | null;
+  /**
+   * Is there EVIDENCE the purchase was fuel — on the receipt, or in the
+   * merchant's name?
+   *
+   * Deliberately not the note. A note is the submitter's words ABOUT a
+   * purchase: "gas powered pressure washer", "gas line repair", "gas
+   * grill" all say gas and none is fuel. A rule that asks the note alone
+   * flagged a cleaning supplier's invoice for two foam tires.
+   */
+  receiptFuel: boolean | null;
   /**
    * Whether the reader got anything usable off the image — legible AND
    * itemised. False is the honest answer to "is there alcohol on this?" being
@@ -616,6 +629,8 @@ function textOf(subject: Subject, field: Field): string {
       return subject.receiptItemised === null ? "" : subject.receiptItemised ? "yes" : "no";
     case "receiptSubstitute":
       return subject.receiptSubstitute === null ? "" : subject.receiptSubstitute ? "yes" : "no";
+    case "receiptFuel":
+      return subject.receiptFuel === null ? "" : subject.receiptFuel ? "yes" : "no";
     case "receiptReadable":
       return subject.receiptReadable === null ? "" : subject.receiptReadable ? "yes" : "no";
     case "receiptShared": return subject.receiptSharedWith > 1 ? "yes" : "no";

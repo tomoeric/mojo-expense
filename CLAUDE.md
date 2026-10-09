@@ -190,6 +190,20 @@ Two separate things, and confusing them cost a queue full of failures.
   in the queue, under the login of whoever presses it (never the original
   decider's — Emburse records the approval against the login it is applied
   under, and the strip says so).
+- **A NOTE IS NOT EVIDENCE, and a receipt is not only purchases.** Two false
+  flags, one shape. The Gas Category rule asked the note alone — contains
+  "gas" — and flagged a cleaning supplier's invoice for two foam tires noted
+  "Replacing gas powered pressure washer wheels"; the auto-category sweep
+  then correctly refused it, because it asks for a witness on the paper too,
+  and the two numbers disagreeing was its own unexplainable thing. The fuel
+  test now lives in `rules/fuel.ts`, both sides use it, and `receiptFuel`
+  lets a rule ask it. Separately, a Shell slip for $81.13 of unleaded was
+  flagged for ALCOHOL: printed under "Please come again" were "16OZ MONSTER
+  2 FOR $5" and "20OZ COCA COLA 2 FOR $3.75" — in-store ADVERTS, taken as
+  purchased lines. The items prompt excluded totals and payment lines and
+  said nothing about advertising. "Gas powered", "gas line", "gasket", and a
+  forecourt's promo board are all things that look like the answer and are
+  not it: ask the receipt and the merchant, never the words around them.
 - **An uploaded "receipt" has a KIND, and the rules can ask about it.** Two
   things a reviewer needs that nothing could express: a **lost-receipt
   form** (Missing Receipt Affidavit, declaration, a template the employee

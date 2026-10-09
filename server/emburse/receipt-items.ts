@@ -62,7 +62,19 @@ const Reading = z.object({
   purchasedAt: z.string().nullable().describe("Transaction date as YYYY-MM-DD, or null."),
   currency: z.string().nullable().describe("ISO code such as USD, or null."),
   items: z.array(Item).describe(
-    "One entry per purchased line. Exclude subtotal, tax, tip, total, change and payment lines — those are separate fields.",
+    "One entry per purchased line. Exclude subtotal, tax, tip, total, change and payment lines \u2014 " +
+    "those are separate fields.\n\n" +
+    "ONLY WHAT WAS BOUGHT. A receipt is not only a list of purchases: it also carries ADVERTISING, " +
+    "and the two look alike once the prices are stripped of context. A Shell slip for $81.13 of " +
+    "unleaded printed \u201c16OZ MONSTER 2 FOR $5\u201d and \u201c20OZ COCA COLA 2 FOR $3.75\u201d under " +
+    "\u201cPlease come again\u201d, and both were taken as items on a one-line fuel purchase. The tells: it " +
+    "sits AFTER the total, the payment block or a closing line (\u201cThank you\u201d, \u201cPlease come " +
+    "again\u201d); it is an offer rather than a charge (\u201c2 FOR $5\u201d, \u201cBUY ONE GET ONE\u201d, \u201cSAVE\u201d, a " +
+    "price with no quantity bought); and its prices do not add up to anything on the receipt. " +
+    "Loyalty blurb, fuel-rewards pitches, survey invitations, coupons and in-store promotions are none " +
+    "them purchases. Also exclude the store\u2019s own header, address, phone, till and cashier lines.\n\n" +
+    "The sum of the items should account for the subtotal. When it does not, the extra lines are " +
+    "usually not purchases \u2014 leave them out and say so in notes.",
   ),
   subtotal: z.number().nullable().describe(
     "The figure before tax, when the receipt prints one. Menards labels it “TOTAL” and prints the " +

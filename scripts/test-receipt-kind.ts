@@ -34,7 +34,7 @@ const expense = (over: Partial<Subject> = {}): Subject => ({
   hasReceipt: true, receiptItems: "", inInbox: true,
   receiptTotalCents: 11655, receiptTotalsCents: [11655],
   receiptAlcohol: false, receiptReadable: true,
-  receiptItemised: true, receiptSubstitute: false,
+  receiptItemised: true, receiptSubstitute: false, receiptFuel: false,
   receiptSharedWith: 1, receiptSplitAddsUp: false, countsTowardsDay: true,
   receiptDate: "2026-09-23", receiptMerchant: "Home Depot",
   date: "2026-09-23", ...over,

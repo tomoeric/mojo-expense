@@ -2,6 +2,7 @@ import type pg from "pg";
 import { db, ensureSchema } from "../db.js";
 import { ensureReceiptItems } from "../emburse/receipt-items.js";
 import { KEY_SQL, ensureTitles } from "../people/titles.js";
+import { fuelEvidence } from "./fuel.js";
 import {
   ACTIONS, FIELDS, OPS, centsDiffer, chosenReceiptTotal, comparableTo, isGroupField, opsFor,
   problems, summarise,
@@ -506,6 +507,15 @@ export async function subjects(
     receiptReadable: r.readable,
     receiptItemised: r.itemised,
     receiptSubstitute: r.substitute,
+    // From the receipt and the merchant, never the note — the same two
+    // witnesses the auto-category sweep uses, so the rule that FLAGS a
+    // miscategorised fuel receipt and the automation that FIXES one
+    // cannot disagree about what fuel is.
+    receiptFuel: fuelEvidence({
+      lines: r.items ?? "",
+      merchantText: `${r.merchant ?? ""} ${r.receipt_merchant ?? ""}`,
+      read: r.readable,
+    }),
     receiptDate: r.receipt_date,
     receiptMerchant: r.receipt_merchant ?? "",
     inInbox: r.in_inbox,

@@ -28,6 +28,7 @@
  */
 
 import { db } from "../db.js";
+import { FUEL_LINE, FUEL_MERCHANT, NOTE_SAYS_FUEL } from "./fuel.js";
 import { getFlag, getLimit } from "../flags.js";
 import { activeRules, listRules, problems } from "./store.js";
 import { listTaxonomy } from "../import/taxonomy.js";
@@ -37,30 +38,6 @@ import { exportInFlight } from "../emburse/export-scheduler.js";
 /** Most to correct in one pass, so a bad morning cannot become a bad day. */
 export const DEFAULT_PER_RUN = 10;
 export const MOST_PER_RUN = 50;
-
-/**
- * Words that only appear on a fuel purchase.
- *
- * Deliberately about the PUMP rather than the forecourt. "Gas" alone is
- * not here: a receipt saying "gas" could be a gas grill, a gas station
- * sandwich, or a utility bill, and this list has to be the half of the
- * evidence that cannot be argued with.
- */
-const FUEL_LINE =
-  /\b(unleaded|unlead|diesel|gasoline|premium\s*unl|reg\s*unl|mid\s*grade|midgrade|e85|def\b|pump\s*#?\s*\d|gallons?\b|gal\s*@|price\s*\/\s*g|\$\s*\/\s*gal)\b/i;
-
-/**
- * Merchants that sell fuel, as the names come through on a card feed.
- *
- * The second half of the receipt witness, for a slip too faint to read a
- * line off. Brand names only — no "mart", no "stop", nothing that merely
- * suggests a forecourt — because this is evidence, not a hunch.
- */
-const FUEL_MERCHANT =
-  /\b(shell|exxon|mobil|chevron|texaco|citgo|sunoco|valero|marathon|phillips\s*66|conoco|bp\b|circle\s*k|quiktrip|quik\s*trip|kwik\s*(trip|star|fill)|casey'?s|speedway|racetrac|race\s*trac|wawa|sheetz|murphy\s*(usa|express)|pilot\s*(travel|flying)|flying\s*j|love'?s\s*(travel|country)|buc-?ee|maverik|holiday\s*stationstore|petro|petroleum|fuel|gas\s*station)\b/i;
-
-/** The note saying, in the submitter's own words, that this was fuel. */
-const NOTE_SAYS_FUEL = /\b(gas|fuel|diesel|unleaded|petrol|gasoline)\b/i;
 
 export type FuelFix = {
   dedupeKey: string;
