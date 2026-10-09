@@ -316,6 +316,7 @@ export async function subjects(
     receipt_arithmetic: string[] | null;
     share_peers: string; share_total_cents: string | null; share_sites: string;
     alcohol: boolean | null; readable: boolean | null;
+    itemised: boolean | null; substitute: boolean | null;
     receipt_date: string | null; receipt_merchant: string | null;
   }>(
     `SELECT e.dedupe_key, e.employee, e.merchant, e.note, e.category, e.location,
@@ -433,6 +434,23 @@ export async function subjects(
                     AND rr.error IS NULL AND rr.legible
                JOIN receipt_items i ON i.sha256 = r.sha256
               WHERE r.dedupe_key = e.dedupe_key) AS alcohol,
+            -- Does any receipt on this expense list what was bought? Asked
+            -- on its own as well as folded into "readable" below, because
+            -- "the receipt does not say what was bought" is a thing a
+            -- reviewer acts on and "not readable" is not the same sentence.
+            (SELECT bool_or(coalesce(rr.itemised, false))
+               FROM expense_receipts r
+               JOIN receipt_readings rr ON rr.sha256 = r.sha256
+                    AND rr.error IS NULL AND rr.legible
+              WHERE r.dedupe_key = e.dedupe_key) AS itemised,
+            -- Is any of them a lost-receipt form rather than a receipt?
+            -- bool_or, so a form attached ALONGSIDE a real receipt still
+            -- shows: that pairing is normal and the reviewer still wants
+            -- to see the declaration.
+            (SELECT bool_or(coalesce(rr.substitute, false))
+               FROM expense_receipts r
+               JOIN receipt_readings rr ON rr.sha256 = r.sha256 AND rr.error IS NULL
+              WHERE r.dedupe_key = e.dedupe_key) AS substitute,
             -- Did the reader get anything usable at all: legible AND listing
             -- items. An order summary reading "1 Item $141.24" is legible and
             -- answers nothing, so it counts as not readable for rule purposes.
@@ -486,6 +504,8 @@ export async function subjects(
     ),
     receiptAlcohol: r.alcohol,
     receiptReadable: r.readable,
+    receiptItemised: r.itemised,
+    receiptSubstitute: r.substitute,
     receiptDate: r.receipt_date,
     receiptMerchant: r.receipt_merchant ?? "",
     inInbox: r.in_inbox,

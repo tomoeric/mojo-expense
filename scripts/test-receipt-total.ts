@@ -29,7 +29,8 @@ const check = (label: string, ok: boolean, detail = "") => {
 };
 
 const base: ReceiptReading = {
-  legible: true, itemised: true, merchant: "Texas Roadhouse", purchasedAt: "2026-09-25",
+  legible: true, itemised: true, substitute: false,
+  merchant: "Texas Roadhouse", purchasedAt: "2026-09-25",
   currency: "USD", items: [], subtotal: 35.37, tax: 2.87, tip: 7.65, total: 38.24,
   paid: null, totals: [], notes: "",
 };

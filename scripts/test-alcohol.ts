@@ -214,7 +214,7 @@ try {
   }
 
   console.log("\n7. The reader was bumped, so stored readings are done again");
-  check("reader version is 6", items.READER_VERSION === 6, String(items.READER_VERSION));
+  check("reader version is 7", items.READER_VERSION === 7, String(items.READER_VERSION));
 } finally {
   await clean();
   await db().end();

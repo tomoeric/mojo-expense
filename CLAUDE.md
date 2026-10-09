@@ -190,6 +190,21 @@ Two separate things, and confusing them cost a queue full of failures.
   in the queue, under the login of whoever presses it (never the original
   decider's — Emburse records the approval against the login it is applied
   under, and the strip says so).
+- **An uploaded "receipt" has a KIND, and the rules can ask about it.** Two
+  things a reviewer needs that nothing could express: a **lost-receipt
+  form** (Missing Receipt Affidavit, declaration, a template the employee
+  filled in and signed) and a receipt that **does not say what was bought**
+  (a card slip, an order summary reading "1 Item $141.24"). The reader
+  already decided `itemised` but only folded it into `receiptReadable`, so
+  the second could only be asked as "not readable" — a different sentence
+  and a false one about a crisp card slip. The first had no signal at all: a
+  form reads cleanly and itemises nothing, so it passed as an unremarkable
+  un-itemised upload. `receipt_readings.substitute` and the two rule fields
+  `receiptItemised` / `receiptSubstitute` carry them, and both are in
+  `UNKNOWN_WHEN_EMPTY` territory by way of `YES_NO`: an unread receipt
+  answers NEITHER question. That is the part that matters — read as "no",
+  the first rule anybody writes flags the whole queue, because right after
+  an import nothing has been read yet.
 - **Sign-in is OIDC, and a stale cookie jar poisons it.** Emburse signs in
   through a redirect chain ending at `/login/oidc/assertion?state=…&code=…`.
   An OIDC flow is stateful: the `state` nonce is tied to a cookie set at the

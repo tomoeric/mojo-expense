@@ -43,6 +43,7 @@ import type { Field } from "./engine.js";
 /** Fields that mean nothing until the receipt image has been read. */
 const NEEDS_A_READING: ReadonlySet<Field> = new Set<Field>([
   "receiptItems", "receiptTotal", "receiptAlcohol", "receiptReadable",
+  "receiptItemised", "receiptSubstitute",
   "receiptDate", "receiptMerchant",
 ]);
 

@@ -26,7 +26,8 @@
 export const FIELDS = [
   "note", "merchant", "category", "location", "department", "employee", "title",
   "amount", "method", "receipt", "receiptItems", "receiptTotal",
-  "receiptAlcohol", "receiptReadable", "date", "receiptDate", "receiptMerchant",
+  "receiptAlcohol", "receiptReadable", "receiptItemised", "receiptSubstitute",
+  "date", "receiptDate", "receiptMerchant",
   "receiptShared", "receiptSplitAddsUp",
   "dayCount", "dayTotal",
 ] as const;
@@ -45,6 +46,8 @@ export const FIELD_LABEL: Record<Field, string> = {
   receipt: "Receipt",
   receiptItems: "Receipt line items",
   receiptAlcohol: "Receipt shows alcohol",
+  receiptItemised: "Receipt lists what was bought",
+  receiptSubstitute: "Receipt is a lost-receipt form",
   receiptReadable: "Receipt could be read",
   date: "Transaction date",
   receiptDate: "Date on the receipt",
@@ -291,7 +294,8 @@ export function comparableTo(field: Field): Field[] {
 /** Fields whose values come from a permanent list, so the UI offers a dropdown. */
 /** Fields whose values are a fixed yes/no, so the UI offers exactly those. */
 export const YES_NO: ReadonlySet<Field> = new Set<Field>(
-  ["receiptAlcohol", "receiptReadable", "receiptShared", "receiptSplitAddsUp"]);
+  ["receiptAlcohol", "receiptReadable", "receiptItemised", "receiptSubstitute",
+   "receiptShared", "receiptSplitAddsUp"]);
 
 /** Fields whose empty value is "not known", never "blank". See `holds`. */
 const UNKNOWN_WHEN_EMPTY = new Set<Field>(["title"]);
@@ -364,7 +368,8 @@ export function opsFor(field: Field): Op[] {
   // Yes/no, plus a way to find the ones nobody could answer for. "is blank"
   // on these means the reader never got far enough to say — an unread
   // receipt, an unreadable one, or one with no line items on it.
-  if (field === "receiptAlcohol" || field === "receiptReadable") {
+  if (field === "receiptAlcohol" || field === "receiptReadable"
+      || field === "receiptItemised" || field === "receiptSubstitute") {
     return ["is", "is_not", "is_blank", "is_not_blank"];
   }
   // A date is not a string to search inside. ISO dates sort lexically, so
@@ -436,6 +441,23 @@ export type Subject = {
    * this field exists to avoid.
    */
   receiptAlcohol: boolean | null;
+  /**
+   * Does the receipt say WHAT was bought, or only what it cost?
+   *
+   * Distinct from readable, which folds this in: a card slip or an order
+   * summary reading "1 Item $141.24" is perfectly legible and itemises
+   * nothing. Null when nothing has been read, so "cannot say" never reads
+   * as "no".
+   */
+  receiptItemised: boolean | null;
+  /**
+   * Is the "receipt" a lost-receipt form rather than a receipt?
+   *
+   * An affidavit or declaration the employee filled in themselves. It is
+   * not weak evidence of a purchase, it is the employee's word for it,
+   * which is the thing a reviewer is meant to decide about.
+   */
+  receiptSubstitute: boolean | null;
   /**
    * Whether the reader got anything usable off the image — legible AND
    * itemised. False is the honest answer to "is there alcohol on this?" being
@@ -590,6 +612,10 @@ function textOf(subject: Subject, field: Field): string {
     // Null stays empty, which no comparison matches — an unknown never fires.
     case "receiptAlcohol":
       return subject.receiptAlcohol === null ? "" : subject.receiptAlcohol ? "yes" : "no";
+    case "receiptItemised":
+      return subject.receiptItemised === null ? "" : subject.receiptItemised ? "yes" : "no";
+    case "receiptSubstitute":
+      return subject.receiptSubstitute === null ? "" : subject.receiptSubstitute ? "yes" : "no";
     case "receiptReadable":
       return subject.receiptReadable === null ? "" : subject.receiptReadable ? "yes" : "no";
     case "receiptShared": return subject.receiptSharedWith > 1 ? "yes" : "no";

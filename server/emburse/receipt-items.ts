@@ -46,6 +46,18 @@ const Reading = z.object({
     "only a total — which is not the same as an unreadable image, and matters because nothing can be " +
     "judged from the lines of a receipt that has none.",
   ),
+  substitute: z.boolean().describe(
+    "True when this image is NOT a receipt from a merchant but a FORM STANDING IN FOR ONE: a " +
+    "Missing Receipt Affidavit, a Lost Receipt Form, a Receipt Declaration, a company template the " +
+    "employee filled in, or a hand-written note describing a purchase. The tells are a form title, " +
+    "blank fields filled in by hand or typed into a template, a certification or declaration " +
+    "sentence (\u201cI certify that\u2026\u201d, \u201cI was unable to obtain\u2026\u201d), and a signature or " +
+    "employee-name line \u2014 none of which a merchant prints. " +
+    "FALSE for anything the seller produced, however unlike a till receipt it looks: an invoice, a " +
+    "statement, an order confirmation, a booking email, a screenshot of one, a card slip with no " +
+    "itemisation. Those are poor evidence, not substitutes, and a different rule judges them. " +
+    "When it is genuinely unclear which it is, say false and say why in notes.",
+  ),
   merchant: z.string().nullable().describe("Merchant name as printed, or null."),
   purchasedAt: z.string().nullable().describe("Transaction date as YYYY-MM-DD, or null."),
   currency: z.string().nullable().describe("ISO code such as USD, or null."),
@@ -216,6 +228,12 @@ ALTER TABLE receipt_items    ADD COLUMN IF NOT EXISTS alcohol  boolean NOT NULL 
 -- an order summary reading "1 Item $141.24" is perfectly readable and says
 -- nothing, and a rule over line items can conclude nothing from it either way.
 ALTER TABLE receipt_readings ADD COLUMN IF NOT EXISTS itemised boolean;
+-- Whether the image is a LOST-RECEIPT FORM rather than a receipt: an
+-- affidavit, a declaration, a template the employee filled in and signed.
+-- Its own column and not a kind of "unreadable", because it is perfectly
+-- readable and says what the employee says — which is exactly the thing a
+-- reviewer is meant to decide about rather than have waved through.
+ALTER TABLE receipt_readings ADD COLUMN IF NOT EXISTS substitute boolean;
 -- How many times reading this image has been tried. A failed read leaves a
 -- row with an error set, which used to still count as unread, so it was
 -- retried every pass, for ever. When a bad request made every read fail, the
@@ -278,7 +296,7 @@ export const ensureReceiptItems = ensure;
  *   5 — an energy drink is not alcohol. Every Red Bull on a fuel-stop
  *       receipt was coming back flagged as a drink.
  */
-export const READER_VERSION = 6;
+export const READER_VERSION = 7;
 
 /**
  * Lines that are never alcohol, whatever the model decides.
@@ -688,9 +706,9 @@ export async function extractReceipt(
       `INSERT INTO receipt_readings
          (sha256, extracted_at, model, legible, merchant, purchased_at, currency,
           subtotal_cents, tax_cents, tip_cents, total_cents, paid_cents, notes, error,
-          itemised, attempts, reader_version, totals)
+          itemised, attempts, reader_version, totals, substitute)
        VALUES ($1, now(), $2, $3, $4, NULLIF($5,'')::date, $6, $7, $8, $9, $10, $15, $11, $12,
-               $13, $14, ${READER_VERSION}, $16::jsonb)
+               $13, $14, ${READER_VERSION}, $16::jsonb, $17)
        ON CONFLICT (sha256) DO UPDATE SET
          extracted_at = now(), model = EXCLUDED.model, legible = EXCLUDED.legible,
          merchant = EXCLUDED.merchant, purchased_at = EXCLUDED.purchased_at,
@@ -699,7 +717,7 @@ export async function extractReceipt(
          total_cents = EXCLUDED.total_cents, paid_cents = EXCLUDED.paid_cents,
          notes = EXCLUDED.notes, error = EXCLUDED.error,
          itemised = EXCLUDED.itemised, reader_version = EXCLUDED.reader_version,
-         totals = EXCLUDED.totals,
+         totals = EXCLUDED.totals, substitute = EXCLUDED.substitute,
          -- Counted on the row rather than passed in, so a retry increments
          -- whatever is already there. A success resets it to zero: the next
          -- time this image is re-read, for a new extracted field say, it
@@ -717,7 +735,8 @@ export async function extractReceipt(
        reading?.notes ?? "", error, reading ? reading.itemised === true : null,
        error === null ? 0 : permanent ? MAX_ATTEMPTS : 1,
        cents(reading?.paid),
-       reading?.totals && reading.totals.length > 0 ? JSON.stringify(reading.totals) : null],
+       reading?.totals && reading.totals.length > 0 ? JSON.stringify(reading.totals) : null,
+       reading ? reading.substitute === true : null],
     );
 
     // Replaced wholesale rather than merged: a re-read is a new opinion about
