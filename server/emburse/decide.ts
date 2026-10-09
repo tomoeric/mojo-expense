@@ -2113,9 +2113,34 @@ async function applyOne(
       }
 
       if (emptyEveryTime) {
+        /*
+         * Say only what is true, which this did not.
+         *
+         * It asserted "Emburse returned nothing for this expense" and "its
+         * users filter could not be used" — flatly, both of them, whatever
+         * had actually happened. Twenty recurring $1,885.00 Facebook
+         * charges came back under that sentence while the very next clause
+         * of the same message read "→ 13 row(s), 0 matching": the filter
+         * had worked, her queue was right there, and rows at that exact
+         * amount were in it.
+         *
+         * `emptyEveryTime` only ever tracked the TEXT searches, so the
+         * sentence was about them and was written as though it were about
+         * everything. Reading it, nobody would think to look at the date.
+         */
+        const amountWasThere = sawAmount
+          ? ` Rows AT ${money(target.amount)} were in that queue — so the expense is almost ` +
+            `certainly there and something about the row did not agree: most often the date, ` +
+            `which is the only thing separating a run of identical recurring charges.`
+          : "";
         throw new Error(
-          `Emburse returned nothing for this expense, whichever way it was searched for, ` +
-          `and its users filter could not be used to check properly. ${attempts} ` +
+          (filtered
+            ? `Emburse's text search returned nothing for this expense. ${target.employee}'s own ` +
+              `queue was readable and held ${filteredCount} row(s), none of which matched on ` +
+              `employee, merchant, amount AND date together.`
+            : `Emburse returned nothing for this expense, whichever way it was searched for, ` +
+              `and its users filter could not be used to check properly.`) +
+          `${amountWasThere} ${attempts} ` +
           `Emburse's text search is known to miss rows that ARE in the view, so this does ` +
           `not mean the expense has gone — check it in Emburse.`);
       }
