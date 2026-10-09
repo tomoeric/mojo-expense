@@ -1948,6 +1948,9 @@ async function runSteps(
   // From settings, so a wrong host can be corrected without a redeploy.
   const url = settings.emburseUrl || env.emburseLogin.url;
 
+  /** Set by the grid step, read by the two that follow it. */
+  let gridEmpty = false;
+
   if (!(await step("open Emburse", () => openEmburse(page, url)))) return false;
 
   if (!(await step("sign in",
@@ -2151,16 +2154,40 @@ async function runSteps(
       );
     }
     const scope = settings.receiptsOnly ? "receipts only, via the URL" : "unfiltered, via the URL";
+    gridEmpty = /empty/.test(how);
     return `${scope} — ${how}` +
-      (viaNav
-        ? ` — NOTE: ${sel.gridPath} did not load, so this followed the nav link to ${viaNav}. ` +
-          `Set this list's path to ${viaNav} under Export settings so it goes straight there.`
-        : "");
+      (!viaNav
+        ? ""
+        // An empty fallback list is NOT a path to adopt.
+        //
+        // This used to say "set this list's path to <wherever the nav went>"
+        // whatever came back, and the nav link on Reimbursements goes to
+        // /reimbursableexpenses/me — the reviewer's OWN reimbursements, not
+        // the queue they review. That list is empty, which is exactly what
+        // an empty grid here means, and taking the advice would have frozen
+        // the wrong list in as the setting.
+        : gridEmpty
+          ? ` — NOTE: ${sel.gridPath} did not load, so this followed the nav link to ${viaNav} ` +
+            `— and THAT list is empty. Do not adopt it as the path without checking: a nav link ` +
+            `often lands on the personal view ("/me") rather than the queue you review. Open the ` +
+            `list in Emburse, copy the address bar, and put that path into this list under ` +
+            `Export settings.`
+          : ` — NOTE: ${sel.gridPath} did not load, so this followed the nav link to ${viaNav}. ` +
+            `Set this list's path to ${viaNav} under Export settings so it goes straight there.`);
   }))) return false;
 
   await step("read the item count", async () => {
     // Not fatal: the count is a cross-check, not a precondition. A run that
     // cannot find it should still produce the export.
+    //
+    // Skipped outright on an empty grid: the count line is not rendered at
+    // all when the count is zero, so waiting for it is thirty seconds spent
+    // confirming what the step above already said. Two of these and a
+    // failing Reimbursements run spent a minute on nothing.
+    if (gridEmpty) {
+      setItemLine("");
+      return "skipped — the grid is empty, so there is no count line to read";
+    }
     const line = (await page.locator(sel.itemCount).first().innerText()).trim();
     setItemLine(line);
     return line;
