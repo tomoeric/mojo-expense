@@ -1921,6 +1921,18 @@ async function applyOne(
     let filteredCount = 0;
     /** Did any row we looked at carry this amount, whatever else was wrong? */
     let sawAmount = false;
+    /**
+     * The rows that carried the amount and still did not match, as they read.
+     *
+     * Twenty recurring $1,885.00 charges failed with "rows AT 1885.00 were
+     * in that queue … something about the row did not agree", and then did
+     * not say WHICH rows or what they said. The reader is left to open
+     * Emburse and do by hand the comparison the run had already done and
+     * thrown away. These are the only rows worth printing: they are the
+     * candidates, and whatever separates them from the expense — nearly
+     * always the date — is visible the moment they are side by side.
+     */
+    const nearMisses: string[] = [];
 
     /** Read the grid in front of us: how many rows, which of them match. */
     const readGrid = async (): Promise<void> => {
@@ -1932,8 +1944,16 @@ async function applyOne(
       matches = [];
       for (let i = 0; i < examined; i++) {
         const text = await rows.nth(i).innerText().catch(() => "");
-        if (amountAppears(text, target.amount)) sawAmount = true;
-        if (rowMatches(text, target).ok) matches.push(i);
+        const carriesAmount = amountAppears(text, target.amount);
+        if (carriesAmount) sawAmount = true;
+        if (rowMatches(text, target).ok) { matches.push(i); continue; }
+        // Capped: a cardholder with a long queue of one recurring charge
+        // would otherwise paste the whole thing into a report somebody has
+        // to read. Four is enough to see the pattern.
+        if (carriesAmount && nearMisses.length < 4) {
+          const line = text.replace(/\s+/g, " ").trim().slice(0, 160);
+          if (!nearMisses.includes(line)) nearMisses.push(line);
+        }
       }
     };
 
@@ -2131,7 +2151,12 @@ async function applyOne(
         const amountWasThere = sawAmount
           ? ` Rows AT ${money(target.amount)} were in that queue — so the expense is almost ` +
             `certainly there and something about the row did not agree: most often the date, ` +
-            `which is the only thing separating a run of identical recurring charges.`
+            `which is the only thing separating a run of identical recurring charges.` +
+            // The comparison, rather than an instruction to go and make it.
+            (nearMisses.length > 0
+              ? ` This expense is dated ${target.date}; the row(s) carrying that amount read: ` +
+                nearMisses.map((r) => `\u201c${r}\u201d`).join(" / ") + "."
+              : "")
           : "";
         throw new Error(
           (filtered
