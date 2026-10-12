@@ -15,12 +15,26 @@ import { FixCategory } from "./fix-category";
 export function ReportDrawer({
   report,
   onClose,
+  onDecided,
   days,
   auditConfigured,
   focusId,
 }: {
   report: ExpenseReport;
   onClose: () => void;
+  /**
+   * A decision landed — open the next thing nobody has decided.
+   *
+   * Reviewing is "read a receipt, say yes or no, read the next one", and
+   * closing after every decision put the whole queue between somebody and
+   * the next receipt: scroll, find your place, click, wait for the image.
+   * Which expense is next is the caller's to know, because it is a
+   * question about the whole list and this drawer holds one report.
+   *
+   * Only on SUCCESS. A decision that was refused leaves the drawer where
+   * it is, with the error, because moving on from a failure hides it.
+   */
+  onDecided?: (lineId: string) => void;
   days: number;
   auditConfigured: boolean;
   /**
@@ -246,13 +260,17 @@ export function ReportDrawer({
                         busy={decide.isPending}
                         onApprove={() => {
                           setDecideError("");
-                          decide.mutate({ dedupeKey: l.id, decision: "approve" },
-                            { onError: (e) => setDecideError((e as Error).message) });
+                          decide.mutate({ dedupeKey: l.id, decision: "approve" }, {
+                            onSuccess: () => onDecided?.(l.id),
+                            onError: (e) => setDecideError((e as Error).message),
+                          });
                         }}
                         onDeny={(reason) => {
                           setDecideError("");
-                          decide.mutate({ dedupeKey: l.id, decision: "deny", reason },
-                            { onError: (e) => setDecideError((e as Error).message) });
+                          decide.mutate({ dedupeKey: l.id, decision: "deny", reason }, {
+                            onSuccess: () => onDecided?.(l.id),
+                            onError: (e) => setDecideError((e as Error).message),
+                          });
                         }}
                         onCancel={(id) =>
                           cancel.mutate(id, { onError: (e) => setDecideError((e as Error).message) })}

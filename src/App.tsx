@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   ListChecks, FileText, BarChart3, Loader2, Upload, Tags, MapPin, Building2, Scale, BookOpen,
@@ -160,9 +160,38 @@ export function App() {
   // otherwise every anonymous page load fires a request that 401s.
   const signedIn = Boolean(auth.data?.user) || auth.data?.authConfigured === false;
   const reports = useReports(WINDOW_DAYS, signedIn);
-  // Only for the headline count. An empty key list asks for no per-expense
-  // detail, so this is the cheapest read of "how many are already done".
-  const { applied } = useDecisions([]);
+  /**
+   * Every expense on screen, in the order the lists show them.
+   *
+   * Used for ONE thing: knowing what to open next when a decision is made
+   * in the drawer. Reviewing is "read a receipt, say yes or no, read the
+   * next one", and closing the drawer after every decision put the whole
+   * queue between somebody and the next receipt — scroll, find your place,
+   * click, wait for the image.
+   */
+  const everyLine = useMemo(
+    () => (reports.data?.reports ?? []).flatMap((r) => r.lines.map((l) => ({ report: r, line: l }))),
+    [reports.data],
+  );
+  // Keyed by the ids, so this is its own read rather than a share of the
+  // queue's — the cost of knowing which expenses are already spoken for
+  // without asking the drawer to know about reports it is not showing.
+  const { applied, byExpense } = useDecisions(everyLine.map((e) => e.line.id));
+
+  /**
+   * The next expense nobody has decided, after the one just decided.
+   *
+   * Wraps once, so deciding the last one in the list picks up anything
+   * still waiting above it rather than closing on a queue that is not
+   * finished. Returns null only when there is genuinely nothing left,
+   * which is the one time closing the drawer is the right answer.
+   */
+  const nextUndecided = (afterLineId: string): { report: ExpenseReport; lineId: string } | null => {
+    const at = everyLine.findIndex((e) => e.line.id === afterLineId);
+    const order = at < 0 ? everyLine : [...everyLine.slice(at + 1), ...everyLine.slice(0, at)];
+    const next = order.find((e) => !byExpense[e.line.id]);
+    return next ? { report: next.report, lineId: next.line.id } : null;
+  };
 
   useEffect(() => {
     // The drawer belongs to the list behind it; leaving it open over another
@@ -388,6 +417,7 @@ export function App() {
           report={openReport}
           focusId={open?.lineId}
           onClose={() => setOpen(null)}
+          onDecided={(lineId) => setOpen(nextUndecided(lineId))}
           days={WINDOW_DAYS}
           auditConfigured={config.data?.auditConfigured ?? false}
         />
