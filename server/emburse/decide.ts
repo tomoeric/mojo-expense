@@ -66,7 +66,7 @@ export type DecisionRun = {
 export type DecisionSelectorKey =
   | "resultRow" | "approveButton" | "rowMenu"
   | "denyButton" | "denyReason" | "denyConfirm" | "decisionApplied"
-  | "userFilter" | "userFilterInput" | "userFilterOption"
+  | "userFilter" | "userFilterInput" | "userFilterOption" | "nextPage"
   | "editMenuItem" | "editCategory" | "editCategoryOption" | "editSave";
 
 export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
@@ -152,6 +152,27 @@ export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
   userFilterInput: "",
   userFilterOption: '[role="option"], li',
 
+  /*
+   * The NEXT PAGE arrow under the grid.
+   *
+   * Emburse paginates at ten rows and the run only ever read the first
+   * page, which went unnoticed for as long as every queue was short. A
+   * cardholder with eighteen recurring charges — "1-10 of 18" — has five
+   * of them permanently invisible to it, and those are precisely the ones
+   * that keep failing: the run reports "none of the 13 rows matched"
+   * about a row sitting on page two, which is a false statement of the
+   * kind that sends somebody to check whether the expense still exists.
+   *
+   * Ordered most specific first. The label is an aria one because the
+   * control is an icon, and `:not([disabled])` matters because the arrow
+   * stays on the page at the end of the list.
+   */
+  nextPage:
+    'button[aria-label*="next page" i]:not([disabled]), '
+    + '[aria-label*="next page" i]:not([aria-disabled="true"]), '
+    + 'button[aria-label*="next" i]:not([disabled]), '
+    + 'nav[aria-label*="pagination" i] button:last-of-type:not([disabled])',
+
   // Correcting a category writes to somebody's finance record, so the parts
   // of Emburse's edit form are configuration for the same reason as
   // everything else here: they cannot be known from outside the tenant, and
@@ -179,6 +200,7 @@ export const DECISION_SELECTOR_HELP: Record<DecisionSelectorKey, string> = {
   userFilter: "The users dropdown above the grid — the one reading “All users”.",
   userFilterInput: "The box inside that dropdown you type a name into.",
   userFilterOption: "One name in the list the dropdown offers.",
+  nextPage: "The next-page arrow under the grid, for a queue longer than one page.",
   editMenuItem: "Edit, inside the \u22ee row menu.",
   editCategory: "The Category control on the edit form.",
   editCategoryOption: "One category in the list that control offers.",
@@ -186,7 +208,8 @@ export const DECISION_SELECTOR_HELP: Record<DecisionSelectorKey, string> = {
 };
 
 export const DECISION_STEP_SELECTORS: Record<string, DecisionSelectorKey[]> = {
-  "search for the expense": ["resultRow", "userFilter", "userFilterInput", "userFilterOption"],
+  "search for the expense": [
+    "resultRow", "userFilter", "userFilterInput", "userFilterOption", "nextPage"],
   "verify it is the right row": ["resultRow"],
   approve: ["approveButton"],
   deny: ["rowMenu", "denyButton", "denyReason", "denyConfirm"],
@@ -1988,6 +2011,50 @@ async function applyOne(
         await readGrid();
         filteredCount = count;
         term = `the ${target.employee} filter`;
+
+        /*
+         * PAGE THROUGH IT. Emburse shows ten rows at a time.
+         *
+         * This is the whole of the Facebook Advertising failure. The
+         * cardholder filter is right and it works — it returns everything
+         * that person has — but "everything" arrives ten rows at a time,
+         * and the run read the first page and concluded. Taylor Langley's
+         * queue is "1-10 of 18", so five of her rows could never be seen,
+         * and seven expenses failed over and over with "none of the 13
+         * rows matched" about rows on page two.
+         *
+         * Stops the moment a page holds a match, deliberately: everything
+         * downstream addresses the row by its index on the page in front
+         * of it, so the matched row has to still be on screen. Carrying
+         * indices across pages is how a run clicks APPROVE on the wrong
+         * expense.
+         *
+         * Bounded. A queue of hundreds is a different problem — the
+         * merchant narrowing below is the answer to that — and a loop
+         * that pages for ever holds the browser lock while it does.
+         */
+        const MAX_PAGES = 12;
+        for (let pageNo = 2; matches.length === 0 && pageNo <= MAX_PAGES; pageNo++) {
+          const next = page.locator(sel.nextPage!).first();
+          if (!(await next.isVisible().catch(() => false))) break;
+          if (await next.isDisabled().catch(() => false)) break;
+          const before = await rows.first().innerText().catch(() => "");
+          await next.click().catch(() => {});
+          // The grid re-renders in place, so there is no navigation to
+          // wait for — wait for the first row to stop being the old one.
+          await page.waitForFunction(
+            ([selector, was]) => {
+              const first = document.querySelector(selector as string);
+              return !!first && (first as HTMLElement).innerText !== was;
+            },
+            [sel.resultRow!, before] as const,
+            { timeout: 10_000 },
+          ).catch(() => {});
+          await readGrid();
+          filteredCount += count;
+          tried.push(`page ${pageNo} of that filter → ${count} row(s), ${matches.length} matching`);
+          if (count === 0) break;
+        }
         // The URL is worth recording: it carries whatever parameter Emburse
         // uses, which is how this becomes one navigation instead of three
         // clicks. Redacted, since a grid URL can carry a session token.
