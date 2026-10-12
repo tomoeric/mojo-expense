@@ -47,16 +47,27 @@ const Reading = z.object({
     "judged from the lines of a receipt that has none.",
   ),
   substitute: z.boolean().describe(
-    "True when this image is NOT a receipt from a merchant but a FORM STANDING IN FOR ONE: a " +
-    "Missing Receipt Affidavit, a Lost Receipt Form, a Receipt Declaration, a company template the " +
-    "employee filled in, or a hand-written note describing a purchase. The tells are a form title, " +
-    "blank fields filled in by hand or typed into a template, a certification or declaration " +
-    "sentence (\u201cI certify that\u2026\u201d, \u201cI was unable to obtain\u2026\u201d), and a signature or " +
-    "employee-name line \u2014 none of which a merchant prints. " +
-    "FALSE for anything the seller produced, however unlike a till receipt it looks: an invoice, a " +
-    "statement, an order confirmation, a booking email, a screenshot of one, a card slip with no " +
-    "itemisation. Those are poor evidence, not substitutes, and a different rule judges them. " +
-    "When it is genuinely unclear which it is, say false and say why in notes.",
+    "True when this image is NOT a record of the purchase but a FORM THE CLAIMANT WROTE TO STAND IN " +
+    "FOR ONE: a Missing Receipt Affidavit, a Lost Receipt Form, a Receipt Declaration, a company " +
+    "template they filled in, or a hand-written note describing a purchase.\n\n" +
+    "THE TEST IS WHO WROTE IT, not what it looks like. The person claiming the expense wrote it \u2014 " +
+    "that is the whole of it. Tells: a form title, blank fields filled in by hand or typed into a " +
+    "template, a certification sentence (\u201cI certify that\u2026\u201d, \u201cI was unable to obtain\u2026\u201d), and a " +
+    "line for them to sign.\n\n" +
+    "FALSE for anything a THIRD PARTY produced, however unlike a till receipt it looks. Not only the " +
+    "seller \u2014 an invoice, statement, order confirmation, booking email or screenshot of one \u2014 but " +
+    "also the CARD ISSUER OR BANK: a fraud or chargeback credit letter, a dispute outcome, a notice " +
+    "about unauthorised charges, a statement extract. An American Express letter telling the " +
+    "cardholder it is crediting $140.16 for unauthorised charges, signed by its fraud team, was read " +
+    "as a lost-receipt form; it is the issuer's own document and it is strong evidence, the opposite " +
+    "of a substitute.\n\n" +
+    "BEING ADDRESSED TO THE EMPLOYEE IS NOT A TELL. A letter carrying their name, their employer and " +
+    "their account number is a letter TO them, not a form BY them \u2014 that is what made the Amex " +
+    "notice look like one. Nor is a signature at the foot: the question is whose, and a company " +
+    "signing off its own letter is not the claimant attesting to a purchase.\n\n" +
+    "An un-itemised card slip is not a substitute either. That is a different question and a " +
+    "different field answers it. When it is genuinely unclear who produced the document, say false " +
+    "and say why in notes.",
   ),
   merchant: z.string().nullable().describe("Merchant name as printed, or null."),
   purchasedAt: z.string().nullable().describe("Transaction date as YYYY-MM-DD, or null."),
