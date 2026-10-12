@@ -2193,6 +2193,36 @@ async function runSteps(
     return line;
   });
 
+  /*
+   * AN EMPTY LIST IS NOT A FAILURE. It is the answer.
+   *
+   * Reimbursements has failed on every scheduled run for days, always at
+   * "set the sections", always with Emburse's own dialog saying "Your
+   * search must result in at least one expense to export." There is
+   * nothing wrong: Eric has no reimbursements pending. The queue is
+   * empty, and the run was treating an empty queue as a broken one — an
+   * amber row every two hours, a selector fix offered for a selector that
+   * is fine, and a real failure would have been invisible among them.
+   *
+   * Stopping HERE rather than pressing on: the export dialog cannot
+   * produce a file from nothing, so every step after this is guaranteed
+   * to fail and none of them would say anything true about why.
+   *
+   * Nothing is imported and NOTHING IS PURGED. A purge keyed off an empty
+   * export would delete every row this source had ever brought in, on the
+   * strength of a grid that could be empty because a filter went wrong.
+   * "I found nothing" and "there is nothing" are only the same sentence
+   * when you trust the view, and this is not the place to decide that.
+   */
+  if (gridEmpty) {
+    setItemLine("0 items");
+    await step("export the results", async () =>
+      "skipped — this list has nothing waiting, so there is nothing to export. " +
+      "Not a failure: an empty queue is a normal state, and nothing was imported " +
+      "or removed.");
+    return true;
+  }
+
   if (!(await step("open the export dialog", async () => {
     await clickVisible(page, sel.exportButton, "the EXPORT button above the grid");
     if (!(await firstVisible(page, sel.dialog, env.emburseLogin.stepTimeoutMs))) {
