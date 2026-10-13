@@ -62,6 +62,25 @@ export async function ingestExport(
   importedBy: string,
   opts: {
     force?: boolean;
+    /**
+     * This run downloaded the file itself, seconds ago.
+     *
+     * Turns off the "older than one already imported" guard, which only
+     * ever made sense for a file somebody CHOSE: picking yesterday's PDF
+     * out of a downloads folder is a real mistake with real damage, and
+     * that is what it is there to catch.
+     *
+     * Applied to a freshly pulled export it is simply wrong, because it
+     * assumes the newest expense date never goes backwards — and the
+     * newest expense leaving the queue is the app WORKING. Emburse's
+     * Needs Review held something dated 2026-10-10; it was approved; the
+     * next export's newest is 2026-10-09; and every export from then on
+     * was refused as stale. `max(expense_date)` counts rows that have
+     * long since left the inbox, so nothing could ever lower it again:
+     * once the newest-ever expense was decided, imports stopped for good
+     * and the runs still said "Succeeded".
+     */
+    downloadedNow?: boolean;
     /** Reuse an existing parse instead of re-reading the file. */
     parsed?: ReturnType<typeof parseExpensesPdf>;
     /** Override the file identity, when the same bytes stand in for a later export. */
@@ -199,7 +218,7 @@ export async function ingestExport(
     //
     // Refused rather than warned about, because by the time a warning is read
     // the queue has already been rewritten.
-    if (!opts.force) {
+    if (!opts.force && !opts.downloadedNow) {
       const stale = await olderThanWhatWeHave(client, parsed, reviewer, source);
       if (stale) {
         await client.query("ROLLBACK");

@@ -637,6 +637,12 @@ export async function attemptExport(
       const imported = await ingestExport(
         run.pdf, `emburse-${day}.pdf`, by,
         { sectionsVerified, reviewer, source: opts.source ?? "",
+          // This run downloaded it moments ago, so the staleness guard —
+          // which exists to catch somebody choosing yesterday's PDF out of
+          // a folder — has nothing to protect against here, and refuses
+          // perfectly current exports whenever the newest expense in the
+          // queue has since been approved.
+          downloadedNow: true,
           sections: mine?.sections ?? undefined,
           receiptsOnly: mine?.receiptsOnly ?? undefined });
       importId = imported.importId;
