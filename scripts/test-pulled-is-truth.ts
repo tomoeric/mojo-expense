@@ -73,7 +73,7 @@ try {
 
   console.log("\n2. Today's export is older-dated, and is STILL the truth");
   const pulled = await importOne("2026-10-09", { downloadedNow: true });
-  check("a freshly pulled export is imported", pulled.importId > 0);
+  check("a freshly pulled export is imported", Number(pulled.importId ?? 0) > 0);
   check("…with no stale warning", !pulled.warnings.some((w) => /older than/i.test(w)),
     pulled.warnings.join(" · "));
   // One, not two: importing also PURGES what the export no longer carries,
@@ -92,7 +92,7 @@ try {
 
   console.log("\n4. force still overrides, as it always did");
   const forced = await importOne("2026-10-07", { force: true } as never);
-  check("forcing a hand-picked older export imports it", forced.importId > 0);
+  check("forcing a hand-picked older export imports it", Number(forced.importId ?? 0) > 0);
 } finally {
   await db().query("DELETE FROM expenses WHERE reviewer = $1", [REVIEWER]).catch(() => {});
   await db().query("DELETE FROM expense_imports WHERE reviewer = $1", [REVIEWER]).catch(() => {});
