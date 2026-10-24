@@ -162,13 +162,14 @@ export async function sendMail(to: string, subject: string, html: string): Promi
 /** One house style for every message, so they look like they came from us. */
 export function layout(heading: string, body: string, footer?: string): string {
   return `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
-      max-width:520px;margin:0 auto;padding:24px;color:#18181b">
-    <p style="margin:0 0 4px;font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#71717a">
-      MOJO Car Wash</p>
-    <h1 style="margin:0 0 16px;font-size:20px">${escapeHtml(heading)}</h1>
+      max-width:560px;margin:0 auto;padding:28px 24px;color:#18181b;line-height:1.5">
+    <p style="margin:0 0 2px;font-size:11px;letter-spacing:.11em;text-transform:uppercase;
+       color:#a1a1aa;font-weight:600">MOJO Car Wash</p>
+    <h1 style="margin:0 0 18px;font-size:21px;font-weight:700;letter-spacing:-.01em">
+      ${escapeHtml(heading)}</h1>
     ${body}
-    <hr style="margin:28px 0 12px;border:none;border-top:1px solid #e4e4e7">
-    <p style="margin:0;font-size:12px;color:#71717a">
+    <hr style="margin:30px 0 12px;border:none;border-top:1px solid #e4e4e7">
+    <p style="margin:0;font-size:12px;color:#a1a1aa">
       ${footer ?? "If you were not expecting this, you can ignore it — nothing happens until the link is used."}
     </p>
   </div>`;

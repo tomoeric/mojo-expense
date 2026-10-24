@@ -35,17 +35,30 @@ const stamp = (iso: string): string => {
   return `${date}, ${time}`;
 };
 
+/**
+ * One label/value pair.
+ *
+ * The label column is a FIXED width, not `auto` and not `1%`. Auto lets
+ * a full-width table share the spare space between the columns, which
+ * pushes every value against the right margin with a corridor of
+ * nothing in the middle. Shrink-to-fit cures that but sizes each table
+ * to its own longest label, so the three sections line their values up
+ * in three different places. One fixed width is the only one of the
+ * three that reads as a single list.
+ */
 const row = (label: string, value: string | null): string =>
   `<tr>
-     <td style="padding:4px 14px 4px 0;color:#71717a;white-space:nowrap;vertical-align:top">
-       ${escapeHtml(label)}</td>
-     <td style="padding:4px 0;font-weight:600">${escapeHtml(value || "—")}</td>
+     <td style="width:132px;padding:5px 16px 5px 0;color:#71717a;
+                vertical-align:top;font-size:14px">${escapeHtml(label)}</td>
+     <td style="padding:5px 0;vertical-align:top;font-size:14px;color:#18181b">
+       ${escapeHtml(value || "—")}</td>
    </tr>`;
 
 const bucket = (title: string, rows: string): string =>
-  `<p style="margin:18px 0 6px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;
-      color:#71717a">${escapeHtml(title)}</p>
-   <table style="border-collapse:collapse;font-size:14px;width:100%">${rows}</table>`;
+  `<p style="margin:24px 0 2px;font-size:11px;letter-spacing:.09em;text-transform:uppercase;
+      color:#a1a1aa;font-weight:600">${escapeHtml(title)}</p>
+   <table style="border-collapse:collapse;width:100%;border-top:1px solid #e4e4e7;
+      margin-top:6px">${rows}</table>`;
 
 /** The same three buckets the app shows, in the same order. */
 export function signupEmail(s: SignupRow, opts: { sample?: boolean } = {}): {
@@ -59,12 +72,19 @@ export function signupEmail(s: SignupRow, opts: { sample?: boolean } = {}): {
 
   const html = layout(
     opts.sample ? "Sample notification" : "New member signup",
-    `${opts.sample ? `<p style="margin:0 0 14px;padding:8px 12px;background:#fef3c7;
-         border-radius:6px;font-size:13px;color:#78350f">
+    `${opts.sample ? `<p style="margin:0 0 16px;padding:10px 14px;background:#fef3c7;
+         border-radius:8px;font-size:13px;color:#78350f">
          A sample, sent to you only. No member was created and no RFID was used.</p>` : ""}
-     <p style="margin:0;font-size:15px">
-       <strong>${escapeHtml(name)}</strong> was signed up by
-       ${escapeHtml(s.submittedBy || "a dealer user")}.</p>
+     <table style="border-collapse:collapse;width:100%;background:#f4f4f5;border-radius:8px">
+       <tr><td style="padding:14px 16px">
+         <span style="display:block;font-size:17px;font-weight:700;color:#18181b">
+           ${escapeHtml(name)}</span>
+         <span style="display:block;margin-top:3px;font-size:14px;color:#52525b">
+           RFID ${escapeHtml(s.customer.rfid)}</span>
+         <span style="display:block;margin-top:3px;font-size:13px;color:#71717a">
+           Submitted by ${escapeHtml(s.submittedBy || "a dealer user")}</span>
+       </td></tr>
+     </table>
 
      ${bucket("Dealer", [
        row("DLW Contract ID", s.dealer.dlwContractId),
@@ -73,13 +93,11 @@ export function signupEmail(s: SignupRow, opts: { sample?: boolean } = {}): {
      ].join(""))}
 
      ${bucket("Customer", [
-       row("First name", s.customer.firstName),
-       row("Last name", s.customer.lastName),
+       row("Name", `${s.customer.firstName} ${s.customer.lastName}`.trim()),
        row("Plate (DLW)", s.customer.plateDlw),
        row("Vehicle", [s.customer.vehicleYear, s.customer.vehicleMake, s.customer.vehicleModel]
          .filter(Boolean).join(" ") || null),
        row("Color", s.customer.vehicleColor),
-       row("RFID", s.customer.rfid),
      ].join(""))}
 
      ${bucket("Entry", [
