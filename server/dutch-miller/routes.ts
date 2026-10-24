@@ -510,7 +510,7 @@ dutchMillerRouter.post("/settings/notifications/sample", requireDmAdmin,
       customer: {
         firstName: "Sample", lastName: "Member", plateDlw: "ABC 1234", plateState: "WV",
         vehicleMake: "Ford", vehicleModel: "Bronco", vehicleYear: "2024",
-        vehicleColor: "Blue", rfid: "00000+000000",
+        vehicleColor: "Blue", rfid: "00000+000000", stickerAttached: true,
       },
       submittedAt: new Date().toISOString(),
       submittedBy: to,
@@ -866,7 +866,13 @@ dutchMillerRouter.post(
   async (req: Request, res: Response) => {
     const body = (req.body ?? {}) as { row?: Record<string, unknown>; batch?: unknown };
     const out = await createSignup(
-      { ...(body.row ?? {}), ...newHandle(), rfid: "" } as Partial<SignupInput>,
+      {
+        ...(body.row ?? {}),
+        ...newHandle(),
+        rfid: "",
+        // The file said YES; the parser refused the row otherwise.
+        stickerAttached: true,
+      } as Partial<SignupInput>,
       actor(req),
       { assignAnyRfid: true },
     );

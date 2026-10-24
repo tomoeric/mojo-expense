@@ -102,6 +102,16 @@ UPDATE dm_member_signups s
 -- A tag belongs to one member. The last line of defence, below every check
 -- in application code, and the reason a double submission cannot double-assign.
 ALTER TABLE dm_member_signups ADD COLUMN IF NOT EXISTS plate_state text;
+/*
+ * The submitter's word that the tag is on the glass.
+ *
+ * Recorded rather than merely required, because the question it
+ * answers comes up later: a member who cannot get through the gate is
+ * either a tag that was never applied or one that was applied wrongly,
+ * and those are different conversations with different people.
+ */
+ALTER TABLE dm_member_signups
+  ADD COLUMN IF NOT EXISTS sticker_attached boolean NOT NULL DEFAULT false;
 CREATE UNIQUE INDEX IF NOT EXISTS dm_member_signups_rfid_once
   ON dm_member_signups (rfid);
 CREATE INDEX IF NOT EXISTS dm_member_signups_recent
@@ -124,6 +134,8 @@ export type SignupRow = {
     vehicleMake: string | null; vehicleModel: string | null;
     vehicleYear: string | null; vehicleColor: string | null;
     rfid: string;
+    /** Confirmed at submission: the sticker is on the windshield. */
+    stickerAttached: boolean;
   };
   submittedAt: string;
   submittedBy: string;
@@ -180,6 +192,8 @@ export type SignupInput = {
   vehicleMake: string; vehicleModel: string;
   vehicleYear: string; vehicleColor: string;
   rfid: string;
+  /** The submitter's word that the tag is on the glass. */
+  stickerAttached: boolean;
 };
 
 /**
@@ -240,6 +254,7 @@ export function validateSignup(
     vehicleYear: t(raw.vehicleYear),
     vehicleColor: t(raw.vehicleColor),
     rfid: t(raw.rfid),
+    stickerAttached: raw.stickerAttached === true || String(raw.stickerAttached) === "true",
   };
 
   const errors: Record<string, string> = {};
@@ -261,6 +276,13 @@ export function validateSignup(
   if (clean.rfid !== "" && !RFID_RE.test(clean.rfid)) {
     errors.rfid = "That is not an RFID number.";
   }
+  // An attestation that can be skipped is decoration. The tag has
+  // already left the pool by the time anyone looks at this record, so
+  // the moment to ask is before it is submitted, not after.
+  if (!clean.stickerAttached) {
+    errors.stickerAttached =
+      "Confirm the sticker is on the windshield before submitting.";
+  }
   return { clean, errors };
 }
 
@@ -275,6 +297,7 @@ type Db = {
   plate_dlw: string | null; plate_state: string | null;
   vehicle_make: string | null; vehicle_model: string | null;
   vehicle_year: string | null; vehicle_color: string | null; rfid: string;
+  sticker_attached: boolean;
   submitted_at: Date; submitted_by: string;
   notified_at: Date | null; opened_at: Date | null; opened_by: string | null;
   completed_at: Date | null; completed_by: string | null;
@@ -299,6 +322,7 @@ const shape = (r: Db): SignupRow => ({
     vehicleYear: r.vehicle_year,
     vehicleColor: r.vehicle_color,
     rfid: r.rfid,
+    stickerAttached: r.sticker_attached,
   },
   submittedAt: r.submitted_at.toISOString(),
   submittedBy: r.submitted_by,
@@ -311,7 +335,7 @@ const shape = (r: Db): SignupRow => ({
 
 const COLS = `guid, created_at, display_timezone, dlw_contract_id, deal_number,
   customer_id, first_name, last_name, plate_dlw, vehicle_make, vehicle_model,
-  vehicle_year, vehicle_color, rfid, submitted_at, submitted_by,
+  vehicle_year, vehicle_color, rfid, sticker_attached, submitted_at, submitted_by,
   notified_at, opened_at, opened_by, completed_at, completed_by`;
 
 export async function listSignups(opts: {
@@ -464,17 +488,17 @@ export async function createSignup(
          guid, created_at, display_timezone,
          dlw_contract_id, deal_number, customer_id,
          first_name, last_name, plate_dlw, plate_state, vehicle_make, vehicle_model,
-         vehicle_year, vehicle_color, rfid, submitted_by)
+         vehicle_year, vehicle_color, rfid, sticker_attached, submitted_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
                NULLIF($9, ''), NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''),
-               NULLIF($13, ''), NULLIF($14, ''), $15, $16)
+               NULLIF($13, ''), NULLIF($14, ''), $15, $16, $17)
        ON CONFLICT (guid) DO NOTHING
        RETURNING ${COLS}`,
       [clean.guid, clean.createdAt, DISPLAY_TZ,
         clean.dlwContractId, clean.dealNumber, clean.customerId,
         clean.firstName, clean.lastName, clean.plateDlw, clean.plateState,
         clean.vehicleMake, clean.vehicleModel, clean.vehicleYear, clean.vehicleColor,
-        clean.rfid, by]);
+        clean.rfid, clean.stickerAttached, by]);
 
     if (ins.rowCount === 0) {
       // Two submissions of the SAME entry, overlapping. The other one won

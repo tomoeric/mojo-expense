@@ -31,6 +31,11 @@ export const BULK_COLUMNS = [
   { key: "vehicleMake", header: "Vehicle Make", required: false, note: "Optional." },
   { key: "vehicleModel", header: "Vehicle Model", required: false, note: "Optional." },
   { key: "vehicleColor", header: "Vehicle Color", required: false, note: "Optional." },
+  {
+    key: "stickerAttached", header: "Sticker Attached", required: true,
+    note: "YES once the sticker is on the windshield, bottom-left, driver's side. "
+      + "A row without it is not imported.",
+  },
 ] as const;
 
 export type BulkColumnKey = (typeof BULK_COLUMNS)[number]["key"];
@@ -40,7 +45,7 @@ export function templateCsv(): string {
   const head = BULK_COLUMNS.map((c) => c.header).join(",");
   const example = [
     "0041", "00712", "C-9", "Dana", "Reyes", "ABC 1234", "WV",
-    "2024", "Ford", "Bronco", "Blue",
+    "2024", "Ford", "Bronco", "Blue", "YES",
   ].join(",");
   return `${head}\r\n${example}\r\n`;
 }
@@ -140,10 +145,20 @@ export function parseBulk(text: string): BulkParse {
     ) as Record<BulkColumnKey, string>;
     values.plateState = values.plateState.toUpperCase();
 
+    /*
+     * The attestation, in whatever a spreadsheet writes for "yes".
+     * Anything else is NOT taken as yes — a blank, a dash or the word
+     * "pending" must not be read as somebody confirming the sticker is
+     * on a windshield.
+     */
+    const said = values.stickerAttached.trim().toLowerCase();
+    const yes = ["yes", "y", "true", "1", "x", "done", "attached"].includes(said);
+
     // The same checks the form applies, so a file cannot put in
     // anything a person could not have typed.
     const { errors: base } = validateSignup(
-      values as Partial<SignupInput>, { rfidOptional: true });
+      { ...values, stickerAttached: yes } as Partial<SignupInput>,
+      { rfidOptional: true });
 
     const errors: Record<string, string> = {};
     for (const c of BULK_COLUMNS) {
@@ -152,6 +167,13 @@ export function parseBulk(text: string): BulkParse {
     }
     if (values.plateState !== "" && !(STATES as readonly string[]).includes(values.plateState)) {
       errors.State = `"${values.plateState}" is not a state abbreviation.`;
+    }
+    if (!yes) {
+      errors["Sticker Attached"] = said === ""
+        ? "Required — put YES once the sticker is on the windshield."
+        : `"${values.stickerAttached}" is not YES.`;
+    } else {
+      values.stickerAttached = "YES";
     }
     // Two rows for one plate is nearly always the same car entered
     // twice, and catching it here costs nothing while catching it

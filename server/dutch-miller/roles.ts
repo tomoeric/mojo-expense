@@ -67,11 +67,21 @@ INSERT INTO dm_roles (key, name, pages, administers, builtin, created_by)
 ON CONFLICT (key) DO NOTHING;
 `;
 
+/*
+ * The administrator role is "every page" by definition, so a page
+ * added later has to reach it. Only that one: a general user's pages
+ * are somebody's deliberate choice and are never widened from here.
+ */
+const WIDEN_ADMIN = `
+UPDATE dm_roles SET pages = $1::jsonb WHERE key = '${ADMIN_ROLE}' AND administers;
+`;
+
 let ready: Promise<void> | null = null;
 const ensure = (): Promise<void> =>
   (ready ??= ensureSchema().then(async () => {
     await db().query(SCHEMA);
     await db().query(SEED, [JSON.stringify(DM_PAGE_KEYS)]);
+    await db().query(WIDEN_ADMIN, [JSON.stringify(DM_PAGE_KEYS)]);
   }));
 
 type Db = {

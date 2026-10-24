@@ -42,7 +42,7 @@ const entry = (over: Record<string, string> = {}) => {
     dlwContractId: "0041", dealNumber: "00712", customerId: "C-9",
     firstName: "Dana", lastName: "Reyes",
     plateDlw: "", vehicleMake: "Ford", vehicleModel: "Bronco",
-    vehicleYear: "2024", vehicleColor: "Blue",
+    vehicleYear: "2024", vehicleColor: "Blue", stickerAttached: true,
     rfid: TAGS[0]!,
     ...over,
   };
@@ -51,13 +51,29 @@ const entry = (over: Record<string, string> = {}) => {
 const ME = "tester@example.invalid";
 
 try {
+  // Reset our own tags first. A run that died before its cleanup used
+  // to leave them used, and the next run failed on that rather than on
+  // anything it was testing — an afternoon lost to a test failing for
+  // the wrong reason.
+  await db().query(
+    `UPDATE dm_rfid SET status = 'active', used_at = NULL, used_by = NULL, used_for = NULL
+      WHERE number = ANY($1::text[])`, [TAGS]).catch(() => {});
+  await db().query(
+    "DELETE FROM dm_member_signups WHERE rfid = ANY($1::text[])", [TAGS]).catch(() => {});
   await addRfids(TAGS, [], TAGS.length, ME);
 
   console.log("1. Validation, field by field");
   const empty = validateSignup({});
-  check("the four required fields are named",
-    Object.keys(empty.errors).sort().join(",") === "dlwContractId,firstName,lastName,rfid",
+  check("the required fields are named",
+    Object.keys(empty.errors).sort().join(",")
+      === "dlwContractId,firstName,lastName,rfid,stickerAttached",
     Object.keys(empty.errors).sort().join(","));
+  // An attestation that can be skipped is decoration. The tag has
+  // already left the pool by the time anybody reads the record.
+  check("…including the sticker confirmation",
+    Boolean(validateSignup({ stickerAttached: false }).errors.stickerAttached));
+  check("…which a ticked box satisfies",
+    !validateSignup({ stickerAttached: true }).errors.stickerAttached);
   // The dealer's own references: often not known at the moment somebody
   // is standing there being signed up.
   check("Deal # is optional", !empty.errors.dealNumber);

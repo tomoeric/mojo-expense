@@ -22,6 +22,12 @@ export const DM_PAGES = [
     ],
   },
   {
+    key: "rfid-instructions",
+    label: "RFID Instructions",
+    blurb: "Where the sticker goes on the vehicle, and how to apply it.",
+    children: [],
+  },
+  {
     key: "rfid-review",
     label: "RFID Review",
     blurb: "Upload RFID numbers and review active and used ones.",

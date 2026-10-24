@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Building2, ChevronRight, Crown, SlidersHorizontal, Users } from "lucide-react";
 import { DmViewAs } from "@/components/dm-view-as";
 import { UserMenu } from "@/components/user-menu";
+import { DmRfidInstructionsPage } from "@/pages/dm-rfid-instructions";
 import { DmRfidPage } from "@/pages/dm-rfid";
 import { DmSignupsPage } from "@/pages/dm-signups";
 import { useLiveUpdates } from "@/lib/live";
@@ -252,6 +253,7 @@ export function DutchMillerApp({
               viewingAs={access.viewingAs}
             />
           )}
+          {access && route.page === "rfid-instructions" && <DmRfidInstructionsPage />}
           {access && route.page === "rfid-review" && <DmRfidPage />}
           {access && route.page === "roles" && access.role === "super" && <DmRolesPage />}
           {access && route.page === "security" && dmAdmin && <DmSecurityPage />}

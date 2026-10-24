@@ -27,6 +27,8 @@ const check = (what: string, ok: boolean, detail = "") => {
 };
 
 const HEAD = BULK_COLUMNS.map((c) => c.header).join(",");
+/** Every example row needs the attestation, as a real file would. */
+const YES = ",YES";
 const TAG = (i: number) => `70${String(i).padStart(3, "0")}+7${String(i).padStart(5, "0")}`;
 const TAGS = [1, 2, 3].map(TAG);
 const GUIDS: string[] = [];
@@ -61,7 +63,7 @@ try {
 
   console.log("\n4. One bad row refuses the whole file");
   const mixed = parseBulk(
-    `${HEAD}\n0041,,,Dana,Reyes,,,,,,\n0042,,,,Jones,,,,,,\n`);
+    `${HEAD}\n0041,,,Dana,Reyes,,,,,,,YES\n0042,,,,Jones,,,,,,,YES\n`);
   check("the file is refused", mixed.ok === false);
   check("…and BOTH rows still come back, so the good one is not hidden",
     mixed.rows.length === 2);
@@ -72,10 +74,10 @@ try {
     Object.keys(mixed.rows[0]!.errors).length === 0);
 
   console.log("\n5. Field rules match the form's");
-  const bad = parseBulk(`${HEAD}\n0041,,,Dana,Reyes,ABC123,ZZ,99,Ford,Bronco,Blue\n`);
+  const bad = parseBulk(`${HEAD}\n0041,,,Dana,Reyes,ABC123,ZZ,99,Ford,Bronco,Blue,YES\n`);
   check("a state that is not one", Boolean(bad.rows[0]!.errors.State));
   check("a two-digit year", Boolean(bad.rows[0]!.errors["Vehicle Year"]));
-  const ok = parseBulk(`${HEAD}\n0041,,,Dana,Reyes,ABC123,wv,2024,Ford,Bronco,Blue\n`);
+  const ok = parseBulk(`${HEAD}\n0041,,,Dana,Reyes,ABC123,wv,2024,Ford,Bronco,Blue,YES\n`);
   check("a lower-case state is accepted and lifted",
     ok.ok && ok.rows[0]!.values.plateState === "WV", ok.rows[0]!.values.plateState);
   check("leading zeros survive", ok.rows[0]!.values.dlwContractId === "0041");
@@ -84,16 +86,31 @@ try {
   // Nearly always one car entered twice. Catching it costs nothing
   // here and costs a tag afterwards.
   const dupe = parseBulk(
-    `${HEAD}\n0041,,,Dana,Reyes,ABC123,WV,,,,\n0042,,,Sam,Lee,abc123,WV,,,,\n`);
+    `${HEAD}\n0041,,,Dana,Reyes,ABC123,WV,,,,,YES\n0042,,,Sam,Lee,abc123,WV,,,,,YES\n`);
   check("is refused", dupe.ok === false);
   check("…pointing at the first one", /row 2/.test(dupe.rows[1]!.errors.Plate ?? ""),
     dupe.rows[1]!.errors.Plate ?? "");
   check("the same plate in a different state is fine",
-    parseBulk(`${HEAD}\n0041,,,Dana,Reyes,ABC123,WV,,,,\n0042,,,Sam,Lee,ABC123,OH,,,,\n`).ok);
+    parseBulk(`${HEAD}\n0041,,,Dana,Reyes,ABC123,WV,,,,,YES\n0042,,,Sam,Lee,ABC123,OH,,,,,YES\n`).ok);
+
+  console.log("\n6b. The sticker attestation");
+  // Bulk must not be a way round the confirmation the form requires.
+  const noSticker = parseBulk(`${HEAD}\n0041,,,Dana,Reyes,,,,,,,\n`);
+  check("a row without it is refused", noSticker.ok === false);
+  check("…by name", Boolean(noSticker.rows[0]!.errors["Sticker Attached"]),
+    Object.keys(noSticker.rows[0]!.errors).join(","));
+  // "pending" must never be read as somebody confirming a sticker is
+  // on a windshield.
+  const vague = parseBulk(`${HEAD}\n0041,,,Dana,Reyes,,,,,,,pending\n`);
+  check("anything that is not yes is refused", vague.ok === false);
+  for (const yes of ["YES", "yes", "y", "TRUE", "1", "x", "Done"]) {
+    check(`"${yes}" is taken as yes`,
+      parseBulk(`${HEAD}\n0041,,,Dana,Reyes,,,,,,,${yes}\n`).ok === true);
+  }
 
   console.log("\n7. Column order and extra columns");
   const shuffled = parseBulk(
-    "Last Name,Nickname,First Name,DLW Contract ID\nReyes,Dan,Dana,0041\n");
+    "Last Name,Nickname,First Name,DLW Contract ID,Sticker Attached\nReyes,Dan,Dana,0041,YES\n");
   check("headers in any order", shuffled.ok === true,
     JSON.stringify(shuffled.rows[0]?.errors));
   check("…read from the right columns",
@@ -102,8 +119,17 @@ try {
   check("an unknown column is ignored, not an error", shuffled.fileErrors.length === 0);
 
   console.log("\n8. Committing takes the next free tag");
+  // Same reason as test-signups: a run that died before its cleanup
+  // must not fail the next one on its own leftovers.
+  await db().query(
+    `UPDATE dm_rfid SET status = 'active', used_at = NULL, used_by = NULL, used_for = NULL
+      WHERE number = ANY($1::text[])`, [TAGS]).catch(() => {});
+  await db().query(
+    "DELETE FROM dm_member_signups WHERE rfid = ANY($1::text[])", [TAGS]).catch(() => {});
   await addRfids(TAGS, [], TAGS.length, "bulk-test@example.invalid");
-  const row = { dlwContractId: "0041", firstName: "Dana", lastName: "Reyes" };
+  const row = {
+    dlwContractId: "0041", firstName: "Dana", lastName: "Reyes", stickerAttached: true,
+  };
   const h1 = newHandle();
   GUIDS.push(h1.guid);
   const first = await createSignup({ ...row, ...h1, rfid: "" }, "bulk@example.invalid",

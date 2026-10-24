@@ -34,6 +34,7 @@ export type SignupRow = {
     plateState: string | null;
     vehicleMake: string | null; vehicleModel: string | null;
     vehicleYear: string | null; vehicleColor: string | null; rfid: string;
+    stickerAttached: boolean;
   };
   submittedAt: string;
   submittedBy: string;
@@ -87,13 +88,14 @@ const STATES = [
 
 type DealerKey = (typeof DEALER_FIELDS)[number]["key"];
 type CustomerKey = (typeof CUSTOMER_FIELDS)[number]["key"];
-type Form = Record<DealerKey | CustomerKey, string> & { plateState: string; rfid: string };
+type Form = Record<DealerKey | CustomerKey, string>
+  & { plateState: string; rfid: string; stickerAttached: boolean };
 
 const BLANK: Form = {
   dlwContractId: "", dealNumber: "", customerId: "",
   firstName: "", lastName: "", plateDlw: "", plateState: "",
   vehicleMake: "", vehicleModel: "", vehicleYear: "", vehicleColor: "",
-  rfid: "",
+  rfid: "", stickerAttached: false,
 };
 
 /* The generated timestamp is shown in the configured zone, never the
@@ -558,7 +560,8 @@ function ExportMenu({ rows }: { rows: SignupRow[] }) {
     const head = detailed
       ? ["Customer", "First Name", "Last Name", "DLW Contract ID", "Deal #", "Customer ID #",
         "Plate", "State", "Vehicle Year", "Vehicle Make", "Vehicle Model", "Vehicle Color",
-        "RFID", "Status", "Date Created", "Time Created", "Submitted By", "Email Sent",
+        "RFID", "Sticker Attached", "Status", "Date Created", "Time Created",
+        "Submitted By", "Email Sent",
         "Opened", "Opened By", "Completed", "Completed By", "Reference"]
       : ["Customer", "DLW Contract ID", "Deal #", "RFID", "Date Created", "Status"];
 
@@ -573,7 +576,7 @@ function ExportMenu({ rows }: { rows: SignupRow[] }) {
         r.customer.plateDlw ?? "", r.customer.plateState ?? "",
         r.customer.vehicleYear ?? "", r.customer.vehicleMake ?? "",
         r.customer.vehicleModel ?? "", r.customer.vehicleColor ?? "",
-        r.customer.rfid, status(r),
+        r.customer.rfid, r.customer.stickerAttached ? "Yes" : "No", status(r),
         dateIn(r.createdAt, r.displayTimezone), timeIn(r.createdAt, r.displayTimezone),
         r.submittedBy,
         r.notifiedAt ? stamp(r.notifiedAt, r.displayTimezone) : "",
@@ -783,6 +786,12 @@ function ViewSignup({
           <Readout label="Vehicle Year" value={row.customer.vehicleYear} />
           <Readout label="Vehicle Color" value={row.customer.vehicleColor} />
           <Readout label="RFID" value={row.customer.rfid} mono />
+          <Readout
+            label="Sticker attached"
+            value={row.customer.stickerAttached
+              ? "Confirmed at submission"
+              : "Not confirmed"}
+          />
         </Bucket>
 
       </div>
@@ -874,7 +883,7 @@ function AddNew({
     },
   });
 
-  const set = (k: keyof Form, v: string) => {
+  const set = (k: keyof Form, v: string | boolean) => {
     setForm((f) => ({ ...f, [k]: v }));
     setErrors((e) => { const { [k]: _gone, ...rest } = e; return rest; });
     if (k === "rfid") setConflict("");
@@ -893,6 +902,9 @@ function AddNew({
       e.vehicleYear = "Vehicle Year must be four digits.";
     }
     if (form.rfid === "") e.rfid = "RFID is required.";
+    if (!form.stickerAttached) {
+      e.stickerAttached = "Confirm the sticker is on the windshield before submitting.";
+    }
     return e;
   };
 
@@ -966,6 +978,11 @@ function AddNew({
           options={options.data?.options ?? []}
           loading={options.isPending}
           onChange={(v) => set("rfid", v)}
+        />
+        <StickerConfirm
+          checked={form.stickerAttached}
+          error={errors.stickerAttached}
+          onChange={(v) => set("stickerAttached", v)}
         />
       </Bucket>
 
@@ -1047,7 +1064,7 @@ function Verify({
   options: string[];
   busy: boolean;
   conflict: string;
-  onChange: (k: keyof Form, v: string) => void;
+  onChange: (k: keyof Form, v: string | boolean) => void;
   onCancelEntry: () => void;
   onConfirm: () => void;
 }) {
@@ -1058,8 +1075,14 @@ function Verify({
   // A correction after verifying unverifies THAT bucket and only that one:
   // re-reading the dealer fields because a vehicle colour changed teaches
   // people to tick without looking.
-  const editDealer = (k: keyof Form, v: string) => { setDealerOk(false); onChange(k, v); };
-  const editCustomer = (k: keyof Form, v: string) => { setCustomerOk(false); onChange(k, v); };
+  const editDealer = (k: keyof Form, v: string | boolean) => {
+    setDealerOk(false);
+    onChange(k, v);
+  };
+  const editCustomer = (k: keyof Form, v: string | boolean) => {
+    setCustomerOk(false);
+    onChange(k, v);
+  };
 
   // The tag can be taken by somebody else between opening this and
   // confirming. When the server says so the field is cleared, and this
@@ -1118,6 +1141,10 @@ function Verify({
             loading={false}
             onChange={(v) => editCustomer("rfid", v)}
           />
+          <StickerConfirm
+            checked={form.stickerAttached}
+            onChange={(v) => editCustomer("stickerAttached", v)}
+          />
         </Bucket>
         <Verified
           checked={customerOk}
@@ -1135,7 +1162,7 @@ function Verify({
           </button>
           <button
             type="button"
-            disabled={!dealerOk || !customerOk || form.rfid === "" || busy}
+            disabled={!dealerOk || !customerOk || form.rfid === "" || !form.stickerAttached || busy}
             onClick={onConfirm}
             className="inline-flex items-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
           >
@@ -1245,6 +1272,47 @@ function RfidField({
           No active RFID numbers are left. Upload more under RFID Review.
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * The one thing on this form that is a promise rather than a fact.
+ *
+ * It spans the row because it is not another field about the vehicle:
+ * it is the submitter saying the physical work is done. Recorded with
+ * the signup, because when a member cannot get through the gate the
+ * question is whether the tag was ever applied, and that is a
+ * different conversation from one applied in the wrong place.
+ */
+function StickerConfirm({
+  checked, error, onChange,
+}: { checked: boolean; error?: string; onChange: (v: boolean) => void }) {
+  return (
+    <div className="sm:col-span-2 lg:col-span-3">
+      <label
+        className={`flex cursor-pointer items-start gap-2.5 rounded-md border px-3 py-2.5 ${
+          error ? "border-red-500" : checked ? "border-emerald-500/50 bg-emerald-500/5" : "border-border"
+        }`}
+      >
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={checked}
+          aria-invalid={Boolean(error)}
+          onChange={(e) => onChange(e.target.checked)}
+        />
+        <span className="text-sm">
+          The RFID sticker has been physically attached to the front windshield,
+          bottom-left on the driver's side.
+          <span className="text-red-500"> *</span>
+          <span className="mt-0.5 block text-xs text-muted-foreground">
+            Applied inside the glass, flat and square, not obstructing the driver's view.
+            See RFID Instructions.
+          </span>
+        </span>
+      </label>
+      {error && <p role="alert" className="mt-1 text-xs text-red-600">{error}</p>}
     </div>
   );
 }

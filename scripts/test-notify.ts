@@ -35,7 +35,7 @@ const ROW: SignupRow = {
   customer: {
     firstName: "Dana", lastName: "Reyes", plateDlw: "ABC 1234", plateState: "WV",
     vehicleMake: "Ford", vehicleModel: "Bronco", vehicleYear: "2024",
-    vehicleColor: "Blue", rfid: "12345+678901",
+    vehicleColor: "Blue", rfid: "12345+678901", stickerAttached: true,
   },
   submittedAt: "2026-10-24T14:20:00.000Z",
   submittedBy: ME,
