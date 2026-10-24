@@ -30,27 +30,69 @@ const GRAPH = "https://graph.microsoft.com/v1.0";
  * receipt inbox. Falling back keeps a single-app setup working, and the
  * boot log says which one is in use so nobody has to guess.
  */
-const env1 = (...names: string[]): string => {
-  for (const n of names) {
-    const v = (process.env[n] ?? "").trim();
-    if (v) return v;
-  }
-  return "";
-};
+const envOf = (name: string): string => (process.env[name] ?? "").trim();
 
-const tenantId = () => env1("MAIL_TENANT_ID", "AZURE_TENANT_ID");
-const clientId = () => env1("MAIL_CLIENT_ID", "AZURE_CLIENT_ID");
-const clientSecret = () => env1("MAIL_CLIENT_SECRET", "AZURE_CLIENT_SECRET");
-const sender = () => (process.env.MAIL_FROM ?? "").trim();
+/**
+ * The credentials are a SET, not three independent values.
+ *
+ * Falling back one variable at a time looks tidy and is a trap: a
+ * `MAIL_CLIENT_ID` entered without its secret would be paired with the
+ * sign-in app's secret, and Entra answers that with a 401 that names
+ * neither. So the moment `MAIL_CLIENT_ID` exists, the mail app is what we
+ * use and its own secret is required — `MAIL_TENANT_ID` may still fall
+ * back, because both registrations live in the same tenant.
+ */
+function creds(): { tenantId: string; clientId: string; clientSecret: string } {
+  const mailClient = envOf("MAIL_CLIENT_ID");
+  if (mailClient) {
+    return {
+      tenantId: envOf("MAIL_TENANT_ID") || envOf("AZURE_TENANT_ID"),
+      clientId: mailClient,
+      clientSecret: envOf("MAIL_CLIENT_SECRET"),
+    };
+  }
+  return {
+    tenantId: envOf("AZURE_TENANT_ID"),
+    clientId: envOf("AZURE_CLIENT_ID"),
+    clientSecret: envOf("AZURE_CLIENT_SECRET"),
+  };
+}
+
+const tenantId = () => creds().tenantId;
+const clientId = () => creds().clientId;
+const clientSecret = () => creds().clientSecret;
+const sender = () => envOf("MAIL_FROM");
 
 export function isMailConfigured(): boolean {
-  return Boolean(tenantId() && clientId() && clientSecret() && sender());
+  const c = creds();
+  return Boolean(c.tenantId && c.clientId && c.clientSecret && sender());
+}
+
+/**
+ * Why it is not configured, in words somebody can act on.
+ *
+ * Shown on the Users page. "Email is not set up" with nothing further is
+ * the message that sends people back through four settings screens.
+ */
+export function mailProblem(): string {
+  if (envOf("MAIL_CLIENT_ID") && !envOf("MAIL_CLIENT_SECRET")) {
+    return "MAIL_CLIENT_ID is set but MAIL_CLIENT_SECRET is missing — add it, or remove "
+      + "MAIL_CLIENT_ID to use the sign-in app registration instead.";
+  }
+  const c = creds();
+  if (!c.tenantId || !c.clientId || !c.clientSecret) {
+    return "The Microsoft app credentials are not set.";
+  }
+  if (!sender()) {
+    return "MAIL_FROM is not set — it should be the mailbox invitations are sent from, "
+      + "such as noreply@mojocarwash.com.";
+  }
+  return "";
 }
 
 /** The sending mailbox, for the settings page. Never a secret. */
 export const mailFrom = (): string => sender();
 
-/** For the boot log and the Users page: which registration sends the mail. */
 export const mailAppIsSeparate = (): boolean =>
   Boolean((process.env.MAIL_CLIENT_ID ?? "").trim());
 
@@ -86,10 +128,7 @@ const escapeHtml = (s: string): string =>
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] ?? c));
 
 export async function sendMail(to: string, subject: string, html: string): Promise<void> {
-  if (!isMailConfigured()) {
-    throw new Error(
-      "Email is not configured. Set MAIL_FROM and grant the app Mail.Send.");
-  }
+  if (!isMailConfigured()) throw new Error(`Email is not configured. ${mailProblem()}`);
   const res = await fetch(`${GRAPH}/users/${encodeURIComponent(sender())}/sendMail`, {
     method: "POST",
     headers: {

@@ -24,6 +24,8 @@ type Payload = {
   myRole: Role;
   mailConfigured: boolean;
   mailFrom: string;
+  mailProblem: string;
+  mailAppIsSeparate: boolean;
 };
 
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString() : "—");
@@ -131,9 +133,14 @@ export function DmUsersPage({ me }: { me: string }) {
 
       {mailOff && (
         <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2.5 text-sm text-amber-900 dark:text-amber-200">
-          Email is not set up, so invitations cannot be sent. Set <code>MAIL_FROM</code> to a
-          MOJO mailbox and grant the app <code>Mail.Send</code>. MOJO staff can still be added —
-          they sign in with Microsoft.
+          Invitations cannot be sent yet. {data.data?.mailProblem} MOJO staff can still be
+          added — they sign in with Microsoft.
+        </p>
+      )}
+      {!mailOff && data.data && (
+        <p className="text-xs text-muted-foreground">
+          Invitations send from <strong>{data.data.mailFrom}</strong> using the{" "}
+          {data.data.mailAppIsSeparate ? "dedicated mail" : "shared sign-in"} app registration.
         </p>
       )}
       {error && <p className="text-sm font-semibold text-red-600">{error}</p>}

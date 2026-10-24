@@ -14,7 +14,9 @@ import {
 } from "./users.js";
 import { audit, listAudit } from "./audit.js";
 import { inviteUser } from "./dealer-auth.js";
-import { isMailConfigured, layout, mailAppIsSeparate, mailFrom, sendMail } from "../mail.js";
+import {
+  isMailConfigured, layout, mailAppIsSeparate, mailFrom, mailProblem, sendMail,
+} from "../mail.js";
 import { forgetEpoch } from "../auth/index.js";
 
 /**
@@ -82,6 +84,8 @@ dutchMillerRouter.get("/users", requireDmAdmin, async (req: Request, res: Respon
     myRole: await roleOf(req),
     mailConfigured: isMailConfigured(),
     mailFrom: mailFrom(),
+    mailProblem: mailProblem(),
+    mailAppIsSeparate: mailAppIsSeparate(),
   });
 });
 
