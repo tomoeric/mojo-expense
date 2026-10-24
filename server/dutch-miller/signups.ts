@@ -219,7 +219,10 @@ const FIELD_LABEL: Record<string, string> = {
 };
 
 /** Field-by-field, so the form can point at the one that is wrong. */
-export function validateSignup(raw: Partial<SignupInput>): {
+export function validateSignup(
+  raw: Partial<SignupInput>,
+  opts: { rfidOptional?: boolean } = {},
+): {
   clean: SignupInput;
   errors: Record<string, string>;
 } {
@@ -242,7 +245,10 @@ export function validateSignup(raw: Partial<SignupInput>): {
   const errors: Record<string, string> = {};
   // Deal # and Customer ID # are the dealer's own references and are not
   // always known at the moment somebody is signed up.
-  for (const k of ["dlwContractId", "firstName", "lastName", "rfid"] as const) {
+  const required = opts.rfidOptional
+    ? (["dlwContractId", "firstName", "lastName"] as const)
+    : (["dlwContractId", "firstName", "lastName", "rfid"] as const);
+  for (const k of required) {
     if (clean[k] === "") errors[k] = `${FIELD_LABEL[k]} is required.`;
   }
   if (clean.plateState !== "" && !isState(clean.plateState)) {
@@ -387,9 +393,20 @@ export type CreateResult =
  * the second attempt finds the row already there and reports success
  * without touching another tag.
  */
-export async function createSignup(raw: Partial<SignupInput>, by: string): Promise<CreateResult> {
+export async function createSignup(
+  raw: Partial<SignupInput>,
+  by: string,
+  /**
+   * Bulk import: take whichever tag is next rather than naming one.
+   *
+   * A spreadsheet of members cannot name tags — the person filling it
+   * in does not know which are free, and by the time they submit it
+   * some will not be. So the row says who, and the pool decides which.
+   */
+  opts: { assignAnyRfid?: boolean } = {},
+): Promise<CreateResult> {
   await ensure();
-  const { clean, errors } = validateSignup(raw);
+  const { clean, errors } = validateSignup(raw, { rfidOptional: opts.assignAnyRfid });
   if (Object.keys(errors).length > 0) return { ok: false, kind: "validation", errors };
   if (!handleIsOurs(clean)) {
     return {
@@ -406,20 +423,41 @@ export async function createSignup(raw: Partial<SignupInput>, by: string): Promi
   const client = await db().connect();
   try {
     await client.query("BEGIN");
-    const claim = await client.query<{ number: string }>(
-      `UPDATE dm_rfid
-          SET status = 'used', used_at = now(), used_by = $2, used_for = $3
-        WHERE number = $1 AND status = 'active'
-      RETURNING number`,
-      [clean.rfid, by, `Member signup ${clean.guid}`]);
+    /*
+     * Claim a tag. Either the one named, or — for a bulk import — the
+     * next free one.
+     *
+     * FOR UPDATE SKIP LOCKED is what makes the second form safe: two
+     * rows of the same spreadsheet landing together take two different
+     * tags instead of fighting over one and one of them failing.
+     */
+    const claim = clean.rfid === "" && opts.assignAnyRfid
+      ? await client.query<{ number: string }>(
+        `UPDATE dm_rfid
+            SET status = 'used', used_at = now(), used_by = $1, used_for = $2
+          WHERE number = (SELECT number FROM dm_rfid WHERE status = 'active'
+                           ORDER BY number LIMIT 1 FOR UPDATE SKIP LOCKED)
+        RETURNING number`,
+        [by, `Member signup ${clean.guid}`])
+      : await client.query<{ number: string }>(
+        `UPDATE dm_rfid
+            SET status = 'used', used_at = now(), used_by = $2, used_for = $3
+          WHERE number = $1 AND status = 'active'
+        RETURNING number`,
+        [clean.rfid, by, `Member signup ${clean.guid}`]);
+
     if (claim.rowCount === 0) {
       await client.query("ROLLBACK");
       return {
         ok: false, kind: "rfid-taken",
-        reason: `RFID ${clean.rfid} is no longer available — it has been used or held back `
-          + "since this form was opened. Choose another one.",
+        reason: clean.rfid === ""
+          ? "There are no active RFID numbers left in the pool. Upload more under RFID Review."
+          : `RFID ${clean.rfid} is no longer available — it has been used or held back `
+            + "since this form was opened. Choose another one.",
       };
     }
+    // Whichever was claimed is the one that goes on the record.
+    clean.rfid = claim.rows[0]!.number;
 
     const ins = await client.query<Db>(
       `INSERT INTO dm_member_signups (

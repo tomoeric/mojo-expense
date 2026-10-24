@@ -14,6 +14,7 @@ import {
   type DmPageKey, type DmRole, type StoredRole,
 } from "./users.js";
 import { audit, listAudit } from "./audit.js";
+import { BULK_COLUMNS, parseBulk, templateCsv } from "./bulk.js";
 import { DEFAULT_ROLE, listRoles, removeRole, saveRole } from "./roles.js";
 import { dutchMillerNamed } from "../auth/apps.js";
 import { publicOrigin } from "../origin.js";
@@ -669,6 +670,102 @@ dutchMillerRouter.post(
     // 409: the entered data is fine and worth keeping — the form says so and
     // asks for a different tag rather than throwing the entry away.
     res.status(409).json({ error: out.reason, kind: out.kind });
+  },
+);
+
+/* ------------------------------------------------------------------ *
+ * Bulk upload
+ * ------------------------------------------------------------------ */
+
+/** The layout and an example, so nobody has to guess at the headers. */
+dutchMillerRouter.get(
+  "/signups/bulk/template",
+  requirePage("member-signups"),
+  (_req: Request, res: Response) => {
+    res.json({ columns: BULK_COLUMNS, csv: templateCsv() });
+  },
+);
+
+/**
+ * Read a file and check it. Writes nothing, claims no tag.
+ *
+ * All or nothing: one bad row and the whole file is refused, named row
+ * by row and column by column. A partial import would spend tags on
+ * the half that worked and leave no way to tell which half that was.
+ */
+dutchMillerRouter.post(
+  "/signups/bulk/check",
+  requirePage("member-signups"),
+  express.raw({ type: ["text/csv", "text/plain", "application/octet-stream"], limit: "8mb" }),
+  async (req: Request, res: Response) => {
+    const file = req.body as Buffer;
+    if (!Buffer.isBuffer(file) || file.length === 0) {
+      res.status(400).json({ error: "No file arrived." });
+      return;
+    }
+    const parsed = parseBulk(file.toString("utf8"));
+    const pool = await rfidCounts();
+    await audit({
+      action: "bulk.uploaded",
+      actor: actor(req),
+      detail: `${parsed.rows.length} row${parsed.rows.length === 1 ? "" : "s"} · `
+        + `${parsed.ok ? "valid" : "refused"}`,
+    });
+    res.json({
+      ...parsed,
+      // Checked here as well as shown, because a file can be valid and
+      // still be unimportable: there has to be a tag for every row.
+      available: pool.active,
+      enoughTags: pool.active >= parsed.rows.length,
+    });
+  },
+);
+
+/**
+ * Commit one row.
+ *
+ * One row per request, because that is one member, one tag and one
+ * transaction — the same path a typed signup takes, with the tag
+ * chosen by the pool instead of by a person. It also means the review
+ * mode and the straight-through mode are the same code, differing only
+ * in whether the page waits for somebody between rows.
+ */
+dutchMillerRouter.post(
+  "/signups/bulk/commit",
+  requirePage("member-signups"),
+  async (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as { row?: Record<string, unknown>; batch?: unknown };
+    const out = await createSignup(
+      { ...(body.row ?? {}), ...newHandle(), rfid: "" } as Partial<SignupInput>,
+      actor(req),
+      { assignAnyRfid: true },
+    );
+    if (!out.ok) {
+      res.status(out.kind === "validation" ? 400 : 409).json(
+        out.kind === "validation" ? { errors: out.errors } : { error: out.reason });
+      return;
+    }
+    if (!out.alreadyExisted) void notifySignup(out.row, publicOrigin(req));
+    emitChange("signups");
+    res.json({ row: out.row });
+  },
+);
+
+/** The run is over: what went in, how, and who did it. */
+dutchMillerRouter.post(
+  "/signups/bulk/done",
+  requirePage("member-signups"),
+  async (req: Request, res: Response) => {
+    const b = (req.body ?? {}) as { added?: unknown; failed?: unknown; reviewed?: unknown };
+    const added = Number(b.added) || 0;
+    const failed = Number(b.failed) || 0;
+    await audit({
+      action: "bulk.committed",
+      actor: actor(req),
+      detail: `${added} added, ${failed} failed · `
+        + (b.reviewed === true ? "reviewed one by one" : "submitted without review"),
+    });
+    res.json({ ok: true });
   },
 );
 

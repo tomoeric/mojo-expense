@@ -2,8 +2,9 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDown, ArrowUp, CheckCircle2, ChevronLeft, ChevronRight, Circle, Download,
-  Eye, Loader2, Lock, Send, X,
+  Eye, FileSpreadsheet, Loader2, Lock, Send, X,
 } from "lucide-react";
+import { DmBulkDialog } from "@/pages/dm-bulk";
 
 /**
  * Member Signups — enrol a member, and hand them an RFID tag.
@@ -784,6 +785,7 @@ function AddNew({
   // Bumped by Cancel and by a successful submission: a fresh entry gets a
   // fresh GUID and a fresh creation time, never the previous one's.
   const [entry, setEntry] = useState(0);
+  const [bulk, setBulk] = useState(false);
 
   const handle = useQuery({
     queryKey: ["dm-signup-handle", entry],
@@ -876,11 +878,21 @@ function AddNew({
 
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-base font-semibold">New member</h2>
-        <p className="text-sm text-muted-foreground">
-          Enter member details, then verify each bucket.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-base font-semibold">New member</h2>
+          <p className="text-sm text-muted-foreground">
+            Enter member details, then verify each bucket.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setBulk(true)}
+          className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted"
+        >
+          <FileSpreadsheet className="h-4 w-4" />
+          Bulk upload
+        </button>
       </div>
 
       {handle.isError && (
@@ -968,6 +980,14 @@ function AddNew({
       <p className="text-xs text-muted-foreground">
         RFID is marked used only after final confirmation.
       </p>
+
+      {bulk && (
+        <DmBulkDialog
+          onClose={() => setBulk(false)}
+          /* Anything added belongs in the list, not on a blank form. */
+          onDone={onCancel}
+        />
+      )}
 
       {verifying && h && (
         <Verify

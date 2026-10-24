@@ -31,7 +31,9 @@ app.use((req, res, next) =>
   // The two raw-body uploads are skipped, like /api/import always was: a
   // spreadsheet is not JSON and the raw parser downstream needs the body
   // untouched.
-  req.path === "/api/import" || req.path === "/api/dutch-miller/rfid/upload"
+  req.path === "/api/import"
+  || req.path === "/api/dutch-miller/rfid/upload"
+  || req.path === "/api/dutch-miller/signups/bulk/check"
     ? next()
     : express.json({ limit: "1mb" })(req, res, next),
 );

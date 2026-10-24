@@ -178,6 +178,24 @@ the blocks.
   - Candidates come from `dm_users` only — never an arbitrary address — and
     include invited accounts, since "what do they see?" is usually asked
     about somebody just added.
+- **Bulk member upload is ALL OR NOTHING** (`dutch-miller/bulk.ts`). One
+  bad row refuses the whole file, named by row and column, and the user
+  re-uploads. Never make it partial: each accepted row spends an RFID
+  tag permanently, so a half-import leaves tags issued against members
+  who are not there and no way to tell which half landed.
+  - The file carries NO RFID column — whoever fills it in cannot know
+    which tags are free. Each row takes the next one via
+    `createSignup(..., { assignAnyRfid: true })`, whose claim is
+    `FOR UPDATE SKIP LOCKED` so two rows arriving together take two
+    different tags instead of fighting over one.
+  - Checking is a separate route from committing and writes nothing.
+    Committing is ONE ROW PER REQUEST, so review-each and send-all are
+    the same code path, differing only in whether the page waits.
+  - The send-all choice lives in component state only, so it lasts for
+    that upload and no longer. A remembered "don't ask again" would
+    quietly turn every later import into a straight-through one.
+  - Both the upload and the finished run are written to the audit trail
+    (`bulk.uploaded`, `bulk.committed`).
 - **Live updates are PUSHED, not polled** (`server/events.ts` +
   `src/lib/live.ts`). The shell holds one server-sent-events connection
   and `emitChange(topic)` on every write invalidates the matching

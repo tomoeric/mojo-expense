@@ -23,6 +23,7 @@ export const AUDIT_ACTIONS = [
   "sessions.revoked", "locked.out",
   "notify.sent", "notify.failed", "notify.changed",
   "role.saved", "role.removed",
+  "bulk.uploaded", "bulk.committed",
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
