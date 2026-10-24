@@ -135,8 +135,11 @@ export async function runReminders(force = false): Promise<{
     return { sent: false, reason: "no recipients", outstanding: rows.length };
   }
 
+  // The reminder is a list, not a record, so everybody gets the same
+  // one — the reviewer/notifier distinction is about who acts on a
+  // single signup, and this is the standing "these are still open".
   const { subject, html } = digest(rows, publicOrigin());
-  const results = await Promise.allSettled(to.map((a) => sendMail(a, subject, html)));
+  const results = await Promise.allSettled(to.map((r) => sendMail(r.email, subject, html)));
   const failed = results.filter((x) => x.status === "rejected").length;
   if (!force) await noteReminderSent(now.stamp);
   await audit({

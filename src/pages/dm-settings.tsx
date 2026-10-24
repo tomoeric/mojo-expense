@@ -3,7 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bell, Clock, Loader2, Send } from "lucide-react";
 
 type Notify = {
-  recipients: string[];
+  reviewer: string;
+  notifiers: string[];
   enabled: boolean;
   copySubmitter: boolean;
   updatedAt: string | null;
@@ -19,6 +20,7 @@ type Notify = {
  */
 export function DmSettingsPage() {
   const qc = useQueryClient();
+  const [reviewer, setReviewer] = useState("");
   const [text, setText] = useState("");
   const [enabled, setEnabled] = useState(true);
   const [copySubmitter, setCopySubmitter] = useState(false);
@@ -39,7 +41,8 @@ export function DmSettingsPage() {
   // halfway through typing a list of addresses would wipe it.
   useEffect(() => {
     if (!data.data || dirty) return;
-    setText(data.data.notify.recipients.join("\n"));
+    setReviewer(data.data.notify.reviewer);
+    setText(data.data.notify.notifiers.join("\n"));
     setEnabled(data.data.notify.enabled);
     setCopySubmitter(data.data.notify.copySubmitter);
   }, [data.data, dirty]);
@@ -49,7 +52,7 @@ export function DmSettingsPage() {
       const res = await fetch("/api/dutch-miller/settings/notifications", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ recipients: text, enabled, copySubmitter }),
+        body: JSON.stringify({ reviewer, notifiers: text, enabled, copySubmitter }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "Could not save.");
@@ -58,11 +61,12 @@ export function DmSettingsPage() {
     onSuccess: (b) => {
       setError("");
       setDirty(false);
-      setText(b.notify.recipients.join("\n"));
-      setNote(b.notify.recipients.length === 0
-        ? "Saved. Nobody is on the list, so no notifications will be sent."
-        : `Saved. ${b.notify.recipients.length} recipient`
-          + `${b.notify.recipients.length === 1 ? "" : "s"}.`);
+      setReviewer(b.notify.reviewer);
+      setText(b.notify.notifiers.join("\n"));
+      setNote(`Saved. ${b.notify.reviewer || "no reviewer"}`
+        + `${b.notify.notifiers.length > 0
+          ? `, plus ${b.notify.notifiers.length} notified`
+          : ""}.`);
       void qc.invalidateQueries({ queryKey: ["dm-notify"] });
     },
     onError: (e) => { setError((e as Error).message); setNote(""); },
@@ -127,23 +131,51 @@ export function DmSettingsPage() {
           </label>
         </div>
 
-        <label htmlFor="recipients" className="mb-1 block text-xs text-muted-foreground">
-          Recipients — one per line, or separated by commas
-        </label>
-        <textarea
-          id="recipients"
-          rows={4}
-          value={text}
-          onChange={(e) => { setText(e.target.value); setDirty(true); setNote(""); }}
-          placeholder={"memberships@mojocarwash.com\noperations@mojocarwash.com"}
-          className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-sm"
-        />
-        <p className="mt-1 text-xs text-muted-foreground">
-          {count === 0
-            ? "Nobody listed — no notifications will be sent."
-            : `${count} address${count === 1 ? "" : "es"}.`}
-          {" "}Each one gets its own message, so a bad address cannot stop the others.
-        </p>
+        <div className="space-y-4">
+          {/* One person, deliberately. "Who is reviewing this?" has to
+              have a single answer — a shared list of reviewers is a
+              list where everybody assumes somebody else has it. */}
+          <div>
+            <label htmlFor="reviewer" className="mb-1 block text-xs font-semibold">
+              CSC Reviewer
+            </label>
+            <p className="mb-1 text-xs text-muted-foreground">
+              One person. They get the email with a button straight to the record, and the
+              review is theirs.
+            </p>
+            <input
+              id="reviewer"
+              value={reviewer}
+              onChange={(e) => { setReviewer(e.target.value); setDirty(true); setNote(""); }}
+              placeholder="name@mojocarwash.com"
+              className="w-full max-w-md rounded-md border border-border bg-background px-3 py-2 font-mono text-sm"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="recipients" className="mb-1 block text-xs font-semibold">
+              Optional notifiers
+            </label>
+            <p className="mb-1 text-xs text-muted-foreground">
+              One per line. They get the same details, with the button greyed out and a
+              line saying the review is not theirs.
+            </p>
+            <textarea
+              id="recipients"
+              rows={3}
+              value={text}
+              onChange={(e) => { setText(e.target.value); setDirty(true); setNote(""); }}
+              placeholder={"operations@mojocarwash.com\nmemberships@mojocarwash.com"}
+              className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-sm"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              {count === 0
+                ? "Nobody else is notified."
+                : `${count} address${count === 1 ? "" : "es"}.`}
+              {" "}Each one gets its own message, so a bad address cannot stop the others.
+            </p>
+          </div>
+        </div>
 
         <label className="mt-3 flex items-center gap-2 text-sm">
           <input

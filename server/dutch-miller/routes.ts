@@ -410,29 +410,43 @@ dutchMillerRouter.get("/settings/notifications", requireDmAdmin,
 dutchMillerRouter.post("/settings/notifications", requireDmAdmin,
   async (req: Request, res: Response) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
-    // The page sends raw text, because that is what somebody pastes. The
-    // server decides what an address is, and says which entries it refused
-    // rather than quietly dropping them.
-    const { ok, rejected } = parseRecipients(body.recipients);
-    if (rejected.length > 0) {
+    // Both fields arrive as raw text, because that is what somebody
+    // pastes. The server decides what an address is and says which
+    // entries it refused rather than quietly dropping them.
+    const reviewer = parseRecipients(body.reviewer);
+    if (reviewer.rejected.length > 0 || reviewer.ok.length > 1) {
       res.status(400).json({
-        error: `Not an email address: ${rejected.slice(0, 5).join(", ")}`,
-        rejected,
+        error: reviewer.ok.length > 1
+          ? "There can be only one CSC Reviewer."
+          : `Not an email address: ${reviewer.rejected.slice(0, 3).join(", ")}`,
       });
       return;
     }
-    const notify = await setSignupNotify({
-      recipients: ok,
-      enabled: body.enabled !== false,
-      copySubmitter: body.copySubmitter === true,
-    }, actor(req));
-    await audit({
-      action: "notify.changed", actor: actor(req),
-      detail: `${ok.length} recipient${ok.length === 1 ? "" : "s"}`
-        + `${notify.enabled ? "" : " · off"}`,
-    });
-    emitChange("settings");
-    res.json({ notify });
+    const notifiers = parseRecipients(body.notifiers);
+    if (notifiers.rejected.length > 0) {
+      res.status(400).json({
+        error: `Not an email address: ${notifiers.rejected.slice(0, 5).join(", ")}`,
+        rejected: notifiers.rejected,
+      });
+      return;
+    }
+    try {
+      const notify = await setSignupNotify({
+        reviewer: reviewer.ok[0] ?? "",
+        notifiers: notifiers.ok,
+        enabled: body.enabled !== false,
+        copySubmitter: body.copySubmitter === true,
+      }, actor(req));
+      await audit({
+        action: "notify.changed", actor: actor(req),
+        detail: notify.enabled
+          ? `reviewer ${notify.reviewer} · ${notify.notifiers.length} notified`
+          : "off",
+      });
+      res.json({ notify });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
   });
 
 dutchMillerRouter.get("/settings/reminders", requireDmAdmin,

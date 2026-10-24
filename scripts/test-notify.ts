@@ -64,48 +64,71 @@ try {
   check("…while the good ones still parse", bad.ok.length === 2);
   check("nothing at all is nothing", parseRecipients("").ok.length === 0);
 
-  console.log("\n2. Nobody is told until somebody is listed");
+  console.log("\n2. Nobody is told until there is a reviewer");
   check("an unset setting sends to nobody", (await recipientsFor(ME)).length === 0);
-  check("…and reads as empty rather than undefined",
-    (await getSignupNotify()).recipients.length === 0);
+  check("…and reads as having no reviewer", (await getSignupNotify()).reviewer === "");
 
-  console.log("\n3. Once it is set");
-  await setSignupNotify(
-    { recipients: ["ops@mojocarwash.com", "memberships@mojocarwash.com"],
-      enabled: true, copySubmitter: false },
-    "tester@mojocarwash.com");
+  console.log("\n3. The reviewer is one person");
+  await setSignupNotify({
+    reviewer: "csc@mojocarwash.com",
+    notifiers: ["ops@mojocarwash.com", "memberships@mojocarwash.com"],
+    enabled: true, copySubmitter: false,
+  }, "tester@mojocarwash.com");
   const to = await recipientsFor(ME);
-  check("both are told", to.length === 2, to.join(","));
-  check("…and the submitter is NOT, unless asked for", !to.includes(ME));
-  check("who changed it is kept",
-    (await getSignupNotify()).updatedBy === "tester@mojocarwash.com");
+  check("everybody is told", to.length === 3, JSON.stringify(to));
+  check("…exactly one of them as the reviewer",
+    to.filter((r) => r.as === "reviewer").length === 1);
+  check("…and the reviewer is first, since the message is theirs",
+    to[0]?.as === "reviewer" && to[0]?.email === "csc@mojocarwash.com");
+  check("the rest are notifiers", to.slice(1).every((r) => r.as === "notifier"));
+  // One address in two roles would get two messages disagreeing about
+  // whose job it is.
+  await setSignupNotify({
+    reviewer: "csc@mojocarwash.com",
+    notifiers: ["csc@mojocarwash.com", "ops@mojocarwash.com"],
+    enabled: true, copySubmitter: false,
+  }, "tester@mojocarwash.com");
+  const once = await recipientsFor(ME);
+  check("somebody cannot be both", once.length === 2, JSON.stringify(once));
 
-  console.log("\n4. Copying the submitter");
-  await setSignupNotify(
-    { recipients: ["ops@mojocarwash.com"], enabled: true, copySubmitter: true },
-    "tester@mojocarwash.com");
-  check("they are added", (await recipientsFor(ME)).includes(ME));
-  // Otherwise somebody on the list who submits a signup gets two copies of
-  // the same email and assumes it fired twice.
-  check("…but never twice if they are already on the list",
-    (await recipientsFor("ops@mojocarwash.com")).length === 1);
-  check("…and a submitter with no address is skipped",
-    (await recipientsFor("")).length === 1);
+  console.log("\n4. Notifications need a reviewer to be on at all");
+  let refused = "";
+  try {
+    await setSignupNotify({
+      reviewer: "", notifiers: ["ops@mojocarwash.com"], enabled: true, copySubmitter: false,
+    }, "tester@mojocarwash.com");
+  } catch (e) { refused = (e as Error).message; }
+  check("switching on without one is refused", /CSC Reviewer/.test(refused), refused);
+  check("…because a crowd told it is not their job is nobody told",
+    (await getSignupNotify()).reviewer === "csc@mojocarwash.com");
+  let badOne = "";
+  try {
+    await setSignupNotify({
+      reviewer: "not an address", notifiers: [], enabled: true, copySubmitter: false,
+    }, "t");
+  } catch (e) { badOne = (e as Error).message; }
+  check("a reviewer that is not an address is refused", badOne !== "");
 
-  console.log("\n5. Switched off means off");
-  await setSignupNotify(
-    { recipients: ["ops@mojocarwash.com"], enabled: false, copySubmitter: true },
-    "tester@mojocarwash.com");
+  console.log("\n5. Copying the submitter");
+  await setSignupNotify({
+    reviewer: "csc@mojocarwash.com", notifiers: ["ops@mojocarwash.com"],
+    enabled: true, copySubmitter: true,
+  }, "tester@mojocarwash.com");
+  const withMe = await recipientsFor(ME);
+  check("they are added", withMe.some((r) => r.email === ME && r.as === "submitter"));
+  check("…but never twice if already listed",
+    (await recipientsFor("ops@mojocarwash.com")).filter(
+      (r) => r.email === "ops@mojocarwash.com").length === 1);
+
+  console.log("\n6. Switched off means off");
+  await setSignupNotify({
+    reviewer: "csc@mojocarwash.com", notifiers: ["ops@mojocarwash.com"],
+    enabled: false, copySubmitter: true,
+  }, "tester@mojocarwash.com");
   check("nobody is told", (await recipientsFor(ME)).length === 0);
-  check("…not even the submitter copy", !(await recipientsFor(ME)).includes(ME));
-  check("…and the list is kept for when it comes back on",
-    (await getSignupNotify()).recipients.length === 1);
-
-  console.log("\n6. An empty list beats being switched on");
-  await setSignupNotify(
-    { recipients: [], enabled: true, copySubmitter: true },
-    "tester@mojocarwash.com");
-  check("still nobody", (await recipientsFor(ME)).length === 0);
+  check("…and both lists are kept for when it comes back on",
+    (await getSignupNotify()).reviewer === "csc@mojocarwash.com"
+      && (await getSignupNotify()).notifiers.length === 1);
 
   console.log("\n7. What the message says");
   const { subject, html } = signupEmail(ROW);
@@ -124,14 +147,34 @@ try {
     html.includes("CDT") || html.includes("CST"), "no timezone in body");
   // The whole point of the button: somebody reads the email and marks
   // the signup complete without first going to find it.
-  const linked = signupEmail(ROW, { origin: "https://example.invalid" });
-  check("the body carries a link to the record",
+  const linked = signupEmail(ROW, { origin: "https://example.invalid", as: "reviewer" });
+  check("the reviewer gets a link to the record",
     linked.html.includes(`https://example.invalid/#/member-signups/review?open=${ROW.guid}`),
     "no link");
-  check("…and says what it opens", /Open in MOJO/.test(linked.html));
+  check("…and their subject says it is theirs", linked.subject.startsWith("To review"),
+    linked.subject);
   // A half-built URL in an email is worse than no button at all.
   check("no origin means no button rather than a broken one",
-    !/Open in MOJO/.test(signupEmail(ROW, { origin: "" }).html));
+    !/href/.test(signupEmail(ROW, { origin: "", as: "reviewer" }).html));
+
+  // A working button on a message that is only for information invites
+  // four people to open a record one of them owns, and "opened" stops
+  // meaning anything.
+  const fyi = signupEmail(ROW, { origin: "https://example.invalid", as: "notifier" });
+  check("a notifier gets NO link", !fyi.html.includes("/member-signups/review?open="),
+    "link present");
+  check("…but the same details", fyi.html.includes(ROW.customer.rfid)
+    && fyi.html.includes(ROW.dealer.dlwContractId));
+  check("…with the button greyed out rather than missing",
+    fyi.html.includes("Open in MOJO") && !/<a[^>]*Open in MOJO/.test(fyi.html));
+  check("…and told the review is not theirs",
+    /review is not yours/i.test(fyi.html), "no explanation");
+  check("…and told where to look instead", /Sign in to the portal/i.test(fyi.html));
+  check("their subject marks it as information", fyi.subject.startsWith("FYI"),
+    fyi.subject);
+  const mine = signupEmail(ROW, { origin: "https://example.invalid", as: "submitter" });
+  check("the submitter is told why they have it",
+    /because you submitted it/i.test(mine.html));
 
   check("a sample says so, loudly",
     signupEmail(ROW, { sample: true }).html.includes("No member was created"));

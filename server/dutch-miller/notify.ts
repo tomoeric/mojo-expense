@@ -63,18 +63,33 @@ const bucket = (title: string, rows: string): string =>
       margin-top:6px">${rows}</table>`;
 
 /** The same three buckets the app shows, in the same order. */
-export function signupEmail(s: SignupRow, opts: { sample?: boolean; origin?: string } = {}): {
+export function signupEmail(s: SignupRow, opts: {
+  sample?: boolean;
+  origin?: string;
+  /**
+   * Who it is for, which decides whether the button works.
+   *
+   * The reviewer gets a link straight to the record because acting on
+   * it is their job. Everybody else gets the same details with the
+   * button greyed out and a line saying so — a working button on a
+   * message that is for information invites four people to open a
+   * record that one of them owns, and "opened" stops meaning anything.
+   */
+  as?: "reviewer" | "notifier" | "submitter";
+} = {}): {
   subject: string;
   html: string;
 } {
+  const as = opts.as ?? "reviewer";
   // Straight to the record, so marking it complete does not start with
   // finding it. Omitted rather than guessed when there is no origin to
   // build from — a broken button is worse than none.
-  const link = signupUrl(opts.origin ?? publicOrigin(), s.guid);
+  const link = as === "reviewer" ? signupUrl(opts.origin ?? publicOrigin(), s.guid) : "";
   const name = `${s.customer.firstName} ${s.customer.lastName}`.trim();
   const subject = opts.sample
     ? "Sample — new member signup"
-    : `New member signup — ${name} · ${s.customer.rfid}`;
+    // The reviewer's inbox should say it is theirs before they open it.
+    : `${as === "reviewer" ? "To review" : "FYI"}: new member signup — ${name} · ${s.customer.rfid}`;
 
   const html = layout(
     opts.sample ? "Sample notification" : "New member signup",
@@ -108,13 +123,27 @@ export function signupEmail(s: SignupRow, opts: { sample?: boolean; origin?: str
      ].join(""))}
 
      ${link ? `<div style="margin:22px 0 0">${button(link, "Open in MOJO")}</div>` : ""}
+     ${as === "reviewer" ? "" : `
+       <div style="margin:22px 0 0">
+         <p style="margin:0 0 10px">
+           <span style="display:inline-block;background:#e4e4e7;color:#a1a1aa;
+                        padding:11px 20px;border-radius:8px;font-weight:600;font-size:15px">
+             Open in MOJO</span></p>
+         <p style="margin:0;font-size:13px;color:#71717a">
+           ${as === "submitter"
+            ? "You are copied on this because you submitted it. "
+            : "You are copied on this for information — the review is not yours. "}
+           Sign in to the portal to see where it has got to.</p>
+       </div>`}
 
      ${bucket("Entry", [
        row("Created", stamp(s.createdAt)),
        row("Submitted", stamp(s.submittedAt)),
        row("Reference", s.guid),
      ].join(""))}`,
-    "Sent because this address is on the Dutch Miller signup notification list.",
+    as === "reviewer"
+      ? "Sent to you as the CSC Reviewer for Dutch Miller signups."
+      : "Sent for information. Change who receives these under Email Settings.",
   );
 
   return { subject, html };
@@ -139,16 +168,22 @@ export async function notifySignup(s: SignupRow, origin?: string): Promise<void>
       });
       return;
     }
-    const { subject, html } = signupEmail(s, { origin });
-    const results = await Promise.allSettled(to.map((a) => sendMail(a, subject, html)));
+
+    // One message each, built for its reader. Also one SEND each: a
+    // single bad address in a combined `toRecipients` can take the
+    // whole thing with it.
+    const results = await Promise.allSettled(to.map((r) => {
+      const { subject, html } = signupEmail(s, { origin, as: r.as });
+      return sendMail(r.email, subject, html);
+    }));
     const failed = results
-      .map((r, i) => (r.status === "rejected" ? to[i]! : null))
+      .map((r, i) => (r.status === "rejected" ? to[i]!.email : null))
       .filter((a): a is string => a !== null);
 
     if (failed.length < to.length) {
       await markNotified(s.guid);
-      // The page that submitted this is still open and still showing the
-      // step as grey. This is what turns it green without a reload.
+      // The page that submitted this is still open and still showing
+      // the step as grey. This is what turns it green without a reload.
       emitChange("signups");
       await audit({
         action: "notify.sent", subject: s.guid, actor: s.submittedBy,
@@ -162,8 +197,8 @@ export async function notifySignup(s: SignupRow, origin?: string): Promise<void>
       });
     }
   } catch (err) {
-    // The signup itself is already saved and the tag already claimed. This
-    // is the one place that must swallow rather than propagate.
+    // The signup itself is already saved and the tag already claimed.
+    // This is the one place that must swallow rather than propagate.
     console.error("signup notification failed:", err);
     await audit({
       action: "notify.failed", subject: s.guid,

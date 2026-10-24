@@ -279,9 +279,15 @@ function ReviewExisting() {
 
   const opened = useMutation({
     mutationFn: async (guid: string) => {
-      await fetch(`/api/dutch-miller/signups/${guid}/opened`, { method: "POST" });
+      const res = await fetch(`/api/dutch-miller/signups/${guid}/opened`, { method: "POST" });
+      return (await res.json()) as { row: SignupRow | null };
     },
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["dm-signups"] }),
+    onSuccess: (b) => {
+      // Show it immediately rather than on the refetch this triggers:
+      // the step turning green is the feedback for having opened it.
+      if (b.row) setOpen(b.row);
+      void qc.invalidateQueries({ queryKey: ["dm-signups"] });
+    },
   });
 
   /**
@@ -303,6 +309,19 @@ function ReviewExisting() {
     });
     return out;
   }, [list.data, sort]);
+
+  /**
+   * The open record, read from the LIST rather than from what was
+   * clicked.
+   *
+   * `open` is a snapshot taken at the moment of the click. Opening
+   * marks the record as opened on the server, the list refetches, and
+   * the dialog went on showing the snapshot — so the third step stayed
+   * grey and Mark complete stayed disabled in front of somebody who
+   * had just done the thing that enables it. Anything that changes
+   * while it is open now shows through.
+   */
+  const openRow = open ? (rows.find((r) => r.guid === open.guid) ?? open) : null;
 
   const counts = list.data?.counts;
   const canComplete = list.data?.canComplete ?? false;
@@ -399,19 +418,19 @@ function ReviewExisting() {
         </table>
       </div>
 
-      {open && (
+      {openRow && (
         <ViewSignup
-          row={open}
+          row={openRow}
           canComplete={canComplete}
           busy={complete.isPending}
           position={{
-            index: Math.max(0, rows.findIndex((r) => r.guid === open.guid)),
+            index: Math.max(0, rows.findIndex((r) => r.guid === openRow.guid)),
             total: rows.length,
           }}
-          onComplete={() => complete.mutate(open.guid)}
-          onOpened={() => opened.mutate(open.guid)}
+          onComplete={() => complete.mutate(openRow.guid)}
+          onOpened={() => opened.mutate(openRow.guid)}
           onStep={(d) => {
-            const at = rows.findIndex((r) => r.guid === open.guid);
+            const at = rows.findIndex((r) => r.guid === openRow.guid);
             const next = rows[at + d];
             if (next) setOpen(next);
           }}
