@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Circle, Loader2, Lock, Send, X } from "lucide-react";
+import { CheckCircle2, Circle, Eye, Loader2, Lock, Send, X } from "lucide-react";
 
 /**
  * Member Signups — enrol a member, and hand them an RFID tag.
@@ -205,7 +205,7 @@ function useRequestedSignup(): string {
 function ReviewExisting() {
   const qc = useQueryClient();
   const requested = useRequestedSignup();
-  const [tab, setTab] = useState<"all" | "new" | "complete">("all");
+  const [tab, setTab] = useState<"all" | "new" | "review" | "complete">("all");
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState<SignupRow | null>(null);
   const [error, setError] = useState("");
@@ -218,9 +218,24 @@ function ReviewExisting() {
       if (!res.ok) throw new Error((await res.json()).error ?? "Could not load.");
       return (await res.json()) as {
         rows: SignupRow[]; total: number;
-        counts: { new: number; complete: number; total: number };
+        counts: { new: number; review: number; complete: number; total: number };
         canComplete: boolean;
       };
+    },
+    /**
+     * A fallback, not the mechanism.
+     *
+     * The server pushes changes over `useLiveUpdates`, which is what
+     * normally turns the second step green a moment after a signup is
+     * submitted. This covers the case where the stream cannot be held
+     * open — a proxy that buffers, a browser without EventSource — and
+     * only while there is something to wait for, so it stops by itself.
+     */
+    refetchInterval: (q) => {
+      const rows = q.state.data?.rows ?? [];
+      const waiting = rows.some((r) =>
+        !r.notifiedAt && Date.now() - new Date(r.submittedAt).getTime() < 5 * 60_000);
+      return waiting ? 8000 : false;
     },
   });
 
@@ -259,8 +274,9 @@ function ReviewExisting() {
 
   const counts = list.data?.counts;
   const canComplete = list.data?.canComplete ?? false;
-  const chips: { key: "all" | "new" | "complete"; label: string; n?: number }[] = [
+  const chips: { key: "all" | "new" | "review" | "complete"; label: string; n?: number }[] = [
     { key: "new", label: "Awaiting MOJO", n: counts?.new },
+    { key: "review", label: "Under review", n: counts?.review },
     { key: "complete", label: "Completed", n: counts?.complete },
     { key: "all", label: "All", n: counts?.total },
   ];
@@ -373,7 +389,7 @@ function Tracker({ row, compact }: { row: SignupRow; compact?: boolean }) {
   const steps = [
     { label: "Submitted", at: row.submittedAt, who: row.submittedBy },
     { label: "Email sent", at: row.notifiedAt, who: "" },
-    { label: "Opened", at: row.openedAt, who: row.openedBy ?? "" },
+    { label: "Opened in MOJO", at: row.openedAt, who: row.openedBy ?? "" },
     { label: "Completed", at: row.completedAt, who: row.completedBy ?? "" },
   ];
   const tz = row.displayTimezone;
@@ -426,19 +442,32 @@ function Tracker({ row, compact }: { row: SignupRow; compact?: boolean }) {
 }
 
 /**
- * The two internal marks, as one badge.
+ * Where it stands, in one phrase.
  *
- * Every row carries "submitted to MOJO" — the record exists because it was
- * submitted — so the badge's job is to show which of the two states it is
- * in, not to repeat a fact that is always true.
+ * Three states, not two. "Submitted" stops being true the moment
+ * somebody at MOJO opens the record — the dealer who submitted it
+ * wants to know the difference between nobody having looked yet and
+ * it being in hand, and that is the whole question they would
+ * otherwise ring up to ask.
  */
 function StatusBadge({ row }: { row: SignupRow }) {
-  return row.completedAt ? (
-    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
-      <CheckCircle2 className="h-3 w-3" />
-      Completed by MOJO
-    </span>
-  ) : (
+  if (row.completedAt) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+        <CheckCircle2 className="h-3 w-3" />
+        Completed by MOJO
+      </span>
+    );
+  }
+  if (row.openedAt) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-400">
+        <Eye className="h-3 w-3" />
+        Under review by MOJO
+      </span>
+    );
+  }
+  return (
     <span className="inline-flex items-center gap-1 rounded-full bg-sky-500/15 px-2 py-0.5 text-xs font-semibold text-sky-700 dark:text-sky-300">
       <Send className="h-3 w-3" />
       Submitted to MOJO

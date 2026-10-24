@@ -5,6 +5,7 @@ import { DmViewAs } from "@/components/dm-view-as";
 import { UserMenu } from "@/components/user-menu";
 import { DmRfidPage } from "@/pages/dm-rfid";
 import { DmSignupsPage } from "@/pages/dm-signups";
+import { useLiveUpdates } from "@/lib/live";
 import { DmPeopleDialog } from "@/pages/dm-people";
 import { DmRolesPage } from "@/pages/dm-roles";
 import { DmSettingsPage } from "@/pages/dm-settings";
@@ -136,6 +137,10 @@ export function DutchMillerApp({
       return (await res.json()) as Access;
     },
   });
+
+  // One connection for the whole shell, once there is somebody to open
+  // it for. Everything below reacts through the query cache.
+  useLiveUpdates(Boolean(me.data));
 
   const access = me.data;
   const dmAdmin = access?.role === "admin" || access?.role === "super";

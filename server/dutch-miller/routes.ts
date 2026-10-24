@@ -17,6 +17,7 @@ import { audit, listAudit } from "./audit.js";
 import { DEFAULT_ROLE, listRoles, removeRole, saveRole } from "./roles.js";
 import { dutchMillerNamed } from "../auth/apps.js";
 import { publicOrigin } from "../origin.js";
+import { emitChange, streamChanges } from "../events.js";
 import { getSignupNotify, parseRecipients, setSignupNotify } from "./settings.js";
 import { notifySignup, signupEmail } from "./notify.js";
 import { inviteUser } from "./dealer-auth.js";
@@ -38,6 +39,16 @@ import { forgetEpoch } from "../auth/index.js";
  * Dutch Miller needs should be hung off the Emburse routers instead.
  */
 export const dutchMillerRouter: IRouter = Router();
+
+/**
+ * The live stream every open page listens to.
+ *
+ * Behind the same app guard as everything else here, so it is only
+ * reachable by somebody who may use Dutch Miller at all.
+ */
+dutchMillerRouter.get("/events", (req: Request, res: Response) => {
+  streamChanges(req, res);
+});
 
 /**
  * What the person signing in may see.
@@ -241,6 +252,7 @@ dutchMillerRouter.post("/roles", requireSuper, async (req: Request, res: Respons
       detail: `${role.name} · ${role.pages.length} page${role.pages.length === 1 ? "" : "s"}`
         + `${role.administers ? " · administers" : ""}`,
     });
+    emitChange("roles");
     res.json({ role, roles: await listRoles() });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
@@ -310,6 +322,7 @@ dutchMillerRouter.post("/users", requireDmAdmin, async (req: Request, res: Respo
       }
       await inviteUser(req, email, by);
     }
+    emitChange("users");
     res.json({ user: await getDmUser(email), users: await listDmUsers() });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
@@ -329,6 +342,7 @@ dutchMillerRouter.post("/users/:email/invite", requireDmAdmin, async (req: Reque
     return;
   }
   try {
+    emitChange("users");
     await inviteUser(req, email, actor(req));
     res.json({ users: await listDmUsers() });
   } catch (err) {
@@ -347,6 +361,7 @@ dutchMillerRouter.post("/users/:email/enabled", requireDmAdmin, async (req: Requ
     action: enabled ? "account.enabled" : "account.disabled",
     subject: email, actor: actor(req),
   });
+  emitChange("users");
   res.json({ users: await listDmUsers() });
 });
 
@@ -401,6 +416,7 @@ dutchMillerRouter.post("/settings/notifications", requireDmAdmin,
       detail: `${ok.length} recipient${ok.length === 1 ? "" : "s"}`
         + `${notify.enabled ? "" : " · off"}`,
     });
+    emitChange("settings");
     res.json({ notify });
   });
 
@@ -524,6 +540,7 @@ dutchMillerRouter.post(
       const parsed = parseRfidFile(file);
       const result = await addRfids(
         parsed.numbers, parsed.rejected, parsed.cells, req.user?.email ?? "");
+      emitChange("rfid");
       res.json({ ...result, counts: await rfidCounts() });
     } catch (err) {
       res.status(400).json({
@@ -561,6 +578,7 @@ dutchMillerRouter.post("/rfid/active", requirePage("rfid-review"), async (req: R
   const body = (req.body ?? {}) as { numbers?: unknown; active?: unknown };
   const numbers = Array.isArray(body.numbers) ? body.numbers.map(String) : [];
   const out = await setRfidActive(numbers, body.active !== false);
+  emitChange("rfid");
   res.json({ ...out, counts: await rfidCounts() });
 });
 
@@ -600,7 +618,8 @@ dutchMillerRouter.get(
     const status = String(req.query.status ?? "all");
     res.json({
       ...(await listSignups({
-        status: status === "new" || status === "complete" ? status : "all",
+        status: status === "new" || status === "review" || status === "complete"
+          ? status : "all",
         search: String(req.query.search ?? ""),
         limit: Number(req.query.limit ?? 100),
         offset: Number(req.query.offset ?? 0),
@@ -634,6 +653,7 @@ dutchMillerRouter.post(
       // the tag is claimed by now, so a bounced email must not tell the
       // dealer their signup failed. Outcomes land in the audit trail.
       if (!out.alreadyExisted) void notifySignup(out.row, publicOrigin(req));
+      emitChange("signups");
       res.json({ row: out.row, alreadyExisted: out.alreadyExisted });
       return;
     }
@@ -658,7 +678,9 @@ dutchMillerRouter.post(
   async (req: Request, res: Response) => {
     const who = req.viewingAs?.real.email ?? req.user?.email ?? "";
     if (!isStaff(req.viewingAs?.real ?? req.user)) { res.json({ row: null }); return; }
-    res.json({ row: await markOpened(String(req.params.guid ?? ""), who) });
+    const row = await markOpened(String(req.params.guid ?? ""), who);
+    if (row) emitChange("signups");
+    res.json({ row });
   },
 );
 
@@ -682,6 +704,7 @@ dutchMillerRouter.post(
     const complete = (req.body ?? {}).complete !== false;
     const row = await setComplete(String(req.params.guid ?? ""), complete, who);
     if (!row) { res.status(404).json({ error: "No such signup." }); return; }
+    emitChange("signups");
     res.json({ row });
   },
 );

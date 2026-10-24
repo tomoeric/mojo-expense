@@ -3,6 +3,7 @@ import { publicOrigin, signupUrl } from "../origin.js";
 import { audit } from "./audit.js";
 import { recipientsFor } from "./settings.js";
 import { DISPLAY_TZ, markNotified, type SignupRow } from "./signups.js";
+import { emitChange } from "../events.js";
 
 /**
  * Telling somebody at MOJO that a member was signed up.
@@ -146,6 +147,9 @@ export async function notifySignup(s: SignupRow, origin?: string): Promise<void>
 
     if (failed.length < to.length) {
       await markNotified(s.guid);
+      // The page that submitted this is still open and still showing the
+      // step as grey. This is what turns it green without a reload.
+      emitChange("signups");
       await audit({
         action: "notify.sent", subject: s.guid, actor: s.submittedBy,
         detail: `${to.length - failed.length} of ${to.length}`,

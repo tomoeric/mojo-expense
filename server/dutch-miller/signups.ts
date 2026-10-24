@@ -84,6 +84,21 @@ CREATE TABLE IF NOT EXISTS dm_member_signups (
 ALTER TABLE dm_member_signups ADD COLUMN IF NOT EXISTS notified_at timestamptz;
 ALTER TABLE dm_member_signups ADD COLUMN IF NOT EXISTS opened_at timestamptz;
 ALTER TABLE dm_member_signups ADD COLUMN IF NOT EXISTS opened_by text;
+/*
+ * Light the second step for signups that predate it.
+ *
+ * The notifications went out; there was simply no column to record it
+ * in, so those rows would have shown a permanently grey "Email sent"
+ * that was not true. The audit trail knows — it has carried a
+ * notify.sent line, keyed on the signup, since before the columns
+ * existed. Runs once: the WHERE clause stops matching as soon as it has.
+ */
+UPDATE dm_member_signups s
+   SET notified_at = a.at
+  FROM (SELECT subject, min(at) AS at FROM dm_audit
+         WHERE action = 'notify.sent' GROUP BY subject) a
+ WHERE s.notified_at IS NULL
+   AND a.subject = s.guid::text;
 -- A tag belongs to one member. The last line of defence, below every check
 -- in application code, and the reason a double submission cannot double-assign.
 ALTER TABLE dm_member_signups ADD COLUMN IF NOT EXISTS plate_state text;
@@ -294,15 +309,22 @@ const COLS = `guid, created_at, display_timezone, dlw_contract_id, deal_number,
   notified_at, opened_at, opened_by, completed_at, completed_by`;
 
 export async function listSignups(opts: {
-  status?: "all" | "new" | "complete";
+  status?: "all" | "new" | "review" | "complete";
   search?: string;
   limit?: number;
   offset?: number;
-} = {}): Promise<{ rows: SignupRow[]; total: number; counts: { new: number; complete: number; total: number } }> {
+} = {}): Promise<{
+  rows: SignupRow[];
+  total: number;
+  counts: { new: number; review: number; complete: number; total: number };
+}> {
   await ensure();
   const where: string[] = [];
   const args: unknown[] = [];
-  if (opts.status === "new") where.push("completed_at IS NULL");
+  // Three states, and they do not overlap: nobody has looked yet,
+  // somebody has looked but not finished, finished.
+  if (opts.status === "new") where.push("completed_at IS NULL AND opened_at IS NULL");
+  if (opts.status === "review") where.push("completed_at IS NULL AND opened_at IS NOT NULL");
   if (opts.status === "complete") where.push("completed_at IS NOT NULL");
   const search = (opts.search ?? "").trim();
   if (search !== "") {
@@ -322,15 +344,19 @@ export async function listSignups(opts: {
       ORDER BY submitted_at DESC LIMIT ${limit} OFFSET ${offset}`, args);
   const total = await db().query<{ n: string }>(
     `SELECT count(*) AS n FROM dm_member_signups ${clause}`, args);
-  const counts = await db().query<{ n: string; done: string }>(
-    `SELECT count(*) AS n, count(completed_at) AS done FROM dm_member_signups`);
+  const counts = await db().query<{ n: string; done: string; looked: string }>(
+    `SELECT count(*) AS n,
+            count(completed_at) AS done,
+            count(*) FILTER (WHERE completed_at IS NULL AND opened_at IS NOT NULL) AS looked
+       FROM dm_member_signups`);
 
   const all = Number(counts.rows[0]?.n ?? 0);
   const done = Number(counts.rows[0]?.done ?? 0);
+  const review = Number(counts.rows[0]?.looked ?? 0);
   return {
     rows: rows.rows.map(shape),
     total: Number(total.rows[0]?.n ?? 0),
-    counts: { new: all - done, complete: done, total: all },
+    counts: { new: all - done - review, review, complete: done, total: all },
   };
 }
 

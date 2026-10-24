@@ -178,6 +178,23 @@ the blocks.
   - Candidates come from `dm_users` only — never an arbitrary address — and
     include invited accounts, since "what do they see?" is usually asked
     about somebody just added.
+- **Live updates are PUSHED, not polled** (`server/events.ts` +
+  `src/lib/live.ts`). The shell holds one server-sent-events connection
+  and `emitChange(topic)` on every write invalidates the matching
+  queries. This exists because the notification is sent AFTER the
+  response, so the step recording it lands once the page has already
+  fetched — without a push the page shows something that stopped being
+  true. The bus is in-process: fine for one Reserved VM, swap for
+  Postgres LISTEN/NOTIFY if it is ever scaled out. Keep the heartbeat;
+  proxies close a silent stream. A slow poll remains as a fallback only.
+- **The tracker's four steps are events, not guesses**: submitted, email
+  sent (Graph accepted it), opened in MOJO, completed. The third is
+  OPENING THE RECORD, never an email open — that would be a pixel, and a
+  pixel reads as "never opened" behind blocked images and as "opened"
+  when a scanner prefetches, which is the exact behaviour that burned an
+  invite here. The badge has three states to match: Submitted → Under
+  review (somebody opened it) → Completed, and the three filters must
+  stay mutually exclusive or the counts stop adding up.
 - **Signup notifications** (Dutch Miller → Settings, admin only). Recipients
   live in `dm_settings`, a small key-value table with a TYPED ACCESSOR per
   key (`getSignupNotify`) — never reach in with a raw string. Three

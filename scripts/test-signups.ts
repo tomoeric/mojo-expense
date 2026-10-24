@@ -199,9 +199,21 @@ try {
   check("search finds it by name", listed.rows.some((r) => r.guid === one.guid));
   const byTag = await listSignups({ search: TAGS[0]! });
   check("…and by tag", byTag.rows.some((r) => r.guid === one.guid));
-  const onlyNew = await listSignups({ status: "new" });
-  check("filtering by state returns only those",
-    onlyNew.rows.every((r) => r.completedAt === null));
+  // The three states must not overlap, or the counts on the chips add
+  // up to more than the number of signups and nobody trusts any of them.
+  const seen = await listSignups({ status: "review" });
+  check("under review means opened and not finished",
+    seen.rows.every((r) => r.openedAt !== null && r.completedAt === null));
+  const fresh2 = await listSignups({ status: "new" });
+  check("awaiting means nobody has looked",
+    fresh2.rows.every((r) => r.openedAt === null && r.completedAt === null));
+  const done2 = await listSignups({ status: "complete" });
+  check("completed means finished",
+    done2.rows.every((r) => r.completedAt !== null));
+  const all = await listSignups({ status: "all" });
+  check("…and the three add up to the whole",
+    all.counts.new + all.counts.review + all.counts.complete === all.counts.total,
+    JSON.stringify(all.counts));
 } finally {
   await db().query("DELETE FROM dm_member_signups WHERE guid = ANY($1::uuid[])", [GUIDS])
     .catch(() => {});
