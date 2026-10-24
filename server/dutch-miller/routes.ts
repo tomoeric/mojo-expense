@@ -19,7 +19,11 @@ import { DEFAULT_ROLE, listRoles, removeRole, saveRole } from "./roles.js";
 import { dutchMillerNamed } from "../auth/apps.js";
 import { publicOrigin } from "../origin.js";
 import { emitChange, streamChanges } from "../events.js";
-import { getSignupNotify, parseRecipients, setSignupNotify } from "./settings.js";
+import {
+  DAY_NAMES, getReminders, getSignupNotify, parseRecipients, setReminders,
+  setSignupNotify,
+} from "./settings.js";
+import { runReminders } from "./reminders.js";
 import { notifySignup, signupEmail } from "./notify.js";
 import { inviteUser } from "./dealer-auth.js";
 import {
@@ -427,6 +431,43 @@ dutchMillerRouter.post("/settings/notifications", requireDmAdmin,
     });
     emitChange("settings");
     res.json({ notify });
+  });
+
+dutchMillerRouter.get("/settings/reminders", requireDmAdmin,
+  async (_req: Request, res: Response) => {
+    res.json({ reminders: await getReminders(), days: DAY_NAMES, timezone: DISPLAY_TZ });
+  });
+
+dutchMillerRouter.post("/settings/reminders", requireDmAdmin,
+  async (req: Request, res: Response) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    try {
+      const reminders = await setReminders({
+        enabled: b.enabled === true,
+        frequency: b.frequency === "day" ? "day" : "week",
+        days: Array.isArray(b.days) ? b.days.map(Number) : [],
+        hour: Number(b.hour) || 8,
+        minute: Number(b.minute) || 0,
+        meridiem: b.meridiem === "PM" ? "PM" : "AM",
+      }, actor(req));
+      await audit({
+        action: "reminder.changed", actor: actor(req),
+        detail: reminders.enabled
+          ? `${reminders.frequency} · ${reminders.days.map((d) => DAY_NAMES[d]).join(", ")} `
+            + `· ${reminders.hour}:${String(reminders.minute).padStart(2, "0")} ${reminders.meridiem}`
+          : "off",
+      });
+      res.json({ reminders });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+/** Send one now, to see what it looks like and that it works. */
+dutchMillerRouter.post("/settings/reminders/run", requireDmAdmin,
+  async (_req: Request, res: Response) => {
+    const out = await runReminders(true);
+    res.json(out);
   });
 
 /**

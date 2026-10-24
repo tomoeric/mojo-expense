@@ -19,6 +19,18 @@ type UploadResult = {
 
 const day = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString() : "—");
 
+/**
+ * The member a tag was issued to, if any.
+ *
+ * Read out of `used_for`, which the signup writes as "Member signup
+ * <guid>". A free-text column being parsed is not lovely, but the
+ * alternative is a foreign key on a column that also records tags
+ * issued by hand for reasons that are not signups at all.
+ */
+const MEMBER_REF = /^Member signup ([0-9a-f-]{36})$/i;
+const memberOf = (r: Row): string | null => MEMBER_REF.exec(r.usedFor ?? "")?.[1] ?? null;
+const memberLink = (r: Row): string => `/member-signups/review?open=${memberOf(r)}`;
+
 /** Upload RFID numbers, and review what is in the pool. */
 export function DmRfidPage() {
   const qc = useQueryClient();
@@ -187,7 +199,14 @@ export function DmRfidPage() {
               </td></tr>
             )}
             {list.data?.rows.map((r) => (
-              <tr key={r.number} className="border-t border-border">
+              <tr
+                key={r.number}
+                onClick={() => { if (memberOf(r)) window.location.hash = memberLink(r); }}
+                className={`border-t border-border ${
+                  memberOf(r) ? "cursor-pointer hover:bg-muted/40" : ""
+                }`}
+                title={memberOf(r) ? "Open the member this tag was issued to" : undefined}
+              >
                 <td className="px-3 py-2 font-mono tabular-nums">{r.number}</td>
                 <td className="px-3 py-2">
                   <span className={
@@ -211,7 +230,11 @@ export function DmRfidPage() {
                 <td className="max-w-40 truncate px-3 py-2 text-muted-foreground" title={r.usedBy ?? ""}>
                   {r.usedBy || "—"}
                 </td>
-                <td className="px-3 py-2 text-muted-foreground">{r.usedFor ?? "—"}</td>
+                <td className="px-3 py-2 text-muted-foreground">
+                  {memberOf(r)
+                    ? <span className="text-sky-600 hover:underline">Member signup</span>
+                    : (r.usedFor ?? "—")}
+                </td>
                 <td className="px-3 py-2 text-right">
                   {/* A used number is never offered a way back into the pool —
                       the server refuses it, and a button that always fails is
@@ -219,9 +242,9 @@ export function DmRfidPage() {
                   {r.status !== "used" && (
                     <button
                       type="button"
-                      onClick={() => setActive.mutate({
+                      onClick={(e) => { e.stopPropagation(); setActive.mutate({
                         numbers: [r.number], active: r.status !== "active",
-                      })}
+                      }); }}
                       className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted"
                     >
                       {r.status === "active" ? "Hold back" : "Make active"}

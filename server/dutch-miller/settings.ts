@@ -130,3 +130,115 @@ export async function recipientsFor(submittedBy: string): Promise<string[]> {
   if (s.copySubmitter && EMAIL_RE.test(me) && !out.includes(me)) out.push(me);
   return out;
 }
+
+/* ------------------------------------------------------------------ *
+ * Reminders
+ * ------------------------------------------------------------------ */
+
+const REMIND_KEY = "signup_reminders";
+
+/** 0 = Monday … 6 = Sunday, which is how the UI lists them. */
+export const DAY_NAMES = [
+  "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+] as const;
+
+export type Reminders = {
+  enabled: boolean;
+  /**
+   * `day` means "on each of these days"; `week` means "once a week, on
+   * this one". They are the same mechanism — the difference is only
+   * how many days may be chosen, which the server enforces so a stale
+   * page cannot save five days against a weekly setting.
+   */
+  frequency: "day" | "week";
+  /** Indexes into DAY_NAMES. Exactly one when the frequency is weekly. */
+  days: number[];
+  /** As shown: 1–12, with a meridiem, in the app's configured zone. */
+  hour: number;
+  minute: number;
+  meridiem: "AM" | "PM";
+  /** When one last went out, so a restart does not send it twice. */
+  lastSentAt: string | null;
+  updatedAt: string | null;
+  updatedBy: string | null;
+};
+
+const DEFAULT_REMINDERS: Omit<Reminders, "updatedAt" | "updatedBy"> = {
+  enabled: false,
+  frequency: "week",
+  days: [0],
+  hour: 8,
+  minute: 0,
+  meridiem: "AM",
+  lastSentAt: null,
+};
+
+/** 8 AM → 8; 12 AM → 0; 12 PM → 12. The two noon/midnight cases are the trap. */
+export function hour24(hour: number, meridiem: "AM" | "PM"): number {
+  const h = Math.min(12, Math.max(1, Math.round(hour)));
+  if (meridiem === "AM") return h === 12 ? 0 : h;
+  return h === 12 ? 12 : h + 12;
+}
+
+export async function getReminders(): Promise<Reminders> {
+  const stored = await read<Partial<Reminders> | null>(REMIND_KEY, null);
+  const { rows } = await db().query<{ updated_at: Date; updated_by: string }>(
+    "SELECT updated_at, updated_by FROM dm_settings WHERE key = $1", [REMIND_KEY]);
+  const days = Array.isArray(stored?.days)
+    ? [...new Set(stored!.days.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort()
+    : DEFAULT_REMINDERS.days;
+  const frequency = stored?.frequency === "day" ? "day" : "week";
+  return {
+    enabled: stored?.enabled === true,
+    frequency,
+    // Weekly means one day, whatever is in the row.
+    days: frequency === "week" ? days.slice(0, 1) : days,
+    hour: Number(stored?.hour) >= 1 && Number(stored?.hour) <= 12
+      ? Number(stored!.hour) : DEFAULT_REMINDERS.hour,
+    minute: Number.isInteger(stored?.minute) && stored!.minute! >= 0 && stored!.minute! <= 59
+      ? stored!.minute! : 0,
+    meridiem: stored?.meridiem === "PM" ? "PM" : "AM",
+    lastSentAt: typeof stored?.lastSentAt === "string" ? stored.lastSentAt : null,
+    updatedAt: rows[0]?.updated_at.toISOString() ?? null,
+    updatedBy: rows[0]?.updated_by ?? null,
+  };
+}
+
+export async function setReminders(
+  opts: Omit<Reminders, "lastSentAt" | "updatedAt" | "updatedBy">,
+  by: string,
+): Promise<Reminders> {
+  const current = await getReminders();
+  const days = [...new Set(opts.days.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))]
+    .sort((a, b) => a - b);
+  if (opts.enabled && days.length === 0) throw new Error("Choose at least one day.");
+  if (opts.frequency === "week" && days.length > 1) {
+    throw new Error("A weekly reminder goes out on one day. Choose Daily for more than one.");
+  }
+  await write(REMIND_KEY, {
+    enabled: opts.enabled,
+    frequency: opts.frequency,
+    days,
+    hour: opts.hour,
+    minute: opts.minute,
+    meridiem: opts.meridiem,
+    // Carried over rather than cleared: changing the wording of a
+    // reminder should not make today's go out a second time.
+    lastSentAt: current.lastSentAt,
+  }, by);
+  return getReminders();
+}
+
+/** Only the scheduler writes this. */
+export async function noteReminderSent(stamp: string): Promise<void> {
+  const current = await getReminders();
+  await write(REMIND_KEY, {
+    enabled: current.enabled,
+    frequency: current.frequency,
+    days: current.days,
+    hour: current.hour,
+    minute: current.minute,
+    meridiem: current.meridiem,
+    lastSentAt: stamp,
+  }, "scheduler");
+}

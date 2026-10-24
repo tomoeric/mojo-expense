@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bell, Loader2, Send } from "lucide-react";
+import { Bell, Clock, Loader2, Send } from "lucide-react";
 
 type Notify = {
   recipients: string[];
@@ -92,9 +92,9 @@ export function DmSettingsPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-lg font-semibold">Settings</h1>
+        <h1 className="text-lg font-semibold">Email Settings</h1>
         <p className="text-sm text-muted-foreground">
-          Dutch Miller settings. Administrators only.
+          What Dutch Miller sends, and when. Administrators only.
         </p>
       </div>
 
@@ -184,6 +184,8 @@ export function DmSettingsPage() {
         </div>
       </section>
 
+      <RemindersSection />
+
       {/* Worth saying where it does NOT reach: somebody expecting a
           notification for a tag going out, or for the Mark complete, will
           otherwise assume it is broken. */}
@@ -193,5 +195,258 @@ export function DmSettingsPage() {
         first — and every attempt is recorded in the audit trail on the Users page.
       </p>
     </div>
+  );
+}
+
+
+/* ------------------------------------------------------------------ *
+ * Reminders
+ * ------------------------------------------------------------------ */
+
+type Reminders = {
+  enabled: boolean;
+  frequency: "day" | "week";
+  days: number[];
+  hour: number;
+  minute: number;
+  meridiem: "AM" | "PM";
+  lastSentAt: string | null;
+  updatedAt: string | null;
+  updatedBy: string | null;
+};
+
+const MINUTES = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55];
+
+/**
+ * A standing reminder about signups nobody has finished with.
+ *
+ * Daily means "on each of the days ticked"; weekly means "once, on the
+ * one ticked". They are the same mechanism underneath — the difference
+ * is only how many days may be chosen — so switching to weekly keeps
+ * the first day rather than clearing the lot and making somebody start
+ * again.
+ */
+function RemindersSection() {
+  const qc = useQueryClient();
+  const [draft, setDraft] = useState<Reminders | null>(null);
+  const [error, setError] = useState("");
+  const [note, setNote] = useState("");
+
+  const data = useQuery({
+    queryKey: ["dm-reminders"],
+    queryFn: async () => {
+      const res = await fetch("/api/dutch-miller/settings/reminders");
+      if (!res.ok) throw new Error((await res.json()).error ?? "Could not load.");
+      return (await res.json()) as {
+        reminders: Reminders; days: string[]; timezone: string;
+      };
+    },
+  });
+
+  useEffect(() => {
+    if (data.data && !draft) setDraft(data.data.reminders);
+  }, [data.data, draft]);
+
+  const save = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/dutch-miller/settings/reminders", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(draft),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Could not save.");
+      return body as { reminders: Reminders };
+    },
+    onSuccess: (b) => {
+      setError("");
+      setDraft(b.reminders);
+      setNote(b.reminders.enabled ? "Saved." : "Saved — reminders are off.");
+      void qc.invalidateQueries({ queryKey: ["dm-reminders"] });
+    },
+    onError: (e) => { setError((e as Error).message); setNote(""); },
+  });
+
+  const runNow = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/dutch-miller/settings/reminders/run", { method: "POST" });
+      return (await res.json()) as { sent: boolean; reason: string; outstanding: number };
+    },
+    onSuccess: (r) => {
+      setError("");
+      setNote(r.sent
+        ? `Sent — ${r.outstanding} signup${r.outstanding === 1 ? "" : "s"} outstanding.`
+        : `Nothing sent: ${r.reason}.`);
+    },
+  });
+
+  const days = data.data?.days ?? [];
+  const d = draft;
+  const dirty = Boolean(d && data.data
+    && JSON.stringify(d) !== JSON.stringify(data.data.reminders));
+
+  const toggleDay = (i: number) => {
+    if (!d) return;
+    if (d.frequency === "week") { setDraft({ ...d, days: [i] }); return; }
+    setDraft({
+      ...d,
+      days: d.days.includes(i) ? d.days.filter((x) => x !== i) : [...d.days, i].sort(),
+    });
+  };
+
+  return (
+    <section className="rounded-xl border border-border bg-card p-4">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <h2 className="flex items-center gap-2 text-sm font-semibold">
+            <Clock className="h-4 w-4" />
+            Email reminders
+          </h2>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            A standing reminder of member signups MOJO has not finished with, to the same
+            addresses as above.
+          </p>
+        </div>
+        <label className="flex shrink-0 items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={d?.enabled ?? false}
+            onChange={(e) => d && setDraft({ ...d, enabled: e.target.checked })}
+          />
+          On
+        </label>
+      </div>
+
+      {d && (
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <label htmlFor="freq" className="mb-1 block text-xs text-muted-foreground">
+                How often
+              </label>
+              <select
+                id="freq"
+                value={d.frequency}
+                onChange={(e) => {
+                  const frequency = e.target.value as "day" | "week";
+                  // Weekly takes one day. Keep the first rather than
+                  // clearing them all and making somebody start again.
+                  setDraft({
+                    ...d, frequency,
+                    days: frequency === "week" ? d.days.slice(0, 1) : d.days,
+                  });
+                }}
+                className="rounded-md border border-border bg-background px-2.5 py-2 text-sm"
+              >
+                <option value="day">Daily</option>
+                <option value="week">Weekly</option>
+              </select>
+            </div>
+
+            <div>
+              <span className="mb-1 block text-xs text-muted-foreground">At</span>
+              <div className="flex items-center gap-1">
+                <select
+                  aria-label="Hour"
+                  value={d.hour}
+                  onChange={(e) => setDraft({ ...d, hour: Number(e.target.value) })}
+                  className="rounded-md border border-border bg-background px-2 py-2 text-sm"
+                >
+                  {Array.from({ length: 12 }, (_, i) => i + 1).map((h) => (
+                    <option key={h} value={h}>{h}</option>
+                  ))}
+                </select>
+                <span className="text-sm text-muted-foreground">:</span>
+                <select
+                  aria-label="Minute"
+                  value={d.minute}
+                  onChange={(e) => setDraft({ ...d, minute: Number(e.target.value) })}
+                  className="rounded-md border border-border bg-background px-2 py-2 text-sm"
+                >
+                  {MINUTES.map((m) => (
+                    <option key={m} value={m}>{String(m).padStart(2, "0")}</option>
+                  ))}
+                </select>
+                <select
+                  aria-label="AM or PM"
+                  value={d.meridiem}
+                  onChange={(e) => setDraft({ ...d, meridiem: e.target.value as "AM" | "PM" })}
+                  className="rounded-md border border-border bg-background px-2 py-2 text-sm"
+                >
+                  <option value="AM">AM</option>
+                  <option value="PM">PM</option>
+                </select>
+                <span className="ml-1 text-xs text-muted-foreground">
+                  {data.data?.timezone.replace("America/", "").replace("_", " ")}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <span className="mb-1 block text-xs text-muted-foreground">
+              {d.frequency === "week" ? "On this day" : "On these days"}
+            </span>
+            <div className="flex flex-wrap gap-2">
+              {days.map((name, i) => (
+                <label
+                  key={name}
+                  className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-1.5 text-sm ${
+                    d.days.includes(i) ? "border-foreground bg-muted/50" : "border-border"
+                  }`}
+                >
+                  <input
+                    // Radio when only one may be chosen, so the control
+                    // itself says the rule rather than silently undoing
+                    // the previous tick.
+                    type={d.frequency === "week" ? "radio" : "checkbox"}
+                    name={d.frequency === "week" ? "reminder-day" : undefined}
+                    checked={d.days.includes(i)}
+                    onChange={() => toggleDay(i)}
+                  />
+                  {name}
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {error && <p className="text-sm font-semibold text-red-600">{error}</p>}
+          {note && <p className="text-sm text-emerald-700 dark:text-emerald-400">{note}</p>}
+
+          <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
+            <button
+              type="button"
+              disabled={save.isPending || !dirty}
+              onClick={() => save.mutate()}
+              className="inline-flex items-center gap-2 rounded-md bg-foreground px-3 py-2 text-sm font-semibold text-background disabled:opacity-50"
+            >
+              {save.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
+              {dirty ? "Save" : "Saved"}
+            </button>
+            <button
+              type="button"
+              disabled={runNow.isPending}
+              onClick={() => runNow.mutate()}
+              className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted disabled:opacity-50"
+            >
+              {runNow.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              Send one now
+            </button>
+            {d.lastSentAt && (
+              <span className="text-xs text-muted-foreground">
+                Last sent {d.lastSentAt}
+              </span>
+            )}
+          </div>
+
+          {/* The one behaviour people would otherwise report as a fault. */}
+          <p className="text-xs text-muted-foreground">
+            Nothing is sent when there is nothing outstanding. A reminder that arrives every
+            week saying there is nothing to do is one people stop reading — and then they
+            stop reading the one that matters.
+          </p>
+        </div>
+      )}
+    </section>
   );
 }

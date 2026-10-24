@@ -69,8 +69,8 @@ const MENU_PAGES: PageDef[] = [
   },
   {
     key: "settings",
-    label: "Settings",
-    blurb: "Notifications and other Dutch Miller settings.",
+    label: "Email Settings",
+    blurb: "What Dutch Miller emails, and when.",
     children: [],
   },
 ];

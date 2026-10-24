@@ -10,6 +10,7 @@ import { allowListSize, authMiddleware, authRouter, isAuthConfigured, requireApp
 import { appListSizes } from "./auth/apps.js";
 import { dutchMillerRouter } from "./dutch-miller/routes.js";
 import { dealerAuthRouter } from "./dutch-miller/dealer-auth.js";
+import { startReminders } from "./dutch-miller/reminders.js";
 import { viewAsMiddleware } from "./auth/view-as.js";
 import { importRouter } from "./import/routes.js";
 import { decisionRouter } from "./emburse/decision-routes.js";
@@ -163,6 +164,9 @@ app.listen(env.port, "0.0.0.0", () => {
         // one of them.
         startAutoApprove();
         recheckRulesOnBoot();
+        // Dutch Miller's own clock: the reminder about signups nobody
+        // at MOJO has finished with.
+        startReminders();
       })
       .catch((err: unknown) => console.error("schema bootstrap failed:", err));
   } else {

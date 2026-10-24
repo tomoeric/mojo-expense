@@ -24,6 +24,7 @@ export const AUDIT_ACTIONS = [
   "notify.sent", "notify.failed", "notify.changed",
   "role.saved", "role.removed",
   "bulk.uploaded", "bulk.committed",
+  "reminder.sent", "reminder.failed", "reminder.changed",
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 

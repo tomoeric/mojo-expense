@@ -366,7 +366,11 @@ function ReviewExisting() {
               </td></tr>
             )}
             {rows.map((r) => (
-              <tr key={r.guid} className="border-t border-border">
+              <tr
+                key={r.guid}
+                onClick={() => setOpen(r)}
+                className="cursor-pointer border-t border-border hover:bg-muted/40"
+              >
                 <td className="px-3 py-2">{r.customer.firstName} {r.customer.lastName}</td>
                 <td className="px-3 py-2 font-mono text-xs">{r.dealer.dlwContractId}</td>
                 <td className="px-3 py-2 font-mono text-xs">{r.dealer.dealNumber}</td>
