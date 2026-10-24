@@ -4,13 +4,18 @@ import express, {
 import { parseRfidFile } from "./rfid-parse.js";
 import { addRfids, listRfids, rfidCounts, setRfidActive, useRfid } from "./rfid.js";
 import {
-  DISPLAY_TZ, createSignup, getSignup, isMojoStaff, listSignups, newHandle, setComplete,
+  DISPLAY_TZ, createSignup, getSignup, listSignups, newHandle, setComplete,
   type SignupInput,
 } from "./signups.js";
 import {
-  DM_PAGES, dmAccessFor, isDmPage, listDmUsers, removeDmUser, saveDmUser,
-  type DmPageKey, type DmRole,
+  DM_PAGES, assertEmail, canAdminister, dmAccessFor, getDmUser, isDmPage, isStaff,
+  listDmUsers, removeDmUser, revokeDmSessions, saveDmUser, setDmUserEnabled,
+  staffDomainList, type DmPageKey, type DmRole, type StoredRole,
 } from "./users.js";
+import { audit, listAudit } from "./audit.js";
+import { inviteUser } from "./dealer-auth.js";
+import { isMailConfigured, mailFrom } from "../mail.js";
+import { forgetEpoch } from "../auth/index.js";
 
 /**
  * Dutch Miller — the second app on this deployment.
@@ -34,8 +39,17 @@ export const dutchMillerRouter: IRouter = Router();
  * that true rather than cosmetic.
  */
 dutchMillerRouter.get("/me", async (req: Request, res: Response) => {
-  const email = req.viewingAs?.real.email ?? req.user?.email ?? "";
-  res.json({ ...(await dmAccessFor(email)), email, allPages: DM_PAGES });
+  const who = req.viewingAs?.real ?? req.user;
+  const email = who?.email ?? "";
+  const access = await dmAccessFor(email);
+  res.json({
+    ...access,
+    email,
+    allPages: DM_PAGES,
+    // Whether they are one of ours, which decides the MOJO-side controls.
+    staff: isStaff(who),
+    via: who?.via ?? "microsoft",
+  });
 });
 
 /** 403 unless this person may open that page. */
@@ -43,7 +57,7 @@ function requirePage(page: DmPageKey) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const email = req.viewingAs?.real.email ?? req.user?.email ?? "";
     const access = await dmAccessFor(email);
-    if (access.role === "admin" || access.pages.includes(page)) { next(); return; }
+    if (canAdminister(access) || access.pages.includes(page)) { next(); return; }
     res.status(403).json({ error: "You do not have access to that page." });
   };
 }
@@ -51,31 +65,155 @@ function requirePage(page: DmPageKey) {
 /** 403 unless this person administers Dutch Miller. */
 async function requireDmAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
   const email = req.viewingAs?.real.email ?? req.user?.email ?? "";
-  if ((await dmAccessFor(email)).role === "admin") { next(); return; }
+  if (canAdminister(await dmAccessFor(email))) { next(); return; }
   res.status(403).json({ error: "Only a Dutch Miller administrator can do that." });
 }
 
-dutchMillerRouter.get("/users", requireDmAdmin, async (_req: Request, res: Response) => {
-  res.json({ users: await listDmUsers(), allPages: DM_PAGES });
+/** The role of whoever is making the request — several rules turn on it. */
+const roleOf = async (req: Request): Promise<DmRole> =>
+  (await dmAccessFor(req.viewingAs?.real.email ?? req.user?.email ?? "")).role;
+
+const actor = (req: Request): string => req.viewingAs?.real.email ?? req.user?.email ?? "";
+
+dutchMillerRouter.get("/users", requireDmAdmin, async (req: Request, res: Response) => {
+  res.json({
+    users: await listDmUsers(),
+    allPages: DM_PAGES,
+    myRole: await roleOf(req),
+    mailConfigured: isMailConfigured(),
+    mailFrom: mailFrom(),
+  });
 });
 
+/**
+ * Add or change somebody.
+ *
+ * `invite: true` with an address outside our own domains creates a dealer
+ * account and emails a one-time link. There is no other way in for an
+ * outside address: nobody can sign themselves up, and this route is behind
+ * the admin guard.
+ */
 dutchMillerRouter.post("/users", requireDmAdmin, async (req: Request, res: Response) => {
-  const body = (req.body ?? {}) as { email?: unknown; role?: unknown; pages?: unknown };
-  const role: DmRole = body.role === "admin" ? "admin" : "user";
+  const body = (req.body ?? {}) as {
+    email?: unknown; role?: unknown; pages?: unknown; invite?: unknown;
+  };
+  const role: StoredRole = body.role === "admin" ? "admin" : "user";
   const pages = Array.isArray(body.pages) ? body.pages.filter(isDmPage) : [];
+  const invite = body.invite === true;
+  const by = actor(req);
+
   try {
-    const user = await saveDmUser(
-      String(body.email ?? ""), role, pages, req.user?.email ?? "");
-    res.json({ user, users: await listDmUsers() });
+    const email = assertEmail(String(body.email ?? ""));
+    const domain = email.split("@")[1] ?? "";
+    const ours = staffDomainList().includes(domain);
+
+    if (invite && ours) {
+      res.status(400).json({
+        error: "That is one of our own addresses — they sign in with the Microsoft "
+          + "button, so there is nothing to invite. Add them without inviting.",
+      });
+      return;
+    }
+    if (!invite && !ours) {
+      res.status(400).json({
+        error: "An outside address can only be added by inviting it, so the person "
+          + "confirms their own email before the account goes live.",
+      });
+      return;
+    }
+
+    const user = await saveDmUser({
+      email, role, pages, by, byRole: await roleOf(req),
+      authMethod: invite ? "link" : "microsoft",
+      status: invite ? "invited" : "active",
+    });
+    await audit({
+      action: "account.created", subject: email, actor: by,
+      detail: `${role}${invite ? " · invited" : " · microsoft"}`,
+    });
+
+    if (invite) {
+      if (!isMailConfigured()) {
+        res.status(500).json({
+          error: "The account was created, but email is not set up, so no invite was sent. "
+            + "Set MAIL_FROM and grant the app Mail.Send, then use Resend invite.",
+        });
+        return;
+      }
+      await inviteUser(req, email, by);
+    }
+    res.json({ user: await getDmUser(email), users: await listDmUsers() });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
 
-dutchMillerRouter.delete("/users/:email", requireDmAdmin, async (req: Request, res: Response) => {
-  const out = await removeDmUser(String(req.params.email ?? ""));
-  if (!out.ok) { res.status(409).json({ error: out.reason }); return; }
+/** Send the invite again. The previous link stops working the moment this does. */
+dutchMillerRouter.post("/users/:email/invite", requireDmAdmin, async (req: Request, res: Response) => {
+  const email = String(req.params.email ?? "").toLowerCase();
+  const row = await getDmUser(email);
+  if (!row || row.authMethod !== "link") {
+    res.status(400).json({ error: "That account does not sign in with a link." });
+    return;
+  }
+  if (row.status === "active") {
+    res.status(400).json({ error: "That account is already set up — they can ask for a sign-in link." });
+    return;
+  }
+  try {
+    await inviteUser(req, email, actor(req));
+    res.json({ users: await listDmUsers() });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/** Switch an account off or back on. Off also ends every open session. */
+dutchMillerRouter.post("/users/:email/enabled", requireDmAdmin, async (req: Request, res: Response) => {
+  const email = String(req.params.email ?? "").toLowerCase();
+  const enabled = (req.body ?? {}).enabled === true;
+  const out = await setDmUserEnabled(email, enabled, actor(req), await roleOf(req));
+  if (!out.ok) { res.status(403).json({ error: out.reason }); return; }
+  forgetEpoch(email);
+  await audit({
+    action: enabled ? "account.enabled" : "account.disabled",
+    subject: email, actor: actor(req),
+  });
   res.json({ users: await listDmUsers() });
+});
+
+/** Sign them out everywhere, without switching the account off. */
+dutchMillerRouter.post("/users/:email/revoke", requireDmAdmin, async (req: Request, res: Response) => {
+  const email = String(req.params.email ?? "").toLowerCase();
+  await revokeDmSessions(email);
+  forgetEpoch(email);
+  await audit({ action: "sessions.revoked", subject: email, actor: actor(req) });
+  res.json({ users: await listDmUsers() });
+});
+
+dutchMillerRouter.delete("/users/:email", requireDmAdmin, async (req: Request, res: Response) => {
+  const email = String(req.params.email ?? "").toLowerCase();
+  const out = await removeDmUser(email, await roleOf(req));
+  if (!out.ok) { res.status(409).json({ error: out.reason }); return; }
+  forgetEpoch(email);
+  await audit({ action: "account.removed", subject: email, actor: actor(req) });
+  res.json({ users: await listDmUsers() });
+});
+
+/**
+ * The audit trail.
+ *
+ * Admin-only, and read-only: there is no route that edits or deletes a
+ * line, deliberately. A log somebody can tidy up is not evidence of
+ * anything.
+ */
+dutchMillerRouter.get("/audit", requireDmAdmin, async (req: Request, res: Response) => {
+  res.json({
+    entries: await listAudit({
+      subject: String(req.query.subject ?? ""),
+      limit: Number(req.query.limit ?? 200),
+    }),
+  });
 });
 
 /** 25 MB. A spreadsheet of a million numbers is about 12. */
@@ -190,7 +328,7 @@ dutchMillerRouter.get(
       })),
       // Whether the person reading may set the MOJO-side mark. The button
       // follows this; the route below decides it again regardless.
-      canComplete: isMojoStaff(req.viewingAs?.real.email ?? req.user?.email ?? ""),
+      canComplete: isStaff(req.viewingAs?.real ?? req.user),
     });
   },
 );
@@ -231,8 +369,9 @@ dutchMillerRouter.post(
   "/signups/:guid/complete",
   requirePage("member-signups"),
   async (req: Request, res: Response) => {
-    const who = req.viewingAs?.real.email ?? req.user?.email ?? "";
-    if (!isMojoStaff(who)) {
+    const real = req.viewingAs?.real ?? req.user;
+    const who = real?.email ?? "";
+    if (!isStaff(real)) {
       res.status(403).json({ error: "Only a MOJO employee can mark a signup complete." });
       return;
     }

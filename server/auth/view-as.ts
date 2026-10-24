@@ -24,7 +24,7 @@
  */
 
 import type { NextFunction, Request, Response } from "express";
-import { isAdmin, isAuthConfigured } from "./index.js";
+import { isAdminUser, isAuthConfigured } from "./index.js";
 import type { SessionUser } from "./session.js";
 
 export const VIEW_AS_COOKIE = "view_as";
@@ -84,7 +84,7 @@ export function viewAsMiddleware(req: Request, res: Response, next: NextFunction
   const real = req.user;
   // No identity, or not an admin: the cookie means nothing. Not an error —
   // it is cleared below so it cannot keep being offered.
-  if (!real || (isAuthConfigured() && !isAdmin(real.email))) {
+  if (!real || (isAuthConfigured() && !isAdminUser(real))) {
     res.clearCookie(VIEW_AS_COOKIE, { path: "/" });
     return next();
   }

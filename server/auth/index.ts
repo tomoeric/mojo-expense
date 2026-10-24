@@ -3,6 +3,7 @@ import { Router, type IRouter, type NextFunction, type Request, type Response } 
 import {
   SESSION_TTL_MS,
   clearSessionCookie,
+  isMicrosoft,
   readSession,
   setSessionCookie,
   type SessionUser,
@@ -53,6 +54,19 @@ export function isAdmin(email: string): boolean {
   return matchesList(email, adminList());
 }
 
+/**
+ * The same question, asked of a session rather than an address.
+ *
+ * Use this wherever a request is being judged. `AUTH_ADMINS` is a list of
+ * addresses, and an address stopped being proof of anything the moment an
+ * administrator could invite an outside one: somebody invited as an
+ * address on that list would otherwise arrive holding Emburse admin.
+ * Admin here means the Microsoft door, always.
+ */
+export function isAdminUser(user: SessionUser | undefined | null): boolean {
+  return Boolean(user) && isMicrosoft(user!) && isAdmin(user!.email);
+}
+
 export function adminListSize(): number {
   return adminList().length;
 }
@@ -72,7 +86,7 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction): v
   // same real-user check themselves. So this widens what an admin may SEE
   // through a view and nothing at all about what anybody may change.
   const real = req.viewingAs?.real ?? req.user;
-  if (!isAuthConfigured() || (real && isAdmin(real.email))) {
+  if (!isAuthConfigured() || isAdminUser(real)) {
     next();
     return;
   }
@@ -131,16 +145,61 @@ declare global {
   }
 }
 
+/**
+ * Revocation, for sessions minted at the link door.
+ *
+ * A signed cookie cannot be withdrawn — that is the trade for not keeping
+ * sessions in a table — so each link session carries the counter its
+ * account had when it was issued, and an account that has since been
+ * disabled or revoked has a higher one. Checked here, cached for ten
+ * seconds so it costs one query per person per ten seconds rather than one
+ * per request.
+ *
+ * Not applied to Microsoft sessions: those are already bounded by Entra,
+ * where disabling the account is the real control.
+ */
+const epochCache = new Map<string, { value: number; until: number }>();
+
+async function currentEpoch(email: string): Promise<number> {
+  const hit = epochCache.get(email);
+  if (hit && hit.until > Date.now()) return hit.value;
+  const { getDmUser } = await import("../dutch-miller/users.js");
+  const row = await getDmUser(email).catch(() => null);
+  // No row, or it was deleted: nothing can match, so every session ends.
+  const value = row && row.status === "active" ? row.sessionEpoch : -1;
+  epochCache.set(email, { value, until: Date.now() + 10_000 });
+  return value;
+}
+
+/** Forget a cached counter, so a revocation bites immediately. */
+export function forgetEpoch(email: string): void {
+  epochCache.delete(email.trim().toLowerCase());
+}
+
 /** Populates `req.user` from the session cookie. Never rejects. */
-export function authMiddleware(req: Request, _res: Response, next: NextFunction): void {
+export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
   const user = readSession(req);
-  if (user) {
-    req.user = user;
-    // "Still here", for the while-you-were-away count. Not awaited: it is a
-    // note in the margin, throttled to once a minute per person, and no page
-    // should wait on it or fail because of it.
-    if (isDbConfigured() && user.email) void noteVisit(user.email);
+  if (!user) { next(); return; }
+
+  if ((user.via ?? "microsoft") === "link") {
+    void currentEpoch(user.email).then((epoch) => {
+      if (epoch < 0 || epoch !== (user.epoch ?? 0)) {
+        // Disabled, revoked, or removed since this cookie was issued.
+        clearSessionCookie(res);
+        next();
+        return;
+      }
+      req.user = user;
+      next();
+    }).catch(() => next());
+    return;
   }
+
+  req.user = user;
+  // "Still here", for the while-you-were-away count. Not awaited: it is a
+  // note in the margin, throttled to once a minute per person, and no page
+  // should wait on it or fail because of it.
+  if (isDbConfigured() && user.email) void noteVisit(user.email);
   next();
 }
 
@@ -161,7 +220,7 @@ export const authRouter: IRouter = Router();
 
 authRouter.get("/auth/user", (req: Request, res: Response) => {
   res.json({
-    user: req.user ? { ...req.user, isAdmin: isAdmin(req.user.email) } : null,
+    user: req.user ? { ...req.user, isAdmin: isAdminUser(req.user) } : null,
     authConfigured: isAuthConfigured(),
     // With sign-in off there is no identity, so the UI should not hide admin
     // affordances behind a check the server is not making either.
@@ -170,7 +229,7 @@ authRouter.get("/auth/user", (req: Request, res: Response) => {
     // changes whose DATA is on screen, not who is looking at it.
     isAdmin: (() => {
       const real = req.viewingAs?.real ?? req.user;
-      return !isAuthConfigured() || (real ? isAdmin(real.email) : false);
+      return !isAuthConfigured() || isAdminUser(real);
     })(),
     // Who is really here, when that is not who the page is showing. The UI
     // needs it for the banner, and for keeping the exit visible: the one
@@ -192,7 +251,7 @@ authRouter.get("/auth/user", (req: Request, res: Response) => {
 function realAppsFor(req: Request): AppKey[] {
   const real = req.viewingAs?.real ?? req.user;
   if (!isAuthConfigured()) return [...APPS];
-  return real ? appsFor(real.email) : [];
+  return real ? appsFor(real.email, real.via ?? "microsoft") : [];
 }
 
 /** The one they are in, from the cookie, narrowed to what they hold. */
@@ -237,7 +296,7 @@ export function requireApp(app: AppKey) {
   return (req: Request, res: Response, next: NextFunction): void => {
     if (!isAuthConfigured()) { next(); return; }
     const real = req.viewingAs?.real ?? req.user;
-    if (real && appsFor(real.email).includes(app)) { next(); return; }
+    if (real && appsFor(real.email, real.via ?? "microsoft").includes(app)) { next(); return; }
     res.status(403).json({ error: `You do not have access to ${APP_LABEL[app]}.` });
   };
 }
@@ -252,7 +311,7 @@ export function requireApp(app: AppKey) {
  */
 authRouter.get("/auth/view-as/people", async (req: Request, res: Response) => {
   const real = req.viewingAs?.real ?? req.user;
-  if (isAuthConfigured() && (!real || !isAdmin(real.email))) {
+  if (isAuthConfigured() && !isAdminUser(real)) {
     res.status(403).json({ error: "Only an administrator can view as somebody else." });
     return;
   }
@@ -279,7 +338,7 @@ authRouter.get("/auth/view-as/people", async (req: Request, res: Response) => {
  */
 authRouter.post("/auth/view-as", (req: Request, res: Response) => {
   const real = req.viewingAs?.real ?? req.user;
-  if (isAuthConfigured() && (!real || !isAdmin(real.email))) {
+  if (isAuthConfigured() && !isAdminUser(real)) {
     res.status(403).json({ error: "Only an administrator can view as somebody else." });
     return;
   }
@@ -412,6 +471,10 @@ authRouter.get("/callback", async (req: Request, res: Response) => {
       email,
       name: String(claims.name ?? email),
       exp: Date.now() + SESSION_TTL_MS,
+      // Which door. Everything that asks "is this one of ours" reads it;
+      // an address alone stopped being an answer once outside people
+      // could be invited by email.
+      via: "microsoft",
     };
 
     setSessionCookie(res, user);

@@ -18,13 +18,36 @@ export const SESSION_COOKIE = "mojo_sid";
 export const SESSION_TTL_MS = 8 * 60 * 60 * 1000; // 8h — a working day.
 
 export type SessionUser = {
-  /** Entra object id (the `sub`/`oid` claim). */
+  /** Entra object id (the `sub`/`oid` claim), or the email for a link sign-in. */
   id: string;
   email: string;
   name: string;
   /** Epoch ms. */
   exp: number;
+  /**
+   * WHICH DOOR they came through.
+   *
+   * Not decoration. Once outside people can sign in with an email link,
+   * "works at MOJO" can no longer be a test on the address — somebody could
+   * be invited as anything@mojocarwash.com and inherit staff powers. It has
+   * to be a test on the identity provider: only Microsoft SSO against our
+   * own tenant proves the address.
+   *
+   * Absent on cookies minted before this existed, and those could only have
+   * come from the OIDC flow, so absent reads as "microsoft".
+   */
+  via?: "microsoft" | "link";
+  /**
+   * Revocation counter, copied from the user's row at sign-in. Raising the
+   * row's counter invalidates every session already issued — the one thing
+   * a stateless cookie cannot otherwise do.
+   */
+  epoch?: number;
 };
+
+/** Microsoft SSO against our tenant, rather than an emailed link. */
+export const isMicrosoft = (u: SessionUser | undefined | null): boolean =>
+  Boolean(u) && (u!.via ?? "microsoft") === "microsoft";
 
 let cachedSecret: string | null = null;
 

@@ -21,6 +21,15 @@ export function SignIn({ authConfigured }: { authConfigured: boolean }) {
               <ShieldCheck className="h-3.5 w-3.5" />
               Restricted to your Microsoft 365 account
             </p>
+            {/* The second door, for invited dealer staff. Kept small and
+                below: almost everybody here is MOJO, and this is not a
+                self-signup — an address nobody invited gets no link. */}
+            <p className="mt-6 border-t border-border pt-5 text-xs text-muted-foreground">
+              Dealer staff with an invitation:{" "}
+              <a href="/#/signin" className="font-semibold text-sky-600 hover:underline">
+                sign in with an email link
+              </a>
+            </p>
           </>
         ) : (
           <div className="mt-7 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-left text-sm">

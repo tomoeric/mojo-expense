@@ -66,6 +66,58 @@ the blocks.
   and caches, and swapping in place leaves the old app's queries running
   against endpoints the server has just started refusing.
 
+## The two doors (READ BEFORE TOUCHING ANY PERMISSION CHECK)
+
+- **MOJO staff sign in with Microsoft. Dealer staff are INVITED by an admin
+  and sign in with an emailed one-time link.** There is no self-signup
+  anywhere; `/api/dm-auth/request` sends nothing to an address no admin
+  invited, and answers identically either way so it cannot be used to find
+  out who has an account.
+- **NEVER decide "is this one of ours" from the email address.** Once an
+  admin can invite an outside address, somebody invited as
+  `anything@mojocarwash.com` would inherit staff powers. The test is the
+  DOOR: `session.via === "microsoft"` AND the domain is in `STAFF_DOMAINS`
+  (default `mojocarwash.com`, `mammothholdings.com`). Use `isStaff(user)`
+  (`dutch-miller/users.ts`) and `isAdminUser(user)` (`auth/index.ts`) —
+  both take a SESSION, not a string. A bare `isAdmin(email)` in a request
+  path is the bug these replaced.
+- **A link session gets Dutch Miller and nothing else**, enforced in
+  `appsFor(email, via)` regardless of any list. Emburse is behind the
+  Microsoft door, permanently.
+- **Super admin is pinned by `DM_SUPER_ADMINS`** (default
+  `eric.s@mojocarwash.com`), never a row. Only a super admin can make
+  somebody an admin, change one, switch one off or remove one — an admin
+  who could promote could promote themselves. The old "empty table makes
+  everyone an admin" fallback is GONE; the pinned super admin does that job
+  without leaving the door open.
+- **Nothing is stored in the clear.** `dm_login_tokens` and
+  `dm_verify_codes` hold SHA-256 only. Links are single-use (conditional
+  `UPDATE`, same trick as the RFID claim), asking again kills the previous
+  one, 15 min for a login and 7 days for an invite. A login link is softly
+  bound to the browser that asked: opened elsewhere it also wants the
+  six-digit code, which is what makes a leaked URL on its own worthless.
+  An invite cannot be browser-bound (an admin asks, somebody else opens),
+  so it ALWAYS requires the code — which is also how the address is verified.
+- **Sessions are revocable** despite being stateless cookies: each link
+  session carries `dm_users.session_epoch` from when it was minted, and
+  disabling or revoking raises it. Checked in `authMiddleware`, cached 10s;
+  call `forgetEpoch(email)` after any change so it bites at once.
+- **Lockout and audit are one table** (`dm_audit`). The lockout is DERIVED
+  from the trail over a rolling window, not stored, so it cannot drift from
+  it and clears itself with nothing to sweep up. Never write a token, a
+  code, or anything derived from one into `detail`. There is no route that
+  edits or deletes a line, deliberately.
+- **Email goes out through Graph** (`server/mail.ts`) using the existing
+  Entra app plus `Mail.Send`, sending as `MAIL_FROM`. Scope it with an
+  application access policy — `Mail.Send` as an application permission can
+  otherwise send as any mailbox in the tenant.
+- Tests: `scripts/test-dealer-auth.ts` (links, codes, lockout) and
+  `scripts/test-dm-users.ts` (roles, invite states, revocation).
+- **Still one factor.** The link and the code both land in the same inbox,
+  so this is possession-of-email, not MFA. The onboarding form collects a
+  contact number precisely so a real second factor (an SMS code at sign-in)
+  can be added without another migration.
+
 ## Inside Dutch Miller
 
 - **Two layers, and they answer different questions.** `auth/apps.ts` (a

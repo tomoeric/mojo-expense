@@ -1,23 +1,30 @@
 /**
- * Who may open what inside Dutch Miller.
+ * Who may open what inside Dutch Miller, and who may change it.
  *
  *   pnpm exec tsx scripts/test-dm-users.ts
  *
- * Two rules here can lock a person out of the only page that could let
- * them back in, so both are tested from the outside rather than read:
+ * Three rules here are the difference between a permission system and a
+ * label, and each has a way of failing quietly:
  *
- *   - an EMPTY table makes everyone an administrator, and the first row
- *     closes that. Get the second half wrong and the permission list is
- *     decoration — everybody stays an admin forever.
- *   - the LAST administrator cannot be removed. Get that wrong and the
- *     table is non-empty with nobody able to edit it, which no amount of
- *     signing in again will fix.
+ *   Only a SUPER admin can make somebody an admin. If an admin can, an
+ *   admin can promote themselves and the two levels are the same level.
+ *   Super is pinned by configuration, so it cannot be granted, edited or
+ *   deleted through the app and nobody can lock the owner out.
  *
- * The table is shared, so this refuses to run against one that already
- * holds rows rather than deleting somebody's configuration.
+ *   An account that is invited-but-not-set-up, or disabled, has NOTHING.
+ *   Getting that wrong means an invite is itself access, before anybody
+ *   has proved they can read the address it went to.
+ *
+ *   Disabling raises the revocation counter. Without it "revoked" means
+ *   "revoked within eight hours", which is not what anybody thinks the
+ *   button does.
+ *
+ * The table is shared, so this refuses to run against one holding rows it
+ * did not create rather than deleting somebody's configuration.
  */
 import {
-  DM_PAGE_KEYS, dmAccessFor, listDmUsers, removeDmUser, saveDmUser,
+  DM_PAGE_KEYS, dmAccessFor, getDmUser, isStaff, isSuperEmail, listDmUsers,
+  removeDmUser, revokeDmSessions, saveDmUser, setDmUserEnabled, activateDmUser,
 } from "../server/dutch-miller/users.js";
 import { db } from "../server/db.js";
 
@@ -29,71 +36,121 @@ const check = (what: string, ok: boolean, detail = "") => {
 
 const BOSS = "boss@example.invalid";
 const HAND = "hand@example.invalid";
+const DEALER = "dealer@dutchmiller.example";
 const PAGE = DM_PAGE_KEYS[0]!;
+const MINE = [BOSS, HAND, DEALER];
+
+/** The pinned super admin, for this run. */
+process.env.DM_SUPER_ADMINS = "owner@example.invalid";
+const OWNER = "owner@example.invalid";
+
+const refused = async (what: string, fn: () => Promise<unknown>): Promise<string> => {
+  try { await fn(); return ""; } catch (e) { return (e as Error).message; }
+};
 
 try {
-  // `dmAccessFor` answers from whether the table is empty, so a leftover
-  // row would make the first section test the opposite of what it says.
   const existing = await listDmUsers();
-  if (existing.length > 0) {
-    console.log(`SKIP — dm_users already holds ${existing.length} row(s); not touching them.`);
+  const strangers = existing.filter((u) => !MINE.includes(u.email));
+  if (strangers.length > 0) {
+    console.log(`SKIP — dm_users holds ${strangers.length} row(s) this test did not make.`);
     process.exit(0);
   }
 
-  console.log("1. Nobody set up yet");
-  const open = await dmAccessFor("anyone@example.invalid");
-  check("everyone is an administrator", open.role === "admin");
-  check("…with every page", open.pages.length === DM_PAGE_KEYS.length);
-  check("…and it says so, rather than looking configured", open.unconfigured === true);
+  console.log("1. Super is pinned, not stored");
+  check("the pinned address is super", isSuperEmail(OWNER));
+  const owner = await dmAccessFor(OWNER);
+  check("…with every page and no row at all", owner.role === "super" && owner.pinned);
+  check("…and all pages", owner.pages.length === DM_PAGE_KEYS.length);
+  check("a stranger is nobody", (await dmAccessFor("nobody@example.invalid")).pages.length === 0);
+  check("…which is the point: there is no empty-table free-for-all",
+    (await dmAccessFor("nobody@example.invalid")).role === "user");
+  check("the pinned account cannot be written over",
+    (await refused("save super", () => saveDmUser({
+      email: OWNER, role: "admin", pages: [], by: OWNER, byRole: "super",
+    }))).includes("super administrator"));
+  check("…nor removed", (await removeDmUser(OWNER, "super")).ok === false);
 
-  console.log("\n2. The first row closes it");
-  await saveDmUser(BOSS, "admin", [], "setup@example.invalid");
-  const after = await dmAccessFor("anyone@example.invalid");
-  check("a stranger is no longer an administrator", after.role === "user", after.role);
-  check("…and has no pages", after.pages.length === 0);
-  check("…and the table is no longer unconfigured", after.unconfigured === false);
-  const boss = await dmAccessFor(BOSS);
-  check("the administrator still has every page", boss.pages.length === DM_PAGE_KEYS.length);
+  console.log("\n2. Only super can make an admin");
+  const asAdmin = await refused("promote", () => saveDmUser({
+    email: BOSS, role: "admin", pages: [], by: HAND, byRole: "admin",
+  }));
+  check("an admin cannot promote anybody", asAdmin.includes("super administrator"), asAdmin);
+  await saveDmUser({ email: BOSS, role: "admin", pages: [], by: OWNER, byRole: "super" });
+  check("a super admin can", (await dmAccessFor(BOSS)).role === "admin");
+  const demote = await refused("demote", () => saveDmUser({
+    email: BOSS, role: "user", pages: [], by: HAND, byRole: "admin",
+  }));
+  check("…and an admin cannot change an existing admin either",
+    demote.includes("super administrator"), demote);
 
-  console.log("\n3. A general user gets what they were given");
-  await saveDmUser(HAND, "user", [PAGE], BOSS);
+  console.log("\n3. A general user gets only what they were given");
+  await saveDmUser({ email: HAND, role: "user", pages: [PAGE], by: BOSS, byRole: "admin" });
   const hand = await dmAccessFor(HAND);
   check("the page they were given", hand.pages.includes(PAGE), hand.pages.join(","));
-  check("…and not the administrator role", hand.role === "user");
+  check("…and not every page", hand.pages.length < DM_PAGE_KEYS.length || DM_PAGE_KEYS.length === 1);
   check("case in the address does not matter",
     (await dmAccessFor(HAND.toUpperCase())).pages.includes(PAGE));
+  await saveDmUser({
+    email: HAND, role: "user", pages: ["not-a-page", PAGE] as never, by: BOSS, byRole: "admin",
+  });
+  check("a page key that does not exist is dropped",
+    (await dmAccessFor(HAND)).pages.join(",") === PAGE);
 
-  console.log("\n4. A page key that does not exist is dropped, not stored");
-  await saveDmUser(HAND, "user", ["not-a-page", PAGE] as never, BOSS);
-  const cleaned = await dmAccessFor(HAND);
-  check("only the real page survives", cleaned.pages.join(",") === PAGE, cleaned.pages.join(","));
+  console.log("\n4. An invited account has nothing yet");
+  await saveDmUser({
+    email: DEALER, role: "user", pages: [PAGE], by: BOSS, byRole: "admin",
+    authMethod: "link", status: "invited",
+  });
+  const waiting = await dmAccessFor(DEALER);
+  check("invited is not access", waiting.pages.length === 0, waiting.pages.join(","));
+  check("…and it says why", waiting.status === "invited");
 
-  console.log("\n5. Taking a page away actually takes it away");
-  await saveDmUser(HAND, "user", [], BOSS);
-  check("no pages left", (await dmAccessFor(HAND)).pages.length === 0);
+  console.log("\n5. Setting up the account is what turns it on");
+  const live = await activateDmUser({
+    email: DEALER, firstName: "Dana", lastName: "Reyes",
+    business: "Dutch Miller Chevrolet", phone: "304 555 0133",
+  });
+  check("the details are kept", live?.business === "Dutch Miller Chevrolet");
+  check("…the address counts as verified", Boolean(live?.emailVerifiedAt));
+  check("…and the pages they were given arrive now",
+    (await dmAccessFor(DEALER)).pages.includes(PAGE));
+  check("activating twice does nothing the second time",
+    (await activateDmUser({
+      email: DEALER, firstName: "X", lastName: "Y", business: "Z", phone: "1234567890",
+    })) === null);
+  check("…and the first set of details stands",
+    (await getDmUser(DEALER))?.firstName === "Dana");
 
-  console.log("\n6. The last administrator stays");
-  const lone = await removeDmUser(BOSS);
-  check("removing the only administrator is refused", lone.ok === false);
-  check("…with a reason that says why", /only administrator/i.test(lone.reason ?? ""),
-    lone.reason ?? "");
-  check("…and they are still there",
-    (await listDmUsers()).some((u) => u.email === BOSS && u.role === "admin"));
+  console.log("\n6. Disabling takes effect now, not in eight hours");
+  const before = (await getDmUser(DEALER))!.sessionEpoch;
+  const off = await setDmUserEnabled(DEALER, false, BOSS, "admin");
+  check("it switches off", off.ok === true);
+  check("…access goes with it", (await dmAccessFor(DEALER)).pages.length === 0);
+  check("…and the revocation counter moves",
+    (await getDmUser(DEALER))!.sessionEpoch === before + 1,
+    `${before} → ${(await getDmUser(DEALER))!.sessionEpoch}`);
+  const back = await setDmUserEnabled(DEALER, true, BOSS, "admin");
+  check("switching back on restores it", back.ok === true
+    && (await dmAccessFor(DEALER)).pages.includes(PAGE));
+  const bumped = await revokeDmSessions(DEALER);
+  check("revoking alone also moves the counter", bumped > before + 1);
+  check("…while leaving them active", (await dmAccessFor(DEALER)).pages.includes(PAGE));
 
-  console.log("\n7. …once there are two, either can go");
-  await saveDmUser(HAND, "admin", [], BOSS);
-  check("the second administrator can be removed", (await removeDmUser(HAND)).ok === true);
-  check("…and is gone", (await listDmUsers()).every((u) => u.email !== HAND));
+  console.log("\n7. An admin is not an admin's to touch");
+  check("an admin cannot switch off an admin",
+    (await setDmUserEnabled(BOSS, false, HAND, "admin")).ok === false);
+  check("…nor remove one", (await removeDmUser(BOSS, "admin")).ok === false);
+  check("a super admin can remove one", (await removeDmUser(BOSS, "super")).ok === true);
   check("removing somebody who is not there is not an error",
-    (await removeDmUser("ghost@example.invalid")).ok === true);
+    (await removeDmUser("ghost@example.invalid", "super")).ok === true);
 
-  console.log("\n8. An address that is not one");
-  let refused = false;
-  try { await saveDmUser("not an email", "user", [], BOSS); } catch { refused = true; }
-  check("is refused", refused);
+  console.log("\n8. Addresses");
+  check("a non-address is refused", (await refused("bad email", () => saveDmUser({
+    email: "not an email", role: "user", pages: [], by: OWNER, byRole: "super",
+  }))).includes("email address"));
+  check("nobody is staff without a session", !isStaff(null));
 } finally {
-  await db().query("DELETE FROM dm_users WHERE email = ANY($1::text[])",
-    [[BOSS, HAND]]).catch(() => {});
+  await db().query("DELETE FROM dm_users WHERE email = ANY($1::text[])", [MINE]).catch(() => {});
   await db().end().catch(() => {});
 }
 

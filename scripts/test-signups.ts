@@ -15,9 +15,10 @@
  * take a client's word for them.
  */
 import {
-  createSignup, getSignup, isMojoStaff, listSignups, newHandle, setComplete,
-  validateSignup,
+  createSignup, getSignup, listSignups, newHandle, setComplete, validateSignup,
 } from "../server/dutch-miller/signups.js";
+import { isStaff } from "../server/dutch-miller/users.js";
+import type { SessionUser } from "../server/auth/session.js";
 import { addRfids } from "../server/dutch-miller/rfid.js";
 import { db } from "../server/db.js";
 
@@ -135,10 +136,22 @@ try {
     "SELECT status FROM dm_rfid WHERE number = $1", [TAGS[2]])).rows[0]?.status === "inactive");
 
   console.log("\n8. The MOJO-side mark");
-  check("a MOJO address is staff", isMojoStaff("eric.s@mojocarwash.com"));
-  check("…and a dealer address is not", !isMojoStaff("paul@dutchmiller.example"));
-  check("…and a lookalike domain is not",
-    !isMojoStaff("someone@notmojocarwash.com.example"));
+  // The door, not the address. This is the test that stops somebody
+  // INVITED as anything@mojocarwash.com inheriting staff powers.
+  const who = (email: string, via: "microsoft" | "link"): SessionUser =>
+    ({ id: email, email, name: email, exp: Date.now() + 1000, via });
+  check("a MOJO address through Microsoft is staff",
+    isStaff(who("eric.s@mojocarwash.com", "microsoft")));
+  check("…and so is Mammoth Holdings",
+    isStaff(who("someone@mammothholdings.com", "microsoft")));
+  check("THE SAME ADDRESS through an emailed link is NOT",
+    !isStaff(who("eric.s@mojocarwash.com", "link")));
+  check("…nor is a dealer address, either way",
+    !isStaff(who("paul@dutchmiller.example", "microsoft"))
+      && !isStaff(who("paul@dutchmiller.example", "link")));
+  check("…nor a lookalike domain",
+    !isStaff(who("someone@notmojocarwash.com.example", "microsoft")));
+  check("…and nobody at all is not staff", !isStaff(null));
   const done = await setComplete(one.guid, true, "eric.s@mojocarwash.com");
   check("marking complete records who", done?.completedBy === "eric.s@mojocarwash.com");
   check("…and when", Boolean(done?.completedAt));

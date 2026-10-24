@@ -9,6 +9,7 @@ import { api } from "./routes.js";
 import { allowListSize, authMiddleware, authRouter, isAuthConfigured, requireApp } from "./auth/index.js";
 import { appListSizes } from "./auth/apps.js";
 import { dutchMillerRouter } from "./dutch-miller/routes.js";
+import { dealerAuthRouter } from "./dutch-miller/dealer-auth.js";
 import { viewAsMiddleware } from "./auth/view-as.js";
 import { importRouter } from "./import/routes.js";
 import { decisionRouter } from "./emburse/decision-routes.js";
@@ -45,6 +46,10 @@ app.use("/api", authRouter);
 
 // Dutch Miller, behind its own assignment. Mounted BEFORE the Emburse
 // guard below so it is not caught by it.
+// The dealer door, deliberately OUTSIDE every guard below: nobody using
+// it is signed in yet. It does its own rate limiting and refuses anything
+// an administrator has not already invited.
+app.use("/api/dm-auth", dealerAuthRouter);
 app.use("/api/dutch-miller", requireApp("dutch-miller"), dutchMillerRouter);
 
 /*

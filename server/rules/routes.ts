@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { adminListSize, isAdmin, isAuthConfigured, requireAdmin, requireAuth } from "../auth/index.js";
+import { adminListSize, isAdminUser, isAuthConfigured, requireAdmin, requireAuth } from "../auth/index.js";
 import { canWriteRules, isRestricted, listEditors, requireRuleEditor, setEditor } from "./editors.js";
 import { isDbConfigured } from "../db.js";
 import { hasCredential, listCredentials } from "../emburse/credentials.js";
@@ -148,7 +148,7 @@ rulesRouter.get("/rules/editors", requireAuth, async (req: Request, res: Respons
     const allowed = new Set(editors.map((e) => e.email));
     res.json({
       you: req.user?.email?.toLowerCase() ?? null,
-      youAreAdmin: !isAuthConfigured() || (req.user ? isAdmin(req.user.email) : false),
+      youAreAdmin: !isAuthConfigured() || isAdminUser(req.user),
       restricted: allowed.size > 0,
       // With AUTH_ADMINS unset every signed-in person is an admin and could
       // add themselves back, so the page must not imply this is a lock.

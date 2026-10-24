@@ -79,10 +79,29 @@ as ninja-live-status** — so no new Azure setup beyond one redirect URI.
 | `AZURE_CLIENT_SECRET` | same |
 | `SESSION_SECRET` | **required in production** — `openssl rand -hex 32` |
 | `AUTH_ALLOWED` | optional; comma-separated emails and/or domains |
+| `MAIL_FROM` | mailbox the app sends invitations and sign-in links as, e.g. `noreply@mojocarwash.com`. Needs `Mail.Send` on the Entra app |
+| `DM_SUPER_ADMINS` | optional; who may create Dutch Miller administrators. Defaults to `eric.s@mojocarwash.com` |
+| `STAFF_DOMAINS` | optional; the domains that count as MOJO's own. Defaults to `mojocarwash.com,mammothholdings.com` |
 
 The issuer is tenant-scoped (`login.microsoftonline.com/<tenant>/v2.0`), so
 only accounts in your Entra tenant can sign in at all. `AUTH_ALLOWED` narrows
 that further to named reviewers; leave it unset to admit the whole tenant.
+
+Dutch Miller has a second door for dealer staff, who have no Microsoft
+account: an administrator invites an address and the person signs in with a
+one-time emailed link. There is no self-signup. Whether somebody counts as
+MOJO staff is decided by **which door they came through**, never by their
+address — see "The two doors" in `CLAUDE.md` before changing any permission
+check.
+
+`Mail.Send` as an application permission lets the app send as any mailbox in
+the tenant. Restrict it to `MAIL_FROM` with an application access policy:
+
+```powershell
+New-ApplicationAccessPolicy -AppId <AZURE_CLIENT_ID> `
+  -PolicyScopeGroupId <mail-enabled group containing only MAIL_FROM> `
+  -AccessRight RestrictAccess -Description "mojo-expense login mail"
+```
 
 ### AUTH_ALLOWED format
 

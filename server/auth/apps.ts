@@ -86,8 +86,17 @@ export function hasEmburse(email: string): boolean {
   return isAllowed(email);
 }
 
-/** Every app this person may use, in the order they are offered. */
-export function appsFor(email: string): AppKey[] {
+/**
+ * Every app this person may use, in the order they are offered.
+ *
+ * Somebody who signed in with an emailed link is a dealer account and gets
+ * Dutch Miller and nothing else, whatever the lists say. Those lists are
+ * keyed on an address, and the whole point of the second door is that an
+ * address no longer proves who somebody is — only the door they came
+ * through does. Emburse is behind the Microsoft door, permanently.
+ */
+export function appsFor(email: string, via: "microsoft" | "link" = "microsoft"): AppKey[] {
+  if (via === "link") return ["dutch-miller"];
   const out: AppKey[] = [];
   if (hasEmburse(email)) out.push("emburse");
   if (hasDutchMiller(email)) out.push("dutch-miller");
@@ -103,8 +112,10 @@ export function appsFor(email: string): AppKey[] {
  * ignored rather than honoured — it is the one value here a browser can
  * set.
  */
-export function appFor(email: string, preferred: string | undefined): AppKey | null {
-  const mine = appsFor(email);
+export function appFor(
+  email: string, preferred: string | undefined, via: "microsoft" | "link" = "microsoft",
+): AppKey | null {
+  const mine = appsFor(email, via);
   if (mine.length === 0) return null;
   return isAppKey(preferred) && mine.includes(preferred) ? preferred : mine[0]!;
 }

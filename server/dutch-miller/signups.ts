@@ -26,15 +26,14 @@ import { RFID_RE } from "./rfid-parse.js";
  */
 
 /**
- * Who may mark a signup complete.
+ * Who may mark a signup complete: see `isStaff` in `users.ts`.
  *
- * The mark means "MOJO has handled this", so a dealer administrator must not
- * be able to set it — being an administrator of Dutch Miller says nothing
- * about working at MOJO. The honest test is the account's own domain.
+ * It used to be a test on the address ending in our domain. That was
+ * correct only while every account came through Microsoft SSO. The moment
+ * an administrator can invite an outside address, somebody invited as
+ * anything@mojocarwash.com would have inherited the mark, so the test
+ * moved to the DOOR they came through.
  */
-const MOJO_DOMAIN = "mojocarwash.com";
-export const isMojoStaff = (email: string): boolean =>
-  email.trim().toLowerCase().endsWith(`@${MOJO_DOMAIN}`);
 
 /** The timezone the created date and time are shown in. */
 export const DISPLAY_TZ = "America/Chicago";

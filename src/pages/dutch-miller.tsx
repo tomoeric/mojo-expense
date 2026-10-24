@@ -31,10 +31,13 @@ type PageDef = {
 };
 
 type Access = {
-  role: "admin" | "user";
+  role: "super" | "admin" | "user";
   pages: string[];
-  unconfigured: boolean;
+  status: "invited" | "active" | "disabled";
   email: string;
+  /** Signed in through Microsoft SSO on one of our own domains. */
+  staff: boolean;
+  via: "microsoft" | "link";
   allPages: readonly PageDef[];
 };
 
@@ -109,7 +112,7 @@ export function DutchMillerApp({
   });
 
   const access = me.data;
-  const dmAdmin = access?.role === "admin";
+  const dmAdmin = access?.role === "admin" || access?.role === "super";
   const rail: PageDef[] = [
     ...(access?.allPages ?? []).filter((p) => dmAdmin || (access?.pages ?? []).includes(p.key)),
     ...(dmAdmin ? [USERS_PAGE] : []),
@@ -138,13 +141,6 @@ export function DutchMillerApp({
           )}
         </div>
       </header>
-
-      {access?.unconfigured && (
-        <div className="border-b border-amber-500/40 bg-amber-500/15 px-5 py-1.5 text-center text-xs text-amber-900 dark:text-amber-200">
-          No users have been set up yet, so everyone with Dutch Miller access is an
-          administrator. Adding the first one under <strong>Users</strong> closes that.
-        </div>
-      )}
 
       <div className="mx-auto flex max-w-[1600px] gap-6 px-5 py-6">
         <nav aria-label="Dutch Miller" className="hidden w-56 shrink-0 space-y-0.5 md:block">
