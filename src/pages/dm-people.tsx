@@ -5,7 +5,10 @@ import {
   Trash2, UserRound, X,
 } from "lucide-react";
 
-type Role = { key: string; name: string; pages: string[]; administers: boolean; builtin: boolean };
+type Role = {
+  key: string; name: string; pages: string[];
+  administers: boolean; approves: boolean; builtin: boolean;
+};
 type DmUser = {
   email: string; roleKey: string; roleName?: string;
   authMethod: "microsoft" | "link"; status: "invited" | "active" | "disabled";
@@ -471,7 +474,9 @@ function AssignRole({
             <span className="min-w-0">
               <span className="block text-sm font-medium">{r.name}</span>
               <span className="block text-xs text-muted-foreground">
-                {r.administers
+                {r.approves
+                  ? "Every page, and the only role that can approve a membership."
+                  : r.administers
                   ? "Every page, plus Users and Settings."
                   : r.pages.length === 0
                     ? "No pages."

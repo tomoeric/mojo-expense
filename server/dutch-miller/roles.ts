@@ -30,6 +30,8 @@ export type DmRoleDef = {
   pages: DmPageKey[];
   /** May open Users, Settings and the audit trail. */
   administers: boolean;
+  /** May mark a member signup approved. Only the built-in CSC role. */
+  approves: boolean;
   /** Built in: editable pages for the admin role, but never renamed or removed. */
   builtin: boolean;
   /** How many people hold it. Filled in by `listRoles`. */
@@ -40,6 +42,16 @@ export type DmRoleDef = {
 
 export const ADMIN_ROLE = "administrator";
 export const DEFAULT_ROLE = "general-user";
+/**
+ * The one role that can approve a membership.
+ *
+ * Approving is not an administrative act — it is somebody at the
+ * customer service centre checking a signup and putting their name on
+ * it. Separating it from `administers` is the whole point: an
+ * administrator manages who can use the app, which is a different job
+ * from deciding that a member may wash.
+ */
+export const CSC_ROLE = "csc";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS dm_roles (
@@ -51,6 +63,8 @@ CREATE TABLE IF NOT EXISTS dm_roles (
   created_at  timestamptz NOT NULL DEFAULT now(),
   created_by  text        NOT NULL DEFAULT ''
 );
+/* Approving is its own permission, not a consequence of administering. */
+ALTER TABLE dm_roles ADD COLUMN IF NOT EXISTS approves boolean NOT NULL DEFAULT false;
 `;
 
 /**
@@ -61,10 +75,22 @@ CREATE TABLE IF NOT EXISTS dm_roles (
  * row's existence is guaranteed here, not its contents.
  */
 const SEED = `
-INSERT INTO dm_roles (key, name, pages, administers, builtin, created_by)
-     VALUES ('${ADMIN_ROLE}', 'Administrator', $1::jsonb, true, true, 'system'),
-            ('${DEFAULT_ROLE}', 'General user', '[]'::jsonb, false, true, 'system')
+INSERT INTO dm_roles (key, name, pages, administers, approves, builtin, created_by)
+     VALUES ('${ADMIN_ROLE}', 'Administrator', $1::jsonb, true, false, true, 'system'),
+            ('${CSC_ROLE}', 'CSC', $1::jsonb, false, true, true, 'system'),
+            ('${DEFAULT_ROLE}', 'General user', '[]'::jsonb, false, false, true, 'system')
 ON CONFLICT (key) DO NOTHING;
+`;
+
+/*
+ * Approving belongs to CSC and to nothing else.
+ *
+ * Asserted on every boot rather than only at seeding, so a row edited
+ * by hand cannot quietly hand the permission to another role. Its own
+ * statement because a parameterised query may carry only one.
+ */
+const ONLY_CSC_APPROVES = `
+UPDATE dm_roles SET approves = (key = '${CSC_ROLE}') WHERE approves <> (key = '${CSC_ROLE}');
 `;
 
 /*
@@ -81,12 +107,14 @@ const ensure = (): Promise<void> =>
   (ready ??= ensureSchema().then(async () => {
     await db().query(SCHEMA);
     await db().query(SEED, [JSON.stringify(DM_PAGE_KEYS)]);
+    await db().query(ONLY_CSC_APPROVES);
     await db().query(WIDEN_ADMIN, [JSON.stringify(DM_PAGE_KEYS)]);
   }));
 
 type Db = {
   key: string; name: string; pages: unknown; administers: boolean;
-  builtin: boolean; created_at: Date; created_by: string; holders?: string;
+  approves: boolean; builtin: boolean; created_at: Date; created_by: string;
+  holders?: string;
 };
 
 const shape = (r: Db): DmRoleDef => ({
@@ -94,6 +122,7 @@ const shape = (r: Db): DmRoleDef => ({
   name: r.name,
   pages: Array.isArray(r.pages) ? (r.pages as unknown[]).filter(isDmPage) : [],
   administers: r.administers,
+  approves: r.approves,
   builtin: r.builtin,
   holders: r.holders === undefined ? undefined : Number(r.holders),
   createdAt: r.created_at.toISOString(),
@@ -103,7 +132,8 @@ const shape = (r: Db): DmRoleDef => ({
 export async function listRoles(): Promise<DmRoleDef[]> {
   await ensure();
   const { rows } = await db().query<Db>(
-    `SELECT r.key, r.name, r.pages, r.administers, r.builtin, r.created_at, r.created_by,
+    `SELECT r.key, r.name, r.pages, r.administers, r.approves, r.builtin,
+            r.created_at, r.created_by,
             (SELECT count(*) FROM dm_users u WHERE u.role_key = r.key) AS holders
        FROM dm_roles r
       ORDER BY r.administers DESC, r.builtin DESC, lower(r.name)`);
@@ -113,7 +143,7 @@ export async function listRoles(): Promise<DmRoleDef[]> {
 export async function getRole(key: string): Promise<DmRoleDef | null> {
   await ensure();
   const { rows } = await db().query<Db>(
-    `SELECT key, name, pages, administers, builtin, created_at, created_by
+    `SELECT key, name, pages, administers, approves, builtin, created_at, created_by
        FROM dm_roles WHERE key = $1`, [key.trim().toLowerCase()]);
   return rows[0] ? shape(rows[0]) : null;
 }
@@ -156,6 +186,8 @@ export async function saveRole(opts: {
     if (clash) throw new Error(`There is already a role called ${clash.name}.`);
   }
 
+  // `approves` is deliberately absent: it belongs to the built-in CSC
+  // role and is not something a role editor can hand out.
   await db().query(
     `INSERT INTO dm_roles (key, name, pages, administers, builtin, created_by)
           VALUES ($1, $2, $3::jsonb, $4, false, $5)

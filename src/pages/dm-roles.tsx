@@ -5,7 +5,7 @@ import { Crown, Loader2, Plus, Trash2 } from "lucide-react";
 type PageDef = { key: string; label: string; blurb: string };
 type Role = {
   key: string; name: string; pages: string[];
-  administers: boolean; builtin: boolean; holders?: number;
+  administers: boolean; approves: boolean; builtin: boolean; holders?: number;
   createdAt: string | null; createdBy: string | null;
 };
 
@@ -112,9 +112,18 @@ export function DmRolesPage() {
                       administers
                     </span>
                   )}
+                  {/* Not a tick-box anywhere: approving belongs to this
+                      one role, so it is stated rather than granted. */}
+                  {r.approves && (
+                    <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-400">
+                      approves memberships
+                    </span>
+                  )}
                 </p>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  {r.administers
+                  {r.approves
+                    ? "The only role that can mark a membership approved."
+                    : r.administers
                     ? "Every page, plus Users, Roles and Settings."
                     : r.pages.length === 0
                       ? "No pages — holders see nothing until this changes."
@@ -168,7 +177,8 @@ export function DmRolesPage() {
       <p className="text-xs text-muted-foreground">
         A role cannot be removed while anybody holds it — move them first. Built-in roles can
         have their pages changed but cannot be renamed or removed, because other things are
-        written against them.
+        written against them. Approving a membership belongs to the CSC role alone and is
+        not something a role can be given here.
       </p>
     </div>
   );
@@ -184,7 +194,8 @@ function RoleEditor({
   onSave: () => void;
   onCancel: () => void;
 }) {
-  const builtin = draft.key === "administrator" || draft.key === "general-user";
+  const builtin = draft.key === "administrator" || draft.key === "general-user"
+    || draft.key === "csc";
   return (
     <div className="space-y-3 rounded-lg border border-border bg-card p-4">
       <div>

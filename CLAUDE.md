@@ -144,6 +144,15 @@ the blocks.
   - A role cannot be deleted while anybody holds it; renaming keeps the
     key, so holders survive it. Deleting out from under somebody would
     grant nothing rather than everything (`dmAccessFor` checks).
+  - **Approving a membership is the CSC role and nothing else**, via an
+    `approves` column that is NOT offered in the role editor — a boot
+    statement re-asserts `approves = (key = 'csc')` every time, so a
+    row edited by hand cannot hand it to another role. An administrator
+    does NOT get it: administering is "who may use the app", which is a
+    different job from "this member may wash". The super admin does,
+    because locking the owner out of their own app is not a security
+    model. `canApprove()` in `routes.ts` also requires `isStaff`, so a
+    dealer account given the CSC role still cannot approve.
   - **Only a SUPER admin writes roles** (`requireSuper`) or hands out one
     that administers. A role is a grant, so an admin who could write one
     could write themselves a better one.

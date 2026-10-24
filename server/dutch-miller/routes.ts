@@ -139,6 +139,21 @@ async function requireDmAdmin(req: Request, res: Response, next: NextFunction): 
   res.status(403).json({ error: "Only a Dutch Miller administrator can do that." });
 }
 
+/**
+ * May this person approve a membership?
+ *
+ * Two conditions, and both matter. The CSC ROLE, because approving is
+ * a job rather than a level — an administrator manages who can use the
+ * app, which is a different thing from deciding a member may wash. And
+ * MOJO's own door, because the mark says MOJO has dealt with it, so a
+ * dealer account handed the CSC role still cannot make it.
+ */
+async function canApprove(req: Request): Promise<boolean> {
+  const real = req.viewingAs?.real ?? req.user;
+  if (!isStaff(real)) return false;
+  return (await dmAccessFor(real?.email ?? "")).approves;
+}
+
 /** The role of whoever is making the request — several rules turn on it. */
 const roleOf = async (req: Request): Promise<DmRole> =>
   (await dmAccessFor(req.viewingAs?.real.email ?? req.user?.email ?? "")).role;
@@ -765,7 +780,7 @@ dutchMillerRouter.get(
       })),
       // Whether the person reading may set the MOJO-side mark. The button
       // follows this; the route below decides it again regardless.
-      canComplete: isStaff(req.viewingAs?.real ?? req.user),
+      canComplete: await canApprove(req),
     });
   },
 );
@@ -917,8 +932,10 @@ dutchMillerRouter.post(
   "/signups/:guid/opened",
   requirePage("member-signups"),
   async (req: Request, res: Response) => {
+    // Opening is recorded for whoever would act on it, which is the
+    // same person who could approve it.
     const who = req.viewingAs?.real.email ?? req.user?.email ?? "";
-    if (!isStaff(req.viewingAs?.real ?? req.user)) { res.json({ row: null }); return; }
+    if (!(await canApprove(req))) { res.json({ row: null }); return; }
     const row = await markOpened(String(req.params.guid ?? ""), who);
     if (row) emitChange("signups");
     res.json({ row });
@@ -942,8 +959,11 @@ dutchMillerRouter.post(
   async (req: Request, res: Response) => {
     const real = req.viewingAs?.real ?? req.user;
     const who = real?.email ?? "";
-    if (!isStaff(real)) {
-      res.status(403).json({ error: "Only a MOJO employee can mark a signup complete." });
+    if (!(await canApprove(req))) {
+      res.status(403).json({
+        error: "Only the CSC role can approve a membership. "
+          + "Ask a super administrator to assign it.",
+      });
       return;
     }
     const out = await setComplete(String(req.params.guid ?? ""), who);

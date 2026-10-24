@@ -20,7 +20,7 @@
  *   everybody.
  */
 import {
-  ADMIN_ROLE, DEFAULT_ROLE, getRole, listRoles, removeRole, saveRole, slug,
+  ADMIN_ROLE, CSC_ROLE, DEFAULT_ROLE, getRole, listRoles, removeRole, saveRole, slug,
 } from "../server/dutch-miller/roles.js";
 import { DM_PAGE_KEYS } from "../server/dutch-miller/pages.js";
 import { dmAccessFor, saveDmUser } from "../server/dutch-miller/users.js";
@@ -56,6 +56,33 @@ try {
   check("…and it grants NOTHING by default", general?.pages.length === 0);
   check("…and does not administer", general?.administers === false);
   check("both are marked built in", admin?.builtin === true && general?.builtin === true);
+
+  console.log("\n1b. Approving belongs to CSC and nothing else");
+  const csc = seeded.find((r) => r.key === CSC_ROLE);
+  check("the CSC role exists", Boolean(csc));
+  check("…and it approves", csc?.approves === true);
+  check("…and it is built in", csc?.builtin === true);
+  // Approving is a job, not a level. An administrator manages who can
+  // use the app, which is a different thing from deciding a member
+  // may wash.
+  check("an ADMINISTRATOR does not approve", admin?.approves === false);
+  check("a general user does not approve", general?.approves === false);
+  check("exactly one role approves",
+    seeded.filter((r) => r.approves).length === 1,
+    String(seeded.filter((r) => r.approves).length));
+
+  // Not a tick-box anywhere, so a new role cannot be given it.
+  const sneaky = await saveRole({
+    name: "Not CSC", pages: [], administers: false, by: OWNER,
+  });
+  MADE.push(sneaky.key);
+  check("a role made here cannot approve", sneaky.approves === false);
+  check("…even after an edit",
+    (await saveRole({
+      key: sneaky.key, name: "Not CSC", pages: [PAGE], administers: false, by: OWNER,
+    })).approves === false);
+  check("…and CSC still does", (await getRole(CSC_ROLE))?.approves === true);
+  check("CSC cannot be removed", (await removeRole(CSC_ROLE)).ok === false);
 
   console.log("\n2. A built-in cannot be redefined");
   check("…not renamed", (await refused(() => saveRole({

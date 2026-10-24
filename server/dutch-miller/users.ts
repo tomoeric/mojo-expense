@@ -221,6 +221,8 @@ export async function getDmUser(email: string): Promise<DmUser | null> {
 
 export type Access = {
   role: DmRole;
+  /** May mark a member signup approved. The CSC role, and nothing else. */
+  approves: boolean;
   /** The named role behind it, for display. Empty for a pinned super admin. */
   roleKey: string;
   roleName: string;
@@ -247,12 +249,16 @@ export async function dmAccessFor(email: string): Promise<Access> {
   if (isSuperEmail(email)) {
     return {
       role: "super", roleKey: "", roleName: "Super administrator",
+      // The owner is not locked out of their own app. Everybody else
+      // needs the CSC role, including administrators.
+      approves: true,
       pages: [...DM_PAGE_KEYS], status: "active", pinned: true,
     };
   }
   const row = await getDmUser(email);
   const none: Access = {
     role: "user", roleKey: row?.roleKey ?? DEFAULT_ROLE, roleName: "",
+    approves: false,
     pages: [], status: row?.status ?? "invited", pinned: false,
   };
   if (!row || row.status !== "active") return none;
@@ -267,6 +273,7 @@ export async function dmAccessFor(email: string): Promise<Access> {
     role: def.administers ? "admin" : "user",
     roleKey: def.key,
     roleName: def.name,
+    approves: def.approves,
     // Administering means EVERY page, whatever the role's tick-boxes say.
     // The alternative is an administrator who can open Users and Roles but
     // not Member Signups, which nobody means by the word and which the

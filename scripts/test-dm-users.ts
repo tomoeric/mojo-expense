@@ -26,7 +26,9 @@ import {
   DM_PAGE_KEYS, dmAccessFor, getDmUser, isStaff, isSuperEmail, listDmUsers,
   removeDmUser, revokeDmSessions, saveDmUser, setDmUserEnabled, activateDmUser,
 } from "../server/dutch-miller/users.js";
-import { ADMIN_ROLE, DEFAULT_ROLE, saveRole } from "../server/dutch-miller/roles.js";
+import {
+  ADMIN_ROLE, CSC_ROLE, DEFAULT_ROLE, saveRole,
+} from "../server/dutch-miller/roles.js";
 import { db } from "../server/db.js";
 
 let failures = 0;
@@ -163,6 +165,19 @@ try {
   check("a super admin can remove one", (await removeDmUser(BOSS, "super")).ok === true);
   check("removing somebody who is not there is not an error",
     (await removeDmUser("ghost@example.invalid", "super")).ok === true);
+
+  console.log("\n7b. Who may approve a membership");
+  await saveDmUser({ email: HAND, roleKey: ADMIN_ROLE, by: OWNER, byRole: "super" });
+  check("an administrator may NOT", (await dmAccessFor(HAND)).approves === false);
+  await saveDmUser({ email: HAND, roleKey: CSC_ROLE, by: OWNER, byRole: "super" });
+  check("a CSC may", (await dmAccessFor(HAND)).approves === true);
+  check("…and still sees the pages", (await dmAccessFor(HAND)).pages.length > 0);
+  await saveDmUser({ email: HAND, roleKey: DEFAULT_ROLE, by: OWNER, byRole: "super" });
+  check("a general user may not", (await dmAccessFor(HAND)).approves === false);
+  // The owner is not locked out of their own app.
+  check("the super admin may", (await dmAccessFor(OWNER)).approves === true);
+  check("somebody with no account at all may not",
+    (await dmAccessFor("nobody@example.invalid")).approves === false);
 
   console.log("\n8. Addresses");
   check("a non-address is refused", (await refused("bad email", () => saveDmUser({
