@@ -28,6 +28,8 @@ process.env.AZURE_CLIENT_ID ||= "client-for-the-test";
 process.env.AZURE_CLIENT_SECRET ||= "secret-for-the-test";
 process.env.AUTH_ALLOWED ||= "mammothholdings.com";
 process.env.AUTH_ADMINS ||= "eric.s@mammothholdings.com";
+// Pinned separately from AUTH_ADMINS, so the two authorities are told apart.
+process.env.DM_SUPER_ADMINS ||= "owner@mojocarwash.com";
 
 let failures = 0;
 const check = (label: string, ok: boolean, detail = ""): void => {
@@ -39,6 +41,7 @@ type Ran = { nexted: boolean; status: number | null; body: unknown; req: Request
 
 function run(opts: {
   method: string; path: string; cookie?: string; email?: string | null;
+  via?: "microsoft" | "link";
 }): Ran {
   const cleared: string[] = [];
   const out: Ran = { nexted: false, status: null, body: null, req: null as never };
@@ -48,7 +51,14 @@ function run(opts: {
     cookies: opts.cookie ? { [VIEW_AS_COOKIE]: opts.cookie } : {},
     ...(opts.email === null
       ? {}
-      : { user: { id: "1", email: opts.email ?? "eric.s@mammothholdings.com", name: "Eric" } }),
+      : {
+        user: {
+          id: "1",
+          email: opts.email ?? "eric.s@mammothholdings.com",
+          name: "Eric",
+          ...(opts.via ? { via: opts.via } : {}),
+        },
+      }),
   } as unknown as Request;
   const res = {
     clearCookie: (n: string) => { cleared.push(n); return res; },
@@ -142,6 +152,34 @@ console.log("\nWho may do it at all");
   // would put a banner on screen that nothing could dismiss.
   const self = run({ method: "POST", path: "/api/decisions", cookie: "eric.s@mammothholdings.com" });
   check("viewing as yourself is simply not viewing", self.nexted && self.req.viewingAs === undefined);
+}
+
+console.log("\nA Dutch Miller super admin may view too");
+{
+  const r = run({ method: "GET", path: "/api/dutch-miller/me", cookie: BRIAN,
+    email: "owner@mojocarwash.com" });
+  check("the view is on", r.req.viewingAs?.viewed === BRIAN);
+  check("…although they are not in AUTH_ADMINS",
+    !(process.env.AUTH_ADMINS ?? "").includes("owner@mojocarwash.com"));
+  check("…and reads are swapped to the viewed person", r.req.user?.email === BRIAN);
+  const w = run({ method: "POST", path: "/api/dutch-miller/users", cookie: BRIAN,
+    email: "owner@mojocarwash.com" });
+  check("…and they still cannot write while viewing", w.status === 403 && !w.nexted);
+}
+
+console.log("\nThe emailed-link door can never view");
+{
+  // The address is the SUPER ADMIN'S OWN. If this ever passes, an invited
+  // account spelled like the owner inherits the ability to look at
+  // everybody — which is the whole reason authority is judged on the door
+  // rather than on the address.
+  const r = run({ method: "GET", path: "/api/dutch-miller/me", cookie: BRIAN,
+    email: "owner@mojocarwash.com", via: "link" });
+  check("not even spelled as the super admin", r.req.viewingAs === undefined);
+  check("…and they stay themselves", r.req.user?.email === "owner@mojocarwash.com");
+  const a = run({ method: "GET", path: "/api/dutch-miller/me", cookie: BRIAN,
+    email: "eric.s@mammothholdings.com", via: "link" });
+  check("nor spelled as an Emburse admin", a.req.viewingAs === undefined);
 }
 
 console.log(failures === 0 ? "\nPASS\n" : `\n${failures} FAILED\n`);

@@ -115,8 +115,24 @@ the blocks.
   `Mail.Send` as an application permission can otherwise send as ANY mailbox
   in the tenant. **Users → Test email** sends to the admin asking and nobody
   else, and passes the Graph status through for setup.
-- Tests: `scripts/test-dealer-auth.ts` (links, codes, lockout) and
-  `scripts/test-dm-users.ts` (roles, invite states, revocation).
+- **View as, for a super admin.** Reuses the existing `view-as` machinery
+  (`VIEW_AS_COOKIE`, `viewAsMiddleware`), so the hard part — EVERY non-GET
+  is refused while viewing, by allow-list — is already true for Dutch
+  Miller routes. `mayView()` admits an Emburse admin or a pinned super
+  admin, **Microsoft door only**: an invited account spelled like the owner
+  must never inherit it.
+  - **Authority on the REAL person, the view on the VIEWED one.** `/me` and
+    `requirePage` read `req.user` (already swapped), so the rail and the
+    refusals are faithfully theirs — including `staff`, or the viewer would
+    see their own MOJO controls inside somebody else's app. `requireDmAdmin`
+    stays on the real person, same precedent as `requireAdmin`, so the way
+    out never disappears.
+  - Candidates come from `dm_users` only — never an arbitrary address — and
+    include invited accounts, since "what do they see?" is usually asked
+    about somebody just added.
+- Tests: `scripts/test-dealer-auth.ts` (links, codes, lockout),
+  `scripts/test-dm-users.ts` (roles, invite states, revocation) and
+  `scripts/test-view-as.ts` (who may view, and that no view can write).
 - **Still one factor.** The link and the code both land in the same inbox,
   so this is possession-of-email, not MFA. The onboarding form collects a
   contact number precisely so a real second factor (an SMS code at sign-in)

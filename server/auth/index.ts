@@ -13,6 +13,7 @@ import { noteVisit, whileAway } from "../visits.js";
 import { VIEW_AS_COOKIE } from "./view-as.js";
 import { listCredentials } from "../emburse/credentials.js";
 import { allowList, isAllowed, matchesList, parseEmailList } from "./allow.js";
+import { isSuperEmail } from "../dutch-miller/users.js";
 import { APPS, APP_COOKIE, APP_LABEL, appsFor, isAppKey, type AppKey } from "./apps.js";
 export { isAllowed } from "./allow.js";
 
@@ -338,7 +339,12 @@ authRouter.get("/auth/view-as/people", async (req: Request, res: Response) => {
  */
 authRouter.post("/auth/view-as", (req: Request, res: Response) => {
   const real = req.viewingAs?.real ?? req.user;
-  if (isAuthConfigured() && !isAdminUser(real)) {
+  // A Dutch Miller super admin may view as well — same reason, and their
+  // people's views differ page by page. Pinned by configuration, so no
+  // database read. Microsoft door only, like every other authority here.
+  const allowed = isAdminUser(real)
+    || (real !== undefined && isMicrosoft(real) && isSuperEmail(real.email));
+  if (isAuthConfigured() && !allowed) {
     res.status(403).json({ error: "Only an administrator can view as somebody else." });
     return;
   }

@@ -25,7 +25,28 @@
 
 import type { NextFunction, Request, Response } from "express";
 import { isAdminUser, isAuthConfigured } from "./index.js";
-import type { SessionUser } from "./session.js";
+import { isMicrosoft, type SessionUser } from "./session.js";
+import { isSuperEmail } from "../dutch-miller/users.js";
+
+/**
+ * Who may look through somebody else's eyes.
+ *
+ * An Emburse administrator, as before, or a Dutch Miller SUPER admin —
+ * who needs it for the same reason and for a harder case: a dealer's view
+ * depends on pages granted one at a time, and the person on the other end
+ * of the phone has no idea which ones they were given.
+ *
+ * Super is pinned by configuration, so this stays a synchronous check with
+ * no database behind it, which is what lets it run on every request.
+ *
+ * Microsoft-only in both branches. Somebody signed in with an emailed link
+ * can never enter a view, whatever their address says.
+ */
+function mayView(user: SessionUser): boolean {
+  if (!isAuthConfigured()) return true;
+  if (!isMicrosoft(user)) return false;
+  return isAdminUser(user) || isSuperEmail(user.email);
+}
 
 export const VIEW_AS_COOKIE = "view_as";
 
@@ -84,7 +105,7 @@ export function viewAsMiddleware(req: Request, res: Response, next: NextFunction
   const real = req.user;
   // No identity, or not an admin: the cookie means nothing. Not an error —
   // it is cleared below so it cannot keep being offered.
-  if (!real || (isAuthConfigured() && !isAdminUser(real))) {
+  if (!real || !mayView(real)) {
     res.clearCookie(VIEW_AS_COOKIE, { path: "/" });
     return next();
   }

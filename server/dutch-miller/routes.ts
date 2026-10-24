@@ -9,8 +9,9 @@ import {
 } from "./signups.js";
 import {
   DM_PAGES, assertEmail, canAdminister, dmAccessFor, getDmUser, isDmPage, isStaff,
-  listDmUsers, removeDmUser, revokeDmSessions, saveDmUser, setDmUserEnabled,
-  staffDomainList, type DmPageKey, type DmRole, type StoredRole,
+  isSuperEmail, listDmUsers, removeDmUser, revokeDmSessions, saveDmUser,
+  setDmUserEnabled, staffDomainList,
+  type DmPageKey, type DmRole, type StoredRole,
 } from "./users.js";
 import { audit, listAudit } from "./audit.js";
 import { inviteUser } from "./dealer-auth.js";
@@ -41,28 +42,72 @@ export const dutchMillerRouter: IRouter = Router();
  * that true rather than cosmetic.
  */
 dutchMillerRouter.get("/me", async (req: Request, res: Response) => {
-  const who = req.viewingAs?.real ?? req.user;
-  const email = who?.email ?? "";
+  // `req.user` is the VIEWED person inside a view; `viewingAs.real` is who
+  // is actually at the keyboard. The rail is built from the viewed person,
+  // or the view shows the viewer's own app with somebody else's name on it.
+  const real = req.viewingAs?.real ?? req.user;
+  const email = req.user?.email ?? "";
   const access = await dmAccessFor(email);
+  const row = req.viewingAs ? await getDmUser(email) : null;
   res.json({
     ...access,
     email,
     allPages: DM_PAGES,
-    // Whether they are one of ours, which decides the MOJO-side controls.
-    staff: isStaff(who),
-    via: who?.via ?? "microsoft",
+    // Whether the person whose view this is counts as MOJO staff. Inside a
+    // view that is the VIEWED person — showing the viewer's own staff
+    // controls would make the view a lie about what they can see. Writes
+    // are refused while viewing regardless.
+    staff: req.viewingAs
+      ? row?.authMethod === "microsoft" && staffDomainList().includes(email.split("@")[1] ?? "")
+      : isStaff(real),
+    via: req.viewingAs ? (row?.authMethod ?? "link") : (real?.via ?? "microsoft"),
+    viewingAs: req.viewingAs ? { real: req.viewingAs.real.email, viewed: email } : null,
+    // Judged on the REAL person, so the way out never disappears.
+    canViewAs: isStaff(real) && isSuperEmail(real?.email ?? ""),
   });
 });
 
-/** 403 unless this person may open that page. */
+/**
+ * 403 unless this person may open that page.
+ *
+ * Judged on the VIEWED person, so a view is faithful: a super admin
+ * looking at somebody's app is refused exactly what that person is
+ * refused. Safe because nothing can be written while viewing — the
+ * view-as middleware rejects every non-GET before this runs.
+ */
 function requirePage(page: DmPageKey) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    const email = req.viewingAs?.real.email ?? req.user?.email ?? "";
-    const access = await dmAccessFor(email);
+    const access = await dmAccessFor(req.user?.email ?? "");
     if (canAdminister(access) || access.pages.includes(page)) { next(); return; }
     res.status(403).json({ error: "You do not have access to that page." });
   };
 }
+
+/**
+ * Everybody a super admin can look at.
+ *
+ * The Dutch Miller roll, plus nothing else: this is not a way to view as
+ * an arbitrary address. Invited-but-not-set-up accounts are included
+ * deliberately — "what does this person see?" is most often asked about
+ * somebody who has just been added and cannot find something.
+ */
+dutchMillerRouter.get("/view-as/people", async (req: Request, res: Response) => {
+  const real = req.viewingAs?.real ?? req.user;
+  if (!isStaff(real) || !isSuperEmail(real?.email ?? "")) {
+    res.status(403).json({ error: "Only a super administrator can view as somebody else." });
+    return;
+  }
+  const people = (await listDmUsers()).map((u) => ({
+    email: u.email,
+    name: [u.firstName, u.lastName].filter(Boolean).join(" ") || u.email,
+    role: u.role,
+    status: u.status,
+    authMethod: u.authMethod,
+    business: u.business,
+    pages: u.role === "user" ? u.pages.length : DM_PAGES.length,
+  }));
+  res.json({ people });
+});
 
 /** 403 unless this person administers Dutch Miller. */
 async function requireDmAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {

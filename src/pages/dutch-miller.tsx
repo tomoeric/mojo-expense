@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Building2, ChevronRight, Users } from "lucide-react";
+import { DmViewAs } from "@/components/dm-view-as";
 import { UserMenu } from "@/components/user-menu";
 import { DmRfidPage } from "@/pages/dm-rfid";
 import { DmSignupsPage } from "@/pages/dm-signups";
@@ -39,6 +40,9 @@ type Access = {
   staff: boolean;
   via: "microsoft" | "link";
   allPages: readonly PageDef[];
+  /** Set only while a super admin is looking through somebody else's eyes. */
+  viewingAs: { real: string; viewed: string } | null;
+  canViewAs: boolean;
 };
 
 /** Reachable from the user menu as well as the rail — it administers, not works. */
@@ -127,20 +131,38 @@ export function DutchMillerApp({
             <p className="truncate text-sm font-semibold">Dutch Miller</p>
             <p className="truncate text-xs text-white/60">Mammoth Holdings</p>
           </div>
-          {user && (
-            <UserMenu
-              user={user}
-              isAdmin={isAdmin}
-              apps={apps}
-              app="dutch-miller"
-              onSwitchApp={onSwitchApp}
-              product="dutch-miller"
-              dmAdmin={dmAdmin}
-              onDmUsers={() => go(USERS_PAGE.key)}
+          <div className="flex items-center gap-3">
+            <DmViewAs
+              canViewAs={access?.canViewAs ?? false}
+              viewingAs={access?.viewingAs ?? null}
             />
-          )}
+            {user && (
+              <UserMenu
+                user={user}
+                isAdmin={isAdmin}
+                apps={apps}
+                app="dutch-miller"
+                onSwitchApp={onSwitchApp}
+                product="dutch-miller"
+                dmAdmin={dmAdmin}
+                onDmUsers={() => go(USERS_PAGE.key)}
+              />
+            )}
+          </div>
         </div>
       </header>
+
+      {/* Impossible to miss, and the way out is in it. Everything below is
+          somebody else's app: their rail, their pages, their refusals. The
+          server rejects every write while this is on, so a control that
+          looks available here would fail rather than act as them. */}
+      {access?.viewingAs && (
+        <div className="border-b border-amber-500/40 bg-amber-500/15 px-5 py-1.5 text-center text-xs text-amber-900 dark:text-amber-200">
+          Viewing as <strong>{access.viewingAs.viewed}</strong> — this is their app, with
+          their pages and their access. Read-only: nothing can be changed until you go
+          back to {access.viewingAs.real}.
+        </div>
+      )}
 
       <div className="mx-auto flex max-w-[1600px] gap-6 px-5 py-6">
         <nav aria-label="Dutch Miller" className="hidden w-56 shrink-0 space-y-0.5 md:block">
