@@ -79,7 +79,8 @@ as ninja-live-status** — so no new Azure setup beyond one redirect URI.
 | `AZURE_CLIENT_SECRET` | same |
 | `SESSION_SECRET` | **required in production** — `openssl rand -hex 32` |
 | `AUTH_ALLOWED` | optional; comma-separated emails and/or domains |
-| `MAIL_FROM` | mailbox the app sends invitations and sign-in links as, e.g. `noreply@mojocarwash.com`. Needs `Mail.Send` on the Entra app |
+| `MAIL_FROM` | mailbox invitations and sign-in links are sent as, e.g. `noreply@mojocarwash.com` |
+| `MAIL_TENANT_ID` / `MAIL_CLIENT_ID` / `MAIL_CLIENT_SECRET` | optional; a **separate** app registration holding only `Mail.Send`. Falls back to the `AZURE_*` sign-in app when unset |
 | `DM_SUPER_ADMINS` | optional; who may create Dutch Miller administrators. Defaults to `eric.s@mojocarwash.com` |
 | `STAFF_DOMAINS` | optional; the domains that count as MOJO's own. Defaults to `mojocarwash.com,mammothholdings.com` |
 
@@ -94,6 +95,22 @@ MOJO staff is decided by **which door they came through**, never by their
 address — see "The two doors" in `CLAUDE.md` before changing any permission
 check.
 
+### The mail app registration
+
+Sending needs `Mail.Send` as an **application** permission (not delegated —
+nobody is signed in when an invite goes out), with **admin consent granted**.
+
+Prefer a **separate registration** holding only that one permission. The
+sign-in app also carries `Sites.ReadWrite.All` and `Mail.Read`, so adding mail
+to it widens a secret that already reaches SharePoint and the receipt inbox.
+Register an app (no redirect URI — nobody signs into it), create a client
+secret, add `Mail.Send`, grant consent, then set `MAIL_TENANT_ID`,
+`MAIL_CLIENT_ID` and `MAIL_CLIENT_SECRET`. Leave them unset to use the
+sign-in app instead; the Users page says which one is in play.
+
+The sending mailbox can be a **shared mailbox** — no licence needed, and the
+app sets `saveToSentItems: false` so it does not fill up.
+
 `Mail.Send` as an application permission lets the app send as any mailbox in
 the tenant. Restrict it to `MAIL_FROM` with an application access policy:
 
@@ -101,7 +118,16 @@ the tenant. Restrict it to `MAIL_FROM` with an application access policy:
 New-ApplicationAccessPolicy -AppId <AZURE_CLIENT_ID> `
   -PolicyScopeGroupId <mail-enabled group containing only MAIL_FROM> `
   -AccessRight RestrictAccess -Description "mojo-expense login mail"
+
+# Granted for the sender, Denied for anybody else
+Test-ApplicationAccessPolicy -Identity noreply@mojocarwash.com -AppId <AZURE_CLIENT_ID>
+Test-ApplicationAccessPolicy -Identity eric.s@mojocarwash.com  -AppId <AZURE_CLIENT_ID>
 ```
+
+Policies can take up to an hour to apply, so a 403 on the first try is
+usually patience rather than a mistake. **Users → Test email** sends a message
+to yourself and passes the Graph status straight through: 403 is the policy or
+missing consent, 401 an expired secret, 404 no such mailbox.
 
 ### AUTH_ALLOWED format
 

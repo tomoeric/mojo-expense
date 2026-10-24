@@ -107,10 +107,14 @@ the blocks.
   it and clears itself with nothing to sweep up. Never write a token, a
   code, or anything derived from one into `detail`. There is no route that
   edits or deletes a line, deliberately.
-- **Email goes out through Graph** (`server/mail.ts`) using the existing
-  Entra app plus `Mail.Send`, sending as `MAIL_FROM`. Scope it with an
-  application access policy — `Mail.Send` as an application permission can
-  otherwise send as any mailbox in the tenant.
+- **Email goes out through Graph** (`server/mail.ts`), sending as `MAIL_FROM`.
+  It prefers a dedicated registration (`MAIL_TENANT_ID` / `MAIL_CLIENT_ID` /
+  `MAIL_CLIENT_SECRET`) and falls back to the `AZURE_*` sign-in app. Prefer
+  the dedicated one: the sign-in app also holds `Sites.ReadWrite.All` and
+  `Mail.Read`. Scope it with an application access policy either way —
+  `Mail.Send` as an application permission can otherwise send as ANY mailbox
+  in the tenant. **Users → Test email** sends to the admin asking and nobody
+  else, and passes the Graph status through for setup.
 - Tests: `scripts/test-dealer-auth.ts` (links, codes, lockout) and
   `scripts/test-dm-users.ts` (roles, invite states, revocation).
 - **Still one factor.** The link and the code both land in the same inbox,

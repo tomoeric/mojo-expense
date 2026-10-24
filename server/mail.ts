@@ -20,9 +20,27 @@
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
 
-const tenantId = () => (process.env.AZURE_TENANT_ID ?? "").trim();
-const clientId = () => (process.env.AZURE_CLIENT_ID ?? "").trim();
-const clientSecret = () => (process.env.AZURE_CLIENT_SECRET ?? "").trim();
+/**
+ * Its own app registration, or the one that signs people in.
+ *
+ * `MAIL_CLIENT_ID` / `MAIL_CLIENT_SECRET` point at a registration whose
+ * only permission is `Mail.Send`, which is the better arrangement: the
+ * sign-in app also holds `Sites.ReadWrite.All` and `Mail.Read`, so adding
+ * mail to it widens a secret that already reaches SharePoint and the
+ * receipt inbox. Falling back keeps a single-app setup working, and the
+ * boot log says which one is in use so nobody has to guess.
+ */
+const env1 = (...names: string[]): string => {
+  for (const n of names) {
+    const v = (process.env[n] ?? "").trim();
+    if (v) return v;
+  }
+  return "";
+};
+
+const tenantId = () => env1("MAIL_TENANT_ID", "AZURE_TENANT_ID");
+const clientId = () => env1("MAIL_CLIENT_ID", "AZURE_CLIENT_ID");
+const clientSecret = () => env1("MAIL_CLIENT_SECRET", "AZURE_CLIENT_SECRET");
 const sender = () => (process.env.MAIL_FROM ?? "").trim();
 
 export function isMailConfigured(): boolean {
@@ -31,6 +49,10 @@ export function isMailConfigured(): boolean {
 
 /** The sending mailbox, for the settings page. Never a secret. */
 export const mailFrom = (): string => sender();
+
+/** For the boot log and the Users page: which registration sends the mail. */
+export const mailAppIsSeparate = (): boolean =>
+  Boolean((process.env.MAIL_CLIENT_ID ?? "").trim());
 
 let token: { value: string; expiresAt: number } | null = null;
 
@@ -49,8 +71,9 @@ async function appToken(): Promise<string> {
       }),
     });
   if (!res.ok) {
+    const which = mailAppIsSeparate() ? "MAIL_CLIENT_SECRET" : "AZURE_CLIENT_SECRET";
     throw new Error(`Could not get a Graph token (${res.status}). `
-      + "Check AZURE_CLIENT_SECRET has not expired.");
+      + `Check ${which} has not expired.`);
   }
   const body = (await res.json()) as { access_token: string; expires_in: number };
   // A minute of slack, so a token never expires mid-request.
@@ -84,9 +107,16 @@ export async function sendMail(to: string, subject: string, html: string): Promi
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
-    // 403 here is almost always the access policy or a missing Mail.Send
-    // grant rather than anything about this message.
-    throw new Error(`Graph refused to send (${res.status}). ${detail.slice(0, 300)}`);
+    // Two failures account for nearly all of these, and the raw Graph text
+    // names neither, so say them out loud rather than making somebody
+    // search for the error code.
+    const hint = res.status === 403
+      ? " — usually the application access policy has not applied yet (give it an hour), "
+        + "or admin consent for Mail.Send was never granted."
+      : res.status === 404
+        ? ` — no mailbox at ${sender()}.`
+        : "";
+    throw new Error(`Graph refused to send (${res.status})${hint} ${detail.slice(0, 300)}`);
   }
 }
 

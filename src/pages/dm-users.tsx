@@ -99,6 +99,19 @@ export function DmUsersPage({ me }: { me: string }) {
         <div className="flex items-center gap-2">
           <button
             type="button"
+            disabled={mailOff || act.isPending}
+            title={mailOff ? "Set MAIL_FROM first." : "Send yourself a test message"}
+            onClick={() => act.mutate({ url: "/api/dutch-miller/mail-test" }, {
+              onSuccess: (b) => setNote(
+                `Test message sent to you from ${(b as { from: string }).from}.`),
+            })}
+            className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted disabled:opacity-50"
+          >
+            <Mail className="h-4 w-4" />
+            Test email
+          </button>
+          <button
+            type="button"
             onClick={() => setTrail(trail === null ? "" : null)}
             className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted"
           >

@@ -14,7 +14,7 @@ import {
 } from "./users.js";
 import { audit, listAudit } from "./audit.js";
 import { inviteUser } from "./dealer-auth.js";
-import { isMailConfigured, mailFrom } from "../mail.js";
+import { isMailConfigured, layout, mailAppIsSeparate, mailFrom, sendMail } from "../mail.js";
 import { forgetEpoch } from "../auth/index.js";
 
 /**
@@ -198,6 +198,38 @@ dutchMillerRouter.delete("/users/:email", requireDmAdmin, async (req: Request, r
   forgetEpoch(email);
   await audit({ action: "account.removed", subject: email, actor: actor(req) });
   res.json({ users: await listDmUsers() });
+});
+
+/**
+ * Prove the mail setup works, without spending an invite on a real person.
+ *
+ * Sends only to the person asking, so it cannot be turned into a way to
+ * mail arbitrary addresses from a MOJO mailbox. The Graph error is passed
+ * through verbatim, because during setup the status code IS the answer —
+ * 403 is the access policy or missing consent, 401 an expired secret, 404
+ * a mailbox that does not exist.
+ */
+dutchMillerRouter.post("/mail-test", requireDmAdmin, async (req: Request, res: Response) => {
+  const to = actor(req);
+  if (!to) { res.status(400).json({ error: "No address to send to." }); return; }
+  if (!isMailConfigured()) {
+    res.status(400).json({ error: "MAIL_FROM is not set, so there is nothing to test." });
+    return;
+  }
+  try {
+    await sendMail(to, "MOJO Expense — test message", layout(
+      "Mail is working",
+      `<p style="margin:0 0 12px;font-size:15px">If you are reading this, Dutch Miller can
+         send invitations and sign-in links.</p>
+       <p style="margin:0;font-size:13px;color:#71717a">Sent from ${mailFrom()} using the
+         ${mailAppIsSeparate() ? "dedicated mail" : "shared sign-in"} app registration.</p>`,
+      "A test message, sent by you from the Users page.",
+    ));
+    await audit({ action: "code.sent", subject: to, actor: to, detail: "mail test" });
+    res.json({ ok: true, to, from: mailFrom() });
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 /**
