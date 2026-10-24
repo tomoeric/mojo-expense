@@ -14,6 +14,8 @@ import {
   type DmPageKey, type DmRole, type StoredRole,
 } from "./users.js";
 import { audit, listAudit } from "./audit.js";
+import { DEFAULT_ROLE, listRoles, removeRole, saveRole } from "./roles.js";
+import { listDirectory } from "../directory.js";
 import { getSignupNotify, parseRecipients, setSignupNotify } from "./settings.js";
 import { notifySignup, signupEmail } from "./notify.js";
 import { inviteUser } from "./dealer-auth.js";
@@ -125,8 +127,14 @@ const roleOf = async (req: Request): Promise<DmRole> =>
 const actor = (req: Request): string => req.viewingAs?.real.email ?? req.user?.email ?? "";
 
 dutchMillerRouter.get("/users", requireDmAdmin, async (req: Request, res: Response) => {
+  const [users, roles] = await Promise.all([listDmUsers(), listRoles()]);
+  const byKey = new Map(roles.map((r) => [r.key, r.name]));
   res.json({
-    users: await listDmUsers(),
+    // The role NAME is attached here rather than in the row shape: the
+    // key is what anything is decided on, and a name read off a stale
+    // copy is how a renamed role starts showing two different labels.
+    users: users.map((u) => ({ ...u, roleName: byKey.get(u.roleKey) ?? u.roleKey })),
+    roles,
     allPages: DM_PAGES,
     myRole: await roleOf(req),
     mailConfigured: isMailConfigured(),
@@ -137,19 +145,107 @@ dutchMillerRouter.get("/users", requireDmAdmin, async (req: Request, res: Respon
 });
 
 /**
- * Add or change somebody.
+ * Everybody we could add: the staff directory, and anybody already here.
+ *
+ * One list rather than two, with each row saying whether it is already
+ * configured, because "is Dana already set up?" is the question somebody
+ * is actually holding when they open it.
+ */
+dutchMillerRouter.get("/people", requireDmAdmin, async (_req: Request, res: Response) => {
+  const [dir, users] = await Promise.all([
+    listDirectory(staffDomainList()),
+    listDmUsers(),
+  ]);
+  const configured = new Map(users.map((u) => [u.email, u]));
+  const rows = dir.people.map((p) => ({
+    email: p.email,
+    name: p.name,
+    jobTitle: p.jobTitle,
+    department: p.department,
+    source: "directory" as const,
+    enabledInDirectory: p.enabled,
+    user: configured.get(p.email) ?? null,
+  }));
+  // Anybody configured who is not in the directory — every invited dealer,
+  // and any staff account since removed from the tenant.
+  for (const u of users) {
+    if (configured.has(u.email) && rows.some((r) => r.email === u.email)) continue;
+    rows.push({
+      email: u.email,
+      name: [u.firstName, u.lastName].filter(Boolean).join(" ") || u.email,
+      jobTitle: u.business,
+      department: null,
+      source: u.authMethod === "link" ? ("invited" as never) : ("directory" as never),
+      enabledInDirectory: true,
+      user: u,
+    });
+  }
+  res.json({
+    people: rows,
+    directoryAvailable: dir.available,
+    directoryProblem: dir.problem,
+    roles: await listRoles(),
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Roles
+ * ------------------------------------------------------------------ */
+
+/** 403 unless this person is the super administrator. */
+async function requireSuper(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const real = req.viewingAs?.real ?? req.user;
+  if (isStaff(real) && isSuperEmail(real?.email ?? "")) { next(); return; }
+  res.status(403).json({ error: "Only a super administrator can change roles." });
+}
+
+// Readable by any administrator — assigning one means seeing the list.
+dutchMillerRouter.get("/roles", requireDmAdmin, async (_req: Request, res: Response) => {
+  res.json({ roles: await listRoles(), allPages: DM_PAGES });
+});
+
+// Creating and editing them is the super administrator's alone. A role is
+// a grant of access, so an admin who could write one could write themselves
+// a better one.
+dutchMillerRouter.post("/roles", requireSuper, async (req: Request, res: Response) => {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  try {
+    const role = await saveRole({
+      key: typeof body.key === "string" && body.key ? body.key : undefined,
+      name: String(body.name ?? ""),
+      pages: Array.isArray(body.pages) ? body.pages.filter(isDmPage) : [],
+      administers: body.administers === true,
+      by: actor(req),
+    });
+    await audit({
+      action: "role.saved", subject: role.key, actor: actor(req),
+      detail: `${role.name} · ${role.pages.length} page${role.pages.length === 1 ? "" : "s"}`
+        + `${role.administers ? " · administers" : ""}`,
+    });
+    res.json({ role, roles: await listRoles() });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+dutchMillerRouter.delete("/roles/:key", requireSuper, async (req: Request, res: Response) => {
+  const key = String(req.params.key ?? "");
+  const out = await removeRole(key);
+  if (!out.ok) { res.status(409).json({ error: out.reason }); return; }
+  await audit({ action: "role.removed", subject: key, actor: actor(req) });
+  res.json({ roles: await listRoles() });
+});
+
+/**
+ * Add somebody, or change the role they hold.
  *
  * `invite: true` with an address outside our own domains creates a dealer
  * account and emails a one-time link. There is no other way in for an
- * outside address: nobody can sign themselves up, and this route is behind
- * the admin guard.
+ * outside address: nobody can sign themselves up, and this route is
+ * behind the admin guard.
  */
 dutchMillerRouter.post("/users", requireDmAdmin, async (req: Request, res: Response) => {
-  const body = (req.body ?? {}) as {
-    email?: unknown; role?: unknown; pages?: unknown; invite?: unknown;
-  };
-  const role: StoredRole = body.role === "admin" ? "admin" : "user";
-  const pages = Array.isArray(body.pages) ? body.pages.filter(isDmPage) : [];
+  const body = (req.body ?? {}) as { email?: unknown; roleKey?: unknown; invite?: unknown };
   const invite = body.invite === true;
   const by = actor(req);
 
@@ -165,7 +261,7 @@ dutchMillerRouter.post("/users", requireDmAdmin, async (req: Request, res: Respo
       });
       return;
     }
-    if (!invite && !ours) {
+    if (!invite && !ours && !(await getDmUser(email))) {
       res.status(400).json({
         error: "An outside address can only be added by inviting it, so the person "
           + "confirms their own email before the account goes live.",
@@ -174,13 +270,15 @@ dutchMillerRouter.post("/users", requireDmAdmin, async (req: Request, res: Respo
     }
 
     const user = await saveDmUser({
-      email, role, pages, by, byRole: await roleOf(req),
-      authMethod: invite ? "link" : "microsoft",
-      status: invite ? "invited" : "active",
+      email,
+      roleKey: String(body.roleKey ?? DEFAULT_ROLE),
+      by,
+      byRole: await roleOf(req),
+      ...(invite ? { authMethod: "link" as const, status: "invited" as const } : {}),
     });
     await audit({
-      action: "account.created", subject: email, actor: by,
-      detail: `${role}${invite ? " · invited" : " · microsoft"}`,
+      action: "account.updated", subject: email, actor: by,
+      detail: `${user.roleKey}${invite ? " · invited" : ""}`,
     });
 
     if (invite) {

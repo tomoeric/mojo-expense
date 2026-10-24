@@ -93,12 +93,18 @@ export function mailProblem(): string {
 /** The sending mailbox, for the settings page. Never a secret. */
 export const mailFrom = (): string => sender();
 
+/** Enough to call Graph at all — mail also needs a MAIL_FROM on top. */
+export function isGraphConfigured(): boolean {
+  const c = creds();
+  return Boolean(c.tenantId && c.clientId && c.clientSecret);
+}
+
 export const mailAppIsSeparate = (): boolean =>
   Boolean((process.env.MAIL_CLIENT_ID ?? "").trim());
 
 let token: { value: string; expiresAt: number } | null = null;
 
-async function appToken(): Promise<string> {
+export async function graphToken(): Promise<string> {
   if (token && Date.now() < token.expiresAt) return token.value;
   const res = await fetch(
     `https://login.microsoftonline.com/${tenantId()}/oauth2/v2.0/token`,
@@ -132,7 +138,7 @@ export async function sendMail(to: string, subject: string, html: string): Promi
   const res = await fetch(`${GRAPH}/users/${encodeURIComponent(sender())}/sendMail`, {
     method: "POST",
     headers: {
-      authorization: `Bearer ${await appToken()}`,
+      authorization: `Bearer ${await graphToken()}`,
       "content-type": "application/json",
     },
     body: JSON.stringify({

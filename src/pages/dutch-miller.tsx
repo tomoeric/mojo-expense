@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Building2, ChevronRight, SlidersHorizontal, Users } from "lucide-react";
+import { Building2, ChevronRight, Crown, SlidersHorizontal, Users } from "lucide-react";
 import { DmViewAs } from "@/components/dm-view-as";
 import { UserMenu } from "@/components/user-menu";
 import { DmRfidPage } from "@/pages/dm-rfid";
 import { DmSignupsPage } from "@/pages/dm-signups";
+import { DmRolesPage } from "@/pages/dm-roles";
 import { DmSettingsPage } from "@/pages/dm-settings";
 import { DmUsersPage } from "@/pages/dm-users";
 import type { AppKey, SessionUser } from "@/lib/api";
@@ -61,6 +62,12 @@ const ADMIN_PAGES: PageDef[] = [
     children: [],
   },
   {
+    key: "roles",
+    label: "Roles",
+    blurb: "What each kind of person can open. Super administrator only.",
+    children: [],
+  },
+  {
     key: "settings",
     label: "Settings",
     blurb: "Notifications and other Dutch Miller settings.",
@@ -70,6 +77,7 @@ const ADMIN_PAGES: PageDef[] = [
 const USERS_PAGE = ADMIN_PAGES[0]!;
 const ADMIN_ICON: Record<string, React.ReactNode> = {
   users: <Users className="h-3.5 w-3.5 shrink-0" />,
+  roles: <Crown className="h-3.5 w-3.5 shrink-0" />,
   settings: <SlidersHorizontal className="h-3.5 w-3.5 shrink-0" />,
 };
 
@@ -139,7 +147,9 @@ export function DutchMillerApp({
   const dmAdmin = access?.role === "admin" || access?.role === "super";
   const rail: PageDef[] = [
     ...(access?.allPages ?? []).filter((p) => dmAdmin || (access?.pages ?? []).includes(p.key)),
-    ...(dmAdmin ? ADMIN_PAGES : []),
+    ...(dmAdmin
+      ? ADMIN_PAGES.filter((p) => p.key !== "roles" || access?.role === "super")
+      : []),
   ];
   const [route, go] = useRoute(rail);
 
@@ -232,7 +242,8 @@ export function DutchMillerApp({
             />
           )}
           {access && route.page === "rfid-review" && <DmRfidPage />}
-          {access && route.page === "users" && dmAdmin && <DmUsersPage me={access.email} />}
+          {access && route.page === "users" && dmAdmin && <DmUsersPage me={access.email} iAmSuper={access.role === "super"} />}
+          {access && route.page === "roles" && access.role === "super" && <DmRolesPage />}
           {access && route.page === "settings" && dmAdmin && <DmSettingsPage />}
         </div>
       </div>

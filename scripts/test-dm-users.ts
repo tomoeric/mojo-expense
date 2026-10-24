@@ -26,6 +26,7 @@ import {
   DM_PAGE_KEYS, dmAccessFor, getDmUser, isStaff, isSuperEmail, listDmUsers,
   removeDmUser, revokeDmSessions, saveDmUser, setDmUserEnabled, activateDmUser,
 } from "../server/dutch-miller/users.js";
+import { ADMIN_ROLE, DEFAULT_ROLE, saveRole } from "../server/dutch-miller/roles.js";
 import { db } from "../server/db.js";
 
 let failures = 0;
@@ -65,40 +66,43 @@ try {
   check("…which is the point: there is no empty-table free-for-all",
     (await dmAccessFor("nobody@example.invalid")).role === "user");
   check("the pinned account cannot be written over",
-    (await refused("save super", () => saveDmUser({
-      email: OWNER, role: "admin", pages: [], by: OWNER, byRole: "super",
-    }))).includes("super administrator"));
+    (await refused("save super", () => saveDmUser({ email: OWNER, roleKey: ADMIN_ROLE, by: OWNER, byRole: "super" }))).includes("super administrator"));
   check("…nor removed", (await removeDmUser(OWNER, "super")).ok === false);
 
   console.log("\n2. Only super can make an admin");
-  const asAdmin = await refused("promote", () => saveDmUser({
-    email: BOSS, role: "admin", pages: [], by: HAND, byRole: "admin",
-  }));
+  const asAdmin = await refused("promote", () => saveDmUser({ email: BOSS, roleKey: ADMIN_ROLE, by: HAND, byRole: "admin" }));
   check("an admin cannot promote anybody", asAdmin.includes("super administrator"), asAdmin);
-  await saveDmUser({ email: BOSS, role: "admin", pages: [], by: OWNER, byRole: "super" });
+  await saveDmUser({ email: BOSS, roleKey: ADMIN_ROLE, by: OWNER, byRole: "super" });
   check("a super admin can", (await dmAccessFor(BOSS)).role === "admin");
   const demote = await refused("demote", () => saveDmUser({
-    email: BOSS, role: "user", pages: [], by: HAND, byRole: "admin",
+    email: BOSS, roleKey: DEFAULT_ROLE, by: HAND, byRole: "admin",
   }));
   check("…and an admin cannot change an existing admin either",
     demote.includes("super administrator"), demote);
 
-  console.log("\n3. A general user gets only what they were given");
-  await saveDmUser({ email: HAND, role: "user", pages: [PAGE], by: BOSS, byRole: "admin" });
+  console.log("\n3. Pages come from the ROLE, never from the person");
+  const writer = await saveRole({
+    name: "Test Writer", pages: [PAGE], administers: false, by: OWNER,
+  });
+  await saveDmUser({ email: HAND, roleKey: writer.key, by: BOSS, byRole: "admin" });
   const hand = await dmAccessFor(HAND);
-  check("the page they were given", hand.pages.includes(PAGE), hand.pages.join(","));
-  check("…and not every page", hand.pages.length < DM_PAGE_KEYS.length || DM_PAGE_KEYS.length === 1);
+  check("they get the role's page", hand.pages.includes(PAGE), hand.pages.join(","));
+  check("…and the role is named back", hand.roleName === "Test Writer", hand.roleName);
   check("case in the address does not matter",
     (await dmAccessFor(HAND.toUpperCase())).pages.includes(PAGE));
-  await saveDmUser({
-    email: HAND, role: "user", pages: ["not-a-page", PAGE] as never, by: BOSS, byRole: "admin",
+  // The point of roles: one edit, and everybody holding it changes.
+  await saveRole({ key: writer.key, name: "Test Writer", pages: [], administers: false, by: OWNER });
+  check("narrowing the ROLE narrows the person", (await dmAccessFor(HAND)).pages.length === 0);
+  await saveRole({
+    key: writer.key, name: "Test Writer",
+    pages: ["not-a-page", PAGE] as never, administers: false, by: OWNER,
   });
   check("a page key that does not exist is dropped",
     (await dmAccessFor(HAND)).pages.join(",") === PAGE);
 
   console.log("\n4. An invited account has nothing yet");
   await saveDmUser({
-    email: DEALER, role: "user", pages: [PAGE], by: BOSS, byRole: "admin",
+    email: DEALER, roleKey: writer.key, by: BOSS, byRole: "admin",
     authMethod: "link", status: "invited",
   });
   const waiting = await dmAccessFor(DEALER);
@@ -146,11 +150,15 @@ try {
 
   console.log("\n8. Addresses");
   check("a non-address is refused", (await refused("bad email", () => saveDmUser({
-    email: "not an email", role: "user", pages: [], by: OWNER, byRole: "super",
+    email: "not an email", roleKey: DEFAULT_ROLE, by: OWNER, byRole: "super",
   }))).includes("email address"));
+  check("a role that does not exist is refused", (await refused("bad role", () => saveDmUser({
+    email: HAND, roleKey: "no-such-role", by: OWNER, byRole: "super",
+  }))).includes("No such role"));
   check("nobody is staff without a session", !isStaff(null));
 } finally {
   await db().query("DELETE FROM dm_users WHERE email = ANY($1::text[])", [MINE]).catch(() => {});
+  await db().query("DELETE FROM dm_roles WHERE key = 'test-writer'").catch(() => {});
   await db().end().catch(() => {});
 }
 

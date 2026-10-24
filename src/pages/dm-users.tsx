@@ -1,27 +1,25 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Crown, Loader2, Mail, Plus, RotateCcw, ScrollText, ShieldCheck, Trash2, UserRound,
+  Eye, Loader2, Mail, Pencil, Power, ScrollText, Send, ShieldCheck, Trash2,
+  UserRound, Users as UsersIcon,
 } from "lucide-react";
+import { DmPeopleDialog } from "@/pages/dm-people";
 
-type Role = "super" | "admin" | "user";
-type StoredRole = "admin" | "user";
+type Role = { key: string; name: string; pages: string[]; administers: boolean; builtin: boolean };
 type Status = "invited" | "active" | "disabled";
-
 type DmUser = {
-  email: string; role: Role; pages: string[];
+  email: string; roleKey: string; roleName: string;
   authMethod: "microsoft" | "link"; status: Status;
   firstName: string | null; lastName: string | null;
   business: string | null; phone: string | null;
-  invitedAt: string | null; invitedBy: string | null;
-  activatedAt: string | null; lastSeenAt: string | null;
-  updatedAt: string; updatedBy: string;
+  invitedAt: string | null; activatedAt: string | null; lastSeenAt: string | null;
 };
-type PageDef = { key: string; label: string; blurb: string };
 type Payload = {
   users: DmUser[];
-  allPages: readonly PageDef[];
-  myRole: Role;
+  roles: Role[];
+  allPages: readonly { key: string; label: string; blurb: string }[];
+  myRole: "super" | "admin" | "user";
   mailConfigured: boolean;
   mailFrom: string;
   mailProblem: string;
@@ -31,22 +29,24 @@ type Payload = {
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString() : "—");
 
 /**
- * Who may open Dutch Miller, and what they find.
+ * Users — administrators only, and mainly about people OUTSIDE MOJO.
  *
- * Two kinds of account sit in one table, deliberately: MOJO staff who come
- * through Microsoft SSO, and invited dealer staff who sign in with an
- * emailed link. One list is the only way to answer "who can get in", and
- * the two are told apart by a badge rather than by being hidden from each
- * other.
+ * Staff do not need adding here in the ordinary way: they sign in with
+ * Microsoft, and giving one of them a Dutch Miller role is a couple of
+ * clicks in the People dialog, off the staff directory. What this page
+ * exists for is the other direction — inviting a dealer, who has no
+ * Microsoft account and can never create one for themselves.
  *
- * The page list is the server's own registry, so a page added there turns
- * up here with no edit.
+ * Which pages anybody can open is NOT decided here. It comes from the
+ * role they hold, and roles live on their own page under the super
+ * administrator.
  */
-export function DmUsersPage({ me }: { me: string }) {
+export function DmUsersPage({ me, iAmSuper }: { me: string; iAmSuper: boolean }) {
   const qc = useQueryClient();
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
-  const [adding, setAdding] = useState(false);
+  const [inviting, setInviting] = useState(false);
+  const [people, setPeople] = useState(false);
   const [trail, setTrail] = useState<string | null>(null);
 
   const data = useQuery({
@@ -69,25 +69,27 @@ export function DmUsersPage({ me }: { me: string }) {
       if (!res.ok) throw new Error(body.error ?? "That did not work.");
       return body;
     },
-    onSuccess: () => { setError(""); void qc.invalidateQueries({ queryKey: ["dm-users"] }); },
+    onSuccess: () => {
+      setError("");
+      void qc.invalidateQueries({ queryKey: ["dm-users"] });
+      void qc.invalidateQueries({ queryKey: ["dm-people"] });
+    },
     onError: (e) => { setError((e as Error).message); setNote(""); },
   });
 
-  const users = data.data?.users ?? [];
-  const pages = data.data?.allPages ?? [];
-  const iAmSuper = data.data?.myRole === "super";
-  const mailOff = data.data && !data.data.mailConfigured;
-
-  const save = (u: DmUser, patch: { role?: StoredRole; pages?: string[] }) =>
-    act.mutate({
-      url: "/api/dutch-miller/users",
-      body: {
-        email: u.email,
-        role: patch.role ?? (u.role === "super" ? "admin" : u.role),
-        pages: patch.pages ?? u.pages,
-        invite: false,
-      },
+  const viewAs = async (email: string) => {
+    await fetch("/api/auth/view-as", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email }),
     });
+    // A full load: every cached query was answered for somebody else.
+    window.location.href = "/";
+  };
+
+  const users = data.data?.users ?? [];
+  const roles = data.data?.roles ?? [];
+  const mailOff = data.data && !data.data.mailConfigured;
 
   return (
     <div className="space-y-4">
@@ -95,10 +97,11 @@ export function DmUsersPage({ me }: { me: string }) {
         <div>
           <h1 className="text-lg font-semibold">Users</h1>
           <p className="text-sm text-muted-foreground">
-            Who may open Dutch Miller, how they sign in, and which pages they can reach.
+            Invite people outside MOJO and Mammoth Holdings, and set what everybody holds.
+            Administrators only.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             disabled={mailOff || act.isPending}
@@ -120,13 +123,22 @@ export function DmUsersPage({ me }: { me: string }) {
             <ScrollText className="h-4 w-4" />
             Audit trail
           </button>
+          {/* Staff come off the directory rather than being typed out. */}
           <button
             type="button"
-            onClick={() => setAdding(true)}
+            onClick={() => setPeople(true)}
+            className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted"
+          >
+            <UsersIcon className="h-4 w-4" />
+            People
+          </button>
+          <button
+            type="button"
+            onClick={() => setInviting(true)}
             className="inline-flex items-center gap-2 rounded-md bg-foreground px-3 py-2 text-sm font-semibold text-background"
           >
-            <Plus className="h-4 w-4" />
-            Add someone
+            <Send className="h-4 w-4" />
+            Invite someone
           </button>
         </div>
       </div>
@@ -134,7 +146,7 @@ export function DmUsersPage({ me }: { me: string }) {
       {mailOff && (
         <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2.5 text-sm text-amber-900 dark:text-amber-200">
           Invitations cannot be sent yet. {data.data?.mailProblem} MOJO staff can still be
-          added — they sign in with Microsoft.
+          given a role — they sign in with Microsoft.
         </p>
       )}
       {!mailOff && data.data && (
@@ -146,21 +158,18 @@ export function DmUsersPage({ me }: { me: string }) {
       {error && <p className="text-sm font-semibold text-red-600">{error}</p>}
       {note && <p className="text-sm text-emerald-700 dark:text-emerald-400">{note}</p>}
 
-      {adding && (
-        <AddRow
-          pages={pages}
+      {inviting && (
+        <InviteRow
+          roles={roles}
           iAmSuper={iAmSuper}
-          mailConfigured={data.data?.mailConfigured ?? false}
           busy={act.isPending}
-          onCancel={() => setAdding(false)}
+          onCancel={() => setInviting(false)}
           onSave={(body) => act.mutate(
             { url: "/api/dutch-miller/users", body },
             {
               onSuccess: () => {
-                setAdding(false);
-                setNote(body.invite
-                  ? `Invitation sent to ${body.email}.`
-                  : `${body.email} can sign in with Microsoft.`);
+                setInviting(false);
+                setNote(`Invitation sent to ${body.email}.`);
               },
             })}
         />
@@ -173,19 +182,20 @@ export function DmUsersPage({ me }: { me: string }) {
               <th className="px-3 py-2 text-left font-semibold">Person</th>
               <th className="px-3 py-2 text-left font-semibold">Signs in</th>
               <th className="px-3 py-2 text-left font-semibold">Role</th>
-              <th className="px-3 py-2 text-left font-semibold">Pages</th>
               <th className="px-3 py-2 text-left font-semibold">Last seen</th>
               <th className="px-3 py-2" />
             </tr>
           </thead>
           <tbody>
             {data.isPending && (
-              <tr><td colSpan={6} className="px-3 py-6 text-center text-muted-foreground">Loading…</td></tr>
+              <tr><td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">Loading…</td></tr>
             )}
             {!data.isPending && users.length === 0 && (
-              <tr><td colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
-                Nobody added yet. You are a super administrator by configuration, which is
-                why you can see this page.
+              <tr><td colSpan={5} className="px-3 py-8 text-center text-sm text-muted-foreground">
+                Nobody has been given a role yet. Use <strong>People</strong> for MOJO and
+                Mammoth staff, or <strong>Invite someone</strong> for a dealer.
+                <br />
+                You can see this page because you are a super administrator by configuration.
               </td></tr>
             )}
             {users.map((u) => (
@@ -208,71 +218,22 @@ export function DmUsersPage({ me }: { me: string }) {
                   <StatusLine user={u} />
                 </td>
                 <td className="px-3 py-2.5">
-                  {u.authMethod === "microsoft" ? (
-                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                      <ShieldCheck className="h-3 w-3" /> Microsoft
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                      <Mail className="h-3 w-3" /> Email link
-                    </span>
-                  )}
+                  <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                    {u.authMethod === "microsoft"
+                      ? <><ShieldCheck className="h-3 w-3" /> Microsoft</>
+                      : <><Mail className="h-3 w-3" /> Email link</>}
+                  </span>
                 </td>
-                <td className="px-3 py-2.5">
-                  {u.role === "super" ? (
-                    <span className="inline-flex items-center gap-1 text-xs font-semibold">
-                      <Crown className="h-3 w-3" /> Super admin
-                    </span>
-                  ) : (
-                    <select
-                      value={u.role}
-                      // Only a super admin may create or change an administrator.
-                      // The server refuses it either way; this stops the control
-                      // being offered to somebody it will say no to.
-                      disabled={!iAmSuper}
-                      onChange={(e) => save(u, { role: e.target.value as StoredRole })}
-                      className="rounded-md border border-border bg-background px-2 py-1 text-sm disabled:opacity-60"
-                      title={iAmSuper ? undefined
-                        : "Only a super administrator can change this."}
-                    >
-                      <option value="user">General user</option>
-                      <option value="admin">Administrator</option>
-                    </select>
-                  )}
-                </td>
-                <td className="px-3 py-2.5">
-                  {u.role !== "user" ? (
-                    <span className="text-xs text-muted-foreground">Every page.</span>
-                  ) : (
-                    <div className="space-y-1">
-                      {pages.map((p) => (
-                        <label key={p.key} className="flex items-center gap-2 text-xs">
-                          <input
-                            type="checkbox"
-                            checked={u.pages.includes(p.key)}
-                            onChange={(e) => save(u, {
-                              pages: e.target.checked
-                                ? [...u.pages, p.key]
-                                : u.pages.filter((k) => k !== p.key),
-                            })}
-                          />
-                          {p.label}
-                        </label>
-                      ))}
-                    </div>
-                  )}
-                </td>
-                <td className="px-3 py-2.5 text-xs text-muted-foreground">
-                  {when(u.lastSeenAt)}
-                </td>
+                <td className="px-3 py-2.5 text-sm">{u.roleName || u.roleKey}</td>
+                <td className="px-3 py-2.5 text-xs text-muted-foreground">{when(u.lastSeenAt)}</td>
                 <td className="px-3 py-2.5">
                   <RowActions
                     user={u}
+                    roles={roles}
                     iAmSuper={iAmSuper}
                     busy={act.isPending}
-                    onAct={(url, body, method) => act.mutate({ url, body, method }, {
-                      onSuccess: () => setNote(""),
-                    })}
+                    onAct={(url, body, method) => act.mutate({ url, body, method })}
+                    onViewAs={() => void viewAs(u.email)}
                     onTrail={() => setTrail(u.email)}
                   />
                 </td>
@@ -282,16 +243,21 @@ export function DmUsersPage({ me }: { me: string }) {
         </table>
       </div>
 
-      {pages.length > 0 && (
-        <div className="rounded-lg border border-border bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
-          <p className="font-semibold text-foreground">Pages</p>
-          <ul className="mt-1 space-y-0.5">
-            {pages.map((p) => <li key={p.key}>{p.label} — {p.blurb}</li>)}
-          </ul>
-        </div>
-      )}
+      <p className="text-xs text-muted-foreground">
+        Which pages somebody can open comes from the role they hold, not from this page.
+        {iAmSuper
+          ? " Roles are set under Roles in the rail."
+          : " Only a super administrator can change what a role covers."}
+      </p>
 
       {trail !== null && <AuditTrail subject={trail} onClose={() => setTrail(null)} />}
+      {people && (
+        <DmPeopleDialog
+          iAmSuper={iAmSuper}
+          onClose={() => setPeople(false)}
+          onViewAs={(email) => void viewAs(email)}
+        />
+      )}
     </div>
   );
 }
@@ -315,122 +281,158 @@ function StatusLine({ user }: { user: DmUser }) {
   return null;
 }
 
+/**
+ * Edit, view as, switch off — plus resend and remove where they apply.
+ *
+ * An action is ABSENT rather than disabled when it cannot apply. The
+ * server refuses all of these against an administrator unless a super
+ * administrator is asking, and a button that always refuses teaches
+ * people to ignore buttons.
+ */
 function RowActions({
-  user, iAmSuper, busy, onAct, onTrail,
+  user, roles, iAmSuper, busy, onAct, onViewAs, onTrail,
 }: {
   user: DmUser;
+  roles: Role[];
   iAmSuper: boolean;
   busy: boolean;
   onAct: (url: string, body?: unknown, method?: string) => void;
+  onViewAs: () => void;
   onTrail: () => void;
 }) {
+  const [editing, setEditing] = useState(false);
   const base = `/api/dutch-miller/users/${encodeURIComponent(user.email)}`;
-  // The server refuses all of these for a super admin and, for an admin
-  // target, for anybody but a super admin. Not offering them keeps the page
-  // honest about what will happen.
-  const mayTouch = user.role !== "super" && (iAmSuper || user.role !== "admin");
+  const theirs = roles.find((r) => r.key === user.roleKey);
+  const mayTouch = iAmSuper || !theirs?.administers;
 
   return (
-    <div className="flex flex-wrap items-center justify-end gap-1">
-      <button
-        type="button"
-        onClick={onTrail}
-        title="History for this account"
-        className="rounded-md border border-border p-1.5 text-muted-foreground hover:bg-muted"
-      >
-        <ScrollText className="h-3.5 w-3.5" />
-      </button>
-
-      {user.authMethod === "link" && user.status === "invited" && mayTouch && (
+    <div className="flex flex-col items-end gap-1">
+      <div className="flex flex-wrap items-center justify-end gap-1">
+        {mayTouch && (
+          <button
+            type="button"
+            title="Change role"
+            onClick={() => setEditing((v) => !v)}
+            className="rounded-md border border-border p-1.5 text-muted-foreground hover:bg-muted"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+        )}
+        {iAmSuper && user.status === "active" && (
+          <button
+            type="button"
+            title={`View Dutch Miller as ${user.email}`}
+            onClick={onViewAs}
+            className="rounded-md border border-border p-1.5 text-muted-foreground hover:bg-muted"
+          >
+            <Eye className="h-3.5 w-3.5" />
+          </button>
+        )}
+        {mayTouch && (
+          <button
+            type="button"
+            disabled={busy}
+            title={user.status === "disabled" ? "Switch on" : "Switch off"}
+            onClick={() => onAct(`${base}/enabled`, { enabled: user.status === "disabled" })}
+            className={`rounded-md border p-1.5 hover:bg-muted disabled:opacity-50 ${
+              user.status === "disabled"
+                ? "border-red-500/50 text-red-600"
+                : "border-border text-muted-foreground"
+            }`}
+          >
+            <Power className="h-3.5 w-3.5" />
+          </button>
+        )}
         <button
           type="button"
-          disabled={busy}
-          onClick={() => onAct(`${base}/invite`)}
-          className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50"
+          title="History for this account"
+          onClick={onTrail}
+          className="rounded-md border border-border p-1.5 text-muted-foreground hover:bg-muted"
         >
-          Resend invite
+          <ScrollText className="h-3.5 w-3.5" />
         </button>
-      )}
+        {user.authMethod === "link" && user.status === "invited" && mayTouch && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onAct(`${base}/invite`)}
+            className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50"
+          >
+            Resend
+          </button>
+        )}
+        {mayTouch && (
+          <button
+            type="button"
+            disabled={busy}
+            title="Remove"
+            onClick={() => {
+              if (window.confirm(
+                `Remove ${user.email}? Switching off keeps the record and the audit trail.`)) {
+                onAct(base, undefined, "DELETE");
+              }
+            }}
+            className="rounded-md border border-border p-1.5 text-muted-foreground hover:bg-muted disabled:opacity-40"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
 
-      {user.status === "active" && mayTouch && (
-        <button
-          type="button"
-          disabled={busy}
-          title="Sign them out everywhere, without switching the account off"
-          onClick={() => onAct(`${base}/revoke`)}
-          className="rounded-md border border-border p-1.5 text-muted-foreground hover:bg-muted disabled:opacity-50"
-        >
-          <RotateCcw className="h-3.5 w-3.5" />
-        </button>
-      )}
-
-      {mayTouch && (
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => onAct(`${base}/enabled`, { enabled: user.status === "disabled" })}
-          className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50"
-        >
-          {user.status === "disabled" ? "Switch on" : "Switch off"}
-        </button>
-      )}
-
-      {mayTouch && (
-        <button
-          type="button"
-          disabled={busy}
-          title="Remove"
-          onClick={() => {
-            if (window.confirm(
-              `Remove ${user.email}? Switching off keeps the record and the audit trail.`)) {
-              onAct(base, undefined, "DELETE");
-            }
+      {editing && (
+        <select
+          autoFocus
+          value={user.roleKey}
+          onChange={(e) => {
+            setEditing(false);
+            onAct("/api/dutch-miller/users", { email: user.email, roleKey: e.target.value });
           }}
-          className="rounded-md border border-border p-1.5 text-muted-foreground hover:bg-muted disabled:opacity-40"
+          className="rounded-md border border-border bg-background px-2 py-1 text-sm"
         >
-          <Trash2 className="h-3.5 w-3.5" />
-        </button>
+          {roles.map((r) => (
+            <option
+              key={r.key}
+              value={r.key}
+              // Handing out a role that administers is the super
+              // administrator's alone; the server refuses it either way.
+              disabled={r.administers && !iAmSuper}
+            >
+              {r.name}{r.administers ? " (administers)" : ""}
+            </option>
+          ))}
+        </select>
       )}
     </div>
   );
 }
 
-/* ------------------------------------------------------------------ *
- * Adding somebody
- * ------------------------------------------------------------------ */
-
-type NewUser = { email: string; role: StoredRole; pages: string[]; invite: boolean };
-
 /**
- * The one place an address is typed.
+ * Invite somebody from outside.
  *
- * Which door they use is not a free choice: our own addresses sign in with
- * Microsoft, everyone else is invited. The form works that out from the
- * address and says which it is doing, rather than offering a switch that
- * the server will reject half the time.
+ * Outside addresses only: one of our own already has a Microsoft account,
+ * and emailing them a link would be a second, weaker way into the same
+ * app. The server refuses it too.
  */
-function AddRow({
-  pages, iAmSuper, mailConfigured, busy, onSave, onCancel,
+function InviteRow({
+  roles, iAmSuper, busy, onSave, onCancel,
 }: {
-  pages: readonly PageDef[];
+  roles: Role[];
   iAmSuper: boolean;
-  mailConfigured: boolean;
   busy: boolean;
-  onSave: (u: NewUser) => void;
+  onSave: (u: { email: string; roleKey: string; invite: true }) => void;
   onCancel: () => void;
 }) {
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState<StoredRole>("user");
-  const [picked, setPicked] = useState<string[]>([]);
+  const [roleKey, setRoleKey] = useState(
+    roles.find((r) => !r.administers)?.key ?? "general-user");
 
   const domain = email.trim().toLowerCase().split("@")[1] ?? "";
-  // Mirrors the server's STAFF_DOMAINS default. If that list is ever
-  // changed by secret the server still decides; this only picks the wording.
   const ours = ["mojocarwash.com", "mammothholdings.com"].includes(domain);
-  const ready = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim());
+  const ready = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim()) && !ours;
 
   return (
     <div className="space-y-3 rounded-lg border border-border bg-card p-4">
+      <p className="text-sm font-semibold">Invite someone outside MOJO</p>
       <div className="flex flex-wrap items-center gap-2">
         <input
           autoFocus
@@ -440,54 +442,40 @@ function AddRow({
           className="w-72 rounded-md border border-border bg-background px-2.5 py-1.5 text-sm"
         />
         <select
-          value={role}
-          disabled={!iAmSuper}
-          onChange={(e) => setRole(e.target.value as StoredRole)}
-          title={iAmSuper ? undefined : "Only a super administrator can add an administrator."}
-          className="rounded-md border border-border bg-background px-2 py-1.5 text-sm disabled:opacity-60"
+          value={roleKey}
+          onChange={(e) => setRoleKey(e.target.value)}
+          className="rounded-md border border-border bg-background px-2 py-1.5 text-sm"
         >
-          <option value="user">General user</option>
-          <option value="admin">Administrator</option>
+          {roles.map((r) => (
+            <option key={r.key} value={r.key} disabled={r.administers && !iAmSuper}>
+              {r.name}
+            </option>
+          ))}
         </select>
       </div>
 
-      {role === "user" && (
-        <div className="flex flex-wrap gap-3">
-          {pages.map((p) => (
-            <label key={p.key} className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={picked.includes(p.key)}
-                onChange={(e) => setPicked((v) =>
-                  e.target.checked ? [...v, p.key] : v.filter((k) => k !== p.key))}
-              />
-              {p.label}
-            </label>
-          ))}
-        </div>
+      {ours && (
+        <p className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+          That is one of our own addresses. They already sign in with Microsoft — give them a
+          role from <strong>People</strong> instead, with nothing to send.
+        </p>
       )}
-
       {ready && (
         <p className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
-          {ours
-            ? "One of our own addresses — they sign in with the Microsoft button, and the "
-              + "account works straight away."
-            : "An outside address — we will email a one-time invitation. The account stays "
-              + "inactive until they open it, confirm a code and enter their details."}
+          They will get a one-time link. The account stays inactive until they open it,
+          confirm a code and enter their details.
         </p>
       )}
 
       <div className="flex items-center gap-2">
         <button
           type="button"
-          disabled={busy || !ready || (!ours && !mailConfigured)}
-          onClick={() => onSave({
-            email: email.trim(), role, pages: picked, invite: !ours,
-          })}
+          disabled={busy || !ready}
+          onClick={() => onSave({ email: email.trim(), roleKey, invite: true })}
           className="inline-flex items-center gap-2 rounded-md bg-foreground px-3 py-1.5 text-sm font-semibold text-background disabled:opacity-50"
         >
           {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          {ready && !ours ? "Send invitation" : "Add"}
+          Send invitation
         </button>
         <button
           type="button"
@@ -496,11 +484,6 @@ function AddRow({
         >
           Cancel
         </button>
-        {!ours && ready && !mailConfigured && (
-          <span className="text-xs text-amber-700 dark:text-amber-400">
-            Email is not set up, so an invitation cannot be sent.
-          </span>
-        )}
       </div>
     </div>
   );
@@ -529,9 +512,7 @@ function AuditTrail({ subject, onClose }: { subject: string; onClose: () => void
   return (
     <div className="rounded-lg border border-border bg-card">
       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
-        <p className="text-sm font-semibold">
-          Audit trail{subject ? ` · ${subject}` : ""}
-        </p>
+        <p className="text-sm font-semibold">Audit trail{subject ? ` · ${subject}` : ""}</p>
         <button
           type="button"
           onClick={onClose}

@@ -115,6 +115,25 @@ the blocks.
   `Mail.Send` as an application permission can otherwise send as ANY mailbox
   in the tenant. **Users → Test email** sends to the admin asking and nobody
   else, and passes the Graph status through for setup.
+- **Access comes from a named ROLE, never from the person.** `dm_roles`
+  holds name + pages + `administers`; `dm_users.role_key` points at one.
+  The old per-person `pages` column is legacy and is no longer read. Two
+  built-ins are seeded and cannot be renamed, removed, or have their
+  administering changed — the guards and the default assignment are
+  written against them. Their PAGES can be edited.
+  - **`administers` implies every page**, whatever is ticked. An admin who
+    could open Users but not Member Signups is not what anybody means.
+  - A role cannot be deleted while anybody holds it; renaming keeps the
+    key, so holders survive it. Deleting out from under somebody would
+    grant nothing rather than everything (`dmAccessFor` checks).
+  - **Only a SUPER admin writes roles** (`requireSuper`) or hands out one
+    that administers. A role is a grant, so an admin who could write one
+    could write themselves a better one.
+- **The Users page is for inviting people OUTSIDE MOJO.** Staff sign in
+  with Microsoft and get a role from the **People** dialog, which lists
+  the Entra directory (`server/directory.ts`, needs `User.Read.All`) beside
+  everybody already set up. Missing that permission DEGRADES the dialog to
+  the configured users and says why — it never breaks the page.
 - **View as, for a super admin.** Reuses the existing `view-as` machinery
   (`VIEW_AS_COOKIE`, `viewAsMiddleware`), so the hard part — EVERY non-GET
   is refused while viewing, by allow-list — is already true for Dutch
@@ -151,7 +170,8 @@ the blocks.
   `scripts/test-dm-users.ts` (roles, invite states, revocation) and
   `scripts/test-view-as.ts` (who may view, and that no view can write) and
   `scripts/test-notify.ts` (recipient parsing, the three empty-list gates,
-  and what the message carries).
+  and what the message carries) and `scripts/test-roles.ts` (built-ins,
+  renaming keeps holders, a held role cannot be deleted).
 - **Still one factor.** The link and the code both land in the same inbox,
   so this is possession-of-email, not MFA. The onboarding form collects a
   contact number precisely so a real second factor (an SMS code at sign-in)

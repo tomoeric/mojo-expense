@@ -1,5 +1,7 @@
 import { db, ensureSchema } from "../db.js";
 import { isMicrosoft, type SessionUser } from "../auth/session.js";
+import { DM_PAGE_KEYS, isDmPage, type DmPageKey } from "./pages.js";
+import { ADMIN_ROLE, DEFAULT_ROLE, getRole } from "./roles.js";
 
 /**
  * Who may do what inside Dutch Miller.
@@ -69,39 +71,21 @@ export const superListSize = (): number => superList().length;
 export const staffDomainList = (): string[] => staffDomains();
 
 /**
- * The pages a user can be given, one entry per page.
- *
- * A registry rather than a free-text column, so a typo cannot grant access
- * to nothing and look like access to something, and so the Users page can
- * list what exists without anybody keeping a second copy in sync.
+ * The page registry and the role definitions live in their own modules.
+ * Re-exported here because most callers want "access" as one idea.
  */
-export const DM_PAGES = [
-  {
-    key: "member-signups",
-    label: "Member Signups",
-    blurb: "Enrol a member and assign them an RFID tag.",
-    // Sub-pages of one page, not pages of their own: access is granted at
-    // the parent, so a tick-box per tab would only be a way to hand somebody
-    // Add New without Review Existing.
-    children: [
-      { key: "review", label: "Review Existing" },
-      { key: "add", label: "Add New" },
-    ],
-  },
-  {
-    key: "rfid-review",
-    label: "RFID Review",
-    blurb: "Upload RFID numbers and review active and used ones.",
-    children: [],
-  },
-] as const;
+export {
+  DM_PAGES, DM_PAGE_KEYS, isDmPage, type DmPageKey,
+} from "./pages.js";
 
-export type DmPageKey = (typeof DM_PAGES)[number]["key"];
-export const DM_PAGE_KEYS: DmPageKey[] = DM_PAGES.map((p) => p.key);
-export const isDmPage = (v: unknown): v is DmPageKey =>
-  typeof v === "string" && (DM_PAGE_KEYS as string[]).includes(v);
-
-/** What the table can hold. `super` is computed, never stored. */
+/**
+ * `super` is computed from configuration, never stored.
+ *
+ * `admin` and `user` remain on the row as the LEGACY shape, from before
+ * roles were named things. They are kept because a deployment upgrading
+ * in place has rows carrying them, and `ensure()` maps them onto the two
+ * built-in roles on first touch. New writes set `role_key`.
+ */
 export type StoredRole = "admin" | "user";
 export type DmRole = StoredRole | "super";
 export type DmStatus = "invited" | "active" | "disabled";
@@ -135,6 +119,19 @@ ALTER TABLE dm_users ADD COLUMN IF NOT EXISTS last_seen_at timestamptz;
  * the one thing a stateless signed cookie cannot otherwise do.
  */
 ALTER TABLE dm_users ADD COLUMN IF NOT EXISTS session_epoch integer NOT NULL DEFAULT 0;
+/**
+ * The named role this person holds. Pages come from it, not from the row.
+ *
+ * The pages column above is the legacy per-person list and is no longer
+ * read for access; it is left in place so an upgrade loses nothing it
+ * might want to look at later.
+ */
+ALTER TABLE dm_users ADD COLUMN IF NOT EXISTS role_key text;
+/* Carry the old two-level column onto the built-in roles, once. */
+UPDATE dm_users SET role_key = CASE WHEN role = 'admin' THEN '${ADMIN_ROLE}'
+                                    ELSE '${DEFAULT_ROLE}' END
+ WHERE role_key IS NULL;
+CREATE INDEX IF NOT EXISTS dm_users_role ON dm_users (role_key);
 `;
 
 let ready: Promise<void> | null = null;
@@ -157,6 +154,9 @@ export type DmUser = {
   activatedAt: string | null;
   lastSeenAt: string | null;
   sessionEpoch: number;
+  /** The named role. Pages come from it; see `roles.ts`. */
+  roleKey: string;
+  roleName: string;
   updatedAt: string;
   updatedBy: string;
 };
@@ -169,13 +169,13 @@ type Db = {
   email_verified_at: Date | null;
   invited_at: Date | null; invited_by: string | null;
   activated_at: Date | null; last_seen_at: Date | null;
-  session_epoch: number;
+  session_epoch: number; role_key: string | null;
   updated_at: Date; updated_by: string;
 };
 
 const COLS = `email, role, pages, auth_method, status, first_name, last_name,
   business, phone, email_verified_at, invited_at, invited_by, activated_at,
-  last_seen_at, session_epoch, updated_at, updated_by`;
+  last_seen_at, session_epoch, role_key, updated_at, updated_by`;
 
 const shape = (r: Db): DmUser => ({
   email: r.email,
@@ -194,6 +194,10 @@ const shape = (r: Db): DmUser => ({
   activatedAt: r.activated_at?.toISOString() ?? null,
   lastSeenAt: r.last_seen_at?.toISOString() ?? null,
   sessionEpoch: r.session_epoch,
+  roleKey: r.role_key ?? (r.role === "admin" ? ADMIN_ROLE : DEFAULT_ROLE),
+  // Filled in by the callers that have the role table to hand; the key is
+  // what everything is decided on.
+  roleName: "",
   updatedAt: r.updated_at.toISOString(),
   updatedBy: r.updated_by,
 });
@@ -214,6 +218,9 @@ export async function getDmUser(email: string): Promise<DmUser | null> {
 
 export type Access = {
   role: DmRole;
+  /** The named role behind it, for display. Empty for a pinned super admin. */
+  roleKey: string;
+  roleName: string;
   pages: DmPageKey[];
   status: DmStatus;
   /** A super admin with no row — they still have everything. */
@@ -223,32 +230,52 @@ export type Access = {
 /**
  * What this person may do.
  *
- * A super admin needs no row. Everybody else needs an ACTIVE one: an
- * invited-but-not-yet-set-up account and a disabled one both come back with
- * nothing, so neither can reach a page while it waits or after it is
- * switched off.
+ * A super admin needs no row and holds no role. Everybody else needs an
+ * ACTIVE one: an invited-but-not-yet-set-up account and a disabled one
+ * both come back with nothing, so neither can reach a page while it waits
+ * or after it is switched off.
  *
- * There is no "empty table means everybody is an admin" fallback any more.
- * It existed so the first person was not locked out of the page that fills
- * the table in; a pinned super admin does that job without ever leaving the
- * door open to everybody else.
+ * Pages come from the ROLE, never from the person. That is the whole
+ * point of roles — "what can a service writer see?" has one answer, in
+ * one place, rather than thirty rows to compare.
  */
 export async function dmAccessFor(email: string): Promise<Access> {
   await ensure();
   if (isSuperEmail(email)) {
-    return { role: "super", pages: [...DM_PAGE_KEYS], status: "active", pinned: true };
+    return {
+      role: "super", roleKey: "", roleName: "Super administrator",
+      pages: [...DM_PAGE_KEYS], status: "active", pinned: true,
+    };
   }
   const row = await getDmUser(email);
-  if (!row || row.status !== "active") {
-    return { role: "user", pages: [], status: row?.status ?? "invited", pinned: false };
-  }
-  if (row.role === "admin") {
-    return { role: "admin", pages: [...DM_PAGE_KEYS], status: "active", pinned: false };
-  }
-  return { role: "user", pages: row.pages, status: "active", pinned: false };
+  const none: Access = {
+    role: "user", roleKey: row?.roleKey ?? DEFAULT_ROLE, roleName: "",
+    pages: [], status: row?.status ?? "invited", pinned: false,
+  };
+  if (!row || row.status !== "active") return none;
+
+  // A role deleted out from under somebody grants nothing rather than
+  // everything. `removeRole` refuses while anybody holds it, so this is
+  // the belt to that brace.
+  const def = await getRole(row.roleKey);
+  if (!def) return none;
+
+  return {
+    role: def.administers ? "admin" : "user",
+    roleKey: def.key,
+    roleName: def.name,
+    // Administering means EVERY page, whatever the role's tick-boxes say.
+    // The alternative is an administrator who can open Users and Roles but
+    // not Member Signups, which nobody means by the word and which the
+    // role editor does not offer either — it greys the page list out.
+    pages: def.administers ? [...DM_PAGE_KEYS] : def.pages,
+    status: "active",
+    pinned: false,
+  };
 }
 
-export const canAdminister = (a: Access): boolean => a.role === "admin" || a.role === "super";
+export const canAdminister = (a: Access): boolean =>
+  a.role === "admin" || a.role === "super";
 
 /* ------------------------------------------------------------------ *
  * Writing
@@ -272,8 +299,8 @@ export function assertEmail(email: string): string {
  */
 export async function saveDmUser(opts: {
   email: string;
-  role: StoredRole;
-  pages: DmPageKey[];
+  /** A key from `dm_roles`. */
+  roleKey: string;
   by: string;
   byRole: DmRole;
   authMethod?: AuthMethod;
@@ -285,26 +312,33 @@ export async function saveDmUser(opts: {
     throw new Error(
       "That account is a super administrator, set in configuration rather than here.");
   }
-  if (opts.role === "admin" && opts.byRole !== "super") {
-    throw new Error("Only a super administrator can make somebody an administrator.");
-  }
+
+  const role = await getRole(opts.roleKey);
+  if (!role) throw new Error("No such role.");
+
+  // Only a super admin may hand out a role that administers, or take one
+  // away. An admin who could do either could promote themselves, and the
+  // difference between the two levels would be a label.
   const existing = await getDmUser(who);
-  if (existing && existing.role === "admin" && opts.byRole !== "super") {
-    throw new Error("Only a super administrator can change an administrator.");
+  const wasAdmin = existing ? (await getRole(existing.roleKey))?.administers === true : false;
+  if ((role.administers || wasAdmin) && opts.byRole !== "super") {
+    throw new Error(
+      role.administers && !wasAdmin
+        ? "Only a super administrator can give somebody an administrator role."
+        : "Only a super administrator can change an administrator.");
   }
 
-  const keep = [...new Set(opts.pages.filter(isDmPage))];
   const method = opts.authMethod ?? existing?.authMethod ?? "microsoft";
   const status = opts.status ?? existing?.status ?? (method === "link" ? "invited" : "active");
 
   await db().query(
-    `INSERT INTO dm_users (email, role, pages, auth_method, status, updated_at, updated_by)
-          VALUES ($1, $2, $3::jsonb, $4, $5, now(), $6)
+    `INSERT INTO dm_users (email, role, role_key, pages, auth_method, status, updated_at, updated_by)
+          VALUES ($1, $2, $3, '[]'::jsonb, $4, $5, now(), $6)
      ON CONFLICT (email) DO UPDATE
-        SET role = EXCLUDED.role, pages = EXCLUDED.pages,
+        SET role = EXCLUDED.role, role_key = EXCLUDED.role_key,
             auth_method = EXCLUDED.auth_method, status = EXCLUDED.status,
             updated_at = now(), updated_by = EXCLUDED.updated_by`,
-    [who, opts.role, JSON.stringify(keep), method, status, opts.by]);
+    [who, role.administers ? "admin" : "user", role.key, method, status, opts.by]);
   return (await getDmUser(who))!;
 }
 
@@ -361,7 +395,7 @@ export async function setDmUserEnabled(
   }
   const row = await getDmUser(who);
   if (!row) return { ok: false, reason: "No such person." };
-  if (row.role === "admin" && byRole !== "super") {
+  if ((await getRole(row.roleKey))?.administers && byRole !== "super") {
     return { ok: false, reason: "Only a super administrator can switch off an administrator." };
   }
   const next = enabled ? (row.activatedAt ? "active" : "invited") : "disabled";
@@ -398,7 +432,7 @@ export async function removeDmUser(
   }
   const row = await getDmUser(who);
   if (!row) return { ok: true };
-  if (row.role === "admin" && byRole !== "super") {
+  if ((await getRole(row.roleKey))?.administers && byRole !== "super") {
     return { ok: false, reason: "Only a super administrator can remove an administrator." };
   }
   await db().query("DELETE FROM dm_users WHERE email = $1", [who]);
