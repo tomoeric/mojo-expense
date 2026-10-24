@@ -154,7 +154,7 @@ export function DutchMillerApp({
         <div className="mx-auto flex max-w-[1800px] items-center justify-between gap-4 px-5 py-3">
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold">Dutch Miller</p>
-            <p className="truncate text-xs text-white/60">Mammoth Holdings</p>
+            <p className="truncate text-xs text-white/60">Mammoth Holdings — SUDS Car Wash</p>
           </div>
           <div className="flex items-center gap-3">
             <DmViewAs

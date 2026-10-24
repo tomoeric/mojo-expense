@@ -49,7 +49,7 @@ export function DmPeopleDialog({
 }) {
   const qc = useQueryClient();
   const [filter, setFilter] = useState("");
-  const [show, setShow] = useState<"all" | "configured" | "not">("all");
+  const [show, setShow] = useState<"all" | "microsoft" | "invited" | "not">("all");
   const [editing, setEditing] = useState<Person | null>(null);
   const [inviting, setInviting] = useState(false);
   const [trail, setTrail] = useState<string | null>(null);
@@ -89,7 +89,8 @@ export function DmPeopleDialog({
   const people = useMemo(() => {
     const q = filter.trim().toLowerCase();
     return (data.data?.people ?? []).filter((p) => {
-      if (show === "configured" && !p.user) return false;
+      if (show === "microsoft" && p.source !== "microsoft") return false;
+      if (show === "invited" && p.source !== "invited") return false;
       if (show === "not" && p.user) return false;
       if (q === "") return true;
       return p.email.includes(q) || p.name.toLowerCase().includes(q)
@@ -98,10 +99,12 @@ export function DmPeopleDialog({
   }, [data.data, filter, show]);
 
   const mailOff = data.data && !data.data.mailConfigured;
+  const all = data.data?.people ?? [];
   const counts = {
-    all: data.data?.people.length ?? 0,
-    configured: data.data?.people.filter((p) => p.user).length ?? 0,
-    not: data.data?.people.filter((p) => !p.user).length ?? 0,
+    all: all.length,
+    microsoft: all.filter((p) => p.source === "microsoft").length,
+    invited: all.filter((p) => p.source === "invited").length,
+    not: all.filter((p) => !p.user).length,
   };
 
   return (
@@ -172,7 +175,12 @@ export function DmPeopleDialog({
               className="w-full bg-transparent text-sm outline-none"
             />
           </div>
-          {([["all", "Everyone"], ["configured", "Has a role"], ["not", "No role yet"]] as const)
+          {([
+            ["all", "Everyone"],
+            ["microsoft", "MOJO staff"],
+            ["invited", "Outside"],
+            ["not", "No role yet"],
+          ] as const)
             .map(([k, label]) => (
               <button
                 key={k}
@@ -234,9 +242,7 @@ export function DmPeopleDialog({
                       you
                     </span>
                   )}
-                  {p.source === "invited"
-                    ? <Mail className="h-3 w-3 shrink-0 text-muted-foreground" />
-                    : <ShieldCheck className="h-3 w-3 shrink-0 text-muted-foreground" />}
+                  <SourceTag source={p.source} />
                   {p.pinnedSuper && (
                     <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
                       super admin
@@ -248,6 +254,10 @@ export function DmPeopleDialog({
                   {p.business ? ` · ${p.business}` : ""}
                   {p.source === "microsoft" && !p.user ? " · allowed, no role yet" : ""}
                 </p>
+              </div>
+
+              <div className="hidden w-28 shrink-0 text-xs text-muted-foreground sm:block">
+                {p.source === "microsoft" ? "Microsoft" : "Email link"}
               </div>
 
               <div className="w-44 shrink-0 text-xs">
@@ -372,6 +382,28 @@ export function DmPeopleDialog({
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * Which door somebody comes through, as a word rather than an icon.
+ *
+ * The distinction is the one that decides what they can be trusted
+ * with — a tenant account is MOJO's own and carries the staff-side
+ * controls; an invited one never can, whatever its address spells. An
+ * icon makes that a thing to decode; the word does not.
+ */
+function SourceTag({ source }: { source: "microsoft" | "invited" }) {
+  return source === "microsoft" ? (
+    <span className="inline-flex items-center gap-1 rounded-full bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700 dark:text-sky-300">
+      <ShieldCheck className="h-2.5 w-2.5" />
+      MOJO
+    </span>
+  ) : (
+    <span className="inline-flex items-center gap-1 rounded-full bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700 dark:text-violet-300">
+      <Mail className="h-2.5 w-2.5" />
+      Outside
+    </span>
   );
 }
 
