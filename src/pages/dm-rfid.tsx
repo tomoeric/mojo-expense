@@ -163,24 +163,26 @@ export function DmRfidPage() {
         />
       </div>
 
-      <div className="overflow-hidden rounded-lg border border-border">
+      <div className="overflow-x-auto rounded-lg border border-border">
         <table className="w-full text-sm">
           <thead className="bg-muted/50 text-xs text-muted-foreground">
             <tr>
               <th className="px-3 py-2 text-left font-semibold">Number</th>
               <th className="px-3 py-2 text-left font-semibold">Status</th>
               <th className="px-3 py-2 text-left font-semibold">Added</th>
+              <th className="px-3 py-2 text-left font-semibold">Added by</th>
               <th className="px-3 py-2 text-left font-semibold">Used</th>
+              <th className="px-3 py-2 text-left font-semibold">Used by</th>
               <th className="px-3 py-2 text-left font-semibold">Used for</th>
               <th className="px-3 py-2" />
             </tr>
           </thead>
           <tbody>
             {list.isPending && (
-              <tr><td colSpan={6} className="px-3 py-6 text-center text-muted-foreground">Loading…</td></tr>
+              <tr><td colSpan={8} className="px-3 py-6 text-center text-muted-foreground">Loading…</td></tr>
             )}
             {list.data?.rows.length === 0 && (
-              <tr><td colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
+              <tr><td colSpan={8} className="px-3 py-6 text-center text-muted-foreground">
                 Nothing here yet.
               </td></tr>
             )}
@@ -197,8 +199,17 @@ export function DmRfidPage() {
                   </span>
                 </td>
                 <td className="px-3 py-2 text-muted-foreground">{day(r.addedAt)}</td>
-                <td className="px-3 py-2 text-muted-foreground">
-                  {r.usedAt ? `${day(r.usedAt)}${r.usedBy ? ` · ${r.usedBy}` : ""}` : "—"}
+                {/* Which upload it arrived on, for tracing a bad file back
+                    to the person and the batch that brought it in. */}
+                <td
+                  className="max-w-40 truncate px-3 py-2 text-muted-foreground"
+                  title={r.batch ? `${r.addedBy || "—"} · batch ${r.batch}` : r.addedBy}
+                >
+                  {r.addedBy || "—"}
+                </td>
+                <td className="px-3 py-2 text-muted-foreground">{day(r.usedAt)}</td>
+                <td className="max-w-40 truncate px-3 py-2 text-muted-foreground" title={r.usedBy ?? ""}>
+                  {r.usedBy || "—"}
                 </td>
                 <td className="px-3 py-2 text-muted-foreground">{r.usedFor ?? "—"}</td>
                 <td className="px-3 py-2 text-right">
