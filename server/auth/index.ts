@@ -11,6 +11,14 @@ import { isDbConfigured } from "../db.js";
 import { noteVisit, whileAway } from "../visits.js";
 import { VIEW_AS_COOKIE } from "./view-as.js";
 import { listCredentials } from "../emburse/credentials.js";
+import { allowList, isAllowed, matchesList, parseEmailList } from "./allow.js";
+import { APPS, APP_COOKIE, APP_LABEL, appsFor, isAppKey, type AppKey } from "./apps.js";
+export { isAllowed } from "./allow.js";
+
+/** Entry count, for the boot log — never the addresses themselves. */
+export function allowListSize(): number {
+  return allowList().length;
+}
 
 /**
  * Microsoft SSO via Entra ID (OpenID Connect + PKCE), matching how
@@ -27,45 +35,6 @@ export function isAuthConfigured(): boolean {
   return Boolean(tenantId() && clientId() && clientSecret());
 }
 
-/**
- * Optional allow-list, on top of the tenant restriction the issuer already
- * enforces. Emails and/or domains:
- *   AUTH_ALLOWED=ap@mojocarwash.com, eric.s@mojocarwash.com
- *   AUTH_ALLOWED=mojocarwash.com
- * Empty (the default) means anyone in the tenant may sign in.
- *
- * Parsing is deliberately forgiving, because this is typed into a Secrets box
- * by hand: entries may be separated by commas, spaces or newlines; surrounding
- * quotes are stripped (pasting `"a@b.com"` should not silently lock everyone
- * out); and a domain written `@mojocarwash.com` is accepted as well as bare.
- */
-function parseList(raw: string | undefined): string[] {
-  return (raw ?? "")
-    .split(/[,\s]+/)
-    .map((s) => s.trim().toLowerCase().replace(/^["']|["']$/g, ""))
-    .map((s) => (s.startsWith("@") ? s.slice(1) : s))
-    .filter(Boolean);
-}
-
-function allowList(): string[] {
-  return parseList(process.env.AUTH_ALLOWED);
-}
-
-/** Entry count, for the boot log — never the addresses themselves. */
-export function allowListSize(): number {
-  return allowList().length;
-}
-
-export function isAllowed(email: string): boolean {
-  return matches(email, allowList());
-}
-
-function matches(email: string, list: string[]): boolean {
-  if (list.length === 0) return true;
-  const lower = email.toLowerCase();
-  const domain = lower.split("@")[1] ?? "";
-  return list.includes(lower) || list.includes(domain);
-}
 
 /**
  * Who may change settings that affect everyone.
@@ -77,11 +46,11 @@ function matches(email: string, list: string[]): boolean {
  * settings they need in order to set the list.
  */
 function adminList(): string[] {
-  return parseList(process.env.AUTH_ADMINS);
+  return parseEmailList(process.env.AUTH_ADMINS);
 }
 
 export function isAdmin(email: string): boolean {
-  return matches(email, adminList());
+  return matchesList(email, adminList());
 }
 
 export function adminListSize(): number {
@@ -209,8 +178,69 @@ authRouter.get("/auth/user", (req: Request, res: Response) => {
     viewingAs: req.viewingAs
       ? { real: req.viewingAs.real.email, viewed: req.viewingAs.viewed }
       : null,
+    // WHICH APP. Judged on the real person, like isAdmin above: a view
+    // changes whose data is on screen, never which product you are in.
+    //
+    // With sign-in off there is nobody to assign, so everything is on —
+    // the same answer isAdmin gives, for the same reason.
+    apps: realAppsFor(req),
+    app: realAppFor(req),
   });
 });
+
+/** Every app the person actually at the keyboard may use. */
+function realAppsFor(req: Request): AppKey[] {
+  const real = req.viewingAs?.real ?? req.user;
+  if (!isAuthConfigured()) return [...APPS];
+  return real ? appsFor(real.email) : [];
+}
+
+/** The one they are in, from the cookie, narrowed to what they hold. */
+function realAppFor(req: Request): AppKey | null {
+  const mine = realAppsFor(req);
+  if (mine.length === 0) return null;
+  const want = req.cookies?.[APP_COOKIE];
+  return isAppKey(want) && mine.includes(want) ? want : mine[0]!;
+}
+
+/**
+ * Switch app.
+ *
+ * A preference, stored in a cookie, and checked on the way in AND on the
+ * way out: a cookie naming an app somebody does not hold is ignored
+ * everywhere it is read, so setting it by hand buys nothing. Refused
+ * outright here as well, because an endpoint that silently does nothing is
+ * worse to debug than one that says no.
+ */
+authRouter.post("/auth/app", (req: Request, res: Response) => {
+  const want = String((req.body as { app?: unknown } | undefined)?.app ?? "");
+  const mine = realAppsFor(req);
+  if (!isAppKey(want) || !mine.includes(want)) {
+    res.status(403).json({ error: "You do not have access to that app." });
+    return;
+  }
+  res.cookie(APP_COOKIE, want, {
+    httpOnly: false, sameSite: "lax", secure: true, path: "/",
+    maxAge: SESSION_TTL_MS,
+  });
+  res.json({ app: want, apps: mine });
+});
+
+/**
+ * Refuse a request that belongs to an app this person does not hold.
+ *
+ * The shell hides the other product's pages, and hiding is not access
+ * control: the routes are still on the same origin and a signed-in person
+ * can call them. This is the part that actually separates the two.
+ */
+export function requireApp(app: AppKey) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    if (!isAuthConfigured()) { next(); return; }
+    const real = req.viewingAs?.real ?? req.user;
+    if (real && appsFor(real.email).includes(app)) { next(); return; }
+    res.status(403).json({ error: `You do not have access to ${APP_LABEL[app]}.` });
+  };
+}
 
 /**
  * Who an admin can look at, and swapping to one of them.

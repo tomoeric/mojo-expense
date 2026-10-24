@@ -4,12 +4,16 @@ import {
   ListChecks, FileText, BarChart3, Loader2, Upload, Tags, MapPin, Building2, Scale, BookOpen,
   SlidersHorizontal, ChevronRight, ChevronDown, type LucideIcon,
 } from "lucide-react";
-import { useAuth, useConfig, useReports, type ExpenseReport } from "@/lib/api";
+import {
+  useAuth, useConfig, useReports,
+  type AppKey, type ExpenseReport, type SessionUser,
+} from "@/lib/api";
 import { useDecisions } from "@/lib/decisions";
 import { SectionTitle, LiveStrip, SegmentedControl, Empty } from "@/components/ui";
 import { NotConnected } from "@/components/not-connected";
 import { SignIn } from "@/components/sign-in";
 import { UserMenu } from "@/components/user-menu";
+import { DutchMillerPage } from "@/pages/dutch-miller";
 import { ViewAs } from "@/components/view-as";
 import { ReportDrawer } from "@/components/report-drawer";
 import { QueuePage } from "@/pages/queue";
@@ -154,6 +158,27 @@ export function App() {
 
   const queryClient = useQueryClient();
   const auth = useAuth();
+
+  /**
+   * Switch product.
+   *
+   * A full reload rather than a re-render: the two shells have entirely
+   * different polling, routes and caches, and swapping them in place
+   * leaves the old app's queries running against endpoints the server
+   * has just started refusing.
+   */
+  const switchApp = (next: AppKey) => {
+    void fetch("/api/auth/app", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ app: next }),
+    }).then((res) => {
+      if (res.ok) {
+        window.location.hash = "";
+        window.location.reload();
+      }
+    });
+  };
   const config = useConfig();
 
   // Only fetch reports once we know the viewer is allowed to see them —
@@ -215,6 +240,35 @@ export function App() {
     return <SignIn authConfigured />;
   }
 
+  /*
+   * WHICH APP. One deployment, two products, and somebody assigned to one
+   * must not get the other's shell at all.
+   *
+   * Rendered as a different app rather than as hidden nav items: the
+   * Emburse chrome is the queue, the rail, the drawer and a dozen polling
+   * hooks, and "Dutch Miller with all of that greyed out" is not a second
+   * product, it is the first one with the labels filed off. The server
+   * refuses the other side's routes regardless — this is the shell, not
+   * the control.
+   */
+  const apps = auth.data?.apps ?? [];
+  const activeApp = auth.data?.app ?? apps[0] ?? "emburse";
+
+  if (auth.data?.user && apps.length === 0) {
+    return <NoAppAssigned email={auth.data.user.email} />;
+  }
+
+  if (activeApp === "dutch-miller") {
+    return (
+      <DutchMillerApp
+        user={auth.data?.user ?? null}
+        isAdmin={auth.data?.isAdmin ?? false}
+        apps={apps}
+        onSwitchApp={switchApp}
+      />
+    );
+  }
+
   // A refetch can replace the open report; keep the drawer showing live data.
   const openReport = open ? (data?.reports.find((r) => r.id === open.report.id) ?? open.report) : null;
 
@@ -237,7 +291,15 @@ export function App() {
             {auth.data?.user && (
               <ViewAs isAdmin={auth.data.isAdmin} viewingAs={auth.data.viewingAs} />
             )}
-            {auth.data?.user && <UserMenu user={auth.data.user} isAdmin={auth.data.isAdmin} />}
+            {auth.data?.user && (
+              <UserMenu
+                user={auth.data.user}
+                isAdmin={auth.data.isAdmin}
+                apps={apps}
+                app={activeApp}
+                onSwitchApp={switchApp}
+              />
+            )}
           </div>
         </div>
       </header>
@@ -422,6 +484,78 @@ export function App() {
           auditConfigured={config.data?.auditConfigured ?? false}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * The Dutch Miller shell.
+ *
+ * Deliberately its own header rather than a reuse of the Emburse one:
+ * that header is built around the queue's nav, and borrowing it would put
+ * Emburse's sections in front of somebody who cannot open them. The user
+ * menu is shared, because identity, sign-out and the app switcher are the
+ * same job in both products.
+ */
+function DutchMillerApp({
+  user,
+  isAdmin,
+  apps,
+  onSwitchApp,
+}: {
+  user: SessionUser | null;
+  isAdmin: boolean;
+  apps: AppKey[];
+  onSwitchApp: (next: AppKey) => void;
+}) {
+  return (
+    <div className="min-h-screen">
+      <header className="border-b border-border bg-black text-white">
+        <div className="mx-auto flex max-w-[1800px] items-center justify-between gap-4 px-5 py-3">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold">Dutch Miller</p>
+            <p className="truncate text-xs text-white/60">Mammoth Holdings</p>
+          </div>
+          {user && (
+            <UserMenu
+              user={user}
+              isAdmin={isAdmin}
+              apps={apps}
+              app="dutch-miller"
+              onSwitchApp={onSwitchApp}
+            />
+          )}
+        </div>
+      </header>
+      <DutchMillerPage />
+    </div>
+  );
+}
+
+/**
+ * Signed in, and assigned to nothing.
+ *
+ * Only reachable once somebody has been removed from both lists, which is
+ * a configuration mistake rather than a state to design around — but it
+ * has to say so plainly. The alternative is an empty Emburse shell whose
+ * every request answers 403, which reads as the app being broken.
+ */
+function NoAppAssigned({ email }: { email: string }) {
+  return (
+    <div className="grid min-h-screen place-items-center p-6">
+      <div className="max-w-md rounded-xl border border-border bg-card p-6 text-center">
+        <p className="text-sm font-semibold">No app is assigned to this account</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          You are signed in as {email}, but it has not been given access to Emburse or
+          Dutch Miller. An administrator can add it to the relevant list.
+        </p>
+        <a
+          href="/api/logout"
+          className="mt-4 inline-block rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted"
+        >
+          Sign out
+        </a>
+      </div>
     </div>
   );
 }

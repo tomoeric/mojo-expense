@@ -38,6 +38,34 @@ Neither block is optional; a reply that ends without both is incomplete. If a
 step beyond restart is needed (re-run the import, change a secret), say so after
 the blocks.
 
+## Two apps on one deployment
+
+- **Emburse and Dutch Miller share this VM, this sign-in and this origin, and
+  nothing else.** Assignment is by email in `server/auth/apps.ts`. The rule in
+  one sentence: **Dutch Miller is opt-in by list, and Emburse is open to
+  everyone who may sign in EXCEPT people assigned to Dutch Miller, unless they
+  are assigned to Emburse as well.**
+- **The asymmetry in the defaults is deliberate.** `EMBURSE_ALLOWED` unset means
+  "carry on as before" — a list that started empty would lock out every
+  reviewer on the deploy that introduced it. `DUTCH_MILLER_ALLOWED` unset means
+  the two named people and nobody else, because it has no users to preserve.
+  A secret REPLACES its default rather than adding to it: a default nobody can
+  remove is a backdoor.
+- **Hiding pages is not access control.** The routes are on the same origin and
+  anybody signed in can call them. `app.use("/api", requireApp("emburse"))` in
+  `index.ts` sits after `authRouter` and before every Emburse router, so a route
+  added later is protected by default rather than by somebody remembering. Dutch
+  Miller mounts at `/api/dutch-miller` behind its own guard — put its routes
+  there, never on an Emburse router.
+- **The app cookie is a preference, never a grant.** It is read only to choose
+  between apps somebody already holds; a cookie naming one they do not is
+  ignored wherever it is read, and `POST /api/auth/app` refuses it outright.
+- **Judged on the REAL person, like `isAdmin`.** A view-as changes whose data is
+  on screen, never which product you are in.
+- Switching does a full reload. The two shells have different polling, routes
+  and caches, and swapping in place leaves the old app's queries running
+  against endpoints the server has just started refusing.
+
 ## Approving and denying
 
 - **Deciding records; a worker applies.** Clicking Approve/Deny writes a row in

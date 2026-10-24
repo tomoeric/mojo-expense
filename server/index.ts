@@ -6,7 +6,9 @@ import { fileURLToPath } from "node:url";
 import { logAiCredential } from "./ai.js";
 import { env, databaseHost, databaseUrlSource } from "./env.js";
 import { api } from "./routes.js";
-import { allowListSize, authMiddleware, authRouter, isAuthConfigured } from "./auth/index.js";
+import { allowListSize, authMiddleware, authRouter, isAuthConfigured, requireApp } from "./auth/index.js";
+import { appListSizes } from "./auth/apps.js";
+import { dutchMillerRouter } from "./dutch-miller/routes.js";
 import { viewAsMiddleware } from "./auth/view-as.js";
 import { importRouter } from "./import/routes.js";
 import { decisionRouter } from "./emburse/decision-routes.js";
@@ -35,6 +37,25 @@ app.use(authMiddleware);
 // write while they are.
 app.use(viewAsMiddleware);
 app.use("/api", authRouter);
+
+// Dutch Miller, behind its own assignment. Mounted BEFORE the Emburse
+// guard below so it is not caught by it.
+app.use("/api/dutch-miller", requireApp("dutch-miller"), dutchMillerRouter);
+
+/*
+ * Everything below this line is Emburse.
+ *
+ * The shell hides the other product's pages and hiding is not access
+ * control — the routes sit on the same origin and anybody signed in can
+ * call them. One guard here covers every Emburse router at once, which is
+ * also the point: a route added later is protected by default rather than
+ * by somebody remembering.
+ *
+ * It goes AFTER authRouter on purpose: signing in, /auth/user and
+ * /auth/app have to stay reachable to somebody who holds neither app, or
+ * they could not find out that they hold neither.
+ */
+app.use("/api", requireApp("emburse"));
 app.use("/api", importRouter);
 app.use("/api", decisionRouter);
 app.use("/api", rulesRouter);
@@ -148,5 +169,13 @@ app.listen(env.port, "0.0.0.0", () => {
     allowed > 0
       ? `AUTH_ALLOWED: ${allowed} entr${allowed === 1 ? "y" : "ies"}`
       : "AUTH_ALLOWED: not set — anyone in the tenant may sign in",
+  );
+  // Counts only, never the addresses. The usual failure is a secret that
+  // did not take effect, and a count answers that without printing a
+  // staff list into a log.
+  const apps = appListSizes();
+  console.log(
+    `Apps: Emburse ${apps.emburse === "all" ? "open to everyone who may sign in" : `${apps.emburse} assigned`}` +
+    ` · Dutch Miller ${apps.dutchMiller} assigned`
   );
 });

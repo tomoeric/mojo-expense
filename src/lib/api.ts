@@ -128,12 +128,30 @@ export type ReportsResponse = {
 
 export type SessionUser = { id: string; email: string; name: string; exp: number; isAdmin?: boolean };
 
+/** The products that share this deployment. */
+export const APPS = ["emburse", "dutch-miller"] as const;
+export type AppKey = (typeof APPS)[number];
+export const APP_LABEL: Record<AppKey, string> = {
+  emburse: "Emburse",
+  "dutch-miller": "Dutch Miller",
+};
+
 export type AuthResponse = {
   user: SessionUser | null;
   authConfigured: boolean;
   isAdmin: boolean;
   /** Set only while an admin is looking through somebody else's eyes. */
   viewingAs?: { real: string; viewed: string } | null;
+  /**
+   * Every app this person may use, and the one they are in.
+   *
+   * Both come from the server and neither is a client decision: the shell
+   * uses them to pick which product to render, and the server refuses the
+   * other one's routes regardless. Judged on the REAL person, so a view
+   * changes whose data is on screen and never which product you are in.
+   */
+  apps?: AppKey[];
+  app?: AppKey | null;
 };
 
 export type ConfigResponse = {

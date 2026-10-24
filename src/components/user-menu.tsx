@@ -1,10 +1,30 @@
 import { useState } from "react";
-import { LogOut, UserRound, SlidersHorizontal, KeyRound } from "lucide-react";
-import type { SessionUser } from "@/lib/api";
+import {
+  LogOut, UserRound, SlidersHorizontal, KeyRound, LayoutGrid, Check, ChevronRight,
+} from "lucide-react";
+import { APP_LABEL, type AppKey, type SessionUser } from "@/lib/api";
 
 /** Signed-in identity + sign out, in the dark header bar. */
-export function UserMenu({ user, isAdmin }: { user: SessionUser; isAdmin: boolean }) {
+export function UserMenu({
+  user,
+  isAdmin,
+  apps = [],
+  app = null,
+  onSwitchApp,
+}: {
+  user: SessionUser;
+  isAdmin: boolean;
+  /** Every product this person may use. One or none means no switcher. */
+  apps?: AppKey[];
+  app?: AppKey | null;
+  onSwitchApp?: (next: AppKey) => void;
+}) {
   const [open, setOpen] = useState(false);
+  const [appsOpen, setAppsOpen] = useState(false);
+  // Only for somebody who actually holds more than one. A switcher
+  // offering a single choice is furniture, and one offering a product
+  // they cannot open is a door into a 403.
+  const canSwitch = apps.length > 1 && Boolean(onSwitchApp);
   const initials =
     user.name
       .split(/\s+/)
@@ -38,6 +58,42 @@ export function UserMenu({ user, isAdmin }: { user: SessionUser; isAdmin: boolea
               </p>
               <p className="mt-0.5 truncate text-xs text-muted-foreground">{user.email}</p>
             </div>
+            {canSwitch && (
+              <div className="border-b border-border">
+                <button
+                  type="button"
+                  onClick={() => setAppsOpen((v) => !v)}
+                  className="flex w-full items-center gap-2 px-3 py-2.5 text-sm transition-colors hover:bg-muted"
+                >
+                  <LayoutGrid className="h-4 w-4" />
+                  <span className="flex-1 text-left">App</span>
+                  <span className="truncate text-xs text-muted-foreground">
+                    {app ? APP_LABEL[app] : ""}
+                  </span>
+                  <ChevronRight
+                    className={`h-3.5 w-3.5 shrink-0 transition-transform ${appsOpen ? "rotate-90" : ""}`}
+                  />
+                </button>
+                {appsOpen && (
+                  <div className="bg-muted/40 pb-1">
+                    {apps.map((key) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => {
+                          setOpen(false);
+                          if (key !== app) onSwitchApp?.(key);
+                        }}
+                        className="flex w-full items-center gap-2 py-2 pr-3 pl-9 text-sm transition-colors hover:bg-muted"
+                      >
+                        <span className="flex-1 text-left">{APP_LABEL[key]}</span>
+                        {key === app && <Check className="h-3.5 w-3.5 shrink-0" />}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             {/* Everyone has their own Emburse login; only admins set the
                 export scope, which governs what everybody sees. */}
             <a
