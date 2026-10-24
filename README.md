@@ -80,6 +80,7 @@ as ninja-live-status** — so no new Azure setup beyond one redirect URI.
 | `SESSION_SECRET` | **required in production** — `openssl rand -hex 32` |
 | `AUTH_ALLOWED` | optional; comma-separated emails and/or domains |
 | `MAIL_FROM` | mailbox invitations and sign-in links are sent as, e.g. `noreply@mojocarwash.com` |
+| `PUBLIC_ORIGIN` | optional; the address emailed links point at, e.g. `https://dealers.mojocarwash.com`. Set it whenever the app answers on more than one hostname |
 | `MAIL_TENANT_ID` / `MAIL_CLIENT_ID` / `MAIL_CLIENT_SECRET` | optional; a **separate** app registration holding only `Mail.Send`. Falls back to the `AZURE_*` sign-in app when unset |
 | `DM_SUPER_ADMINS` | optional; who may create Dutch Miller administrators. Defaults to `eric.s@mojocarwash.com` |
 | `STAFF_DOMAINS` | optional; the domains that count as MOJO's own. Defaults to `mojocarwash.com,mammothholdings.com` |

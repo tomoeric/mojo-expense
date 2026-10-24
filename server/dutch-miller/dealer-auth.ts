@@ -40,7 +40,20 @@ const ip = (req: Request): string =>
   String(req.headers["x-forwarded-for"] ?? "").split(",")[0]?.trim()
   || req.socket.remoteAddress || "";
 
+/**
+ * The address links in emails point at.
+ *
+ * `PUBLIC_ORIGIN` pins it; without one it follows whichever host the
+ * request arrived on. Pin it whenever the app answers on more than one
+ * name, because cookies are PER ORIGIN: a link requested on one host and
+ * opened on another does not match the browser-binding nonce, so the
+ * person is asked for the emailed code for no real reason. Pinning also
+ * keeps a link somebody forwards from quietly advertising an internal
+ * hostname.
+ */
 const origin = (req: Request): string => {
+  const pinned = (process.env.PUBLIC_ORIGIN ?? "").trim().replace(/\/+$/, "");
+  if (pinned) return pinned;
   const proto = req.headers["x-forwarded-proto"] ?? "https";
   const host = req.headers["x-forwarded-host"] ?? req.headers["host"] ?? "localhost";
   return `${proto}://${host}`;
