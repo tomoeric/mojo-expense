@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Building2, ChevronRight, Users } from "lucide-react";
+import { Building2, ChevronRight, SlidersHorizontal, Users } from "lucide-react";
 import { DmViewAs } from "@/components/dm-view-as";
 import { UserMenu } from "@/components/user-menu";
 import { DmRfidPage } from "@/pages/dm-rfid";
 import { DmSignupsPage } from "@/pages/dm-signups";
+import { DmSettingsPage } from "@/pages/dm-settings";
 import { DmUsersPage } from "@/pages/dm-users";
 import type { AppKey, SessionUser } from "@/lib/api";
 
@@ -45,12 +46,31 @@ type Access = {
   canViewAs: boolean;
 };
 
-/** Reachable from the user menu as well as the rail — it administers, not works. */
-const USERS_PAGE: PageDef = {
-  key: "users",
-  label: "Users",
-  blurb: "Who may open Dutch Miller, and what they can reach.",
-  children: [],
+/**
+ * The administrator's pages, below the rail's working pages.
+ *
+ * Not in `DM_PAGES`, because that registry is what a general user can be
+ * GIVEN — and these are never given, they come with the role. The server
+ * guards them with `requireDmAdmin` rather than `requirePage`.
+ */
+const ADMIN_PAGES: PageDef[] = [
+  {
+    key: "users",
+    label: "Users",
+    blurb: "Who may open Dutch Miller, and what they can reach.",
+    children: [],
+  },
+  {
+    key: "settings",
+    label: "Settings",
+    blurb: "Notifications and other Dutch Miller settings.",
+    children: [],
+  },
+];
+const USERS_PAGE = ADMIN_PAGES[0]!;
+const ADMIN_ICON: Record<string, React.ReactNode> = {
+  users: <Users className="h-3.5 w-3.5 shrink-0" />,
+  settings: <SlidersHorizontal className="h-3.5 w-3.5 shrink-0" />,
 };
 
 /**
@@ -119,7 +139,7 @@ export function DutchMillerApp({
   const dmAdmin = access?.role === "admin" || access?.role === "super";
   const rail: PageDef[] = [
     ...(access?.allPages ?? []).filter((p) => dmAdmin || (access?.pages ?? []).includes(p.key)),
-    ...(dmAdmin ? [USERS_PAGE] : []),
+    ...(dmAdmin ? ADMIN_PAGES : []),
   ];
   const [route, go] = useRoute(rail);
 
@@ -171,7 +191,7 @@ export function DutchMillerApp({
               key={p.key}
               page={p}
               route={route}
-              icon={p.key === USERS_PAGE.key ? <Users className="h-3.5 w-3.5 shrink-0" /> : null}
+              icon={ADMIN_ICON[p.key] ?? null}
               onGo={go}
             />
           ))}
@@ -212,7 +232,8 @@ export function DutchMillerApp({
             />
           )}
           {access && route.page === "rfid-review" && <DmRfidPage />}
-          {access && route.page === USERS_PAGE.key && dmAdmin && <DmUsersPage me={access.email} />}
+          {access && route.page === "users" && dmAdmin && <DmUsersPage me={access.email} />}
+          {access && route.page === "settings" && dmAdmin && <DmSettingsPage />}
         </div>
       </div>
     </div>

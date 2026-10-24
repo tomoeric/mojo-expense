@@ -21,6 +21,7 @@ export const AUDIT_ACTIONS = [
   "account.activated", "account.created", "account.updated",
   "account.disabled", "account.enabled", "account.removed",
   "sessions.revoked", "locked.out",
+  "notify.sent", "notify.failed", "notify.changed",
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 

@@ -130,9 +130,28 @@ the blocks.
   - Candidates come from `dm_users` only — never an arbitrary address — and
     include invited accounts, since "what do they see?" is usually asked
     about somebody just added.
+- **Signup notifications** (Dutch Miller → Settings, admin only). Recipients
+  live in `dm_settings`, a small key-value table with a TYPED ACCESSOR per
+  key (`getSignupNotify`) — never reach in with a raw string. Three
+  independent gates produce an empty list: switched off, no recipients, or
+  a submitter-copy with notifications off; `recipientsFor()` is the only
+  place that decides.
+- **Sending is FIRE-AND-FORGET, outside the submission.** By the time it
+  runs the member exists and the tag is claimed, so failing the request
+  would tell a dealer their signup did not work when it did — and they
+  cannot retry without burning a second tag. Every outcome goes to the
+  audit trail (`notify.sent` / `notify.failed`) so a notification nobody
+  got is visible rather than silent. One message PER RECIPIENT: a single
+  bad address in `toRecipients` can take the whole send with it.
+- Date formatting in `notify.ts` uses explicit components, not
+  `dateStyle`/`timeStyle` — Intl THROWS when those are combined with
+  `timeZoneName`, and in there the throw is swallowed, so every
+  notification would silently become a `notify.failed` line.
 - Tests: `scripts/test-dealer-auth.ts` (links, codes, lockout),
   `scripts/test-dm-users.ts` (roles, invite states, revocation) and
-  `scripts/test-view-as.ts` (who may view, and that no view can write).
+  `scripts/test-view-as.ts` (who may view, and that no view can write) and
+  `scripts/test-notify.ts` (recipient parsing, the three empty-list gates,
+  and what the message carries).
 - **Still one factor.** The link and the code both land in the same inbox,
   so this is possession-of-email, not MFA. The onboarding form collects a
   contact number precisely so a real second factor (an SMS code at sign-in)

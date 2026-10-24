@@ -5,7 +5,7 @@ import { parseRfidFile } from "./rfid-parse.js";
 import { addRfids, listRfids, rfidCounts, setRfidActive, useRfid } from "./rfid.js";
 import {
   DISPLAY_TZ, createSignup, getSignup, listSignups, newHandle, setComplete,
-  type SignupInput,
+  type SignupInput, type SignupRow,
 } from "./signups.js";
 import {
   DM_PAGES, assertEmail, canAdminister, dmAccessFor, getDmUser, isDmPage, isStaff,
@@ -14,6 +14,8 @@ import {
   type DmPageKey, type DmRole, type StoredRole,
 } from "./users.js";
 import { audit, listAudit } from "./audit.js";
+import { getSignupNotify, parseRecipients, setSignupNotify } from "./settings.js";
+import { notifySignup, signupEmail } from "./notify.js";
 import { inviteUser } from "./dealer-auth.js";
 import {
   isMailConfigured, layout, mailAppIsSeparate, mailFrom, mailProblem, sendMail,
@@ -249,6 +251,82 @@ dutchMillerRouter.delete("/users/:email", requireDmAdmin, async (req: Request, r
   res.json({ users: await listDmUsers() });
 });
 
+/* ------------------------------------------------------------------ *
+ * Notification settings
+ * ------------------------------------------------------------------ */
+
+dutchMillerRouter.get("/settings/notifications", requireDmAdmin,
+  async (_req: Request, res: Response) => {
+    res.json({ notify: await getSignupNotify(), mailConfigured: isMailConfigured() });
+  });
+
+dutchMillerRouter.post("/settings/notifications", requireDmAdmin,
+  async (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    // The page sends raw text, because that is what somebody pastes. The
+    // server decides what an address is, and says which entries it refused
+    // rather than quietly dropping them.
+    const { ok, rejected } = parseRecipients(body.recipients);
+    if (rejected.length > 0) {
+      res.status(400).json({
+        error: `Not an email address: ${rejected.slice(0, 5).join(", ")}`,
+        rejected,
+      });
+      return;
+    }
+    const notify = await setSignupNotify({
+      recipients: ok,
+      enabled: body.enabled !== false,
+      copySubmitter: body.copySubmitter === true,
+    }, actor(req));
+    await audit({
+      action: "notify.changed", actor: actor(req),
+      detail: `${ok.length} recipient${ok.length === 1 ? "" : "s"}`
+        + `${notify.enabled ? "" : " · off"}`,
+    });
+    res.json({ notify });
+  });
+
+/**
+ * A sample of the notification, to the administrator asking and nobody else.
+ *
+ * Not to the configured list: checking the wording should not mail the
+ * finance team. It uses the most recent real signup when there is one, so
+ * what you see is what they will get, and falls back to an obviously
+ * made-up record when the table is empty.
+ */
+dutchMillerRouter.post("/settings/notifications/sample", requireDmAdmin,
+  async (req: Request, res: Response) => {
+    const to = actor(req);
+    if (!isMailConfigured()) {
+      res.status(400).json({ error: `Email is not configured. ${mailProblem()}` });
+      return;
+    }
+    const recent = (await listSignups({ limit: 1 })).rows[0];
+    const sample: SignupRow = recent ?? {
+      guid: "00000000-0000-4000-8000-000000000000",
+      createdAt: new Date().toISOString(),
+      displayTimezone: DISPLAY_TZ,
+      dealer: { dlwContractId: "0041", dealNumber: "00712", customerId: "C-9" },
+      customer: {
+        firstName: "Sample", lastName: "Member", plateDlw: "ABC 1234",
+        vehicleMake: "Ford", vehicleModel: "Bronco", vehicleYear: "2024",
+        vehicleColor: "Blue", rfid: "00000+000000",
+      },
+      submittedAt: new Date().toISOString(),
+      submittedBy: to,
+      completedAt: null,
+      completedBy: null,
+    };
+    const { subject, html } = signupEmail(sample, { sample: true });
+    try {
+      await sendMail(to, subject, html);
+      res.json({ ok: true, to, usedRealSignup: Boolean(recent) });
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
 /**
  * Prove the mail setup works, without spending an invite on a real person.
  *
@@ -431,7 +509,14 @@ dutchMillerRouter.post(
   async (req: Request, res: Response) => {
     const out = await createSignup(
       (req.body ?? {}) as Partial<SignupInput>, req.user?.email ?? "");
-    if (out.ok) { res.json({ row: out.row, alreadyExisted: out.alreadyExisted }); return; }
+    if (out.ok) {
+      // Not awaited, and not inside the transaction: the member exists and
+      // the tag is claimed by now, so a bounced email must not tell the
+      // dealer their signup failed. Outcomes land in the audit trail.
+      if (!out.alreadyExisted) void notifySignup(out.row);
+      res.json({ row: out.row, alreadyExisted: out.alreadyExisted });
+      return;
+    }
     if (out.kind === "validation") { res.status(400).json({ errors: out.errors }); return; }
     // 409: the entered data is fine and worth keeping — the form says so and
     // asks for a different tag rather than throwing the entry away.
