@@ -185,6 +185,9 @@ dutchMillerRouter.get("/people", requireDmAdmin, async (_req: Request, res: Resp
     directoryAvailable: dir.available,
     directoryProblem: dir.problem,
     roles: await listRoles(),
+    mailConfigured: isMailConfigured(),
+    mailFrom: mailFrom(),
+    mailProblem: mailProblem(),
   });
 });
 

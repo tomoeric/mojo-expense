@@ -129,11 +129,20 @@ the blocks.
   - **Only a SUPER admin writes roles** (`requireSuper`) or hands out one
     that administers. A role is a grant, so an admin who could write one
     could write themselves a better one.
-- **The Users page is for inviting people OUTSIDE MOJO.** Staff sign in
-  with Microsoft and get a role from the **People** dialog, which lists
-  the Entra directory (`server/directory.ts`, needs `User.Read.All`) beside
-  everybody already set up. Missing that permission DEGRADES the dialog to
-  the configured users and says why — it never breaks the page.
+- **Users, Roles and Settings live under the USER ICON, never in the rail.**
+  The rail is for the pages people come here to do work in; these
+  administer the app, and putting them in the same column makes an
+  occasional errand look like part of the job.
+  - **Users is a DIALOG, not a page** (`dm-people.tsx`), opening over
+    whatever is on screen — setting a role is a thirty-second errand and
+    losing your place to run it is the annoying part. It is the single
+    users surface: the Entra directory (`server/directory.ts`, needs
+    `User.Read.All`) beside everybody already invited, plus invite, test
+    email, audit trail, and per-row edit · view as · switch off · resend ·
+    remove. Missing `User.Read.All` DEGRADES it to the configured users
+    and says why; it never breaks.
+  - Roles and Settings stay routes (`#/roles`, `#/settings`) so the back
+    button and a pasted link behave — they are simply not in the rail.
 - **View as, for a super admin.** Reuses the existing `view-as` machinery
   (`VIEW_AS_COOKIE`, `viewAsMiddleware`), so the hard part — EVERY non-GET
   is refused while viewing, by allow-list — is already true for Dutch

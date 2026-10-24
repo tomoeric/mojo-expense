@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Eye, Loader2, Mail, Pencil, Power, Search, ShieldCheck, UserRound, X,
+  Eye, Loader2, Mail, Pencil, Power, ScrollText, Search, Send, ShieldCheck,
+  Trash2, UserRound, X,
 } from "lucide-react";
 
 type Role = { key: string; name: string; pages: string[]; administers: boolean; builtin: boolean };
@@ -23,6 +24,10 @@ type Person = {
 /**
  * Everybody who could be given access, in one dialog.
  *
+ * This IS the Users screen — reached from the user icon rather than the
+ * rail, because it administers the app rather than being a place to do
+ * work in it. The rail is for the pages people come here to use.
+ *
  * The staff directory and the people already set up, together rather than
  * in two lists, because "is Dana already set up?" is the question somebody
  * is holding when they open this. Picking a name off a list also removes
@@ -34,8 +39,9 @@ type Person = {
  * buttons.
  */
 export function DmPeopleDialog({
-  iAmSuper, onClose, onViewAs,
+  me, iAmSuper, onClose, onViewAs,
 }: {
+  me: string;
   iAmSuper: boolean;
   onClose: () => void;
   onViewAs: (email: string) => void;
@@ -44,7 +50,10 @@ export function DmPeopleDialog({
   const [filter, setFilter] = useState("");
   const [show, setShow] = useState<"all" | "configured" | "not">("all");
   const [editing, setEditing] = useState<Person | null>(null);
+  const [inviting, setInviting] = useState(false);
+  const [trail, setTrail] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [note, setNote] = useState("");
 
   const data = useQuery({
     queryKey: ["dm-people"],
@@ -54,6 +63,7 @@ export function DmPeopleDialog({
       return (await res.json()) as {
         people: Person[]; roles: Role[];
         directoryAvailable: boolean; directoryProblem: string;
+        mailConfigured: boolean; mailFrom: string; mailProblem: string;
       };
     },
   });
@@ -72,9 +82,8 @@ export function DmPeopleDialog({
     onSuccess: () => {
       setError("");
       void qc.invalidateQueries({ queryKey: ["dm-people"] });
-      void qc.invalidateQueries({ queryKey: ["dm-users"] });
     },
-    onError: (e) => setError((e as Error).message),
+    onError: (e) => { setError((e as Error).message); setNote(""); },
   });
 
   const people = useMemo(() => {
@@ -89,6 +98,7 @@ export function DmPeopleDialog({
     });
   }, [data.data, filter, show]);
 
+  const mailOff = data.data && !data.data.mailConfigured;
   const counts = {
     all: data.data?.people.length ?? 0,
     configured: data.data?.people.filter((p) => p.user).length ?? 0,
@@ -104,20 +114,51 @@ export function DmPeopleDialog({
         className="w-full max-w-4xl rounded-xl border border-border bg-background shadow-xl"
       >
         <div className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
-          <div>
-            <h2 className="text-base font-semibold">People</h2>
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold">Users</h2>
             <p className="text-sm text-muted-foreground">
               Everyone at MOJO and Mammoth Holdings, and everyone invited to Dutch Miller.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded-md p-1 text-muted-foreground hover:bg-muted"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              disabled={mailOff || act.isPending}
+              title={mailOff ? "Email is not configured." : "Send yourself a test message"}
+              onClick={() => act.mutate({ url: "/api/dutch-miller/mail-test" }, {
+                onSuccess: (b) => setNote(
+                  `Test message sent to you from ${(b as { from: string }).from}.`),
+              })}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs hover:bg-muted disabled:opacity-50"
+            >
+              <Mail className="h-3.5 w-3.5" />
+              Test email
+            </button>
+            <button
+              type="button"
+              onClick={() => setTrail(trail === null ? "" : null)}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs hover:bg-muted"
+            >
+              <ScrollText className="h-3.5 w-3.5" />
+              Audit trail
+            </button>
+            <button
+              type="button"
+              onClick={() => { setInviting(true); setEditing(null); }}
+              className="inline-flex items-center gap-1.5 rounded-md bg-foreground px-2.5 py-1.5 text-xs font-semibold text-background"
+            >
+              <Send className="h-3.5 w-3.5" />
+              Invite someone
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="rounded-md p-1 text-muted-foreground hover:bg-muted"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 border-b border-border px-5 py-3">
@@ -154,7 +195,35 @@ export function DmPeopleDialog({
             listed. {data.data.directoryProblem}
           </p>
         )}
+        {mailOff && (
+          <p className="border-b border-border bg-amber-500/10 px-5 py-2.5 text-xs text-amber-900 dark:text-amber-200">
+            Invitations cannot be sent: {data.data?.mailProblem} MOJO staff can still be
+            given a role — they sign in with Microsoft.
+          </p>
+        )}
         {error && <p className="border-b border-border px-5 py-2 text-sm text-red-600">{error}</p>}
+        {note && (
+          <p className="border-b border-border px-5 py-2 text-sm text-emerald-700 dark:text-emerald-400">
+            {note}
+          </p>
+        )}
+        {inviting && (
+          <InviteRow
+            roles={data.data?.roles ?? []}
+            iAmSuper={iAmSuper}
+            busy={act.isPending}
+            onCancel={() => setInviting(false)}
+            onSave={(body) => act.mutate(
+              { url: "/api/dutch-miller/users", body },
+              {
+                onSuccess: () => {
+                  setInviting(false);
+                  setNote(`Invitation sent to ${body.email}.`);
+                },
+              })}
+          />
+        )}
+        {trail !== null && <AuditTrail subject={trail} onClose={() => setTrail(null)} />}
 
         <div className="max-h-[60vh] overflow-auto">
           {data.isPending && (
@@ -174,6 +243,11 @@ export function DmPeopleDialog({
                 <p className="flex items-center gap-1.5 truncate text-sm font-medium">
                   <UserRound className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                   {p.name}
+                  {p.email === me && (
+                    <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
+                      you
+                    </span>
+                  )}
                   {p.source === "invited" && (
                     <Mail className="h-3 w-3 shrink-0 text-muted-foreground" />
                   )}
@@ -238,6 +312,50 @@ export function DmPeopleDialog({
                     }`}
                   >
                     <Power className="h-3.5 w-3.5" />
+                  </button>
+                )}
+                {p.user?.authMethod === "link" && p.user.status === "invited" && (
+                  <button
+                    type="button"
+                    disabled={act.isPending || mailOff}
+                    title="Send the invitation again"
+                    onClick={() => act.mutate(
+                      { url: `/api/dutch-miller/users/${encodeURIComponent(p.email)}/invite` },
+                      { onSuccess: () => setNote(`Invitation re-sent to ${p.email}.`) })}
+                    className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50"
+                  >
+                    Resend
+                  </button>
+                )}
+                <button
+                  type="button"
+                  title="History for this account"
+                  onClick={() => setTrail(p.email)}
+                  className="rounded-md border border-border p-1.5 text-muted-foreground hover:bg-muted"
+                >
+                  <ScrollText className="h-3.5 w-3.5" />
+                </button>
+                {/* Removing is not the same as switching off, and the
+                    difference is worth the extra click: switching off keeps
+                    the record and its history, this does not. */}
+                {p.user && (
+                  <button
+                    type="button"
+                    disabled={act.isPending}
+                    title="Remove"
+                    onClick={() => {
+                      if (window.confirm(
+                        `Remove ${p.email}? Switching off instead keeps the record and `
+                        + "the audit trail.")) {
+                        act.mutate({
+                          url: `/api/dutch-miller/users/${encodeURIComponent(p.email)}`,
+                          method: "DELETE",
+                        });
+                      }
+                    }}
+                    className="rounded-md border border-border p-1.5 text-muted-foreground hover:bg-muted disabled:opacity-40"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
                   </button>
                 )}
               </div>
@@ -354,6 +472,155 @@ function AssignRole({
           </span>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Invite somebody from outside.
+ *
+ * Outside addresses only: one of our own already has a Microsoft account,
+ * and emailing them a link would be a second, weaker way into the same
+ * app. The server refuses it too.
+ */
+function InviteRow({
+  roles, iAmSuper, busy, onSave, onCancel,
+}: {
+  roles: Role[];
+  iAmSuper: boolean;
+  busy: boolean;
+  onSave: (u: { email: string; roleKey: string; invite: true }) => void;
+  onCancel: () => void;
+}) {
+  const [email, setEmail] = useState("");
+  const [roleKey, setRoleKey] = useState(
+    roles.find((r) => !r.administers)?.key ?? "general-user");
+
+  const domain = email.trim().toLowerCase().split("@")[1] ?? "";
+  const ours = ["mojocarwash.com", "mammothholdings.com"].includes(domain);
+  const ready = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim()) && !ours;
+
+  return (
+    <div className="space-y-3 rounded-lg border border-border bg-card p-4">
+      <p className="text-sm font-semibold">Invite someone outside MOJO</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          autoFocus
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="name@dealership.com"
+          className="w-72 rounded-md border border-border bg-background px-2.5 py-1.5 text-sm"
+        />
+        <select
+          value={roleKey}
+          onChange={(e) => setRoleKey(e.target.value)}
+          className="rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+        >
+          {roles.map((r) => (
+            <option key={r.key} value={r.key} disabled={r.administers && !iAmSuper}>
+              {r.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {ours && (
+        <p className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+          That is one of our own addresses. They already sign in with Microsoft — give them a
+          role from <strong>People</strong> instead, with nothing to send.
+        </p>
+      )}
+      {ready && (
+        <p className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+          They will get a one-time link. The account stays inactive until they open it,
+          confirm a code and enter their details.
+        </p>
+      )}
+
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          disabled={busy || !ready}
+          onClick={() => onSave({ email: email.trim(), roleKey, invite: true })}
+          className="inline-flex items-center gap-2 rounded-md bg-foreground px-3 py-1.5 text-sm font-semibold text-background disabled:opacity-50"
+        >
+          {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          Send invitation
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * The audit trail
+ * ------------------------------------------------------------------ */
+
+type Entry = {
+  id: string; at: string; actor: string; action: string;
+  subject: string; detail: string; ip: string;
+};
+
+function AuditTrail({ subject, onClose }: { subject: string; onClose: () => void }) {
+  const q = useQuery({
+    queryKey: ["dm-audit", subject],
+    queryFn: async () => {
+      const url = `/api/dutch-miller/audit${subject ? `?subject=${encodeURIComponent(subject)}` : ""}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error((await res.json()).error ?? "Could not load.");
+      return (await res.json()) as { entries: Entry[] };
+    },
+  });
+
+  return (
+    <div className="rounded-lg border border-border bg-card">
+      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <p className="text-sm font-semibold">Audit trail{subject ? ` · ${subject}` : ""}</p>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted"
+        >
+          Close
+        </button>
+      </div>
+      <div className="max-h-96 overflow-auto">
+        <table className="w-full text-xs">
+          <tbody>
+            {q.isPending && (
+              <tr><td className="px-4 py-6 text-center text-muted-foreground">Loading…</td></tr>
+            )}
+            {q.data?.entries.length === 0 && (
+              <tr><td className="px-4 py-6 text-center text-muted-foreground">
+                Nothing recorded yet.
+              </td></tr>
+            )}
+            {q.data?.entries.map((e) => (
+              <tr key={e.id} className="border-t border-border">
+                <td className="px-4 py-1.5 whitespace-nowrap text-muted-foreground">
+                  {new Date(e.at).toLocaleString()}
+                </td>
+                <td className="px-2 py-1.5 font-mono">{e.action}</td>
+                <td className="px-2 py-1.5 text-muted-foreground">{e.subject}</td>
+                <td className="px-2 py-1.5 text-muted-foreground">{e.actor || "—"}</td>
+                <td className="px-4 py-1.5 text-muted-foreground">{e.detail}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {/* Read-only on purpose: there is no route that edits or deletes a
+          line. A log somebody can tidy up is not evidence of anything. */}
+      <p className="border-t border-border px-4 py-2 text-xs text-muted-foreground">
+        Read-only. Entries are never edited or removed, and never contain a code or a link.
+      </p>
     </div>
   );
 }

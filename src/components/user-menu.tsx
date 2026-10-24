@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {
   LogOut, UserRound, SlidersHorizontal, KeyRound, LayoutGrid, Check, ChevronRight,
-  Users,
+  Crown, Users,
 } from "lucide-react";
 import { APP_LABEL, type AppKey, type SessionUser } from "@/lib/api";
 
@@ -15,6 +15,8 @@ export function UserMenu({
   product = "emburse",
   dmAdmin = false,
   onDmUsers,
+  onDmRoles,
+  onDmSettings,
 }: {
   user: SessionUser;
   isAdmin: boolean;
@@ -31,7 +33,11 @@ export function UserMenu({
   product?: AppKey;
   /** Administers Dutch Miller — a separate question from Emburse's `isAdmin`. */
   dmAdmin?: boolean;
+  /** Opens the Users dialog over whatever is on screen. */
   onDmUsers?: () => void;
+  /** Only passed for a super administrator; absent hides the item. */
+  onDmRoles?: () => void;
+  onDmSettings?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [appsOpen, setAppsOpen] = useState(false);
@@ -132,15 +138,39 @@ export function UserMenu({
                 )}
               </>
             )}
+            {/* Administering the app, kept out of the rail: the rail is
+                for the pages people come here to work in. */}
             {product === "dutch-miller" && dmAdmin && (
-              <button
-                type="button"
-                onClick={() => { setOpen(false); onDmUsers?.(); }}
-                className="flex w-full items-center gap-2 border-b border-border px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted"
-              >
-                <Users className="h-4 w-4" />
-                Users
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => { setOpen(false); onDmUsers?.(); }}
+                  className="flex w-full items-center gap-2 border-b border-border px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted"
+                >
+                  <Users className="h-4 w-4" />
+                  Users
+                </button>
+                {onDmRoles && (
+                  <button
+                    type="button"
+                    onClick={() => { setOpen(false); onDmRoles(); }}
+                    className="flex w-full items-center gap-2 border-b border-border px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted"
+                  >
+                    <Crown className="h-4 w-4" />
+                    Roles
+                  </button>
+                )}
+                {onDmSettings && (
+                  <button
+                    type="button"
+                    onClick={() => { setOpen(false); onDmSettings(); }}
+                    className="flex w-full items-center gap-2 border-b border-border px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted"
+                  >
+                    <SlidersHorizontal className="h-4 w-4" />
+                    Settings
+                  </button>
+                )}
+              </>
             )}
             <a
               href="/api/logout"
