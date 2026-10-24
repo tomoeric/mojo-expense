@@ -91,7 +91,9 @@ that further to named reviewers; leave it unset to admit the whole tenant.
 
 Dutch Miller has a second door for dealer staff, who have no Microsoft
 account: an administrator invites an address and the person signs in with a
-one-time emailed link. There is no self-signup. Whether somebody counts as
+one-time emailed link. There is no self-signup. Which Microsoft accounts may use
+Dutch Miller is decided by `DUTCH_MILLER_ALLOWED`; there is no directory
+lookup and no Graph permission beyond `Mail.Send`. Whether somebody counts as
 MOJO staff is decided by **which door they came through**, never by their
 address — see "The two doors" in `CLAUDE.md` before changing any permission
 check.

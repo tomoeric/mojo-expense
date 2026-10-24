@@ -69,6 +69,8 @@ export const isSuperEmail = (email: string): boolean => superList().includes(cle
 
 /** For the boot log: how many, never who. */
 export const superListSize = (): number => superList().length;
+/** The pinned super administrators, for the Users dialog. */
+export const superEmails = (): string[] => [...superList()];
 export const staffDomainList = (): string[] => staffDomains();
 
 /**

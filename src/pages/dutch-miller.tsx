@@ -235,6 +235,7 @@ export function DutchMillerApp({
             <DmSignupsPage
               view={route.sub === "add" ? "add" : "review"}
               onView={(v) => go("member-signups", v)}
+              viewingAs={access.viewingAs}
             />
           )}
           {access && route.page === "rfid-review" && <DmRfidPage />}

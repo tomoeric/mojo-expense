@@ -120,6 +120,19 @@ export function appFor(
   return isAppKey(preferred) && mine.includes(preferred) ? preferred : mine[0]!;
 }
 
+/**
+ * The Dutch Miller addresses named in configuration.
+ *
+ * Who the secret (or its default) lets in, so the Users dialog can list
+ * them without Microsoft Graph. Domain entries are left out: "anybody at
+ * mammothholdings.com" is a rule, not a person, and there is nobody to
+ * put in a row for it.
+ */
+export function dutchMillerNamed(): string[] {
+  return listFor(process.env.DUTCH_MILLER_ALLOWED, DUTCH_MILLER_DEFAULT)
+    .filter((entry) => entry.includes("@"));
+}
+
 /** For the boot log: how many are assigned, never who. */
 export function appListSizes(): { emburse: number | "all"; dutchMiller: number } {
   const explicit = parseEmailList(process.env.EMBURSE_ALLOWED);

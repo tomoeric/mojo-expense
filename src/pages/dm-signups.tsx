@@ -84,9 +84,12 @@ const stamp = (iso: string | null, tz: string) =>
 export function DmSignupsPage({
   view,
   onView,
+  viewingAs,
 }: {
   view: "review" | "add";
   onView: (v: "review" | "add") => void;
+  /** Set while a super admin is looking through somebody else's eyes. */
+  viewingAs?: { real: string; viewed: string } | null;
 }) {
   const [justSaved, setJustSaved] = useState<SignupRow | null>(null);
 
@@ -109,10 +112,41 @@ export function DmSignupsPage({
 
       {view === "review"
         ? <ReviewExisting />
-        : <AddNew
+        : viewingAs
+          ? <NotWhileViewing viewed={viewingAs.viewed} onBack={() => onView("review")} />
+          : <AddNew
             onCancel={() => { setJustSaved(null); onView("review"); }}
             onSaved={(row) => { setJustSaved(row); onView("review"); }}
           />}
+    </div>
+  );
+}
+
+/**
+ * Add New, inside a view.
+ *
+ * Starting an entry mints its GUID and creation time on the server, so
+ * it is a write — and nothing is written while viewing as somebody else,
+ * because a signup carries the name of whoever made it and an RFID tag
+ * leaves the pool for good. Said here rather than left to the red error
+ * the refusal produces, which reads as a fault instead of the rule.
+ */
+function NotWhileViewing({ viewed, onBack }: { viewed: string; onBack: () => void }) {
+  return (
+    <div className="rounded-xl border border-border bg-card p-6">
+      <p className="text-sm font-semibold">Not while viewing as somebody else</p>
+      <p className="mt-1 text-sm text-muted-foreground">
+        You are looking at the app as {viewed}. A signup records who made it and takes an
+        RFID tag out of the pool for good, so it has to be made by the person whose name
+        goes on it. Stop viewing to add one.
+      </p>
+      <button
+        type="button"
+        onClick={onBack}
+        className="mt-4 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted"
+      >
+        Back to Review Existing
+      </button>
     </div>
   );
 }

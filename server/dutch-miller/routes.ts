@@ -9,13 +9,13 @@ import {
 } from "./signups.js";
 import {
   DM_PAGES, assertEmail, canAdminister, dmAccessFor, getDmUser, isDmPage, isStaff,
-  isSuperEmail, listDmUsers, removeDmUser, revokeDmSessions, saveDmUser,
+  isSuperEmail, listDmUsers, removeDmUser, revokeDmSessions, saveDmUser, superEmails,
   setDmUserEnabled, staffDomainList,
   type DmPageKey, type DmRole, type StoredRole,
 } from "./users.js";
 import { audit, listAudit } from "./audit.js";
 import { DEFAULT_ROLE, listRoles, removeRole, saveRole } from "./roles.js";
-import { listDirectory } from "../directory.js";
+import { dutchMillerNamed } from "../auth/apps.js";
 import { getSignupNotify, parseRecipients, setSignupNotify } from "./settings.js";
 import { notifySignup, signupEmail } from "./notify.js";
 import { inviteUser } from "./dealer-auth.js";
@@ -151,39 +151,54 @@ dutchMillerRouter.get("/users", requireDmAdmin, async (req: Request, res: Respon
  * configured, because "is Dana already set up?" is the question somebody
  * is actually holding when they open it.
  */
+/**
+ * Everybody who can reach Dutch Miller.
+ *
+ * Three sources, and between them they are the complete answer:
+ *
+ *   the pinned super administrators (`DM_SUPER_ADMINS`)
+ *   the addresses the `DUTCH_MILLER_ALLOWED` secret lets in
+ *   anybody with a row — every invited dealer, and every staff account
+ *   that has been given a role
+ *
+ * There is deliberately no directory lookup. The secret IS the list of
+ * Microsoft accounts that may use this app, so reading the whole tenant
+ * would only add hundreds of people who cannot sign in, and would make
+ * the dialog depend on a Graph permission to answer a question
+ * configuration already answers.
+ */
 dutchMillerRouter.get("/people", requireDmAdmin, async (_req: Request, res: Response) => {
-  const [dir, users] = await Promise.all([
-    listDirectory(staffDomainList()),
-    listDmUsers(),
-  ]);
+  const users = await listDmUsers();
   const configured = new Map(users.map((u) => [u.email, u]));
-  const rows = dir.people.map((p) => ({
-    email: p.email,
-    name: p.name,
-    jobTitle: p.jobTitle,
-    department: p.department,
-    source: "directory" as const,
-    enabledInDirectory: p.enabled,
-    user: configured.get(p.email) ?? null,
-  }));
-  // Anybody configured who is not in the directory — every invited dealer,
-  // and any staff account since removed from the tenant.
+
+  type Row = {
+    email: string; name: string; business: string | null;
+    source: "microsoft" | "invited";
+    pinnedSuper: boolean;
+    user: (typeof users)[number] | null;
+  };
+  const rows = new Map<string, Row>();
+  const add = (r: Row) => { if (!rows.has(r.email)) rows.set(r.email, r); };
+
+  for (const email of [...superEmails(), ...dutchMillerNamed()]) {
+    add({
+      email, name: email, business: null, source: "microsoft",
+      pinnedSuper: isSuperEmail(email), user: configured.get(email) ?? null,
+    });
+  }
   for (const u of users) {
-    if (configured.has(u.email) && rows.some((r) => r.email === u.email)) continue;
-    rows.push({
+    add({
       email: u.email,
       name: [u.firstName, u.lastName].filter(Boolean).join(" ") || u.email,
-      jobTitle: u.business,
-      department: null,
-      source: u.authMethod === "link" ? ("invited" as never) : ("directory" as never),
-      enabledInDirectory: true,
+      business: u.business,
+      source: u.authMethod === "link" ? "invited" : "microsoft",
+      pinnedSuper: isSuperEmail(u.email),
       user: u,
     });
   }
+
   res.json({
-    people: rows,
-    directoryAvailable: dir.available,
-    directoryProblem: dir.problem,
+    people: [...rows.values()].sort((a, b) => a.name.localeCompare(b.name)),
     roles: await listRoles(),
     mailConfigured: isMailConfigured(),
     mailFrom: mailFrom(),

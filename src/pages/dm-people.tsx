@@ -14,10 +14,11 @@ type DmUser = {
 type Person = {
   email: string;
   name: string;
-  jobTitle: string | null;
-  department: string | null;
-  source: "directory" | "invited";
-  enabledInDirectory: boolean;
+  business: string | null;
+  /** How they get in: the Microsoft button, or an emailed link. */
+  source: "microsoft" | "invited";
+  /** Pinned in DM_SUPER_ADMINS: holds everything, and cannot be edited here. */
+  pinnedSuper: boolean;
   user: DmUser | null;
 };
 
@@ -62,7 +63,6 @@ export function DmPeopleDialog({
       if (!res.ok) throw new Error((await res.json()).error ?? "Could not load.");
       return (await res.json()) as {
         people: Person[]; roles: Role[];
-        directoryAvailable: boolean; directoryProblem: string;
         mailConfigured: boolean; mailFrom: string; mailProblem: string;
       };
     },
@@ -93,8 +93,7 @@ export function DmPeopleDialog({
       if (show === "not" && p.user) return false;
       if (q === "") return true;
       return p.email.includes(q) || p.name.toLowerCase().includes(q)
-        || (p.jobTitle ?? "").toLowerCase().includes(q)
-        || (p.department ?? "").toLowerCase().includes(q);
+        || (p.business ?? "").toLowerCase().includes(q);
     });
   }, [data.data, filter, show]);
 
@@ -117,7 +116,8 @@ export function DmPeopleDialog({
           <div className="min-w-0">
             <h2 className="text-base font-semibold">Users</h2>
             <p className="text-sm text-muted-foreground">
-              Everyone at MOJO and Mammoth Holdings, and everyone invited to Dutch Miller.
+              Everyone who can reach Dutch Miller: MOJO staff on the access list, and
+              everyone invited from outside.
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -168,11 +168,11 @@ export function DmPeopleDialog({
               autoFocus
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
-              placeholder="Name, email, job title or department"
+              placeholder="Name, email or dealership"
               className="w-full bg-transparent text-sm outline-none"
             />
           </div>
-          {([["all", "Everyone"], ["configured", "Has access"], ["not", "No access"]] as const)
+          {([["all", "Everyone"], ["configured", "Has a role"], ["not", "No role yet"]] as const)
             .map(([k, label]) => (
               <button
                 key={k}
@@ -187,20 +187,6 @@ export function DmPeopleDialog({
             ))}
         </div>
 
-        {data.data && !data.data.directoryAvailable && (
-          <p className="border-b border-border bg-amber-500/10 px-5 py-2.5 text-xs text-amber-900 dark:text-amber-200">
-            {/* Degraded, not broken: the people already set up are still
-                listed, and an address can still be typed on the Users page. */}
-            The staff directory could not be read, so only people already set up are
-            listed. {data.data.directoryProblem}
-          </p>
-        )}
-        {mailOff && (
-          <p className="border-b border-border bg-amber-500/10 px-5 py-2.5 text-xs text-amber-900 dark:text-amber-200">
-            Invitations cannot be sent: {data.data?.mailProblem} MOJO staff can still be
-            given a role — they sign in with Microsoft.
-          </p>
-        )}
         {error && <p className="border-b border-border px-5 py-2 text-sm text-red-600">{error}</p>}
         {note && (
           <p className="border-b border-border px-5 py-2 text-sm text-emerald-700 dark:text-emerald-400">
@@ -248,22 +234,26 @@ export function DmPeopleDialog({
                       you
                     </span>
                   )}
-                  {p.source === "invited" && (
-                    <Mail className="h-3 w-3 shrink-0 text-muted-foreground" />
-                  )}
-                  {p.source === "directory" && p.user?.authMethod === "microsoft" && (
-                    <ShieldCheck className="h-3 w-3 shrink-0 text-muted-foreground" />
+                  {p.source === "invited"
+                    ? <Mail className="h-3 w-3 shrink-0 text-muted-foreground" />
+                    : <ShieldCheck className="h-3 w-3 shrink-0 text-muted-foreground" />}
+                  {p.pinnedSuper && (
+                    <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
+                      super admin
+                    </span>
                   )}
                 </p>
                 <p className="truncate text-xs text-muted-foreground">
                   {p.email}
-                  {p.jobTitle ? ` · ${p.jobTitle}` : ""}
-                  {p.department ? ` · ${p.department}` : ""}
+                  {p.business ? ` · ${p.business}` : ""}
+                  {p.source === "microsoft" && !p.user ? " · allowed, no role yet" : ""}
                 </p>
               </div>
 
               <div className="w-44 shrink-0 text-xs">
-                {p.user ? (
+                {p.pinnedSuper ? (
+                  <span className="font-semibold">Everything</span>
+                ) : p.user ? (
                   <>
                     <span className="font-semibold">{p.user.roleName ?? p.user.roleKey}</span>
                     {p.user.status !== "active" && (
@@ -271,22 +261,27 @@ export function DmPeopleDialog({
                     )}
                   </>
                 ) : (
-                  <span className="text-muted-foreground">No access</span>
+                  <span className="text-muted-foreground">No role yet</span>
                 )}
               </div>
 
               <div className="flex shrink-0 items-center gap-1">
-                <button
-                  type="button"
-                  title={p.user ? "Change role" : "Give access"}
-                  onClick={() => setEditing(p)}
-                  className="rounded-md border border-border p-1.5 text-muted-foreground hover:bg-muted"
-                >
-                  <Pencil className="h-3.5 w-3.5" />
-                </button>
+                {/* A pinned super administrator is set in configuration,
+                    not here — the server refuses every one of these for
+                    them, and a button that always fails is worse than none. */}
+                {!p.pinnedSuper && (
+                  <button
+                    type="button"
+                    title={p.user ? "Change role" : "Give access"}
+                    onClick={() => setEditing(p)}
+                    className="rounded-md border border-border p-1.5 text-muted-foreground hover:bg-muted"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                )}
                 {/* Only a super admin may view as, and only somebody who
                     actually has an account to view. */}
-                {iAmSuper && p.user && p.user.status === "active" && (
+                {iAmSuper && !p.pinnedSuper && p.user && p.user.status === "active" && (
                   <button
                     type="button"
                     title={`View Dutch Miller as ${p.name}`}
@@ -296,7 +291,7 @@ export function DmPeopleDialog({
                     <Eye className="h-3.5 w-3.5" />
                   </button>
                 )}
-                {p.user && (
+                {p.user && !p.pinnedSuper && (
                   <button
                     type="button"
                     disabled={act.isPending}
@@ -338,7 +333,7 @@ export function DmPeopleDialog({
                 {/* Removing is not the same as switching off, and the
                     difference is worth the extra click: switching off keeps
                     the record and its history, this does not. */}
-                {p.user && (
+                {p.user && !p.pinnedSuper && (
                   <button
                     type="button"
                     disabled={act.isPending}

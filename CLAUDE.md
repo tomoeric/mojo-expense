@@ -154,11 +154,13 @@ the blocks.
   - **Users is a DIALOG, not a page** (`dm-people.tsx`), opening over
     whatever is on screen — setting a role is a thirty-second errand and
     losing your place to run it is the annoying part. It is the single
-    users surface: the Entra directory (`server/directory.ts`, needs
-    `User.Read.All`) beside everybody already invited, plus invite, test
-    email, audit trail, and per-row edit · view as · switch off · resend ·
-    remove. Missing `User.Read.All` DEGRADES it to the configured users
-    and says why; it never breaks.
+    users surface, with invite, test email, audit trail, and per-row
+    edit · view as · switch off · resend · remove.
+  - Its list has **no directory lookup and needs no Graph permission**.
+    `DUTCH_MILLER_ALLOWED` IS the list of Microsoft accounts that may use
+    the app, so the three sources are the pinned super admins, that
+    secret, and anybody with a `dm_users` row. Reading the tenant would
+    add hundreds of people who cannot sign in. Don't reintroduce it.
   - Roles and Settings stay routes (`#/roles`, `#/settings`) so the back
     button and a pasted link behave — they are simply not in the rail.
 - **View as, for a super admin.** Reuses the existing `view-as` machinery
