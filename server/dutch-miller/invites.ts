@@ -31,7 +31,16 @@ import { LOCKOUT } from "./audit.js";
  * is also how the address gets verified.
  */
 
-export const INVITE_TTL_MINUTES = 60 * 24 * 7; // A week — an admin sends it, a person gets to it.
+/**
+ * Three days, not a week.
+ *
+ * Setting up an account asks for no confirmation code — opening a link
+ * emailed to the address already proves the inbox, and a second secret
+ * to the same inbox proves it twice. This link is therefore the only
+ * credential in that flow, so it does not sit around for a week. Resend
+ * is one click for an administrator.
+ */
+export const INVITE_TTL_MINUTES = 60 * 24 * 3;
 export const LOGIN_TTL_MINUTES = 15;
 export const CODE_TTL_MINUTES = 15;
 
@@ -122,6 +131,34 @@ export async function issueToken(opts: {
       browserNonce ? hash(browserNonce) : null, expiresAt, opts.by ?? "", opts.ip ?? ""]);
 
   return { token, browserNonce, expiresAt: expiresAt.toISOString() };
+}
+
+/**
+ * Look at a link WITHOUT spending it.
+ *
+ * Mail providers scan incoming messages by fetching the URLs in them, so
+ * a one-time link is routinely opened by a machine before the person
+ * ever sees it. A GET that consumed the token therefore burned the
+ * invite on delivery — the first failure reported from the real world,
+ * and the reason redemption moved to an explicit POST.
+ *
+ * This answers "is it still good?" so the page can say so, and nothing
+ * else: no row changes, no email is sent.
+ */
+export async function peekToken(token: string): Promise<Redeemed> {
+  await ensure();
+  if (!token) return { ok: false, reason: "unknown" };
+  const { rows } = await db().query<{
+    email: string; kind: TokenKind; browser_hash: string | null;
+    used_at: Date | null; expired: boolean;
+  }>(
+    `SELECT email, kind, browser_hash, used_at, (expires_at <= now()) AS expired
+       FROM dm_login_tokens WHERE token_hash = $1`, [hash(token)]);
+  const row = rows[0];
+  if (!row) return { ok: false, reason: "unknown" };
+  if (row.used_at) return { ok: false, reason: "used" };
+  if (row.expired) return { ok: false, reason: "expired" };
+  return { ok: true, email: row.email, kind: row.kind, sameBrowser: false };
 }
 
 export type Redeemed =

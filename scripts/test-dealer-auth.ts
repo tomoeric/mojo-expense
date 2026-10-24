@@ -26,6 +26,9 @@ import {
   issueCode, issueToken, purgeOldTokens, redeemToken, verifyCode,
 } from "../server/dutch-miller/invites.js";
 import { LOCKOUT, audit, listAudit, lockState } from "../server/dutch-miller/audit.js";
+import {
+  TRUST_DAYS, deviceLabel, forgetDevices, isTrusted, listDevices, trustDevice,
+} from "../server/dutch-miller/devices.js";
 import { db } from "../server/db.js";
 
 let failures = 0;
@@ -144,12 +147,42 @@ try {
     trail.every((e) => !e.detail.includes(code) && !e.detail.includes(t1.token)));
   check("purging old tokens does not touch live ones",
     (await purgeOldTokens()) >= 0);
+
+  console.log("\n11. Trusted devices");
+  check("an unknown browser is not trusted", !(await isTrusted(A, "never-seen")));
+  check("…and neither is no cookie at all", !(await isTrusted(A, undefined)));
+  const dev = await trustDevice(A, deviceLabel("Mozilla/5.0 (Macintosh) Chrome/1"));
+  check("a trusted browser is recognised", await isTrusted(A, dev.secret));
+  // Both halves have to match, or one person's trust on a shared machine
+  // would carry the next person past the code.
+  check("…but only for the person it was trusted for", !(await isTrusted(B, dev.secret)));
+  check("the cookie's secret is not stored", (await db().query<{ n: string }>(
+    "SELECT count(*) AS n FROM dm_trusted_devices WHERE id = $1", [dev.secret])).rows[0]?.n === "0");
+  check("two weeks is the window", TRUST_DAYS === 14, String(TRUST_DAYS));
+  check("the machine is listed for an administrator",
+    (await listDevices(A)).some((d) => d.label.includes("Chrome")));
+  check("…with a readable name", deviceLabel("Mozilla/5.0 (Windows NT) Firefox/1") === "Firefox on Windows",
+    deviceLabel("Mozilla/5.0 (Windows NT) Firefox/1"));
+
+  console.log("\n12. Trust runs out, and can be taken away");
+  await db().query(
+    "UPDATE dm_trusted_devices SET expires_at = now() - interval '1 day' WHERE email = $1", [A]);
+  check("expired trust is no trust", !(await isTrusted(A, dev.secret)));
+  const dev2 = await trustDevice(B, "Test");
+  check("a fresh one works", await isTrusted(B, dev2.secret));
+  // "Signed out everywhere" has to include the machines, or the next link
+  // walks straight in with no code.
+  check("revoking forgets every machine", (await forgetDevices(B)) >= 1);
+  check("…so the code is asked for again", !(await isTrusted(B, dev2.secret)));
+
 } finally {
   await db().query("DELETE FROM dm_login_tokens WHERE email = ANY($1::text[])", [MINE])
     .catch(() => {});
   await db().query("DELETE FROM dm_verify_codes WHERE email = ANY($1::text[])", [MINE])
     .catch(() => {});
   await db().query("DELETE FROM dm_audit WHERE subject = ANY($1::text[])", [MINE])
+    .catch(() => {});
+  await db().query("DELETE FROM dm_trusted_devices WHERE email = ANY($1::text[])", [MINE])
     .catch(() => {});
   await db().end().catch(() => {});
 }

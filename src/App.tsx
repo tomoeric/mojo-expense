@@ -12,7 +12,9 @@ import { useDecisions } from "@/lib/decisions";
 import { SectionTitle, LiveStrip, SegmentedControl, Empty } from "@/components/ui";
 import { NotConnected } from "@/components/not-connected";
 import { SignIn } from "@/components/sign-in";
-import { DealerSignIn, DealerVerify, DealerWelcome } from "@/pages/dealer-access";
+import {
+  DealerContinue, DealerSignIn, DealerVerify, DealerWelcome,
+} from "@/pages/dealer-access";
 import { UserMenu } from "@/components/user-menu";
 import { DutchMillerApp } from "@/pages/dutch-miller";
 import { ViewAs } from "@/components/view-as";
@@ -244,6 +246,7 @@ export function App() {
     // one reads its state from an httpOnly cookie the SPA cannot see.
     const where = window.location.hash.replace(/^#\/?/, "").split(/[/?]/)[0] ?? "";
     if (where === "welcome") return <DealerWelcome />;
+    if (where === "continue") return <DealerContinue />;
     if (where === "verify") return <DealerVerify />;
     if (where === "signin") return <DealerSignIn />;
     return <SignIn authConfigured />;

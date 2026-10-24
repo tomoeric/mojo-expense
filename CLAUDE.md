@@ -90,6 +90,24 @@ the blocks.
   who could promote could promote themselves. The old "empty table makes
   everyone an admin" fallback is GONE; the pinned super admin does that job
   without leaving the door open.
+- **A LINK IS NEVER SPENT BY A GET.** Mail providers fetch the URLs in
+  incoming messages to scan them, so a redeem-on-GET burned invites on
+  delivery — reported from the real world within a day of shipping.
+  `GET /redeem` only PEEKS (`peekToken`), parks the token in the signed
+  httpOnly pending cookie and shows a Continue button; `POST /continue`
+  spends it. Never move redemption back onto a GET, and never send an
+  email from one.
+- **Setting up asks for NO code.** Opening a one-time link emailed to the
+  address already proves the inbox; a code to the same inbox proves it
+  twice. The invite link is therefore the only credential in that flow,
+  so it lives 3 days rather than 7.
+- **First sign-in from a browser DOES ask for a code, then that browser
+  is trusted for 14 days** (`devices.ts`). Trust is a row, not just a
+  cookie, so revoking sessions or disabling an account clears it —
+  otherwise "signed out everywhere" leaves every machine able to walk
+  back in with no code. Trust is checked against the device secret AND
+  the address, or one person's trust on a shared machine carries the
+  next person past the code.
 - **Nothing is stored in the clear.** `dm_login_tokens` and
   `dm_verify_codes` hold SHA-256 only. Links are single-use (conditional
   `UPDATE`, same trick as the RFID claim), asking again kills the previous

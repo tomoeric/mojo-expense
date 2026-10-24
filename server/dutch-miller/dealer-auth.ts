@@ -5,9 +5,11 @@ import { SESSION_TTL_MS, setSessionCookie, type SessionUser } from "../auth/sess
 import { button, isMailConfigured, layout, sendMail } from "../mail.js";
 import { LOCKOUT, audit, lockState, minutesLeft } from "./audit.js";
 import {
-  CODE_TTL_MINUTES, LOGIN_TTL_MINUTES, issueCode, issueToken, redeemToken, verifyCode,
+  CODE_TTL_MINUTES, LOGIN_TTL_MINUTES, issueCode, issueToken, peekToken, redeemToken,
+  verifyCode,
 } from "./invites.js";
 import { activateDmUser, getDmUser, isSuperEmail, markInvited } from "./users.js";
+import { DEVICE_COOKIE, TRUST_DAYS, deviceLabel, isTrusted, trustDevice } from "./devices.js";
 
 /**
  * The second door: dealer staff, signing in with an emailed one-time link.
@@ -30,7 +32,14 @@ import { activateDmUser, getDmUser, isSuperEmail, markInvited } from "./users.js
 
 export const dealerAuthRouter: IRouter = Router();
 
-/** The browser that asked for a login link. Soft binding — see `invites.ts`. */
+/**
+ * The browser that asked for a login link.
+ *
+ * Kept only so a link opened where it was requested can skip the code on
+ * the SAME visit. Durable trust is a separate thing — see `devices.ts`:
+ * the first sign-in from a browser asks for a code, and that browser is
+ * then trusted for two weeks.
+ */
 const NONCE_COOKIE = "dm_link";
 /** A half-finished sign-in: redeemed the link, still owes a code. */
 const PENDING_COOKIE = "dm_pending";
@@ -65,7 +74,19 @@ const secure = () => process.env.NODE_ENV === "production";
  * The half-finished sign-in
  * ------------------------------------------------------------------ */
 
-type Pending = { email: string; kind: "invite" | "login"; exp: number };
+type Pending = {
+  email: string;
+  kind: "invite" | "login";
+  /**
+   * The link itself, still unspent, until the person confirms.
+   *
+   * Safe to park here: the cookie is httpOnly and signed, so it never
+   * reaches page scripts and cannot be forged. It is dropped the moment
+   * the token is spent.
+   */
+  token?: string;
+  exp: number;
+};
 
 const sign = (payload: string): string =>
   createHmac("sha256", env.sessionSecret || "mojo-expense").update(payload).digest("base64url");
@@ -106,6 +127,17 @@ const clearPending = (res: Response) => res.clearCookie(PENDING_COOKIE, { path: 
  * row, so revoking later invalidates this cookie without waiting for it to
  * expire.
  */
+/** Remember this browser for two weeks, so the next sign-in needs no code. */
+async function rememberDevice(req: Request, res: Response, email: string): Promise<void> {
+  const { secret, maxAgeMs } = await trustDevice(email, deviceLabel(req.headers["user-agent"]));
+  res.cookie(DEVICE_COOKIE, secret, {
+    httpOnly: true, secure: secure(), sameSite: "lax", path: "/", maxAge: maxAgeMs,
+  });
+}
+
+const deviceSecret = (req: Request): string | undefined =>
+  (req.cookies as Record<string, string | undefined> | undefined)?.[DEVICE_COOKIE];
+
 async function signIn(res: Response, email: string): Promise<SessionUser | null> {
   const row = await getDmUser(email);
   if (!row || row.status !== "active") return null;
@@ -136,7 +168,7 @@ async function sendInvite(req: Request, email: string, token: string): Promise<v
        portal. Use the button below to finish setting it up — it takes a minute, and
        you will be asked to confirm a short code we send you at that point.</p>
      ${button(url, "Set up my account")}
-     <p style="margin:0;font-size:13px;color:#71717a">This link works once, and expires in 7 days.</p>`,
+     <p style="margin:0;font-size:13px;color:#71717a">This link works once, and expires in 3 days. Ask your MOJO contact for another if it runs out.</p>`,
     "If you were not expecting this, ignore it — nothing happens until the link is used.",
   ));
 }
@@ -242,56 +274,97 @@ dealerAuthRouter.post("/request", async (req: Request, res: Response) => {
 });
 
 /**
- * Spend a link.
+ * Open a link — WITHOUT spending it.
  *
- * A GET from an email client, so it answers with a redirect rather than
- * JSON, and never with anything that could be mistaken for success.
+ * Mail providers scan incoming messages by fetching the URLs inside
+ * them. A GET that redeemed the token therefore burned the invite on
+ * delivery and emailed a confirmation code to somebody who had not done
+ * anything yet; both were reported from the real world within a day of
+ * shipping. Nothing here changes a row or sends an email.
+ *
+ * The link is parked in the signed, httpOnly pending cookie and spent by
+ * `POST /continue` below, which a scanner does not issue.
  */
 dealerAuthRouter.get("/redeem", async (req: Request, res: Response) => {
   const token = String(req.query.token ?? "");
-  const nonce = (req.cookies as Record<string, string | undefined> | undefined)?.[NONCE_COOKIE];
-  const out = await redeemToken(token, nonce);
+  const out = await peekToken(token);
 
   if (!out.ok) {
     await audit({ action: "login.rejected", ip: ip(req), detail: `link ${out.reason}` });
     res.redirect(`/#/signin?link=${out.reason}`);
     return;
   }
+  setPending(res, {
+    email: out.email, kind: out.kind, token, exp: Date.now() + PENDING_TTL_MS,
+  });
+  res.redirect(out.kind === "invite" ? "/#/welcome" : "/#/continue");
+});
+
+/**
+ * Spend it, now that a person has asked.
+ *
+ * The claim is still a single conditional UPDATE, so two clicks or a
+ * double submission cannot both succeed — all that moved is WHEN it
+ * happens, from the fetch to the press.
+ */
+dealerAuthRouter.post("/continue", async (req: Request, res: Response) => {
+  const p = readPending(req);
+  if (!p?.token) {
+    res.status(400).json({ error: "That link has expired. Ask for a new one.", reason: "expired" });
+    return;
+  }
+  const nonce = (req.cookies as Record<string, string | undefined> | undefined)?.[NONCE_COOKIE];
+  const out = await redeemToken(p.token, nonce);
+  if (!out.ok) {
+    clearPending(res);
+    await audit({ action: "login.rejected", subject: p.email, ip: ip(req), detail: `link ${out.reason}` });
+    res.status(400).json({ error: linkMessage(out.reason), reason: out.reason });
+    return;
+  }
 
   res.clearCookie(NONCE_COOKIE, { path: "/" });
+  // Spent. Keep the pending cookie for the step that follows, without the
+  // token in it.
   setPending(res, { email: out.email, kind: out.kind, exp: Date.now() + PENDING_TTL_MS });
 
   if (out.kind === "invite") {
-    // The code is sent now rather than with the invite, because an invite
-    // lives for a week and a code must not.
-    try {
-      await sendCode(out.email, await issueCode(out.email));
-      await audit({ action: "code.sent", subject: out.email, ip: ip(req) });
-    } catch (err) {
-      console.error("code mail failed:", err);
-    }
     await audit({ action: "invite.redeemed", subject: out.email, ip: ip(req) });
-    res.redirect("/#/welcome");
+    res.json({ kind: "invite", email: out.email });
     return;
   }
 
-  if (out.sameBrowser) {
+  // A code is asked for on the FIRST sign-in from a browser, and not
+  // again for two weeks. `sameBrowser` lets somebody who asked and
+  // clicked in one sitting through on their very first go; after that it
+  // is the trusted-device row that decides.
+  const trusted = await isTrusted(out.email, deviceSecret(req));
+  if (trusted || out.sameBrowser) {
     const user = await signIn(res, out.email);
     await audit({
       action: user ? "login.redeemed" : "login.rejected",
-      subject: out.email, ip: ip(req), detail: user ? "same browser" : "not active",
+      subject: out.email, ip: ip(req),
+      detail: user ? (trusted ? "trusted device" : "same browser") : "not active",
     });
-    res.redirect(user ? "/" : "/#/signin?link=inactive");
+    if (!user) { res.status(403).json({ error: "That account is not active." }); return; }
+    // Same-browser but not yet trusted: start the two weeks now, so the
+    // next sign-in from here is the one that skips the code.
+    if (!trusted) await rememberDevice(req, res, out.email);
+    res.json({ kind: "login", signedIn: true });
     return;
   }
 
-  // Opened somewhere other than where it was asked for. The code it was
-  // sent with is what closes that gap.
   await audit({
-    action: "login.redeemed", subject: out.email, ip: ip(req), detail: "other browser — code required",
+    action: "login.redeemed", subject: out.email, ip: ip(req),
+    detail: "new device — code required",
   });
-  res.redirect("/#/verify");
+  res.json({ kind: "login", signedIn: false, needsCode: true, trustDays: TRUST_DAYS });
 });
+
+function linkMessage(reason: string): string {
+  if (reason === "used") return "That link has already been used. Ask for a new one.";
+  if (reason === "expired") return "That link has expired. Ask for a new one.";
+  return "That link is not valid. Ask for a new one.";
+}
 
 /** What the half-finished sign-in is waiting for. Drives the two screens. */
 dealerAuthRouter.get("/pending", (req: Request, res: Response) => {
@@ -322,18 +395,45 @@ dealerAuthRouter.post("/verify", async (req: Request, res: Response) => {
     res.status(403).json({ error: "That account is not active." });
     return;
   }
-  await audit({ action: "code.verified", subject: p.email, ip: ip(req) });
-  res.json({ ok: true });
+  await rememberDevice(req, res, p.email);
+  await audit({
+    action: "code.verified", subject: p.email, ip: ip(req),
+    detail: `device trusted for ${TRUST_DAYS} days`,
+  });
+  res.json({ ok: true, trustDays: TRUST_DAYS });
 });
+
+/** The details somebody enters about themselves, checked the same way twice. */
+function detailErrors(body: Record<string, unknown>): Record<string, string> {
+  const t = (k: string) => String(body[k] ?? "").trim();
+  const errors: Record<string, string> = {};
+  if (t("firstName") === "") errors.firstName = "First name is required.";
+  if (t("lastName") === "") errors.lastName = "Last name is required.";
+  if (t("business") === "") errors.business = "Business affiliation is required.";
+  // Ten digits somewhere in there — formatting is the person's business.
+  if ((t("phone").match(/\d/g) ?? []).length < 10) {
+    errors.phone = "Enter a contact number with at least 10 digits.";
+  }
+  return errors;
+}
 
 /**
  * Finish setting up an invited account.
  *
- * Their details AND the code in one submission: the account goes live
- * exactly once, with a verified address, or not at all. Role and page
- * access are not in the payload and are not read from it — an onboarding
- * form that could grant itself permissions would make the invite email the
- * whole security boundary.
+ * NO CONFIRMATION CODE. Opening a one-time link that was emailed to this
+ * address already proves whoever is here can read that inbox, and a code
+ * sent to the same inbox proves exactly the same thing a second time. It
+ * was in an earlier version of this flow and it was theatre — two
+ * secrets, one mailbox, one real check.
+ *
+ * What covers the gap a code would have covered is the link itself being
+ * single use and short lived: see `INVITE_TTL_MINUTES`. A code still
+ * earns its place on SIGN-IN, where it answers a different question —
+ * whether the link was opened on the machine that asked for it.
+ *
+ * Role and page access are not in the payload and are not read from it.
+ * An onboarding form that could grant its own permissions would make the
+ * invite email the entire security boundary.
  */
 dealerAuthRouter.post("/onboard", async (req: Request, res: Response) => {
   const p = readPending(req);
@@ -344,29 +444,8 @@ dealerAuthRouter.post("/onboard", async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as Record<string, unknown>;
   const t = (k: string) => String(body[k] ?? "").trim();
 
-  const errors: Record<string, string> = {};
-  if (t("firstName") === "") errors.firstName = "First name is required.";
-  if (t("lastName") === "") errors.lastName = "Last name is required.";
-  if (t("business") === "") errors.business = "Business affiliation is required.";
-  // Ten digits somewhere in there — formatting is the person's business.
-  if ((t("phone").match(/\d/g) ?? []).length < 10) {
-    errors.phone = "Enter a contact number with at least 10 digits.";
-  }
-  if (t("code") === "") errors.code = "Enter the code we emailed you.";
+  const errors = detailErrors(body);
   if (Object.keys(errors).length > 0) { res.status(400).json({ errors }); return; }
-
-  const lock = await lockState(p.email);
-  if (lock.locked) {
-    res.status(429).json({ error: `Too many attempts. Try again in ${minutesLeft(lock.until)} minutes.` });
-    return;
-  }
-
-  const check = await verifyCode(p.email, t("code"));
-  if (!check.ok) {
-    await audit({ action: "code.failed", subject: p.email, ip: ip(req), detail: check.reason });
-    res.status(400).json({ errors: { code: codeMessage(check.reason, check.attemptsLeft) } });
-    return;
-  }
 
   const row = await activateDmUser({
     email: p.email,
@@ -384,10 +463,13 @@ dealerAuthRouter.post("/onboard", async (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
-/** Ask for a fresh code during onboarding. */
+/** Ask for a fresh code on the sign-in step that needs one. */
 dealerAuthRouter.post("/resend-code", async (req: Request, res: Response) => {
   const p = readPending(req);
-  if (!p) { res.status(400).json({ error: "That has expired. Start again." }); return; }
+  if (!p || p.kind !== "login") {
+    res.status(400).json({ error: "That has expired. Start again." });
+    return;
+  }
   const lock = await lockState(p.email);
   if (lock.locked) {
     res.status(429).json({ error: `Too many attempts. Try again in ${minutesLeft(lock.until)} minutes.` });

@@ -2,6 +2,7 @@ import { db, ensureSchema } from "../db.js";
 import { isMicrosoft, type SessionUser } from "../auth/session.js";
 import { DM_PAGE_KEYS, isDmPage, type DmPageKey } from "./pages.js";
 import { ADMIN_ROLE, DEFAULT_ROLE, getRole } from "./roles.js";
+import { forgetDevices } from "./devices.js";
 
 /**
  * Who may do what inside Dutch Miller.
@@ -407,6 +408,9 @@ export async function setDmUserEnabled(
       WHERE email = $1
     RETURNING ${COLS}`,
     [who, next, by]);
+  // Otherwise the next link they are sent walks straight in with no code,
+  // which is not what switching an account off means.
+  if (!enabled) await forgetDevices(who);
   return { ok: true, user: rows[0] ? shape(rows[0]) : undefined };
 }
 
@@ -416,6 +420,10 @@ export async function revokeDmSessions(email: string): Promise<number> {
   const { rows } = await db().query<{ session_epoch: number }>(
     `UPDATE dm_users SET session_epoch = session_epoch + 1 WHERE email = $1
      RETURNING session_epoch`, [clean(email)]);
+  // "Signed out everywhere" has to include the trusted machines, or the
+  // next sign-in from one of them needs no code and the revocation was
+  // worth an hour.
+  await forgetDevices(email);
   return rows[0]?.session_epoch ?? 0;
 }
 

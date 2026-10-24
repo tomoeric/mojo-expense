@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Building2, Check, Loader2, Mail, ShieldCheck } from "lucide-react";
+import { ArrowRight, Building2, Check, Loader2, Mail, ShieldCheck } from "lucide-react";
 
 /**
  * The dealer door: the three screens somebody sees before they are signed in.
@@ -170,17 +170,119 @@ const FIELDS = [
   { key: "phone", label: "Contact number", autoComplete: "tel" },
 ] as const;
 
+/**
+ * Spend the link, once a person asks.
+ *
+ * The press is the whole point. Mail providers fetch the URLs in
+ * incoming messages to scan them, so a link that acted on being fetched
+ * was spent before its recipient ever saw it — and emailed them a
+ * confirmation code for something they had not done. A POST behind a
+ * button is not something a scanner issues.
+ */
+function useContinue(): {
+  go: () => void; busy: boolean; done: boolean; error: string; needsCode: boolean;
+} {
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [needsCode, setNeedsCode] = useState(false);
+  const [error, setError] = useState("");
+
+  const go = () => {
+    setBusy(true);
+    setError("");
+    void (async () => {
+      try {
+        const res = await fetch("/api/dm-auth/continue", { method: "POST" });
+        const body = await res.json();
+        if (!res.ok) { setError(body.error ?? "That did not work."); return; }
+        if (body.signedIn) { window.location.href = "/"; return; }
+        setNeedsCode(body.needsCode === true);
+        setDone(true);
+      } catch {
+        setError("Could not reach the server. Try again.");
+      } finally {
+        setBusy(false);
+      }
+    })();
+  };
+
+  return { go, busy, done, error, needsCode };
+}
+
+/** A login link, waiting to be spent. */
+export function DealerContinue() {
+  const { pending, loading } = usePending();
+  const { go, busy, error, needsCode, done } = useContinue();
+
+  useEffect(() => {
+    if (done && needsCode) window.location.hash = "/verify";
+  }, [done, needsCode]);
+
+  if (loading) return <Frame><p className="text-center text-sm text-muted-foreground">Loading…</p></Frame>;
+  if (!pending?.email || pending.kind !== "login") return <Expired />;
+
+  return (
+    <Frame>
+      <div className={card}>
+        <p className="text-sm font-semibold">Sign in to Dutch Miller</p>
+        <p className="mt-1 mb-4 text-sm text-muted-foreground">
+          As <strong className="text-foreground">{pending.email}</strong>.
+        </p>
+        {error && <p role="alert" className="mb-3 text-sm text-red-600">{error}</p>}
+        <button type="button" disabled={busy} onClick={go} className={primary}>
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
+          {busy ? "Signing in…" : "Continue"}
+        </button>
+        {/* Worth a line: otherwise an extra button on a link that used to
+            just work looks like something went wrong. */}
+        <p className="mt-4 text-xs text-muted-foreground">
+          This press is what uses the link — until then it stays unused, so a mail scanner
+          opening it on the way to you cannot spend it. On a new device you will be asked
+          for the code from the same email.
+        </p>
+      </div>
+    </Frame>
+  );
+}
+
 export function DealerWelcome() {
   const { pending, loading } = usePending();
+  const { go, busy: starting, done: started, error: startError } = useContinue();
   const [form, setForm] = useState({ firstName: "", lastName: "", business: "", phone: "" });
-  const [code, setCode] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [resent, setResent] = useState(false);
 
   if (loading) return <Frame><p className="text-center text-sm text-muted-foreground">Loading…</p></Frame>;
   if (!pending?.email || pending.kind !== "invite") return <Expired />;
+
+  // Step one: spend the link and have the code sent. Nothing has happened
+  // yet at this point — a scanner that fetched the URL got exactly here
+  // and no further.
+  if (!started) {
+    return (
+      <Frame>
+        <div className={card}>
+          <p className="flex items-center gap-2 text-sm font-semibold">
+            <Building2 className="h-4 w-4 shrink-0" />
+            Set up your account
+          </p>
+          <p className="mt-1 mb-4 text-sm text-muted-foreground">
+            For <strong className="text-foreground">{pending.email}</strong>. A few details
+            and you are in — there is nothing else to confirm, because this link came to
+            your inbox.
+          </p>
+          {startError && <p role="alert" className="mb-3 text-sm text-red-600">{startError}</p>}
+          <button type="button" disabled={starting} onClick={go} className={primary}>
+            {starting
+              ? <Loader2 className="h-4 w-4 animate-spin" />
+              : <ArrowRight className="h-4 w-4" />}
+            {starting ? "One moment…" : "Get started"}
+          </button>
+        </div>
+      </Frame>
+    );
+  }
 
   const submit = async () => {
     setBusy(true);
@@ -190,7 +292,7 @@ export function DealerWelcome() {
       const res = await fetch("/api/dm-auth/onboard", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ...form, code }),
+        body: JSON.stringify(form),
       });
       const body = await res.json();
       if (!res.ok) {
@@ -237,22 +339,6 @@ export function DealerWelcome() {
             </div>
           ))}
 
-          <div className="border-t border-border pt-3">
-            <label htmlFor="code" className="mb-1 block text-xs text-muted-foreground">
-              Confirmation code — we emailed it to {pending.email}
-            </label>
-            <input
-              id="code"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              value={code}
-              onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-              placeholder="000000"
-              className={`${input} font-mono text-lg tracking-[.3em] ${errors.code ? "border-red-500" : ""}`}
-            />
-            {errors.code && <p role="alert" className="mt-1 text-xs text-red-600">{errors.code}</p>}
-            <ResendCode onDone={() => setResent(true)} done={resent} />
-          </div>
         </div>
 
         {error && <p role="alert" className="mt-3 text-sm text-red-600">{error}</p>}
@@ -304,10 +390,12 @@ export function DealerVerify() {
         <p className="text-sm font-semibold">One more step</p>
         {/* Worth explaining: otherwise being asked for a code only on the
             phone looks like a glitch rather than the point. */}
+        {/* Said plainly, or being asked for a code on some visits and not
+            others looks like a glitch rather than the design. */}
         <p className="mt-1 mb-4 text-sm text-muted-foreground">
-          You opened the link on a different device from the one you asked on, so enter
-          the code from the same email to finish signing in as{" "}
-          <strong className="text-foreground">{pending.email}</strong>.
+          This is a new device, so enter the code from the same email to finish signing in
+          as <strong className="text-foreground">{pending.email}</strong>. We will remember
+          this browser for two weeks and not ask again until then.
         </p>
         <input
           autoFocus
