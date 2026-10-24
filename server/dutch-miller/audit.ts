@@ -22,6 +22,7 @@ export const AUDIT_ACTIONS = [
   "account.disabled", "account.enabled", "account.removed",
   "sessions.revoked", "locked.out",
   "notify.sent", "notify.failed", "notify.changed",
+  "approved.sent", "approved.failed",
   "role.saved", "role.removed",
   "bulk.uploaded", "bulk.committed",
   "reminder.sent", "reminder.failed", "reminder.changed",

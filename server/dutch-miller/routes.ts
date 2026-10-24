@@ -26,7 +26,7 @@ import {
   setSignupNotify,
 } from "./settings.js";
 import { runReminders } from "./reminders.js";
-import { notifySignup, signupEmail } from "./notify.js";
+import { notifyApproved, notifySignup, signupEmail } from "./notify.js";
 import { inviteUser } from "./dealer-auth.js";
 import {
   isMailConfigured, layout, mailAppIsSeparate, mailFrom, mailProblem, sendMail,
@@ -624,6 +624,40 @@ dutchMillerRouter.post(
     }
     try {
       const parsed = parseRfidFile(file);
+
+      /*
+       * ALL OR NOTHING, as with the member upload and for the same
+       * reason: a tag is a physical thing, and a pool half-loaded from
+       * a file somebody has since corrected leaves nobody able to say
+       * which numbers are in it. One unreadable number refuses the
+       * file, named, and the person fixes it and uploads again.
+       *
+       * Repeats and numbers already held are NOT errors — those are
+       * two copies of a correct number, which costs nothing. They are
+       * reported, not refused.
+       */
+      if (parsed.rejected.length > 0) {
+        res.status(400).json({
+          refused: true,
+          error: `Nothing was added. ${parsed.rejected.length} `
+            + `number${parsed.rejected.length === 1 ? "" : "s"} could not be read.`,
+          rejected: parsed.rejected,
+          cells: parsed.cells,
+          readable: parsed.numbers.length,
+        });
+        return;
+      }
+      if (parsed.numbers.length === 0) {
+        res.status(400).json({
+          refused: true,
+          error: "No RFID numbers were found in that file.",
+          rejected: [],
+          cells: parsed.cells,
+          readable: 0,
+        });
+        return;
+      }
+
       const result = await addRfids(
         parsed.numbers, parsed.rejected, parsed.cells, req.user?.email ?? "");
       emitChange("rfid");
@@ -635,6 +669,25 @@ dutchMillerRouter.post(
     }
   },
 );
+
+/** The layout, so nobody has to guess at it before uploading. */
+dutchMillerRouter.get("/rfid/format", requirePage("rfid-review"),
+  (_req: Request, res: Response) => {
+    res.json({
+      pattern: "nnnnn+nnnnnn",
+      rules: [
+        "Eleven digits as five, a plus, then six — 12345+678901.",
+        "Every cell of every sheet is read, so no column needs naming and "
+          + "headers or notes are ignored.",
+        "Eleven digits with no separator are accepted and the plus is added.",
+        "A dash in place of the plus is accepted.",
+        "Ten digits are refused — that is Excel dropping a leading zero. "
+          + "Format the column as text before saving.",
+        "A number already in the pool is reported, not added twice.",
+      ],
+      csv: "RFID\r\n12345+678901\r\n23456+789012\r\n",
+    });
+  });
 
 dutchMillerRouter.get("/rfid", requirePage("rfid-review"), async (req: Request, res: Response) => {
   const status = String(req.query.status ?? "all");
@@ -898,6 +951,10 @@ dutchMillerRouter.post(
       });
       return;
     }
+    // The one message the dealer actually wants: their member can
+    // wash. Not awaited — the approval is already recorded, and a
+    // bounced email must not make it look otherwise.
+    void notifyApproved(out.row, publicOrigin(req));
     emitChange("signups");
     res.json({ row: out.row });
   },

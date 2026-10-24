@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Upload } from "lucide-react";
+import { AlertTriangle, Download, Loader2, Upload } from "lucide-react";
 
 type Status = "active" | "inactive" | "used";
 type Row = {
@@ -8,6 +8,13 @@ type Row = {
   batch: string; usedAt: string | null; usedBy: string | null; usedFor: string | null;
 };
 type Counts = { active: number; inactive: number; used: number; total: number };
+type Refusal = {
+  refused: true;
+  error: string;
+  rejected: { raw: string; problem: string }[];
+  cells: number;
+  readable: number;
+};
 type UploadResult = {
   added: number;
   duplicatesInFile: { number: string; copies: number }[];
@@ -37,7 +44,9 @@ export function DmRfidPage() {
   const [tab, setTab] = useState<"all" | Status>("active");
   const [search, setSearch] = useState("");
   const [result, setResult] = useState<UploadResult | null>(null);
+  const [refused, setRefused] = useState<Refusal | null>(null);
   const [error, setError] = useState("");
+  const [showFormat, setShowFormat] = useState(false);
   const pick = useRef<HTMLInputElement>(null);
 
   const list = useQuery({
@@ -60,11 +69,30 @@ export function DmRfidPage() {
         body: file,
       });
       const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? "The upload failed.");
+      if (!res.ok) {
+        // A refusal is an answer, not a failure: it carries which
+        // numbers could not be read so the page can name them.
+        if (body.refused) {
+          const err = new Error(body.error) as Error & { refusal?: Refusal };
+          err.refusal = body as Refusal;
+          throw err;
+        }
+        throw new Error(body.error ?? "The upload failed.");
+      }
       return body as UploadResult;
     },
-    onSuccess: (r) => { setResult(r); setError(""); void qc.invalidateQueries({ queryKey: ["dm-rfid"] }); },
-    onError: (e) => { setError((e as Error).message); setResult(null); },
+    onSuccess: (r) => {
+      setResult(r);
+      setRefused(null);
+      setError("");
+      void qc.invalidateQueries({ queryKey: ["dm-rfid"] });
+    },
+    onError: (e) => {
+      const err = e as Error & { refusal?: Refusal };
+      setResult(null);
+      setRefused(err.refusal ?? null);
+      setError(err.refusal ? "" : err.message);
+    },
   });
 
   const setActive = useMutation({
@@ -118,13 +146,55 @@ export function DmRfidPage() {
             {upload.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
             {upload.isPending ? "Reading…" : "Upload CSV or Excel"}
           </button>
+          <button
+            type="button"
+            onClick={() => setShowFormat((v) => !v)}
+            className="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted"
+          >
+            {showFormat ? "Hide required format" : "See required format"}
+          </button>
           <p className="text-xs text-muted-foreground">
             Numbers are <code>nnnnn+nnnnnn</code>. Every cell is read, so no column needs naming.
-            A number already in the pool is never added twice.
           </p>
         </div>
 
+        {showFormat && <FormatHelp />}
+
         {error && <p className="mt-3 text-sm font-semibold text-red-600">{error}</p>}
+
+        {/* All or nothing, as with the member upload: a pool half-loaded
+            from a file somebody has since corrected leaves nobody able
+            to say which numbers are in it. */}
+        {refused && (
+          <div className="mt-3 space-y-2">
+            <p className="flex items-start gap-2 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-700 dark:text-red-400">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                <strong>{refused.error}</strong> Fix the file and upload it again — a pool
+                half-loaded from a file that is being corrected leaves nobody able to say
+                which numbers are in it.
+              </span>
+            </p>
+            {refused.rejected.length > 0 && (
+              <div className="max-h-56 overflow-auto rounded-lg border border-border">
+                <table className="w-full text-xs">
+                  <tbody>
+                    {refused.rejected.map((r, i) => (
+                      <tr key={`${r.raw}-${i}`} className="border-b border-border last:border-b-0">
+                        <td className="px-3 py-1.5 font-mono">{r.raw || "(blank)"}</td>
+                        <td className="px-3 py-1.5 text-muted-foreground">{r.problem}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground">
+              {refused.readable} of {refused.cells.toLocaleString()} cells read as numbers.
+              Nothing was added to the pool.
+            </p>
+          </div>
+        )}
 
         {result && (
           <div className="mt-3 space-y-2 border-t border-border pt-3 text-sm">
@@ -262,6 +332,48 @@ export function DmRfidPage() {
           Narrow it with the search box.
         </p>
       )}
+    </div>
+  );
+}
+
+/** What the file has to look like, without leaving the page to find out. */
+function FormatHelp() {
+  const q = useQuery({
+    queryKey: ["dm-rfid-format"],
+    queryFn: async () => {
+      const res = await fetch("/api/dutch-miller/rfid/format");
+      if (!res.ok) throw new Error("Could not load.");
+      return (await res.json()) as { pattern: string; rules: string[]; csv: string };
+    },
+  });
+
+  const download = () => {
+    if (!q.data) return;
+    const url = URL.createObjectURL(
+      new Blob([`\ufeff${q.data.csv}`], { type: "text/csv;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "rfid-template.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="mt-3 rounded-lg border border-border bg-muted/20 px-4 py-3">
+      <p className="text-sm font-semibold">
+        Required format — <code>{q.data?.pattern ?? "nnnnn+nnnnnn"}</code>
+      </p>
+      <ul className="mt-1.5 space-y-1 text-xs text-muted-foreground">
+        {(q.data?.rules ?? []).map((r) => <li key={r}>• {r}</li>)}
+      </ul>
+      <button
+        type="button"
+        onClick={download}
+        className="mt-3 inline-flex items-center gap-2 rounded-md border border-border bg-background px-3 py-1.5 text-xs hover:bg-muted"
+      >
+        <Download className="h-3.5 w-3.5" />
+        Download template
+      </button>
     </div>
   );
 }

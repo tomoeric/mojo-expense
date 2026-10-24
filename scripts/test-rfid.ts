@@ -138,6 +138,25 @@ try {
     onlyUsed.rows.every((r) => r.status === "used"));
   check("a number not in the pool cannot be issued",
     !(await useRfid("99999+999999", "x@example.invalid", "")).ok);
+  console.log("\n9. A file is all or nothing");
+  // The route refuses the whole file when any cell is an unreadable
+  // attempt at a number, so this checks the parser gives it the two
+  // facts that decision needs: what could be read, and what could not.
+  const mixedFile = parseRfidFile(Buffer.from(
+    `RFID\n${N(7)}\n1234567890\n${N(8)}\n`, "utf8"));
+  check("the readable ones are still reported",
+    mixedFile.numbers.length === 2, String(mixedFile.numbers.length));
+  check("…and so is the one that is not", mixedFile.rejected.length === 1);
+  check("…with a reason somebody can act on",
+    /leading zero/i.test(mixedFile.rejected[0]?.problem ?? ""),
+    mixedFile.rejected[0]?.problem ?? "");
+  // Headers and notes are furniture, not errors — refusing a file for
+  // having a title row would make the rule unusable.
+  const tidy = parseRfidFile(Buffer.from(`Tag numbers\nRFID\n${N(9)}\nVehicle 42\n`, "utf8"));
+  check("a header and a note are not failures", tidy.rejected.length === 0,
+    JSON.stringify(tidy.rejected));
+  check("…and the real number is still found", tidy.numbers.length === 1);
+
 } finally {
   await db().query("DELETE FROM dm_rfid WHERE number = ANY($1::text[])",
     [[...MINE, N(1), N(2), N(3), N(4)]]).catch(() => {});

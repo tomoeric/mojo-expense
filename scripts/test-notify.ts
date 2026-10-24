@@ -16,7 +16,7 @@
 import {
   getSignupNotify, parseRecipients, recipientsFor, setSignupNotify,
 } from "../server/dutch-miller/settings.js";
-import { signupEmail } from "../server/dutch-miller/notify.js";
+import { approvedEmail, signupEmail } from "../server/dutch-miller/notify.js";
 import type { SignupRow } from "../server/dutch-miller/signups.js";
 import { db } from "../server/db.js";
 
@@ -180,6 +180,26 @@ try {
     signupEmail(ROW, { sample: true }).html.includes("No member was created"));
   check("…and its subject cannot be mistaken for a real one",
     signupEmail(ROW, { sample: true }).subject.startsWith("Sample"));
+
+  console.log("\n7b. The approval, to whoever submitted it");
+  const done = { ...ROW, completedAt: "2026-10-25T15:00:00.000Z",
+    completedBy: "csc@mojocarwash.com", openedAt: "2026-10-24T22:00:00.000Z" };
+  const appr = approvedEmail(done, { origin: "https://example.invalid" });
+  // The dealer has been waiting on one fact since they pressed submit.
+  // It leads with that, in those words, not with a status name.
+  check("it says the member can wash", /can now wash their vehicle/i.test(appr.html));
+  check("…in the subject too", /can wash/i.test(appr.subject), appr.subject);
+  check("…and names them", appr.subject.includes("Dana Reyes"));
+  check("the tag is on it, since that is what they hand over",
+    appr.html.includes(ROW.customer.rfid));
+  check("their own references are on it", appr.html.includes("0041")
+    && appr.html.includes("00712"));
+  check("the vehicle and plate are on it",
+    appr.html.includes("2024 Ford Bronco") && appr.html.includes("ABC 1234"));
+  check("when it was approved", /Approved/.test(appr.html));
+  // Submitting again would take a second tag off a member who has one.
+  check("…and they are told not to submit again",
+    /rather than submitting them again/i.test(appr.html));
 
   console.log("\n8. A name with markup in it");
   const nasty = { ...ROW, customer: { ...ROW.customer, lastName: '<script>x</script>' } };

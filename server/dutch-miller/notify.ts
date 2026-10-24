@@ -206,3 +206,96 @@ export async function notifySignup(s: SignupRow, origin?: string): Promise<void>
     });
   }
 }
+
+
+/* ------------------------------------------------------------------ *
+ * Approved
+ * ------------------------------------------------------------------ */
+
+/**
+ * Told to the dealer who submitted it, when MOJO finishes with it.
+ *
+ * This is the only message in the whole flow that the dealer actually
+ * wants. Everything before it is MOJO's internal progress; this one
+ * answers the question they have been holding since they pressed
+ * submit — can this person wash their car yet. So it leads with that
+ * and in those words, rather than with a status name.
+ */
+export function approvedEmail(s: SignupRow, opts: { origin?: string } = {}): {
+  subject: string;
+  html: string;
+} {
+  const name = `${s.customer.firstName} ${s.customer.lastName}`.trim();
+  const vehicle = [s.customer.vehicleYear, s.customer.vehicleMake, s.customer.vehicleModel]
+    .filter(Boolean).join(" ");
+  const plate = [s.customer.plateDlw, s.customer.plateState].filter(Boolean).join("  ");
+
+  return {
+    subject: `Approved — ${name} is set up and can wash`,
+    html: layout(
+      "Membership approved",
+      `<table style="border-collapse:collapse;width:100%;background:#ecfdf5;border-radius:8px">
+         <tr><td style="padding:16px 18px">
+           <span style="display:block;font-size:17px;font-weight:700;color:#065f46">
+             ${escapeHtml(name)} can now wash their vehicle.</span>
+           <span style="display:block;margin-top:4px;font-size:14px;color:#047857">
+             MOJO has reviewed and approved the membership. The tag is active.</span>
+         </td></tr>
+       </table>
+
+       ${bucket("Membership", [
+        row("Member", name),
+        row("RFID tag", s.customer.rfid),
+        row("Vehicle", vehicle || null),
+        row("Plate", plate || null),
+      ].join(""))}
+
+       ${bucket("Your reference", [
+        row("DLW Contract ID", s.dealer.dlwContractId),
+        row("Deal #", s.dealer.dealNumber || null),
+        row("Customer ID #", s.dealer.customerId || null),
+        row("Submitted", stamp(s.submittedAt)),
+        row("Approved", s.completedAt ? stamp(s.completedAt) : "—"),
+      ].join(""))}
+
+       <p style="margin:22px 0 0;font-size:14px;color:#52525b">
+         Hand the tag to the member and they are ready to go. If anything here is wrong,
+         reply to this message rather than submitting them again — a second signup would
+         take a second tag.</p>
+
+       ${opts.origin
+        ? `<div style="margin:20px 0 0">${button(
+          `${opts.origin}/#/member-signups/review`, "See your signups")}</div>`
+        : ""}`,
+      "Sent because this address submitted the signup.",
+    ),
+  };
+}
+
+/**
+ * Send it. Never throws at the caller.
+ *
+ * The approval is already recorded by the time this runs, exactly as
+ * with the submission notification: failing the request because an
+ * email bounced would tell somebody the approval did not happen when
+ * it did.
+ */
+export async function notifyApproved(s: SignupRow, origin?: string): Promise<void> {
+  try {
+    const to = s.submittedBy.trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return;
+    if (!isMailConfigured()) {
+      await audit({ action: "approved.failed", subject: s.guid, detail: "email is not configured" });
+      return;
+    }
+    const { subject, html } = approvedEmail(s, { origin });
+    await sendMail(to, subject, html);
+    await audit({ action: "approved.sent", subject: s.guid, detail: to });
+  } catch (err) {
+    console.error("approval email failed:", err);
+    await audit({
+      action: "approved.failed", subject: s.guid,
+      detail: err instanceof Error ? err.message.slice(0, 200) : "unknown",
+    });
+  }
+}
