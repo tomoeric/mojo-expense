@@ -69,6 +69,22 @@ try {
     (await refused("save super", () => saveDmUser({ email: OWNER, roleKey: ADMIN_ROLE, by: OWNER, byRole: "super" }))).includes("super administrator"));
   check("…nor removed", (await removeDmUser(OWNER, "super")).ok === false);
 
+  console.log("\n1b. An ordinary admin cannot touch the super admin");
+  // Not merely hidden in the UI: an admin session that asked directly
+  // has to be refused, and the pinned account has to survive it.
+  check("an admin cannot edit the super admin",
+    (await refused("edit super", () => saveDmUser({
+      email: OWNER, roleKey: DEFAULT_ROLE, by: BOSS, byRole: "admin",
+    }))).includes("super administrator"));
+  check("an admin cannot remove the super admin",
+    (await removeDmUser(OWNER, "admin")).ok === false);
+  check("an admin cannot switch the super admin off",
+    (await setDmUserEnabled(OWNER, false, BOSS, "admin")).ok === false);
+  check("…and a SUPER admin cannot either — it is configuration, not a row",
+    (await setDmUserEnabled(OWNER, false, OWNER, "super")).ok === false);
+  check("…so they still hold everything",
+    (await dmAccessFor(OWNER)).pages.length === DM_PAGE_KEYS.length);
+
   console.log("\n2. Only super can make an admin");
   const asAdmin = await refused("promote", () => saveDmUser({ email: BOSS, roleKey: ADMIN_ROLE, by: HAND, byRole: "admin" }));
   check("an admin cannot promote anybody", asAdmin.includes("super administrator"), asAdmin);

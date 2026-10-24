@@ -179,8 +179,13 @@ dutchMillerRouter.get("/users", requireDmAdmin, async (req: Request, res: Respon
  * the dialog depend on a Graph permission to answer a question
  * configuration already answers.
  */
-dutchMillerRouter.get("/people", requireDmAdmin, async (_req: Request, res: Response) => {
-  const users = await listDmUsers();
+dutchMillerRouter.get("/people", requireDmAdmin, async (req: Request, res: Response) => {
+  // A super administrator is only visible to another one. An ordinary
+  // admin cannot edit, disable or remove the account anyway, so listing
+  // it would do nothing except advertise which address holds the keys —
+  // and this list is the first thing a compromised admin session reads.
+  const iAmSuper = isSuperEmail(req.viewingAs?.real.email ?? req.user?.email ?? "");
+  const users = (await listDmUsers()).filter((u) => iAmSuper || !isSuperEmail(u.email));
   const configured = new Map(users.map((u) => [u.email, u]));
 
   type Row = {
@@ -192,7 +197,10 @@ dutchMillerRouter.get("/people", requireDmAdmin, async (_req: Request, res: Resp
   const rows = new Map<string, Row>();
   const add = (r: Row) => { if (!rows.has(r.email)) rows.set(r.email, r); };
 
-  for (const email of [...superEmails(), ...dutchMillerNamed()]) {
+  const named = iAmSuper
+    ? [...superEmails(), ...dutchMillerNamed()]
+    : dutchMillerNamed().filter((e) => !isSuperEmail(e));
+  for (const email of named) {
     add({
       email, name: email, business: null, source: "microsoft",
       pinnedSuper: isSuperEmail(email), user: configured.get(email) ?? null,

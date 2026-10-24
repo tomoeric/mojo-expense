@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Eye, Loader2, Mail, Pencil, Power, ScrollText, Search, Send, ShieldCheck,
@@ -49,7 +49,7 @@ export function DmPeopleDialog({
 }) {
   const qc = useQueryClient();
   const [filter, setFilter] = useState("");
-  const [show, setShow] = useState<"all" | "microsoft" | "invited" | "not">("all");
+  const [onlyNoRole, setOnlyNoRole] = useState(false);
   const [editing, setEditing] = useState<Person | null>(null);
   const [inviting, setInviting] = useState(false);
   const [trail, setTrail] = useState<string | null>(null);
@@ -86,26 +86,31 @@ export function DmPeopleDialog({
     onError: (e) => { setError((e as Error).message); setNote(""); },
   });
 
-  const people = useMemo(() => {
+  /**
+   * Two groups, because they are two different jobs.
+   *
+   * MOJO staff are already in the tenant and only need a role. Invited
+   * people are an account MOJO made for somebody outside, with an
+   * invitation that can go unanswered and a link that can expire.
+   * Mixed in one list, you had to read the badge on every row to work
+   * out which kind of problem you were looking at.
+   */
+  const groups = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    return (data.data?.people ?? []).filter((p) => {
-      if (show === "microsoft" && p.source !== "microsoft") return false;
-      if (show === "invited" && p.source !== "invited") return false;
-      if (show === "not" && p.user) return false;
-      if (q === "") return true;
-      return p.email.includes(q) || p.name.toLowerCase().includes(q)
-        || (p.business ?? "").toLowerCase().includes(q);
-    });
-  }, [data.data, filter, show]);
+    const matches = (p: Person) =>
+      (!onlyNoRole || !p.user)
+      && (q === "" || p.email.includes(q) || p.name.toLowerCase().includes(q)
+        || (p.business ?? "").toLowerCase().includes(q));
+    const all = data.data?.people ?? [];
+    return {
+      microsoft: all.filter((p) => p.source === "microsoft" && matches(p)),
+      invited: all.filter((p) => p.source === "invited" && matches(p)),
+      total: all.filter(matches).length,
+      noRole: all.filter((p) => !p.user).length,
+    };
+  }, [data.data, filter, onlyNoRole]);
 
   const mailOff = data.data && !data.data.mailConfigured;
-  const all = data.data?.people ?? [];
-  const counts = {
-    all: all.length,
-    microsoft: all.filter((p) => p.source === "microsoft").length,
-    invited: all.filter((p) => p.source === "invited").length,
-    not: all.filter((p) => !p.user).length,
-  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4 sm:p-8">
@@ -175,24 +180,17 @@ export function DmPeopleDialog({
               className="w-full bg-transparent text-sm outline-none"
             />
           </div>
-          {([
-            ["all", "Everyone"],
-            ["microsoft", "MOJO staff"],
-            ["invited", "Outside"],
-            ["not", "No role yet"],
-          ] as const)
-            .map(([k, label]) => (
-              <button
-                key={k}
-                type="button"
-                onClick={() => setShow(k)}
-                className={`rounded-full border px-3 py-1 text-xs ${
-                  show === k ? "border-foreground font-semibold" : "border-border text-muted-foreground"
-                }`}
-              >
-                {label} {counts[k]}
-              </button>
-            ))}
+          {/* The two kinds are sections now, so the only filter left is
+              the one that crosses both: who still has nothing. */}
+          <button
+            type="button"
+            onClick={() => setOnlyNoRole((v) => !v)}
+            className={`rounded-full border px-3 py-1 text-xs ${
+              onlyNoRole ? "border-foreground font-semibold" : "border-border text-muted-foreground"
+            }`}
+          >
+            No role yet {groups.noRole}
+          </button>
         </div>
 
         {error && <p className="border-b border-border px-5 py-2 text-sm text-red-600">{error}</p>}
@@ -223,15 +221,28 @@ export function DmPeopleDialog({
           {data.isPending && (
             <p className="px-5 py-8 text-center text-sm text-muted-foreground">Loading…</p>
           )}
-          {data.data && people.length === 0 && (
+          {data.data && groups.total === 0 && (
             <p className="px-5 py-8 text-center text-sm text-muted-foreground">
-              {filter ? "Nobody matches that." : "Nobody to show."}
+              {filter || onlyNoRole ? "Nobody matches that." : "Nobody to show."}
             </p>
           )}
-          {people.map((p) => (
+          {([
+            ["MOJO staff", "They sign in with Microsoft. Give them a role.", groups.microsoft],
+            ["Invited from outside", "Accounts MOJO created for people with no Microsoft login.",
+              groups.invited],
+          ] as const).map(([heading, blurb, list]) => list.length === 0 ? null : (
+            <section key={heading}>
+              <div className="sticky top-0 z-[1] border-b border-border bg-muted/60 px-5 py-1.5 backdrop-blur">
+                <p className="text-xs font-semibold">
+                  {heading}
+                  <span className="ml-1.5 font-normal text-muted-foreground">{list.length}</span>
+                </p>
+                <p className="text-[11px] text-muted-foreground">{blurb}</p>
+              </div>
+              {list.map((p) => (
+              <Fragment key={p.email}>
             <div
-              key={p.email}
-              className="flex items-center gap-3 border-b border-border px-5 py-2.5 last:border-b-0"
+              className="flex items-center gap-3 border-b border-border px-5 py-2.5"
             >
               <div className="min-w-0 flex-1">
                 <p className="flex items-center gap-1.5 truncate text-sm font-medium">
@@ -365,21 +376,24 @@ export function DmPeopleDialog({
                 )}
               </div>
             </div>
+            {editing?.email === p.email && (
+              <AssignRole
+                person={p}
+                roles={data.data?.roles ?? []}
+                iAmSuper={iAmSuper}
+                busy={act.isPending}
+                onCancel={() => setEditing(null)}
+                onSave={(roleKey, invite) => act.mutate(
+                  { url: "/api/dutch-miller/users", body: { email: p.email, roleKey, invite } },
+                  { onSuccess: () => setEditing(null) })}
+              />
+            )}
+              </Fragment>
+              ))}
+            </section>
           ))}
         </div>
 
-        {editing && (
-          <AssignRole
-            person={editing}
-            roles={data.data?.roles ?? []}
-            iAmSuper={iAmSuper}
-            busy={act.isPending}
-            onCancel={() => setEditing(null)}
-            onSave={(roleKey, invite) => act.mutate(
-              { url: "/api/dutch-miller/users", body: { email: editing.email, roleKey, invite } },
-              { onSuccess: () => setEditing(null) })}
-          />
-        )}
       </div>
     </div>
   );
