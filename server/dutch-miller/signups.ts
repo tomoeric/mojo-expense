@@ -46,12 +46,14 @@ CREATE TABLE IF NOT EXISTS dm_member_signups (
   display_timezone text        NOT NULL DEFAULT '${DISPLAY_TZ}',
 
   dlw_contract_id  text        NOT NULL,
-  deal_number      text        NOT NULL,
-  customer_id      text        NOT NULL,
+  /** The dealer's own references, not always known at signup. */
+  deal_number      text        NOT NULL DEFAULT '',
+  customer_id      text        NOT NULL DEFAULT '',
 
   first_name       text        NOT NULL,
   last_name        text        NOT NULL,
   plate_dlw        text,
+  plate_state      text,
   vehicle_make     text,
   vehicle_model    text,
   vehicle_year     text,
@@ -65,8 +67,26 @@ CREATE TABLE IF NOT EXISTS dm_member_signups (
   completed_at     timestamptz,
   completed_by     text
 );
+/**
+ * The two middle steps of the tracker.
+ *
+ * notified_at is when the notification actually left — not when one was
+ * meant to, so a step that never lights is a notification nobody got
+ * rather than a setting somebody has to go and check.
+ *
+ * opened_at is somebody at MOJO OPENING THE RECORD, not opening the
+ * email. Email-open tracking is a pixel, and a pixel lies in both
+ * directions: blocked images read as never opened, and the scanners
+ * that fetch everything read as opened before anybody saw it — the
+ * exact failure that burned an invite here last week. Opening the
+ * record is a real action by a real person.
+ */
+ALTER TABLE dm_member_signups ADD COLUMN IF NOT EXISTS notified_at timestamptz;
+ALTER TABLE dm_member_signups ADD COLUMN IF NOT EXISTS opened_at timestamptz;
+ALTER TABLE dm_member_signups ADD COLUMN IF NOT EXISTS opened_by text;
 -- A tag belongs to one member. The last line of defence, below every check
 -- in application code, and the reason a double submission cannot double-assign.
+ALTER TABLE dm_member_signups ADD COLUMN IF NOT EXISTS plate_state text;
 CREATE UNIQUE INDEX IF NOT EXISTS dm_member_signups_rfid_once
   ON dm_member_signups (rfid);
 CREATE INDEX IF NOT EXISTS dm_member_signups_recent
@@ -85,12 +105,16 @@ export type SignupRow = {
   customer: {
     firstName: string; lastName: string;
     plateDlw: string | null;
+    plateState: string | null;
     vehicleMake: string | null; vehicleModel: string | null;
     vehicleYear: string | null; vehicleColor: string | null;
     rfid: string;
   };
   submittedAt: string;
   submittedBy: string;
+  notifiedAt: string | null;
+  openedAt: string | null;
+  openedBy: string | null;
   completedAt: string | null;
   completedBy: string | null;
 };
@@ -137,7 +161,8 @@ export type SignupInput = {
   guid: string; createdAt: string; token: string;
   dlwContractId: string; dealNumber: string; customerId: string;
   firstName: string; lastName: string;
-  plateDlw: string; vehicleMake: string; vehicleModel: string;
+  plateDlw: string; plateState: string;
+  vehicleMake: string; vehicleModel: string;
   vehicleYear: string; vehicleColor: string;
   rfid: string;
 };
@@ -151,10 +176,27 @@ export type SignupInput = {
  */
 const t = (v: unknown): string => String(v ?? "").trim();
 
+/**
+ * The plate's state, as the two letters on the registration.
+ *
+ * A fixed list rather than free text: a plate is only unique within its
+ * state, so "OH" and "Ohio" and "oh" being three different answers makes
+ * the pair useless for matching a vehicle later.
+ */
+export const STATES = [
+  "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", "HI", "ID",
+  "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO",
+  "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA",
+  "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
+] as const;
+
+export const isState = (v: string): boolean => (STATES as readonly string[]).includes(v);
+
 const FIELD_LABEL: Record<string, string> = {
   dlwContractId: "DLW Contract ID",
   dealNumber: "Deal #",
   customerId: "Customer ID #",
+  plateState: "State",
   firstName: "First Name",
   lastName: "Last Name",
   vehicleYear: "Vehicle Year",
@@ -174,6 +216,7 @@ export function validateSignup(raw: Partial<SignupInput>): {
     firstName: t(raw.firstName),
     lastName: t(raw.lastName),
     plateDlw: t(raw.plateDlw),
+    plateState: t(raw.plateState).toUpperCase(),
     vehicleMake: t(raw.vehicleMake),
     vehicleModel: t(raw.vehicleModel),
     vehicleYear: t(raw.vehicleYear),
@@ -182,8 +225,13 @@ export function validateSignup(raw: Partial<SignupInput>): {
   };
 
   const errors: Record<string, string> = {};
-  for (const k of ["dlwContractId", "dealNumber", "customerId", "firstName", "lastName", "rfid"] as const) {
+  // Deal # and Customer ID # are the dealer's own references and are not
+  // always known at the moment somebody is signed up.
+  for (const k of ["dlwContractId", "firstName", "lastName", "rfid"] as const) {
     if (clean[k] === "") errors[k] = `${FIELD_LABEL[k]} is required.`;
+  }
+  if (clean.plateState !== "" && !isState(clean.plateState)) {
+    errors.plateState = "Pick a state from the list.";
   }
   // Optional, but four digits if it is there at all.
   if (clean.vehicleYear !== "" && !/^\d{4}$/.test(clean.vehicleYear)) {
@@ -202,10 +250,12 @@ export function validateSignup(raw: Partial<SignupInput>): {
 type Db = {
   guid: string; created_at: Date; display_timezone: string;
   dlw_contract_id: string; deal_number: string; customer_id: string;
-  first_name: string; last_name: string; plate_dlw: string | null;
+  first_name: string; last_name: string;
+  plate_dlw: string | null; plate_state: string | null;
   vehicle_make: string | null; vehicle_model: string | null;
   vehicle_year: string | null; vehicle_color: string | null; rfid: string;
   submitted_at: Date; submitted_by: string;
+  notified_at: Date | null; opened_at: Date | null; opened_by: string | null;
   completed_at: Date | null; completed_by: string | null;
 };
 
@@ -222,6 +272,7 @@ const shape = (r: Db): SignupRow => ({
     firstName: r.first_name,
     lastName: r.last_name,
     plateDlw: r.plate_dlw,
+    plateState: r.plate_state,
     vehicleMake: r.vehicle_make,
     vehicleModel: r.vehicle_model,
     vehicleYear: r.vehicle_year,
@@ -230,6 +281,9 @@ const shape = (r: Db): SignupRow => ({
   },
   submittedAt: r.submitted_at.toISOString(),
   submittedBy: r.submitted_by,
+  notifiedAt: r.notified_at?.toISOString() ?? null,
+  openedAt: r.opened_at?.toISOString() ?? null,
+  openedBy: r.opened_by,
   completedAt: r.completed_at?.toISOString() ?? null,
   completedBy: r.completed_by,
 });
@@ -237,7 +291,7 @@ const shape = (r: Db): SignupRow => ({
 const COLS = `guid, created_at, display_timezone, dlw_contract_id, deal_number,
   customer_id, first_name, last_name, plate_dlw, vehicle_make, vehicle_model,
   vehicle_year, vehicle_color, rfid, submitted_at, submitted_by,
-  completed_at, completed_by`;
+  notified_at, opened_at, opened_by, completed_at, completed_by`;
 
 export async function listSignups(opts: {
   status?: "all" | "new" | "complete";
@@ -345,17 +399,18 @@ export async function createSignup(raw: Partial<SignupInput>, by: string): Promi
       `INSERT INTO dm_member_signups (
          guid, created_at, display_timezone,
          dlw_contract_id, deal_number, customer_id,
-         first_name, last_name, plate_dlw, vehicle_make, vehicle_model,
+         first_name, last_name, plate_dlw, plate_state, vehicle_make, vehicle_model,
          vehicle_year, vehicle_color, rfid, submitted_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
-               NULLIF($9, ''), NULLIF($10, ''), NULLIF($11, ''),
-               NULLIF($12, ''), NULLIF($13, ''), $14, $15)
+               NULLIF($9, ''), NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''),
+               NULLIF($13, ''), NULLIF($14, ''), $15, $16)
        ON CONFLICT (guid) DO NOTHING
        RETURNING ${COLS}`,
       [clean.guid, clean.createdAt, DISPLAY_TZ,
         clean.dlwContractId, clean.dealNumber, clean.customerId,
-        clean.firstName, clean.lastName, clean.plateDlw, clean.vehicleMake,
-        clean.vehicleModel, clean.vehicleYear, clean.vehicleColor, clean.rfid, by]);
+        clean.firstName, clean.lastName, clean.plateDlw, clean.plateState,
+        clean.vehicleMake, clean.vehicleModel, clean.vehicleYear, clean.vehicleColor,
+        clean.rfid, by]);
 
     if (ins.rowCount === 0) {
       // Two submissions of the SAME entry, overlapping. The other one won
@@ -382,6 +437,30 @@ export async function createSignup(raw: Partial<SignupInput>, by: string): Promi
   } finally {
     client.release();
   }
+}
+
+/** The notification went out. Recorded so a step that never lights means something. */
+export async function markNotified(guid: string): Promise<void> {
+  await ensure();
+  await db().query(
+    "UPDATE dm_member_signups SET notified_at = now() WHERE guid = $1 AND notified_at IS NULL",
+    [guid]).catch(() => {});
+}
+
+/**
+ * Somebody at MOJO opened the record.
+ *
+ * First open only — the step is "has anybody looked at this", and
+ * rewriting it on every view would turn a milestone into a last-seen
+ * timestamp that tells nobody whether it has been dealt with.
+ */
+export async function markOpened(guid: string, by: string): Promise<SignupRow | null> {
+  await ensure();
+  const { rows } = await db().query<Db>(
+    `UPDATE dm_member_signups SET opened_at = now(), opened_by = $2
+      WHERE guid = $1 AND opened_at IS NULL
+    RETURNING ${COLS}`, [guid, by]);
+  return rows[0] ? shape(rows[0]) : null;
 }
 
 /**

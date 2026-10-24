@@ -4,7 +4,7 @@ import express, {
 import { parseRfidFile } from "./rfid-parse.js";
 import { addRfids, listRfids, rfidCounts, setRfidActive, useRfid } from "./rfid.js";
 import {
-  DISPLAY_TZ, createSignup, getSignup, listSignups, newHandle, setComplete,
+  DISPLAY_TZ, createSignup, getSignup, listSignups, markOpened, newHandle, setComplete,
   type SignupInput, type SignupRow,
 } from "./signups.js";
 import {
@@ -16,6 +16,7 @@ import {
 import { audit, listAudit } from "./audit.js";
 import { DEFAULT_ROLE, listRoles, removeRole, saveRole } from "./roles.js";
 import { dutchMillerNamed } from "../auth/apps.js";
+import { publicOrigin } from "../origin.js";
 import { getSignupNotify, parseRecipients, setSignupNotify } from "./settings.js";
 import { notifySignup, signupEmail } from "./notify.js";
 import { inviteUser } from "./dealer-auth.js";
@@ -425,16 +426,19 @@ dutchMillerRouter.post("/settings/notifications/sample", requireDmAdmin,
       displayTimezone: DISPLAY_TZ,
       dealer: { dlwContractId: "0041", dealNumber: "00712", customerId: "C-9" },
       customer: {
-        firstName: "Sample", lastName: "Member", plateDlw: "ABC 1234",
+        firstName: "Sample", lastName: "Member", plateDlw: "ABC 1234", plateState: "WV",
         vehicleMake: "Ford", vehicleModel: "Bronco", vehicleYear: "2024",
         vehicleColor: "Blue", rfid: "00000+000000",
       },
       submittedAt: new Date().toISOString(),
       submittedBy: to,
+      notifiedAt: null,
+      openedAt: null,
+      openedBy: null,
       completedAt: null,
       completedBy: null,
     };
-    const { subject, html } = signupEmail(sample, { sample: true });
+    const { subject, html } = signupEmail(sample, { sample: true, origin: publicOrigin(req) });
     try {
       await sendMail(to, subject, html);
       res.json({ ok: true, to, usedRealSignup: Boolean(recent) });
@@ -629,7 +633,7 @@ dutchMillerRouter.post(
       // Not awaited, and not inside the transaction: the member exists and
       // the tag is claimed by now, so a bounced email must not tell the
       // dealer their signup failed. Outcomes land in the audit trail.
-      if (!out.alreadyExisted) void notifySignup(out.row);
+      if (!out.alreadyExisted) void notifySignup(out.row, publicOrigin(req));
       res.json({ row: out.row, alreadyExisted: out.alreadyExisted });
       return;
     }
@@ -637,6 +641,24 @@ dutchMillerRouter.post(
     // 409: the entered data is fine and worth keeping — the form says so and
     // asks for a different tag rather than throwing the entry away.
     res.status(409).json({ error: out.reason, kind: out.kind });
+  },
+);
+
+/**
+ * Record that somebody at MOJO has looked at this.
+ *
+ * A POST rather than a side effect of reading, so it is refused while
+ * viewing as somebody else — an admin checking a dealer's screen has
+ * not dealt with the signup, and the tracker would be lying if it said
+ * they had.
+ */
+dutchMillerRouter.post(
+  "/signups/:guid/opened",
+  requirePage("member-signups"),
+  async (req: Request, res: Response) => {
+    const who = req.viewingAs?.real.email ?? req.user?.email ?? "";
+    if (!isStaff(req.viewingAs?.real ?? req.user)) { res.json({ row: null }); return; }
+    res.json({ row: await markOpened(String(req.params.guid ?? ""), who) });
   },
 );
 

@@ -15,7 +15,8 @@
  * take a client's word for them.
  */
 import {
-  createSignup, getSignup, listSignups, newHandle, setComplete, validateSignup,
+  createSignup, getSignup, listSignups, markNotified, markOpened, newHandle,
+  setComplete, validateSignup,
 } from "../server/dutch-miller/signups.js";
 import { isStaff } from "../server/dutch-miller/users.js";
 import type { SessionUser } from "../server/auth/session.js";
@@ -54,8 +55,18 @@ try {
 
   console.log("1. Validation, field by field");
   const empty = validateSignup({});
-  check("the six required fields are named", Object.keys(empty.errors).length === 6,
-    Object.keys(empty.errors).join(","));
+  check("the four required fields are named",
+    Object.keys(empty.errors).sort().join(",") === "dlwContractId,firstName,lastName,rfid",
+    Object.keys(empty.errors).sort().join(","));
+  // The dealer's own references: often not known at the moment somebody
+  // is standing there being signed up.
+  check("Deal # is optional", !empty.errors.dealNumber);
+  check("Customer ID # is optional", !empty.errors.customerId);
+  check("a state off the list is kept",
+    validateSignup({ plateState: "wv" }).clean.plateState === "WV");
+  check("…and one that is not a state is refused",
+    Boolean(validateSignup({ plateState: "ZZ" }).errors.plateState));
+  check("…while no state at all is fine", !validateSignup({ plateState: "" }).errors.plateState);
   check("a three-digit year is refused",
     Boolean(validateSignup({ vehicleYear: "202" }).errors.vehicleYear));
   check("…and a blank one is not", !validateSignup({ vehicleYear: "" }).errors.vehicleYear);
@@ -158,7 +169,29 @@ try {
   const reopened = await setComplete(one.guid, false, "eric.s@mojocarwash.com");
   check("reopening clears both", reopened?.completedAt === null && reopened?.completedBy === null);
 
-  console.log("\n9. Reading back");
+  console.log("\n9. The four steps");
+  const fresh = (await getSignup(one.guid))!;
+  check("submitted is the only one lit at first",
+    Boolean(fresh.submittedAt) && !fresh.notifiedAt && !fresh.openedAt && !fresh.completedAt);
+  await markNotified(one.guid);
+  check("the notification lights the second", Boolean((await getSignup(one.guid))!.notifiedAt));
+  const firstOpen = await markOpened(one.guid, "eric.s@mojocarwash.com");
+  check("opening lights the third", Boolean(firstOpen?.openedAt));
+  check("…and records who looked", firstOpen?.openedBy === "eric.s@mojocarwash.com");
+  // A milestone, not a last-seen: rewriting it on every view would stop
+  // it answering "has anybody dealt with this".
+  check("opening again does not move it",
+    (await markOpened(one.guid, "someone.else@mojocarwash.com")) === null);
+  check("…and the first viewer stands",
+    (await getSignup(one.guid))!.openedBy === "eric.s@mojocarwash.com");
+  await setComplete(one.guid, true, "eric.s@mojocarwash.com");
+  const allFour = (await getSignup(one.guid))!;
+  check("all four are lit",
+    Boolean(allFour.submittedAt && allFour.notifiedAt && allFour.openedAt && allFour.completedAt));
+  check("reopening clears only the last",
+    (await setComplete(one.guid, false, "x"))?.openedAt !== null);
+
+  console.log("\n10. Reading back");
   const got = await getSignup(one.guid);
   check("the three buckets come back grouped",
     got?.dealer.dealNumber === "00712" && got?.customer.vehicleMake === "Ford");

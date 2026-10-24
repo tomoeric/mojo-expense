@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Loader2, Lock, Send, X } from "lucide-react";
+import { CheckCircle2, Circle, Loader2, Lock, Send, X } from "lucide-react";
 
 /**
  * Member Signups — enrol a member, and hand them an RFID tag.
@@ -27,11 +27,15 @@ export type SignupRow = {
   dealer: { dlwContractId: string; dealNumber: string; customerId: string };
   customer: {
     firstName: string; lastName: string; plateDlw: string | null;
+    plateState: string | null;
     vehicleMake: string | null; vehicleModel: string | null;
     vehicleYear: string | null; vehicleColor: string | null; rfid: string;
   };
   submittedAt: string;
   submittedBy: string;
+  notifiedAt: string | null;
+  openedAt: string | null;
+  openedBy: string | null;
   completedAt: string | null;
   completedBy: string | null;
 };
@@ -40,27 +44,50 @@ type Handle = { guid: string; createdAt: string; token: string; displayTimezone:
 
 const DEALER_FIELDS = [
   { key: "dlwContractId", label: "DLW Contract ID", required: true },
-  { key: "dealNumber", label: "Deal #", required: true },
-  { key: "customerId", label: "Customer ID #", required: true },
+  // The dealer's own references, not always known when somebody is
+  // signed up, so the form does not stop for them.
+  { key: "dealNumber", label: "Deal #", required: false },
+  { key: "customerId", label: "Customer ID #", required: false },
 ] as const;
 
+/**
+ * Year, make, model — in the order people say them.
+ *
+ * It used to read make, model, year, and the first real entry put 2022
+ * in Make, Honda in Model and Accord in Year. Nobody describes a car in
+ * that order out loud, so the form stops asking them to.
+ */
 const CUSTOMER_FIELDS = [
   { key: "firstName", label: "First Name", required: true, placeholder: "First Name" },
   { key: "lastName", label: "Last Name", required: true, placeholder: "Last Name" },
   { key: "plateDlw", label: "Plate (DLW)", required: false, placeholder: "Optional" },
-  { key: "vehicleMake", label: "Vehicle Make", required: false, placeholder: "Vehicle Make" },
-  { key: "vehicleModel", label: "Vehicle Model", required: false, placeholder: "Vehicle Model" },
   { key: "vehicleYear", label: "Vehicle Year", required: false, placeholder: "YYYY" },
+  { key: "vehicleMake", label: "Vehicle Make", required: false, placeholder: "Honda" },
+  { key: "vehicleModel", label: "Vehicle Model", required: false, placeholder: "Accord" },
   { key: "vehicleColor", label: "Vehicle Color", required: false, placeholder: "Vehicle Color" },
+] as const;
+
+/**
+ * The plate's state, as the two letters on the registration.
+ *
+ * A list rather than a text box: a plate is only unique within its
+ * state, so "OH", "Ohio" and "oh" being three different answers makes
+ * the pair useless for matching a vehicle later.
+ */
+const STATES = [
+  "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", "HI", "ID",
+  "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO",
+  "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA",
+  "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
 ] as const;
 
 type DealerKey = (typeof DEALER_FIELDS)[number]["key"];
 type CustomerKey = (typeof CUSTOMER_FIELDS)[number]["key"];
-type Form = Record<DealerKey | CustomerKey, string> & { rfid: string };
+type Form = Record<DealerKey | CustomerKey, string> & { plateState: string; rfid: string };
 
 const BLANK: Form = {
   dlwContractId: "", dealNumber: "", customerId: "",
-  firstName: "", lastName: "", plateDlw: "",
+  firstName: "", lastName: "", plateDlw: "", plateState: "",
   vehicleMake: "", vehicleModel: "", vehicleYear: "", vehicleColor: "",
   rfid: "",
 };
@@ -155,8 +182,29 @@ function NotWhileViewing({ viewed, onBack }: { viewed: string; onBack: () => voi
  * Review Existing
  * ------------------------------------------------------------------ */
 
+/**
+ * `?open=<guid>` on the hash, as the notification email links to.
+ *
+ * Read once on mount and then cleared from the address, so a reload or
+ * a shared link does not keep re-opening the same record over whatever
+ * somebody has moved on to.
+ */
+function useRequestedSignup(): string {
+  const [guid] = useState(() => {
+    const q = window.location.hash.split("?")[1] ?? "";
+    return new URLSearchParams(q).get("open") ?? "";
+  });
+  useEffect(() => {
+    if (!guid) return;
+    const [path] = window.location.hash.split("?");
+    window.history.replaceState(null, "", path ?? "#/member-signups/review");
+  }, [guid]);
+  return guid;
+}
+
 function ReviewExisting() {
   const qc = useQueryClient();
+  const requested = useRequestedSignup();
   const [tab, setTab] = useState<"all" | "new" | "complete">("all");
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState<SignupRow | null>(null);
@@ -193,6 +241,20 @@ function ReviewExisting() {
       void qc.invalidateQueries({ queryKey: ["dm-signups"] });
     },
     onError: (e) => setError((e as Error).message),
+  });
+
+  // Arrived from an email link: open that record as soon as it loads.
+  useEffect(() => {
+    if (!requested || open) return;
+    const row = list.data?.rows.find((r) => r.guid === requested);
+    if (row) setOpen(row);
+  }, [requested, list.data, open]);
+
+  const opened = useMutation({
+    mutationFn: async (guid: string) => {
+      await fetch(`/api/dutch-miller/signups/${guid}/opened`, { method: "POST" });
+    },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["dm-signups"] }),
   });
 
   const counts = list.data?.counts;
@@ -259,7 +321,12 @@ function ReviewExisting() {
                 <td className="px-3 py-2 text-muted-foreground">
                   {dateIn(r.createdAt, r.displayTimezone)}
                 </td>
-                <td className="px-3 py-2"><StatusBadge row={r} /></td>
+                <td className="px-3 py-2">
+                  <span className="flex items-center gap-2">
+                    <Tracker row={r} compact />
+                    <StatusBadge row={r} />
+                  </span>
+                </td>
                 <td className="px-3 py-2 text-right">
                   <button
                     type="button"
@@ -281,10 +348,80 @@ function ReviewExisting() {
           canComplete={canComplete}
           busy={complete.isPending}
           onComplete={(v) => complete.mutate({ guid: open.guid, complete: v })}
+          onOpened={() => opened.mutate(open.guid)}
           onClose={() => setOpen(null)}
         />
       )}
     </>
+  );
+}
+
+/**
+ * Where a signup has got to, as four steps.
+ *
+ * Green when done, grey when not, and each one a real event rather than
+ * a guess: the row exists, the notification left, somebody at MOJO
+ * opened it, somebody marked it complete.
+ *
+ * Note what the third step is NOT. "Email opened" would be a tracking
+ * pixel, and a pixel is wrong in both directions — blocked images read
+ * as never opened, and the scanners that fetch everything read as
+ * opened before a person saw it, which is the exact thing that burned
+ * an invite here. Opening the record is somebody actually looking.
+ */
+function Tracker({ row, compact }: { row: SignupRow; compact?: boolean }) {
+  const steps = [
+    { label: "Submitted", at: row.submittedAt, who: row.submittedBy },
+    { label: "Email sent", at: row.notifiedAt, who: "" },
+    { label: "Opened", at: row.openedAt, who: row.openedBy ?? "" },
+    { label: "Completed", at: row.completedAt, who: row.completedBy ?? "" },
+  ];
+  const tz = row.displayTimezone;
+
+  if (compact) {
+    return (
+      <span className="flex items-center gap-1" title={steps
+        .map((st) => `${st.label}: ${st.at ? stamp(st.at, tz) : "not yet"}`).join("\n")}>
+        {steps.map((st) => (
+          <span
+            key={st.label}
+            className={`h-1.5 w-5 rounded-full ${
+              st.at ? "bg-emerald-500" : "bg-muted-foreground/25"
+            }`}
+          />
+        ))}
+      </span>
+    );
+  }
+
+  return (
+    <ol className="flex flex-wrap items-stretch gap-2">
+      {steps.map((st, i) => (
+        <li
+          key={st.label}
+          className={`flex-1 rounded-lg border px-3 py-2 ${
+            st.at
+              ? "border-emerald-500/40 bg-emerald-500/10"
+              : "border-border bg-muted/30"
+          }`}
+        >
+          <span className="flex items-center gap-1.5">
+            {st.at
+              ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+              : <Circle className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />}
+            <span className={`text-xs font-semibold ${
+              st.at ? "text-emerald-800 dark:text-emerald-300" : "text-muted-foreground"
+            }`}>
+              {i + 1}. {st.label}
+            </span>
+          </span>
+          <span className="mt-0.5 block text-[11px] text-muted-foreground">
+            {st.at ? stamp(st.at, tz) : "—"}
+            {st.at && st.who ? <><br />{st.who}</> : null}
+          </span>
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -310,18 +447,24 @@ function StatusBadge({ row }: { row: SignupRow }) {
 }
 
 function ViewSignup({
-  row, canComplete, busy, onComplete, onClose,
+  row, canComplete, busy, onComplete, onOpened, onClose,
 }: {
   row: SignupRow;
   canComplete: boolean;
   busy: boolean;
   onComplete: (v: boolean) => void;
+  onOpened: () => void;
   onClose: () => void;
 }) {
   const tz = row.displayTimezone;
+  // Only the first time, and only for somebody who could act on it —
+  // the server decides that again and ignores anybody else.
+  useEffect(() => { if (canComplete && !row.openedAt) onOpened(); },
+    [canComplete, row.openedAt, row.guid]);
   return (
     <Modal title={`${row.customer.firstName} ${row.customer.lastName}`} onClose={onClose}>
       <div className="space-y-4">
+        <Tracker row={row} />
         <div className="flex flex-wrap items-center gap-3">
           <StatusBadge row={row} />
           {canComplete && (
@@ -356,7 +499,11 @@ function ViewSignup({
         <Bucket title="Customer">
           <Readout label="First Name" value={row.customer.firstName} />
           <Readout label="Last Name" value={row.customer.lastName} />
-          <Readout label="Plate (DLW)" value={row.customer.plateDlw} />
+          <Readout
+            label="Plate (DLW)"
+            value={[row.customer.plateDlw, row.customer.plateState].filter(Boolean).join("  ")
+              || null}
+          />
           <Readout label="Vehicle Make" value={row.customer.vehicleMake} />
           <Readout label="Vehicle Model" value={row.customer.vehicleModel} />
           <Readout label="Vehicle Year" value={row.customer.vehicleYear} />
@@ -364,16 +511,6 @@ function ViewSignup({
           <Readout label="RFID" value={row.customer.rfid} mono />
         </Bucket>
 
-        {/* The marks themselves, spelled out. The badge says which state; this
-            says who and when, which is the part anybody chasing a signup asks. */}
-        <div className="rounded-lg border border-border bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
-          <p>Submitted to MOJO {stamp(row.submittedAt, tz)}{row.submittedBy ? ` · ${row.submittedBy}` : ""}</p>
-          <p className="mt-0.5">
-            {row.completedAt
-              ? `Marked complete ${stamp(row.completedAt, tz)}${row.completedBy ? ` · ${row.completedBy}` : ""}`
-              : "Not yet marked complete by MOJO."}
-          </p>
-        </div>
       </div>
     </Modal>
   );
@@ -471,7 +608,9 @@ function AddNew({
   /** The same rules the server applies, so the form can answer immediately. */
   const check = (): Record<string, string> => {
     const e: Record<string, string> = {};
-    for (const f of DEALER_FIELDS) if (form[f.key].trim() === "") e[f.key] = `${f.label} is required.`;
+    for (const f of DEALER_FIELDS) {
+      if (f.required && form[f.key].trim() === "") e[f.key] = `${f.label} is required.`;
+    }
     for (const f of CUSTOMER_FIELDS) {
       if (f.required && form[f.key].trim() === "") e[f.key] = `${f.label} is required.`;
     }
@@ -522,10 +661,19 @@ function AddNew({
 
       <Bucket title="Customer" note="User input">
         {CUSTOMER_FIELDS.map((f) => (
-          <Field
-            key={f.key} label={f.label} required={f.required} error={errors[f.key]}
-            value={form[f.key]} placeholder={f.placeholder} onChange={(v) => set(f.key, v)}
-          />
+          <Fragment key={f.key}>
+            <Field
+              label={f.label} required={f.required} error={errors[f.key]}
+              value={form[f.key]} placeholder={f.placeholder} onChange={(v) => set(f.key, v)}
+            />
+            {f.key === "plateDlw" && (
+              <StateField
+                value={form.plateState}
+                error={errors.plateState}
+                onChange={(v) => set("plateState", v)}
+              />
+            )}
+          </Fragment>
         ))}
         <RfidField
           value={form.rfid}
@@ -657,11 +805,19 @@ function Verify({
 
         <Bucket title="Customer" note="User input">
           {CUSTOMER_FIELDS.map((f) => (
-            <Field
-              key={f.key} label={f.label} required={f.required}
-              value={form[f.key]} placeholder={f.placeholder}
-              onChange={(v) => editCustomer(f.key, v)}
-            />
+            <Fragment key={f.key}>
+              <Field
+                label={f.label} required={f.required}
+                value={form[f.key]} placeholder={f.placeholder}
+                onChange={(v) => editCustomer(f.key, v)}
+              />
+              {f.key === "plateDlw" && (
+                <StateField
+                  value={form.plateState}
+                  onChange={(v) => editCustomer("plateState", v)}
+                />
+              )}
+            </Fragment>
           ))}
           <RfidField
             value={form.rfid}
@@ -796,6 +952,32 @@ function RfidField({
           No active RFID numbers are left. Upload more under RFID Review.
         </p>
       )}
+    </div>
+  );
+}
+
+/** Two letters, picked rather than typed. */
+function StateField({
+  value, error, onChange,
+}: { value: string; error?: string; onChange: (v: string) => void }) {
+  return (
+    <div>
+      <label htmlFor="f-plate-state" className="mb-1 block text-xs text-muted-foreground">
+        State
+      </label>
+      <select
+        id="f-plate-state"
+        value={value}
+        aria-invalid={Boolean(error)}
+        onChange={(e) => onChange(e.target.value)}
+        className={`w-full rounded-md border bg-background px-2.5 py-2 text-sm ${
+          error ? "border-red-500" : "border-border"
+        }`}
+      >
+        <option value="">—</option>
+        {STATES.map((st) => <option key={st} value={st}>{st}</option>)}
+      </select>
+      {error && <p role="alert" className="mt-1 text-xs text-red-600">{error}</p>}
     </div>
   );
 }

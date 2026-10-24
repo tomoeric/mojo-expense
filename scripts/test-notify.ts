@@ -33,12 +33,15 @@ const ROW: SignupRow = {
   displayTimezone: "America/Chicago",
   dealer: { dlwContractId: "0041", dealNumber: "00712", customerId: "C-9" },
   customer: {
-    firstName: "Dana", lastName: "Reyes", plateDlw: "ABC 1234",
+    firstName: "Dana", lastName: "Reyes", plateDlw: "ABC 1234", plateState: "WV",
     vehicleMake: "Ford", vehicleModel: "Bronco", vehicleYear: "2024",
     vehicleColor: "Blue", rfid: "12345+678901",
   },
   submittedAt: "2026-10-24T14:20:00.000Z",
   submittedBy: ME,
+  notifiedAt: null,
+  openedAt: null,
+  openedBy: null,
   completedAt: null,
   completedBy: null,
 };
@@ -119,6 +122,17 @@ try {
   // The stored timestamp is UTC; everybody reading reads Chicago.
   check("times are shown in the configured zone, not UTC",
     html.includes("CDT") || html.includes("CST"), "no timezone in body");
+  // The whole point of the button: somebody reads the email and marks
+  // the signup complete without first going to find it.
+  const linked = signupEmail(ROW, { origin: "https://example.invalid" });
+  check("the body carries a link to the record",
+    linked.html.includes(`https://example.invalid/#/member-signups/review?open=${ROW.guid}`),
+    "no link");
+  check("…and says what it opens", /Open in MOJO/.test(linked.html));
+  // A half-built URL in an email is worse than no button at all.
+  check("no origin means no button rather than a broken one",
+    !/Open in MOJO/.test(signupEmail(ROW, { origin: "" }).html));
+
   check("a sample says so, loudly",
     signupEmail(ROW, { sample: true }).html.includes("No member was created"));
   check("…and its subject cannot be mistaken for a real one",

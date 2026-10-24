@@ -1,7 +1,8 @@
-import { escapeHtml, isMailConfigured, layout, sendMail } from "../mail.js";
+import { button, escapeHtml, isMailConfigured, layout, sendMail } from "../mail.js";
+import { publicOrigin, signupUrl } from "../origin.js";
 import { audit } from "./audit.js";
 import { recipientsFor } from "./settings.js";
-import { DISPLAY_TZ, type SignupRow } from "./signups.js";
+import { DISPLAY_TZ, markNotified, type SignupRow } from "./signups.js";
 
 /**
  * Telling somebody at MOJO that a member was signed up.
@@ -61,10 +62,14 @@ const bucket = (title: string, rows: string): string =>
       margin-top:6px">${rows}</table>`;
 
 /** The same three buckets the app shows, in the same order. */
-export function signupEmail(s: SignupRow, opts: { sample?: boolean } = {}): {
+export function signupEmail(s: SignupRow, opts: { sample?: boolean; origin?: string } = {}): {
   subject: string;
   html: string;
 } {
+  // Straight to the record, so marking it complete does not start with
+  // finding it. Omitted rather than guessed when there is no origin to
+  // build from — a broken button is worse than none.
+  const link = signupUrl(opts.origin ?? publicOrigin(), s.guid);
   const name = `${s.customer.firstName} ${s.customer.lastName}`.trim();
   const subject = opts.sample
     ? "Sample — new member signup"
@@ -94,11 +99,14 @@ export function signupEmail(s: SignupRow, opts: { sample?: boolean } = {}): {
 
      ${bucket("Customer", [
        row("Name", `${s.customer.firstName} ${s.customer.lastName}`.trim()),
-       row("Plate (DLW)", s.customer.plateDlw),
+       row("Plate (DLW)", [s.customer.plateDlw, s.customer.plateState]
+         .filter(Boolean).join("  ·  ") || null),
        row("Vehicle", [s.customer.vehicleYear, s.customer.vehicleMake, s.customer.vehicleModel]
          .filter(Boolean).join(" ") || null),
        row("Color", s.customer.vehicleColor),
      ].join(""))}
+
+     ${link ? `<div style="margin:22px 0 0">${button(link, "Open in MOJO")}</div>` : ""}
 
      ${bucket("Entry", [
        row("Created", stamp(s.createdAt)),
@@ -119,7 +127,7 @@ export function signupEmail(s: SignupRow, opts: { sample?: boolean } = {}): {
  * with it, and these are internal notifications where who else got it is
  * nobody's business anyway.
  */
-export async function notifySignup(s: SignupRow): Promise<void> {
+export async function notifySignup(s: SignupRow, origin?: string): Promise<void> {
   try {
     const to = await recipientsFor(s.submittedBy);
     if (to.length === 0) return;
@@ -130,13 +138,14 @@ export async function notifySignup(s: SignupRow): Promise<void> {
       });
       return;
     }
-    const { subject, html } = signupEmail(s);
+    const { subject, html } = signupEmail(s, { origin });
     const results = await Promise.allSettled(to.map((a) => sendMail(a, subject, html)));
     const failed = results
       .map((r, i) => (r.status === "rejected" ? to[i]! : null))
       .filter((a): a is string => a !== null);
 
     if (failed.length < to.length) {
+      await markNotified(s.guid);
       await audit({
         action: "notify.sent", subject: s.guid, actor: s.submittedBy,
         detail: `${to.length - failed.length} of ${to.length}`,

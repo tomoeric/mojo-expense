@@ -87,7 +87,8 @@ function useRoute(pages: readonly PageDef[]): [Route, (page: string, sub?: strin
   const keys = pages.map((p) => `${p.key}:${p.children.map((c) => c.key).join("|")}`).join(",");
 
   const read = (): Route => {
-    const [first = "", second = ""] = window.location.hash.replace(/^#\/?/, "").split("/");
+    const [first = "", second = ""] = window.location.hash
+      .replace(/^#\/?/, "").split("?")[0]!.split("/");
     const page = pages.find((p) => p.key === first) ?? pages[0];
     if (!page) return { page: "", sub: "" };
     const sub = page.children.some((c) => c.key === second)
