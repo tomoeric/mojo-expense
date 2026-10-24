@@ -685,11 +685,15 @@ dutchMillerRouter.post(
 );
 
 /**
- * The MOJO-side mark.
+ * The MOJO-side mark, which is one-way and ordered.
  *
- * Not an administrator's privilege: being an administrator of Dutch Miller
- * says nothing about working at MOJO, and this mark is MOJO saying it has
- * dealt with the signup.
+ * Not an administrator's privilege: being an administrator of Dutch
+ * Miller says nothing about working at MOJO, and this mark is MOJO
+ * saying it has dealt with the signup. Nor is it available before
+ * somebody has opened the record — "completed" means a person read this
+ * one, so marking it off a list without reading it is exactly what the
+ * mark must not permit. `setComplete` enforces both; a button is only a
+ * suggestion.
  */
 dutchMillerRouter.post(
   "/signups/:guid/complete",
@@ -701,10 +705,18 @@ dutchMillerRouter.post(
       res.status(403).json({ error: "Only a MOJO employee can mark a signup complete." });
       return;
     }
-    const complete = (req.body ?? {}).complete !== false;
-    const row = await setComplete(String(req.params.guid ?? ""), complete, who);
-    if (!row) { res.status(404).json({ error: "No such signup." }); return; }
+    const out = await setComplete(String(req.params.guid ?? ""), who);
+    if (!out.ok) {
+      res.status(out.reason === "not-found" ? 404 : 409).json({
+        error: out.reason === "not-found"
+          ? "No such signup."
+          : out.reason === "already"
+            ? "That signup is already complete, and completing is final."
+            : "Open the signup and read it before marking it complete.",
+      });
+      return;
+    }
     emitChange("signups");
-    res.json({ row });
+    res.json({ row: out.row });
   },
 );

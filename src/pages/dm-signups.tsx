@@ -1,6 +1,9 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Circle, Eye, Loader2, Lock, Send, X } from "lucide-react";
+import {
+  ArrowDown, ArrowUp, CheckCircle2, ChevronLeft, ChevronRight, Circle, Download,
+  Eye, Loader2, Lock, Send, X,
+} from "lucide-react";
 
 /**
  * Member Signups — enrol a member, and hand them an RFID tag.
@@ -209,6 +212,9 @@ function ReviewExisting() {
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState<SignupRow | null>(null);
   const [error, setError] = useState("");
+  // Newest first is what somebody opening this page wants to see.
+  const [sort, setSort] = useState<{ by: "customer" | "created"; dir: "asc" | "desc" }>(
+    { by: "created", dir: "desc" });
 
   const list = useQuery({
     queryKey: ["dm-signups", tab, search],
@@ -240,11 +246,9 @@ function ReviewExisting() {
   });
 
   const complete = useMutation({
-    mutationFn: async (v: { guid: string; complete: boolean }) => {
-      const res = await fetch(`/api/dutch-miller/signups/${v.guid}/complete`, {
+    mutationFn: async (guid: string) => {
+      const res = await fetch(`/api/dutch-miller/signups/${guid}/complete`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ complete: v.complete }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "Could not change it.");
@@ -258,12 +262,19 @@ function ReviewExisting() {
     onError: (e) => setError((e as Error).message),
   });
 
-  // Arrived from an email link: open that record as soon as it loads.
+  /**
+   * Arrived from an email link: open that record once it has loaded.
+   *
+   * ONCE. Without the latch this re-ran every time `open` went back to
+   * null — which is what closing the dialog does — so the X reopened
+   * the thing it had just closed and the popup could not be escaped.
+   */
+  const honoured = useRef(false);
   useEffect(() => {
-    if (!requested || open) return;
+    if (!requested || honoured.current) return;
     const row = list.data?.rows.find((r) => r.guid === requested);
-    if (row) setOpen(row);
-  }, [requested, list.data, open]);
+    if (row) { honoured.current = true; setOpen(row); }
+  }, [requested, list.data]);
 
   const opened = useMutation({
     mutationFn: async (guid: string) => {
@@ -271,6 +282,26 @@ function ReviewExisting() {
     },
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["dm-signups"] }),
   });
+
+  /**
+   * Sorted here rather than by the server.
+   *
+   * The whole filtered set is already on the client — the server caps
+   * at 200 and says so — and a round trip to reverse a column people
+   * flip back and forth while scanning a list would be slower than the
+   * scanning.
+   */
+  const rows = useMemo(() => {
+    const out = [...(list.data?.rows ?? [])];
+    out.sort((a, b) => {
+      const d = sort.by === "customer"
+        ? `${a.customer.lastName} ${a.customer.firstName}`
+          .localeCompare(`${b.customer.lastName} ${b.customer.firstName}`)
+        : a.createdAt.localeCompare(b.createdAt);
+      return sort.dir === "asc" ? d : -d;
+    });
+    return out;
+  }, [list.data, sort]);
 
   const counts = list.data?.counts;
   const canComplete = list.data?.canComplete ?? false;
@@ -302,6 +333,7 @@ function ReviewExisting() {
           placeholder="Name, contract, deal or RFID…"
           className="ml-auto w-64 rounded-md border border-border bg-background px-2.5 py-1.5 text-sm"
         />
+        <ExportMenu rows={rows} />
       </div>
 
       {error && <p className="mt-3 text-sm font-semibold text-red-600">{error}</p>}
@@ -310,11 +342,15 @@ function ReviewExisting() {
         <table className="w-full text-sm">
           <thead className="bg-muted/50 text-xs text-muted-foreground">
             <tr>
-              <th className="px-3 py-2 text-left font-semibold">Customer</th>
+              <SortHeader
+                label="Customer" col="customer" sort={sort} onSort={setSort}
+              />
               <th className="px-3 py-2 text-left font-semibold">DLW Contract ID</th>
               <th className="px-3 py-2 text-left font-semibold">Deal #</th>
               <th className="px-3 py-2 text-left font-semibold">RFID</th>
-              <th className="px-3 py-2 text-left font-semibold">Date Created</th>
+              <SortHeader
+                label="Date Created" col="created" sort={sort} onSort={setSort}
+              />
               <th className="px-3 py-2 text-left font-semibold">Status</th>
               <th className="px-3 py-2" />
             </tr>
@@ -323,12 +359,12 @@ function ReviewExisting() {
             {list.isPending && (
               <tr><td colSpan={7} className="px-3 py-6 text-center text-muted-foreground">Loading…</td></tr>
             )}
-            {list.data?.rows.length === 0 && (
+            {list.data && rows.length === 0 && (
               <tr><td colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
                 No signups yet.
               </td></tr>
             )}
-            {list.data?.rows.map((r) => (
+            {rows.map((r) => (
               <tr key={r.guid} className="border-t border-border">
                 <td className="px-3 py-2">{r.customer.firstName} {r.customer.lastName}</td>
                 <td className="px-3 py-2 font-mono text-xs">{r.dealer.dlwContractId}</td>
@@ -363,8 +399,17 @@ function ReviewExisting() {
           row={open}
           canComplete={canComplete}
           busy={complete.isPending}
-          onComplete={(v) => complete.mutate({ guid: open.guid, complete: v })}
+          position={{
+            index: Math.max(0, rows.findIndex((r) => r.guid === open.guid)),
+            total: rows.length,
+          }}
+          onComplete={() => complete.mutate(open.guid)}
           onOpened={() => opened.mutate(open.guid)}
+          onStep={(d) => {
+            const at = rows.findIndex((r) => r.guid === open.guid);
+            const next = rows[at + d];
+            if (next) setOpen(next);
+          }}
           onClose={() => setOpen(null)}
         />
       )}
@@ -441,6 +486,153 @@ function Tracker({ row, compact }: { row: SignupRow; compact?: boolean }) {
   );
 }
 
+function SortHeader({
+  label, col, sort, onSort,
+}: {
+  label: string;
+  col: "customer" | "created";
+  sort: { by: "customer" | "created"; dir: "asc" | "desc" };
+  onSort: (s: { by: "customer" | "created"; dir: "asc" | "desc" }) => void;
+}) {
+  const on = sort.by === col;
+  return (
+    <th className="px-3 py-2 text-left font-semibold">
+      <button
+        type="button"
+        onClick={() => onSort({
+          by: col,
+          // Clicking the column you are already on reverses it; a new
+          // column starts the way people expect that column to start.
+          dir: on ? (sort.dir === "asc" ? "desc" : "asc") : (col === "created" ? "desc" : "asc"),
+        })}
+        className={`inline-flex items-center gap-1 ${on ? "text-foreground" : "hover:text-foreground"}`}
+      >
+        {label}
+        {on && (sort.dir === "asc"
+          ? <ArrowUp className="h-3 w-3" />
+          : <ArrowDown className="h-3 w-3" />)}
+      </button>
+    </th>
+  );
+}
+
+/**
+ * Export what is on screen.
+ *
+ * Two shapes, because they answer different questions. The list is
+ * what the page shows — one line per signup, for counting and
+ * reconciling. The detailed one is every field of every bucket, which
+ * is what somebody loading these into another system needs.
+ *
+ * It exports the CURRENT view: the filter, the search and the sort all
+ * apply, so what comes out matches what is being looked at.
+ */
+function ExportMenu({ rows }: { rows: SignupRow[] }) {
+  const [open, setOpen] = useState(false);
+
+  const download = (detailed: boolean) => {
+    const head = detailed
+      ? ["Customer", "First Name", "Last Name", "DLW Contract ID", "Deal #", "Customer ID #",
+        "Plate", "State", "Vehicle Year", "Vehicle Make", "Vehicle Model", "Vehicle Color",
+        "RFID", "Status", "Date Created", "Time Created", "Submitted By", "Email Sent",
+        "Opened", "Opened By", "Completed", "Completed By", "Reference"]
+      : ["Customer", "DLW Contract ID", "Deal #", "RFID", "Date Created", "Status"];
+
+    const status = (r: SignupRow) =>
+      r.completedAt ? "Completed" : r.openedAt ? "Under review" : "Submitted";
+
+    const body = rows.map((r) => (detailed
+      ? [
+        `${r.customer.firstName} ${r.customer.lastName}`.trim(),
+        r.customer.firstName, r.customer.lastName,
+        r.dealer.dlwContractId, r.dealer.dealNumber, r.dealer.customerId,
+        r.customer.plateDlw ?? "", r.customer.plateState ?? "",
+        r.customer.vehicleYear ?? "", r.customer.vehicleMake ?? "",
+        r.customer.vehicleModel ?? "", r.customer.vehicleColor ?? "",
+        r.customer.rfid, status(r),
+        dateIn(r.createdAt, r.displayTimezone), timeIn(r.createdAt, r.displayTimezone),
+        r.submittedBy,
+        r.notifiedAt ? stamp(r.notifiedAt, r.displayTimezone) : "",
+        r.openedAt ? stamp(r.openedAt, r.displayTimezone) : "", r.openedBy ?? "",
+        r.completedAt ? stamp(r.completedAt, r.displayTimezone) : "", r.completedBy ?? "",
+        r.guid,
+      ]
+      : [
+        `${r.customer.firstName} ${r.customer.lastName}`.trim(),
+        r.dealer.dlwContractId, r.dealer.dealNumber, r.customer.rfid,
+        dateIn(r.createdAt, r.displayTimezone), status(r),
+      ]));
+
+    const csv = [head, ...body].map((line) => line.map(csvCell).join(",")).join("\r\n");
+    // A BOM, so Excel opens it as UTF-8 instead of mangling anything
+    // that is not plain ASCII.
+    const blob = new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `member-signups-${detailed ? "detailed-" : ""}`
+      + `${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setOpen(false);
+  };
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        disabled={rows.length === 0}
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+      >
+        <Download className="h-3.5 w-3.5" />
+        Export
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 z-20 mt-1 w-64 overflow-hidden rounded-lg border border-border bg-card shadow-lg">
+            <button
+              type="button"
+              onClick={() => download(false)}
+              className="block w-full border-b border-border px-3 py-2.5 text-left text-sm hover:bg-muted"
+            >
+              <span className="block font-medium">This list</span>
+              <span className="block text-xs text-muted-foreground">
+                The columns on screen, {rows.length} row{rows.length === 1 ? "" : "s"}.
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => download(true)}
+              className="block w-full px-3 py-2.5 text-left text-sm hover:bg-muted"
+            >
+              <span className="block font-medium">Detailed</span>
+              <span className="block text-xs text-muted-foreground">
+                Every member field, plus who did what and when.
+              </span>
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One CSV cell.
+ *
+ * Quoted whenever it holds a comma, a quote or a newline, with inner
+ * quotes doubled — and a leading apostrophe stripped of meaning by the
+ * quoting, so an identifier beginning with 0 keeps its zero instead of
+ * Excel reading it as a number.
+ */
+function csvCell(v: string): string {
+  const needs = /[",\r\n]/.test(v);
+  const body = v.replace(/"/g, '""');
+  return needs ? `"${body}"` : body;
+}
+
 /**
  * Where it stands, in one phrase.
  *
@@ -476,13 +668,16 @@ function StatusBadge({ row }: { row: SignupRow }) {
 }
 
 function ViewSignup({
-  row, canComplete, busy, onComplete, onOpened, onClose,
+  row, canComplete, busy, position, onComplete, onOpened, onStep, onClose,
 }: {
   row: SignupRow;
   canComplete: boolean;
   busy: boolean;
-  onComplete: (v: boolean) => void;
+  /** Where this one sits in the list behind the dialog, for the arrows. */
+  position: { index: number; total: number };
+  onComplete: () => void;
   onOpened: () => void;
+  onStep: (delta: -1 | 1) => void;
   onClose: () => void;
 }) {
   const tz = row.displayTimezone;
@@ -491,27 +686,53 @@ function ViewSignup({
   useEffect(() => { if (canComplete && !row.openedAt) onOpened(); },
     [canComplete, row.openedAt, row.guid]);
   return (
-    <Modal title={`${row.customer.firstName} ${row.customer.lastName}`} onClose={onClose}>
+    <Modal
+      title={`${row.customer.firstName} ${row.customer.lastName}`}
+      onClose={onClose}
+      /* Reviewing is usually a run through several, not one lookup, so
+         the next one is a keystroke rather than a close and a scroll. */
+      nav={{
+        label: `${position.index + 1} of ${position.total}`,
+        onPrev: position.index > 0 ? () => onStep(-1) : undefined,
+        onNext: position.index < position.total - 1 ? () => onStep(1) : undefined,
+      }}
+    >
       <div className="space-y-4">
         <Tracker row={row} />
         <div className="flex flex-wrap items-center gap-3">
           <StatusBadge row={row} />
-          {canComplete && (
+          {/* Not offered before the record has been opened, and never
+              offered again afterwards: completing means somebody read
+              this one, and it is final. The server refuses both cases
+              regardless. */}
+          {canComplete && !row.completedAt && (
             <button
               type="button"
-              disabled={busy}
-              onClick={() => onComplete(!row.completedAt)}
-              className={`inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-semibold disabled:opacity-50 ${
-                row.completedAt
-                  ? "border border-border hover:bg-muted"
-                  : "bg-foreground text-background"
-              }`}
+              disabled={busy || !row.openedAt}
+              title={row.openedAt ? undefined : "Opening this record is what makes it reviewable."}
+              onClick={onComplete}
+              className="inline-flex items-center gap-2 rounded-md bg-foreground px-3 py-1.5 text-sm font-semibold text-background disabled:opacity-50"
             >
               {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              {row.completedAt ? "Reopen" : "Mark complete"}
+              Mark complete
             </button>
           )}
         </div>
+
+        {/* The point of the whole flow, said plainly. A dealer reading
+            this wants one fact, and it is not a timestamp. */}
+        {row.completedAt && (
+          <p className="flex items-start gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-800 dark:text-emerald-300">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>
+              <strong>{row.customer.firstName} {row.customer.lastName} is set up and can
+              now wash their vehicle.</strong> RFID {row.customer.rfid} is active on the
+              account{row.customer.plateDlw
+                ? ` for plate ${row.customer.plateDlw}${row.customer.plateState ? ` (${row.customer.plateState})` : ""}`
+                : ""}.
+            </span>
+          </p>
+        )}
 
         <Bucket title="Auto Data" note="Automatically generated · locked">
           <Readout label="Date Created" value={dateIn(row.createdAt, tz)} />
@@ -1044,8 +1265,13 @@ function Readout({ label, value, mono }: { label: string; value: string | null; 
  * trapped inside, and the page behind it is inert to the keyboard.
  */
 function Modal({
-  title, onClose, children,
-}: { title: string; onClose: () => void; children: React.ReactNode }) {
+  title, onClose, children, nav,
+}: {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+  nav?: { label: string; onPrev?: () => void; onNext?: () => void };
+}) {
   const box = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -1085,14 +1311,41 @@ function Modal({
       >
         <div className="mb-4 flex items-start justify-between gap-3">
           <h2 className="text-base font-semibold">{title}</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded-md p-1 text-muted-foreground hover:bg-muted"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex shrink-0 items-center gap-1">
+            {nav && (
+              <>
+                <button
+                  type="button"
+                  disabled={!nav.onPrev}
+                  onClick={nav.onPrev}
+                  aria-label="Previous member"
+                  className="rounded-md border border-border p-1 text-muted-foreground hover:bg-muted disabled:opacity-30"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+                <span className="px-1 text-xs tabular-nums text-muted-foreground">
+                  {nav.label}
+                </span>
+                <button
+                  type="button"
+                  disabled={!nav.onNext}
+                  onClick={nav.onNext}
+                  aria-label="Next member"
+                  className="rounded-md border border-border p-1 text-muted-foreground hover:bg-muted disabled:opacity-30"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="ml-1 rounded-md p-1 text-muted-foreground hover:bg-muted"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
         {children}
       </div>

@@ -163,33 +163,45 @@ try {
   check("…nor a lookalike domain",
     !isStaff(who("someone@notmojocarwash.com.example", "microsoft")));
   check("…and nobody at all is not staff", !isStaff(null));
-  const done = await setComplete(one.guid, true, "eric.s@mojocarwash.com");
-  check("marking complete records who", done?.completedBy === "eric.s@mojocarwash.com");
-  check("…and when", Boolean(done?.completedAt));
-  const reopened = await setComplete(one.guid, false, "eric.s@mojocarwash.com");
-  check("reopening clears both", reopened?.completedAt === null && reopened?.completedBy === null);
+  // Completing is ORDERED: it means a person read this one, so it is
+  // refused until somebody has opened it. Marking a list off without
+  // reading it is the one thing the mark must not allow.
+  const early = await setComplete(one.guid, "eric.s@mojocarwash.com");
+  check("cannot complete before anybody has opened it",
+    !early.ok && early.reason === "not-opened", early.ok ? "allowed" : early.reason);
+
+  await markOpened(one.guid, "eric.s@mojocarwash.com");
+  const done = await setComplete(one.guid, "eric.s@mojocarwash.com");
+  check("…and can once it has been opened", done.ok === true);
+  check("marking complete records who",
+    done.ok && done.row.completedBy === "eric.s@mojocarwash.com");
+  check("…and when", done.ok && Boolean(done.row.completedAt));
+
+  // One way. A dealer told their member can wash must not be told
+  // otherwise, and a tracker that runs backwards is not a tracker.
+  const again2 = await setComplete(one.guid, "someone@mojocarwash.com");
+  check("completing is final", !again2.ok && again2.reason === "already",
+    again2.ok ? "allowed" : again2.reason);
+  check("…and the first completer stands",
+    (await getSignup(one.guid))!.completedBy === "eric.s@mojocarwash.com");
+  check("a signup that does not exist says so",
+    !(await setComplete("00000000-0000-4000-8000-000000000000", "x")).ok);
 
   console.log("\n9. The four steps");
-  const fresh = (await getSignup(one.guid))!;
-  check("submitted is the only one lit at first",
-    Boolean(fresh.submittedAt) && !fresh.notifiedAt && !fresh.openedAt && !fresh.completedAt);
   await markNotified(one.guid);
   check("the notification lights the second", Boolean((await getSignup(one.guid))!.notifiedAt));
-  const firstOpen = await markOpened(one.guid, "eric.s@mojocarwash.com");
-  check("opening lights the third", Boolean(firstOpen?.openedAt));
-  check("…and records who looked", firstOpen?.openedBy === "eric.s@mojocarwash.com");
+  check("opening lit the third", Boolean((await getSignup(one.guid))!.openedAt));
+  check("…and recorded who looked",
+    (await getSignup(one.guid))!.openedBy === "eric.s@mojocarwash.com");
   // A milestone, not a last-seen: rewriting it on every view would stop
   // it answering "has anybody dealt with this".
   check("opening again does not move it",
     (await markOpened(one.guid, "someone.else@mojocarwash.com")) === null);
   check("…and the first viewer stands",
     (await getSignup(one.guid))!.openedBy === "eric.s@mojocarwash.com");
-  await setComplete(one.guid, true, "eric.s@mojocarwash.com");
   const allFour = (await getSignup(one.guid))!;
   check("all four are lit",
     Boolean(allFour.submittedAt && allFour.notifiedAt && allFour.openedAt && allFour.completedAt));
-  check("reopening clears only the last",
-    (await setComplete(one.guid, false, "x"))?.openedAt !== null);
 
   console.log("\n10. Reading back");
   const got = await getSignup(one.guid);

@@ -490,21 +490,35 @@ export async function markOpened(guid: string, by: string): Promise<SignupRow | 
 }
 
 /**
- * The MOJO-side mark.
+ * The MOJO-side mark. One way.
  *
- * Reversible, because the alternative to an undo is a wrong record nobody
- * can correct; who set it and when are kept either way.
+ * Not reversible, and not available until somebody has actually opened
+ * the record: "completed" means a person looked at this and dealt with
+ * it, so marking one off a list without reading it is the one thing the
+ * mark must not permit. The order is enforced here rather than in the
+ * button, because a button is a suggestion.
+ *
+ * It used to have a Reopen. That made the dealer-facing status
+ * reversible — a member told they could wash could be told otherwise —
+ * and gave the tracker a state it could move backwards through, which
+ * is not a tracker.
  */
-export async function setComplete(
-  guid: string, complete: boolean, by: string,
-): Promise<SignupRow | null> {
+export type CompleteResult =
+  | { ok: true; row: SignupRow }
+  | { ok: false; reason: "not-found" | "not-opened" | "already" };
+
+export async function setComplete(guid: string, by: string): Promise<CompleteResult> {
   await ensure();
   const { rows } = await db().query<Db>(
     `UPDATE dm_member_signups
-        SET completed_at = ${complete ? "now()" : "NULL"},
-            completed_by = ${complete ? "$2" : "NULL"}
-      WHERE guid = $1
-    RETURNING ${COLS}`,
-    complete ? [guid, by] : [guid]);
-  return rows[0] ? shape(rows[0]) : null;
+        SET completed_at = now(), completed_by = $2
+      WHERE guid = $1 AND completed_at IS NULL AND opened_at IS NOT NULL
+    RETURNING ${COLS}`, [guid, by]);
+  if (rows[0]) return { ok: true, row: shape(rows[0]) };
+
+  // Nothing moved. Say which of the three it was, so the page can
+  // explain rather than just refuse.
+  const existing = await getSignup(guid);
+  if (!existing) return { ok: false, reason: "not-found" };
+  return { ok: false, reason: existing.completedAt ? "already" : "not-opened" };
 }
