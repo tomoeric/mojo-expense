@@ -13,7 +13,7 @@ import { SectionTitle, LiveStrip, SegmentedControl, Empty } from "@/components/u
 import { NotConnected } from "@/components/not-connected";
 import { SignIn } from "@/components/sign-in";
 import { UserMenu } from "@/components/user-menu";
-import { DutchMillerPage } from "@/pages/dutch-miller";
+import { DutchMillerApp } from "@/pages/dutch-miller";
 import { ViewAs } from "@/components/view-as";
 import { ReportDrawer } from "@/components/report-drawer";
 import { QueuePage } from "@/pages/queue";
@@ -484,50 +484,6 @@ export function App() {
           auditConfigured={config.data?.auditConfigured ?? false}
         />
       )}
-    </div>
-  );
-}
-
-/**
- * The Dutch Miller shell.
- *
- * Deliberately its own header rather than a reuse of the Emburse one:
- * that header is built around the queue's nav, and borrowing it would put
- * Emburse's sections in front of somebody who cannot open them. The user
- * menu is shared, because identity, sign-out and the app switcher are the
- * same job in both products.
- */
-function DutchMillerApp({
-  user,
-  isAdmin,
-  apps,
-  onSwitchApp,
-}: {
-  user: SessionUser | null;
-  isAdmin: boolean;
-  apps: AppKey[];
-  onSwitchApp: (next: AppKey) => void;
-}) {
-  return (
-    <div className="min-h-screen">
-      <header className="border-b border-border bg-black text-white">
-        <div className="mx-auto flex max-w-[1800px] items-center justify-between gap-4 px-5 py-3">
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold">Dutch Miller</p>
-            <p className="truncate text-xs text-white/60">Mammoth Holdings</p>
-          </div>
-          {user && (
-            <UserMenu
-              user={user}
-              isAdmin={isAdmin}
-              apps={apps}
-              app="dutch-miller"
-              onSwitchApp={onSwitchApp}
-            />
-          )}
-        </div>
-      </header>
-      <DutchMillerPage />
     </div>
   );
 }

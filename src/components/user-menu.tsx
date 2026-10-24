@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   LogOut, UserRound, SlidersHorizontal, KeyRound, LayoutGrid, Check, ChevronRight,
+  Users,
 } from "lucide-react";
 import { APP_LABEL, type AppKey, type SessionUser } from "@/lib/api";
 
@@ -11,6 +12,9 @@ export function UserMenu({
   apps = [],
   app = null,
   onSwitchApp,
+  product = "emburse",
+  dmAdmin = false,
+  onDmUsers,
 }: {
   user: SessionUser;
   isAdmin: boolean;
@@ -18,6 +22,16 @@ export function UserMenu({
   apps?: AppKey[];
   app?: AppKey | null;
   onSwitchApp?: (next: AppKey) => void;
+  /**
+   * Which product's items to offer below the switcher. Identity, the
+   * switcher and sign-out are shared; everything else is one app's own, and
+   * offering Emburse's settings inside Dutch Miller would be a link into a
+   * 403 for somebody who holds only the one.
+   */
+  product?: AppKey;
+  /** Administers Dutch Miller — a separate question from Emburse's `isAdmin`. */
+  dmAdmin?: boolean;
+  onDmUsers?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [appsOpen, setAppsOpen] = useState(false);
@@ -94,25 +108,39 @@ export function UserMenu({
                 )}
               </div>
             )}
-            {/* Everyone has their own Emburse login; only admins set the
-                export scope, which governs what everybody sees. */}
-            <a
-              href="#/emburse-login"
-              onClick={() => setOpen(false)}
-              className="flex items-center gap-2 border-b border-border px-3 py-2.5 text-sm transition-colors hover:bg-muted"
-            >
-              <KeyRound className="h-4 w-4" />
-              Your Emburse login
-            </a>
-            {isAdmin && (
-              <a
-                href="#/settings"
-                onClick={() => setOpen(false)}
-                className="flex items-center gap-2 border-b border-border px-3 py-2.5 text-sm transition-colors hover:bg-muted"
+            {product === "emburse" && (
+              <>
+                {/* Everyone has their own Emburse login; only admins set the
+                    export scope, which governs what everybody sees. */}
+                <a
+                  href="#/emburse-login"
+                  onClick={() => setOpen(false)}
+                  className="flex items-center gap-2 border-b border-border px-3 py-2.5 text-sm transition-colors hover:bg-muted"
+                >
+                  <KeyRound className="h-4 w-4" />
+                  Your Emburse login
+                </a>
+                {isAdmin && (
+                  <a
+                    href="#/settings"
+                    onClick={() => setOpen(false)}
+                    className="flex items-center gap-2 border-b border-border px-3 py-2.5 text-sm transition-colors hover:bg-muted"
+                  >
+                    <SlidersHorizontal className="h-4 w-4" />
+                    Export settings
+                  </a>
+                )}
+              </>
+            )}
+            {product === "dutch-miller" && dmAdmin && (
+              <button
+                type="button"
+                onClick={() => { setOpen(false); onDmUsers?.(); }}
+                className="flex w-full items-center gap-2 border-b border-border px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted"
               >
-                <SlidersHorizontal className="h-4 w-4" />
-                Export settings
-              </a>
+                <Users className="h-4 w-4" />
+                Users
+              </button>
             )}
             <a
               href="/api/logout"

@@ -27,7 +27,12 @@ const app = express();
 app.disable("x-powered-by");
 // JSON parsing must not touch /api/import, whose body is a raw PDF.
 app.use((req, res, next) =>
-  req.path === "/api/import" ? next() : express.json({ limit: "1mb" })(req, res, next),
+  // The two raw-body uploads are skipped, like /api/import always was: a
+  // spreadsheet is not JSON and the raw parser downstream needs the body
+  // untouched.
+  req.path === "/api/import" || req.path === "/api/dutch-miller/rfid/upload"
+    ? next()
+    : express.json({ limit: "1mb" })(req, res, next),
 );
 app.use(cookieParser());
 // Populates req.user from the session cookie before anything reads it.

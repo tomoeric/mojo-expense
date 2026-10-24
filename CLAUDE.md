@@ -66,6 +66,39 @@ the blocks.
   and caches, and swapping in place leaves the old app's queries running
   against endpoints the server has just started refusing.
 
+## Inside Dutch Miller
+
+- **Two layers, and they answer different questions.** `auth/apps.ts` (a
+  Secret) says who comes through the door; `dutch-miller/users.ts` (the
+  `dm_users` table) says what they find once inside. Being listed in
+  `dm_users` grants nothing on its own, and being on the Secret's list grants
+  no page.
+- **An EMPTY `dm_users` makes everyone an administrator**, same reasoning as
+  `AUTH_ADMINS`: a permission table that starts empty would lock the first
+  person out of the page that fills it in. **The first row closes it**, so it
+  cannot quietly stay open — and the shell says so in a banner while it is.
+  The last administrator cannot be removed, because with the table non-empty
+  the fallback does not come back.
+- **`DM_PAGES` in `users.ts` is the one registry of pages.** The rail, the
+  Users page's tick-boxes and the `requirePage()` guards all read it, so a new
+  page is one entry there plus a route in the shell. Never keep a second copy
+  in the UI: a typo in it grants access to nothing while looking like access
+  to something.
+- **The rail is built from `GET /api/dutch-miller/me`**, so a page somebody
+  cannot open is never offered — and every route under `/api/dutch-miller`
+  carries `requirePage()` or `requireDmAdmin` so that is a rule, not a
+  decoration. Hiding is never the control.
+- **RFID numbers are physical tags**, which is where the two hard rules come
+  from: one of each (`number` is the primary key, and an upload reports the
+  repeats it dropped rather than silently de-duplicating), and **issued once**
+  — `useRfid` claims with `WHERE status <> 'used'` so the database picks the
+  winner when two requests arrive together, and a used tag can never be made
+  active again. Excel dropping a leading zero turns `01234+567890` into ten
+  digits; the parser refuses those and says why rather than padding a guess.
+- Tests: `scripts/test-rfid.ts`, `scripts/test-dm-users.ts` (both need
+  `DATABASE_URL`). The users test SKIPS against a non-empty `dm_users` rather
+  than deleting somebody's configuration.
+
 ## Approving and denying
 
 - **Deciding records; a worker applies.** Clicking Approve/Deny writes a row in
