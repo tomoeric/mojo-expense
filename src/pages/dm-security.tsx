@@ -5,6 +5,7 @@ import { AlertTriangle, Globe, Shield, ShieldAlert, UserX } from "lucide-react";
 type Event = {
   id: string; at: string; actor: string; action: string;
   subject: string; detail: string; ip: string;
+  userAgent: string; path: string; forwarded: string;
 };
 type Payload = {
   events: Event[];
@@ -167,6 +168,7 @@ export function DmSecurityPage() {
                 <th className="px-3 py-2 text-left font-semibold">Address</th>
                 <th className="px-3 py-2 text-left font-semibold">From</th>
                 <th className="px-3 py-2 text-left font-semibold">Detail</th>
+                <th className="px-3 py-2" />
               </tr>
             </thead>
             <tbody>
@@ -195,8 +197,24 @@ export function DmSecurityPage() {
                     <td className="px-3 py-2 break-all">{e.subject || "—"}</td>
                     <td className="px-3 py-2 font-mono text-xs text-muted-foreground">
                       {e.ip || "—"}
+                      {/* A chain means proxies between them and us, which
+                          is worth seeing: the first hop alone can be
+                          anything the client cares to claim. */}
+                      {e.forwarded && (
+                        <span className="mt-0.5 block text-[10px] break-all" title={e.forwarded}>
+                          via {e.forwarded}
+                        </span>
+                      )}
                     </td>
-                    <td className="px-3 py-2 text-xs text-muted-foreground">{e.detail}</td>
+                    <td className="px-3 py-2 text-xs text-muted-foreground">
+                      {e.detail}
+                      {e.path && (
+                        <span className="mt-0.5 block font-mono text-[10px]">{e.path}</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2">
+                      <Agent ua={e.userAgent} />
+                    </td>
                   </tr>
                 );
               })}
@@ -213,6 +231,53 @@ export function DmSecurityPage() {
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * What claimed to be making the request.
+ *
+ * The user agent lies freely, which is rather the point of showing
+ * it. A browser claims to be a browser; curl, a script and a scanner
+ * mostly do not bother, and a run of attempts sharing one odd string
+ * is a pattern that an address and a time alone do not reveal.
+ */
+function Agent({ ua }: { ua: string }) {
+  if (!ua) {
+    return (
+      <span
+        title="No user agent at all — a browser always sends one."
+        className="inline-flex items-center gap-1 rounded-full bg-red-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-red-700 dark:text-red-400"
+      >
+        <AlertTriangle className="h-2.5 w-2.5" />
+        no agent
+      </span>
+    );
+  }
+  const browser = /Edg\//.test(ua) ? "Edge"
+    : /OPR\//.test(ua) ? "Opera"
+      : /Chrome\//.test(ua) ? "Chrome"
+        : /Safari\//.test(ua) ? "Safari"
+          : /Firefox\//.test(ua) ? "Firefox" : "";
+  const os = /Windows/.test(ua) ? "Windows"
+    : /iPhone|iPad/.test(ua) ? "iOS"
+      : /Android/.test(ua) ? "Android"
+        : /Mac OS X|Macintosh/.test(ua) ? "Mac"
+          : /Linux/.test(ua) ? "Linux" : "";
+
+  // Not a browser, as far as it is willing to say.
+  const tool = !browser;
+  return (
+    <span
+      title={ua}
+      className={`inline-block max-w-40 truncate rounded-full px-1.5 py-0.5 text-[10px] ${
+        tool
+          ? "bg-amber-500/15 font-semibold text-amber-700 dark:text-amber-400"
+          : "bg-muted text-muted-foreground"
+      }`}
+    >
+      {tool ? ua.split("/")[0]!.slice(0, 24) || "unknown tool" : [browser, os].filter(Boolean).join(" · ")}
+    </span>
   );
 }
 

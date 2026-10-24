@@ -66,15 +66,13 @@ export async function listSecurityLog(opts: {
   await ensure();
   const days = Math.min(Math.max(Number(opts.days) || 30, 1), 365);
   const limit = Math.min(Math.max(Number(opts.limit) || 300, 1), 2000);
-  const { rows } = await db().query<{
-    id: string; at: Date; actor: string; action: string;
-    subject: string; detail: string; ip: string;
-  }>(
-    `SELECT id, at, actor, action, subject, detail, ip FROM dm_audit
+  const { rows } = await db().query<DbEntry>(
+    `SELECT id, at, actor, action, subject, detail, ip, user_agent, path, forwarded
+       FROM dm_audit
       WHERE action = ANY($1::text[]) AND at > now() - ($2 || ' days')::interval
       ORDER BY at DESC, id DESC LIMIT ${limit}`,
     [SUSPICIOUS, String(days)]);
-  return rows.map((r) => ({ ...r, id: String(r.id), at: r.at.toISOString() }));
+  return rows.map(shapeEntry);
 }
 
 /**
@@ -129,6 +127,22 @@ CREATE TABLE IF NOT EXISTS dm_audit (
   detail  text        NOT NULL DEFAULT '',
   ip      text        NOT NULL DEFAULT ''
 );
+/**
+ * Enough to tell two attempts apart, and to recognise a tool.
+ *
+ * The user agent lies freely — that is rather the point of recording
+ * it. A browser claims to be a browser; curl, a script and a scanner
+ * mostly do not bother, and a run of attempts sharing one odd agent
+ * string is a pattern an address and a time alone do not show.
+ *
+ * The forwarded chain is kept apart from the ip column because that
+ * column is only the first hop, and a chain of three says something
+ * the first one does not.
+ */
+ALTER TABLE dm_audit ADD COLUMN IF NOT EXISTS user_agent text NOT NULL DEFAULT '';
+ALTER TABLE dm_audit ADD COLUMN IF NOT EXISTS path text NOT NULL DEFAULT '';
+ALTER TABLE dm_audit ADD COLUMN IF NOT EXISTS forwarded text NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS dm_audit_ip ON dm_audit (ip, at DESC);
 CREATE INDEX IF NOT EXISTS dm_audit_recent ON dm_audit (at DESC);
 CREATE INDEX IF NOT EXISTS dm_audit_subject ON dm_audit (subject, action, at DESC);
 `;
@@ -145,7 +159,34 @@ export type AuditEntry = {
   subject: string;
   detail: string;
   ip: string;
+  userAgent: string;
+  path: string;
+  /** The whole X-Forwarded-For chain, when there was more than one hop. */
+  forwarded: string;
 };
+
+/**
+ * Everything worth keeping about where a request came from.
+ *
+ * Taken from the request rather than passed in by each caller, so a
+ * new route cannot quietly log less than the others.
+ */
+export function requestMeta(req: {
+  headers: Record<string, unknown>;
+  socket?: { remoteAddress?: string };
+  path?: string;
+  method?: string;
+}): { ip: string; userAgent: string; path: string; forwarded: string } {
+  const chain = String(req.headers["x-forwarded-for"] ?? "").trim();
+  const first = chain.split(",")[0]?.trim() ?? "";
+  return {
+    ip: first || req.socket?.remoteAddress || "",
+    userAgent: String(req.headers["user-agent"] ?? "").slice(0, 300),
+    path: `${req.method ?? ""} ${req.path ?? ""}`.trim(),
+    // Only when it adds something: one hop is already in `ip`.
+    forwarded: chain.includes(",") ? chain.slice(0, 300) : "",
+  };
+}
 
 /**
  * Write one line.
@@ -160,14 +201,19 @@ export async function audit(e: {
   actor?: string;
   detail?: string;
   ip?: string;
+  userAgent?: string;
+  path?: string;
+  forwarded?: string;
 }): Promise<void> {
   try {
     await ensure();
     await db().query(
-      `INSERT INTO dm_audit (actor, action, subject, detail, ip)
-            VALUES ($1, $2, $3, $4, $5)`,
+      `INSERT INTO dm_audit (actor, action, subject, detail, ip, user_agent, path, forwarded)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [(e.actor ?? "").toLowerCase(), e.action, (e.subject ?? "").toLowerCase(),
-        (e.detail ?? "").slice(0, 500), e.ip ?? ""]);
+        (e.detail ?? "").slice(0, 500), e.ip ?? "",
+        (e.userAgent ?? "").slice(0, 300), (e.path ?? "").slice(0, 200),
+        (e.forwarded ?? "").slice(0, 300)]);
   } catch (err) {
     console.error("audit write failed:", err instanceof Error ? err.message : err);
   }
@@ -183,13 +229,34 @@ export async function listAudit(opts: {
   const { rows } = await db().query<{
     id: string; at: Date; actor: string; action: string;
     subject: string; detail: string; ip: string;
+    user_agent: string; path: string; forwarded: string;
   }>(
-    `SELECT id, at, actor, action, subject, detail, ip FROM dm_audit
+    `SELECT id, at, actor, action, subject, detail, ip, user_agent, path, forwarded
+       FROM dm_audit
       ${subject ? "WHERE subject = $1 OR actor = $1" : ""}
       ORDER BY at DESC, id DESC LIMIT ${limit}`,
     subject ? [subject] : []);
-  return rows.map((r) => ({ ...r, id: String(r.id), at: r.at.toISOString() }));
+  return rows.map(shapeEntry);
 }
+
+type DbEntry = {
+  id: string; at: Date; actor: string; action: string;
+  subject: string; detail: string; ip: string;
+  user_agent: string; path: string; forwarded: string;
+};
+
+const shapeEntry = (r: DbEntry): AuditEntry => ({
+  id: String(r.id),
+  at: r.at.toISOString(),
+  actor: r.actor,
+  action: r.action,
+  subject: r.subject,
+  detail: r.detail,
+  ip: r.ip,
+  userAgent: r.user_agent,
+  path: r.path,
+  forwarded: r.forwarded,
+});
 
 /* ------------------------------------------------------------------ *
  * Lockout

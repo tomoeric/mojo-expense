@@ -27,7 +27,7 @@ import {
 } from "../server/dutch-miller/invites.js";
 import {
   LOCKOUT, SUSPICIOUS, audit, listAudit, listSecurityLog, lockState,
-  securitySummary,
+  requestMeta, securitySummary,
 } from "../server/dutch-miller/audit.js";
 import {
   TRUST_DAYS, deviceLabel, forgetDevices, isTrusted, listDevices, trustDevice,
@@ -195,6 +195,36 @@ try {
   check("everything on it is a listed kind",
     log.every((e) => (SUSPICIOUS as string[]).includes(e.action)));
 
+  console.log("\n13b. What each entry carries");
+  // An IP on its own rarely settles anything. What was reached for,
+  // what claimed to be asking, and how many hops away it was are the
+  // parts that make one attempt distinguishable from the next.
+  const meta = requestMeta({
+    headers: {
+      "x-forwarded-for": "198.51.100.7, 203.0.113.1, 10.0.0.1",
+      "user-agent": "curl/8.4.0",
+    },
+    path: "/request",
+    method: "POST",
+  });
+  check("the client is the FIRST hop", meta.ip === "198.51.100.7", meta.ip);
+  check("…and the whole chain is kept too, since one hop can be claimed",
+    meta.forwarded.split(",").length === 3, meta.forwarded);
+  check("a single hop is not repeated as a chain",
+    requestMeta({ headers: { "x-forwarded-for": "198.51.100.7" } }).forwarded === "");
+  check("what was reached for", meta.path === "POST /request", meta.path);
+  check("and what claimed to be asking", meta.userAgent === "curl/8.4.0");
+  check("no headers at all is empty, not a crash",
+    requestMeta({ headers: {} }).userAgent === "");
+
+  await audit({ action: "code.failed", subject: LOCKED, ...meta });
+  const detailed = (await listSecurityLog({ days: 1, limit: 100 }))
+    .find((e) => e.action === "code.failed" && e.subject === LOCKED);
+  check("…and all of it survives the round trip",
+    detailed?.userAgent === "curl/8.4.0" && detailed?.path === "POST /request"
+      && (detailed?.forwarded ?? "").includes("203.0.113.1"),
+    JSON.stringify({ ua: detailed?.userAgent, p: detailed?.path }));
+
   const sum = await securitySummary(1);
   const probe = sum.byIp.find((r) => r.ip === "203.0.113.9");
   // One address fumbling their own sign-in looks nothing like one
@@ -212,7 +242,8 @@ try {
     .catch(() => {});
   await db().query("DELETE FROM dm_audit WHERE subject = ANY($1::text[])", [MINE])
     .catch(() => {});
-  await db().query("DELETE FROM dm_audit WHERE ip = '203.0.113.9'").catch(() => {});
+  await db().query("DELETE FROM dm_audit WHERE ip IN ('203.0.113.9', '198.51.100.7')")
+    .catch(() => {});
   await db().query("DELETE FROM dm_trusted_devices WHERE email = ANY($1::text[])", [MINE])
     .catch(() => {});
   await db().end().catch(() => {});

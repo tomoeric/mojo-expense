@@ -4,7 +4,7 @@ import { env } from "../env.js";
 import { publicOrigin } from "../origin.js";
 import { SESSION_TTL_MS, setSessionCookie, type SessionUser } from "../auth/session.js";
 import { button, isMailConfigured, layout, sendMail } from "../mail.js";
-import { LOCKOUT, audit, lockState, minutesLeft } from "./audit.js";
+import { LOCKOUT, audit, lockState, minutesLeft, requestMeta } from "./audit.js";
 import {
   CODE_TTL_MINUTES, LOGIN_TTL_MINUTES, issueCode, issueToken, peekToken, redeemToken,
   verifyCode,
@@ -46,9 +46,13 @@ const NONCE_COOKIE = "dm_link";
 const PENDING_COOKIE = "dm_pending";
 const PENDING_TTL_MS = 20 * 60 * 1000;
 
-const ip = (req: Request): string =>
-  String(req.headers["x-forwarded-for"] ?? "").split(",")[0]?.trim()
-  || req.socket.remoteAddress || "";
+/**
+ * Where a request came from, for the security log.
+ *
+ * Everything here goes through one helper so a route added later
+ * cannot quietly record less than the others.
+ */
+const from = (req: Request) => requestMeta(req as never);
 
 const origin = (req: Request): string => publicOrigin(req);
 
@@ -211,13 +215,13 @@ dealerAuthRouter.post("/request", async (req: Request, res: Response) => {
 
   const lock = await lockState(email);
   if (lock.locked) {
-    await audit({ action: "locked.out", subject: email, ip: ip(req), detail: "link request" });
+    await audit({ action: "locked.out", subject: email, ...from(req), detail: "link request" });
     res.status(429).json({
       error: `Too many attempts. Try again in ${minutesLeft(lock.until)} minutes.`,
     });
     return;
   }
-  await audit({ action: "login.requested", subject: email, ip: ip(req) });
+  await audit({ action: "login.requested", subject: email, ...from(req) });
 
   const row = await getDmUser(email);
   // A super admin and any staff account belong at the Microsoft door; so
@@ -226,23 +230,23 @@ dealerAuthRouter.post("/request", async (req: Request, res: Response) => {
   // separately, because somebody working through a list of guesses
   // looks exactly like this and nothing else does.
   if (!row || row.authMethod !== "link" || isSuperEmail(email)) {
-    if (!row) await audit({ action: "login.unknown", subject: email, ip: ip(req) });
+    if (!row) await audit({ action: "login.unknown", subject: email, ...from(req) });
     res.json(same);
     return;
   }
   if (row.status === "disabled") {
-    await audit({ action: "login.rejected", subject: email, ip: ip(req), detail: "disabled" });
+    await audit({ action: "login.rejected", subject: email, ...from(req), detail: "disabled" });
     res.json(same);
     return;
   }
 
   try {
     if (row.status === "invited") {
-      const t = await issueToken({ email, kind: "invite", ip: ip(req), bindBrowser: false });
+      const t = await issueToken({ email, kind: "invite", ...from(req), bindBrowser: false });
       await sendInvite(req, email, t.token);
-      await audit({ action: "invite.resent", subject: email, ip: ip(req) });
+      await audit({ action: "invite.resent", subject: email, ...from(req) });
     } else {
-      const t = await issueToken({ email, kind: "login", ip: ip(req) });
+      const t = await issueToken({ email, kind: "login", ...from(req) });
       const code = await issueCode(email);
       await sendLoginLink(req, email, t.token, code);
       if (t.browserNonce) {
@@ -251,8 +255,8 @@ dealerAuthRouter.post("/request", async (req: Request, res: Response) => {
           maxAge: LOGIN_TTL_MINUTES * 60_000,
         });
       }
-      await audit({ action: "login.sent", subject: email, ip: ip(req) });
-      await audit({ action: "code.sent", subject: email, ip: ip(req) });
+      await audit({ action: "login.sent", subject: email, ...from(req) });
+      await audit({ action: "code.sent", subject: email, ...from(req) });
     }
   } catch (err) {
     // A mail failure is ours, not theirs, and saying "sent" when nothing
@@ -281,7 +285,7 @@ dealerAuthRouter.get("/redeem", async (req: Request, res: Response) => {
   const out = await peekToken(token);
 
   if (!out.ok) {
-    await audit({ action: "login.rejected", ip: ip(req), detail: `link ${out.reason}` });
+    await audit({ action: "login.rejected", ...from(req), detail: `link ${out.reason}` });
     res.redirect(`/#/signin?link=${out.reason}`);
     return;
   }
@@ -308,7 +312,7 @@ dealerAuthRouter.post("/continue", async (req: Request, res: Response) => {
   const out = await redeemToken(p.token, nonce);
   if (!out.ok) {
     clearPending(res);
-    await audit({ action: "login.rejected", subject: p.email, ip: ip(req), detail: `link ${out.reason}` });
+    await audit({ action: "login.rejected", subject: p.email, ...from(req), detail: `link ${out.reason}` });
     res.status(400).json({ error: linkMessage(out.reason), reason: out.reason });
     return;
   }
@@ -319,7 +323,7 @@ dealerAuthRouter.post("/continue", async (req: Request, res: Response) => {
   setPending(res, { email: out.email, kind: out.kind, exp: Date.now() + PENDING_TTL_MS });
 
   if (out.kind === "invite") {
-    await audit({ action: "invite.redeemed", subject: out.email, ip: ip(req) });
+    await audit({ action: "invite.redeemed", subject: out.email, ...from(req) });
     res.json({ kind: "invite", email: out.email });
     return;
   }
@@ -333,7 +337,7 @@ dealerAuthRouter.post("/continue", async (req: Request, res: Response) => {
     const user = await signIn(res, out.email);
     await audit({
       action: user ? "login.redeemed" : "login.rejected",
-      subject: out.email, ip: ip(req),
+      subject: out.email, ...from(req),
       detail: user ? (trusted ? "trusted device" : "same browser") : "not active",
     });
     if (!user) { res.status(403).json({ error: "That account is not active." }); return; }
@@ -345,7 +349,7 @@ dealerAuthRouter.post("/continue", async (req: Request, res: Response) => {
   }
 
   await audit({
-    action: "login.redeemed", subject: out.email, ip: ip(req),
+    action: "login.redeemed", subject: out.email, ...from(req),
     detail: "new device — code required",
   });
   res.json({ kind: "login", signedIn: false, needsCode: true, trustDays: TRUST_DAYS });
@@ -377,7 +381,7 @@ dealerAuthRouter.post("/verify", async (req: Request, res: Response) => {
   }
   const check = await verifyCode(p.email, String((req.body as { code?: unknown })?.code ?? ""));
   if (!check.ok) {
-    await audit({ action: "code.failed", subject: p.email, ip: ip(req), detail: check.reason });
+    await audit({ action: "code.failed", subject: p.email, ...from(req), detail: check.reason });
     res.status(400).json({ error: codeMessage(check.reason, check.attemptsLeft) });
     return;
   }
@@ -388,7 +392,7 @@ dealerAuthRouter.post("/verify", async (req: Request, res: Response) => {
   }
   await rememberDevice(req, res, p.email);
   await audit({
-    action: "code.verified", subject: p.email, ip: ip(req),
+    action: "code.verified", subject: p.email, ...from(req),
     detail: `device trusted for ${TRUST_DAYS} days`,
   });
   res.json({ ok: true, trustDays: TRUST_DAYS });
@@ -449,7 +453,7 @@ dealerAuthRouter.post("/onboard", async (req: Request, res: Response) => {
     res.status(409).json({ error: "This account has already been set up. Ask for a sign-in link." });
     return;
   }
-  await audit({ action: "account.activated", subject: p.email, ip: ip(req), detail: t("business") });
+  await audit({ action: "account.activated", subject: p.email, ...from(req), detail: t("business") });
   await signIn(res, p.email);
   res.json({ ok: true });
 });
@@ -468,7 +472,7 @@ dealerAuthRouter.post("/resend-code", async (req: Request, res: Response) => {
   }
   try {
     await sendCode(p.email, await issueCode(p.email));
-    await audit({ action: "code.sent", subject: p.email, ip: ip(req), detail: "resend" });
+    await audit({ action: "code.sent", subject: p.email, ...from(req), detail: "resend" });
   } catch {
     res.status(500).json({ error: "We could not send the email. Tell your MOJO contact." });
     return;
@@ -487,10 +491,10 @@ function codeMessage(reason: string, left: number): string {
 
 /** Everything an admin needs to send an invite, used by the Users page. */
 export async function inviteUser(req: Request, email: string, by: string): Promise<void> {
-  const t = await issueToken({ email, kind: "invite", by, ip: ip(req), bindBrowser: false });
+  const t = await issueToken({ email, kind: "invite", by, ...from(req), bindBrowser: false });
   await sendInvite(req, email, t.token);
   await markInvited(email, by);
-  await audit({ action: "invite.sent", subject: email, actor: by, ip: ip(req) });
+  await audit({ action: "invite.sent", subject: email, actor: by, ...from(req) });
 }
 
 export { LOCKOUT };
