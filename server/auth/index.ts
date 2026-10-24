@@ -186,6 +186,15 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
     void currentEpoch(user.email).then((epoch) => {
       if (epoch < 0 || epoch !== (user.epoch ?? 0)) {
         // Disabled, revoked, or removed since this cookie was issued.
+        // Usually ordinary — somebody was switched off — but a cookie
+        // being presented after that is also what a stolen one looks
+        // like, so it goes on the sign-in log either way.
+        void import("../dutch-miller/audit.js").then(({ audit }) => audit({
+          action: "session.rejected",
+          subject: user.email,
+          detail: epoch < 0 ? "account is no longer active" : "session was revoked",
+          ip: String(req.headers["x-forwarded-for"] ?? "").split(",")[0]?.trim() ?? "",
+        })).catch(() => {});
         clearSessionCookie(res);
         next();
         return;
@@ -468,6 +477,14 @@ authRouter.get("/callback", async (req: Request, res: Response) => {
 
     if (!isAllowed(email)) {
       // Authenticated in the tenant, but not on this app's allow-list.
+      // Worth recording: it is a real account somebody signed into,
+      // reaching for an app they have not been given.
+      void import("../dutch-miller/audit.js").then(({ audit }) => audit({
+        action: "signin.denied",
+        subject: email,
+        detail: "signed in to the tenant but not on the allow-list",
+        ip: String(req.headers["x-forwarded-for"] ?? "").split(",")[0]?.trim() ?? "",
+      })).catch(() => {});
       res.status(403).type("html").send(deniedPage(email));
       return;
     }

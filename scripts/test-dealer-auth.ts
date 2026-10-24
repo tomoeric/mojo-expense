@@ -25,7 +25,10 @@ import { createHash } from "node:crypto";
 import {
   issueCode, issueToken, purgeOldTokens, redeemToken, verifyCode,
 } from "../server/dutch-miller/invites.js";
-import { LOCKOUT, audit, listAudit, lockState } from "../server/dutch-miller/audit.js";
+import {
+  LOCKOUT, SUSPICIOUS, audit, listAudit, listSecurityLog, lockState,
+  securitySummary,
+} from "../server/dutch-miller/audit.js";
 import {
   TRUST_DAYS, deviceLabel, forgetDevices, isTrusted, listDevices, trustDevice,
 } from "../server/dutch-miller/devices.js";
@@ -175,6 +178,33 @@ try {
   check("revoking forgets every machine", (await forgetDevices(B)) >= 1);
   check("…so the code is asked for again", !(await isTrusted(B, dev2.secret)));
 
+
+  console.log("\n13. The security log");
+  // The point of a separate log: only what failed. A successful
+  // sign-in on it would bury the handful that matter.
+  await audit({ action: "login.unknown", subject: LOCKED, ip: "203.0.113.9" });
+  await audit({ action: "signin.denied", subject: A, ip: "203.0.113.9" });
+  await audit({ action: "login.redeemed", subject: A, ip: "203.0.113.9" });
+  await audit({ action: "invite.sent", subject: A, actor: "admin@example.invalid" });
+
+  const log = await listSecurityLog({ days: 1, limit: 100 });
+  check("a failed attempt is on it", log.some((e) => e.action === "login.unknown"));
+  check("…and a refused tenant sign-in", log.some((e) => e.action === "signin.denied"));
+  check("a SUCCESSFUL sign-in is not", !log.some((e) => e.action === "login.redeemed"));
+  check("…nor is ordinary admin work", !log.some((e) => e.action === "invite.sent"));
+  check("everything on it is a listed kind",
+    log.every((e) => (SUSPICIOUS as string[]).includes(e.action)));
+
+  const sum = await securitySummary(1);
+  const probe = sum.byIp.find((r) => r.ip === "203.0.113.9");
+  // One address fumbling their own sign-in looks nothing like one
+  // origin reaching for several, and only the grouping tells them apart.
+  check("attempts are grouped by origin", Boolean(probe), JSON.stringify(sum.byIp.slice(0, 2)));
+  check("…counting the DISTINCT addresses tried",
+    (probe?.addresses ?? 0) >= 2, String(probe?.addresses));
+  check("…and not counting the successful one",
+    (probe?.attempts ?? 0) === 2, String(probe?.attempts));
+
 } finally {
   await db().query("DELETE FROM dm_login_tokens WHERE email = ANY($1::text[])", [MINE])
     .catch(() => {});
@@ -182,6 +212,7 @@ try {
     .catch(() => {});
   await db().query("DELETE FROM dm_audit WHERE subject = ANY($1::text[])", [MINE])
     .catch(() => {});
+  await db().query("DELETE FROM dm_audit WHERE ip = '203.0.113.9'").catch(() => {});
   await db().query("DELETE FROM dm_trusted_devices WHERE email = ANY($1::text[])", [MINE])
     .catch(() => {});
   await db().end().catch(() => {});

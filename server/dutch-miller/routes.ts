@@ -13,7 +13,9 @@ import {
   setDmUserEnabled, staffDomainList,
   type DmPageKey, type DmRole, type StoredRole,
 } from "./users.js";
-import { audit, listAudit } from "./audit.js";
+import {
+  LOCKOUT, audit, listAudit, listSecurityLog, securitySummary,
+} from "./audit.js";
 import { BULK_COLUMNS, parseBulk, templateCsv } from "./bulk.js";
 import { DEFAULT_ROLE, listRoles, removeRole, saveRole } from "./roles.js";
 import { dutchMillerNamed } from "../auth/apps.js";
@@ -543,6 +545,26 @@ dutchMillerRouter.post("/mail-test", requireDmAdmin, async (req: Request, res: R
   } catch (err) {
     res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
   }
+});
+
+/**
+ * The security log: attempts that failed, and anything worth a look.
+ *
+ * Separate from the audit trail on purpose. The trail is a record of
+ * what was DONE — invites sent, roles changed, accounts disabled — and
+ * it is mostly ordinary. This is only the things that did not work:
+ * addresses nobody invited asking for links, spent and expired links
+ * being replayed, wrong codes, lockouts, sessions presented after the
+ * account behind them stopped being valid. Four real attempts buried
+ * in nine hundred ordinary lines is how they get missed.
+ */
+dutchMillerRouter.get("/security", requireDmAdmin, async (req: Request, res: Response) => {
+  const days = Number(req.query.days ?? 30);
+  const [events, summary] = await Promise.all([
+    listSecurityLog({ days, limit: Number(req.query.limit ?? 300) }),
+    securitySummary(days),
+  ]);
+  res.json({ events, ...summary, days, lockout: LOCKOUT });
 });
 
 /**

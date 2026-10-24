@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {
   LogOut, UserRound, SlidersHorizontal, KeyRound, LayoutGrid, Check, ChevronRight,
-  Crown, Users,
+  Crown, Shield, Users,
 } from "lucide-react";
 import { APP_LABEL, type AppKey, type SessionUser } from "@/lib/api";
 
@@ -16,6 +16,7 @@ export function UserMenu({
   dmAdmin = false,
   onDmUsers,
   onDmRoles,
+  onDmSecurity,
   onDmSettings,
 }: {
   user: SessionUser;
@@ -37,6 +38,7 @@ export function UserMenu({
   onDmUsers?: () => void;
   /** Only passed for a super administrator; absent hides the item. */
   onDmRoles?: () => void;
+  onDmSecurity?: () => void;
   onDmSettings?: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -158,6 +160,16 @@ export function UserMenu({
                   >
                     <Crown className="h-4 w-4" />
                     Roles
+                  </button>
+                )}
+                {onDmSecurity && (
+                  <button
+                    type="button"
+                    onClick={() => { setOpen(false); onDmSecurity(); }}
+                    className="flex w-full items-center gap-2 border-b border-border px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted"
+                  >
+                    <Shield className="h-4 w-4" />
+                    Security Log
                   </button>
                 )}
                 {onDmSettings && (

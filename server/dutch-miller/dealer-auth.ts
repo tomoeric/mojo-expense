@@ -221,8 +221,15 @@ dealerAuthRouter.post("/request", async (req: Request, res: Response) => {
 
   const row = await getDmUser(email);
   // A super admin and any staff account belong at the Microsoft door; so
-  // does an address that was never invited. All three get the same silence.
-  if (!row || row.authMethod !== "link" || isSuperEmail(email)) { res.json(same); return; }
+  // does an address that was never invited. All three get the same
+  // silence — but an address nobody has ever invited is recorded
+  // separately, because somebody working through a list of guesses
+  // looks exactly like this and nothing else does.
+  if (!row || row.authMethod !== "link" || isSuperEmail(email)) {
+    if (!row) await audit({ action: "login.unknown", subject: email, ip: ip(req) });
+    res.json(same);
+    return;
+  }
   if (row.status === "disabled") {
     await audit({ action: "login.rejected", subject: email, ip: ip(req), detail: "disabled" });
     res.json(same);

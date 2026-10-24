@@ -178,6 +178,19 @@ the blocks.
   - Candidates come from `dm_users` only — never an arbitrary address — and
     include invited accounts, since "what do they see?" is usually asked
     about somebody just added.
+- **The Security Log is only what FAILED** (`SUSPICIOUS` in `audit.ts`,
+  page under the user icon). Never add a successful sign-in to it:
+  four real attempts buried in nine hundred ordinary lines is how they
+  get missed — that is what the audit trail is for. It groups by
+  address and by origin, because one address fumbling their own
+  sign-in looks nothing like one origin reaching for several, and only
+  the grouping tells them apart.
+- **Email Settings** holds notifications and reminders. A reminder is
+  daily on any days ticked or weekly on one; the scheduler checks each
+  minute and records the MINUTE SLOT it last sent, which is what stops
+  a restart loop mailing the same digest repeatedly. Nothing is sent
+  when nothing is outstanding. Watch 12 AM (hour 0) and 12 PM (hour 12)
+  if `hour24` is ever touched.
 - **Bulk member upload is ALL OR NOTHING** (`dutch-miller/bulk.ts`). One
   bad row refuses the whole file, named by row and column, and the user
   re-uploads. Never make it partial: each accepted row spends an RFID

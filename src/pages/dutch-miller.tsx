@@ -8,6 +8,7 @@ import { DmSignupsPage } from "@/pages/dm-signups";
 import { useLiveUpdates } from "@/lib/live";
 import { DmPeopleDialog } from "@/pages/dm-people";
 import { DmRolesPage } from "@/pages/dm-roles";
+import { DmSecurityPage } from "@/pages/dm-security";
 import { DmSettingsPage } from "@/pages/dm-settings";
 import type { AppKey, SessionUser } from "@/lib/api";
 
@@ -65,6 +66,12 @@ const MENU_PAGES: PageDef[] = [
     key: "roles",
     label: "Roles",
     blurb: "What each kind of person can open. Super administrator only.",
+    children: [],
+  },
+  {
+    key: "security",
+    label: "Security Log",
+    blurb: "Failed sign-ins and other attempts worth a look.",
     children: [],
   },
   {
@@ -177,6 +184,7 @@ export function DutchMillerApp({
                 dmAdmin={dmAdmin}
                 onDmUsers={() => setUsers(true)}
               onDmRoles={access?.role === "super" ? () => go("roles") : undefined}
+              onDmSecurity={() => go("security")}
               onDmSettings={() => go("settings")}
               />
             )}
@@ -246,6 +254,7 @@ export function DutchMillerApp({
           )}
           {access && route.page === "rfid-review" && <DmRfidPage />}
           {access && route.page === "roles" && access.role === "super" && <DmRolesPage />}
+          {access && route.page === "security" && dmAdmin && <DmSecurityPage />}
           {access && route.page === "settings" && dmAdmin && <DmSettingsPage />}
         </div>
       </div>

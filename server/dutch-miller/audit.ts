@@ -25,11 +25,96 @@ export const AUDIT_ACTIONS = [
   "role.saved", "role.removed",
   "bulk.uploaded", "bulk.committed",
   "reminder.sent", "reminder.failed", "reminder.changed",
+  /* Sign-in attempts worth looking at. See `SUSPICIOUS` below. */
+  "login.unknown", "signin.denied", "session.rejected",
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
 /** The ones that count toward a lockout. */
 const FAILURES: AuditAction[] = ["login.rejected", "code.failed", "login.requested"];
+
+/**
+ * What belongs on the security log.
+ *
+ * Only things that FAILED or are worth a second look. A log of
+ * successful sign-ins is a list nobody reads, and burying four real
+ * attempts in nine hundred ordinary ones is how they get missed.
+ *
+ *   login.unknown    an address nobody ever invited asked for a link
+ *   signin.denied    a real tenant account that is not on the allow-list
+ *   login.rejected   a link that was expired, spent, or for a dead account
+ *   code.failed      a wrong confirmation code
+ *   locked.out       too many of the above, so the address is refused
+ *   session.rejected a session cookie that no longer matches its account
+ */
+export const SUSPICIOUS: AuditAction[] = [
+  "login.unknown", "signin.denied", "login.rejected", "code.failed",
+  "locked.out", "session.rejected",
+];
+
+/**
+ * The security log, newest first.
+ *
+ * Deliberately unaggregated — an administrator reading this wants the
+ * raw attempts with their addresses, times and IPs. The grouping that
+ * makes a pattern obvious is done above it, in `signInSummary`.
+ */
+export async function listSecurityLog(opts: {
+  days?: number;
+  limit?: number;
+} = {}): Promise<AuditEntry[]> {
+  await ensure();
+  const days = Math.min(Math.max(Number(opts.days) || 30, 1), 365);
+  const limit = Math.min(Math.max(Number(opts.limit) || 300, 1), 2000);
+  const { rows } = await db().query<{
+    id: string; at: Date; actor: string; action: string;
+    subject: string; detail: string; ip: string;
+  }>(
+    `SELECT id, at, actor, action, subject, detail, ip FROM dm_audit
+      WHERE action = ANY($1::text[]) AND at > now() - ($2 || ' days')::interval
+      ORDER BY at DESC, id DESC LIMIT ${limit}`,
+    [SUSPICIOUS, String(days)]);
+  return rows.map((r) => ({ ...r, id: String(r.id), at: r.at.toISOString() }));
+}
+
+/**
+ * The shape of it: who is being tried, and from where.
+ *
+ * One IP against many addresses is the pattern that matters — a person
+ * mistyping their own code looks nothing like somebody working through
+ * a list, and only the grouping tells them apart.
+ */
+export async function securitySummary(days = 30): Promise<{
+  byAddress: { subject: string; attempts: number; last: string }[];
+  byIp: { ip: string; attempts: number; addresses: number; last: string }[];
+  total: number;
+}> {
+  await ensure();
+  const window = String(Math.min(Math.max(days, 1), 365));
+  const base = `FROM dm_audit WHERE action = ANY($1::text[])
+                  AND at > now() - ($2 || ' days')::interval`;
+
+  const byAddress = await db().query<{ subject: string; n: string; last: Date }>(
+    `SELECT subject, count(*) AS n, max(at) AS last ${base} AND subject <> ''
+      GROUP BY subject ORDER BY n DESC, last DESC LIMIT 50`, [SUSPICIOUS, window]);
+  const byIp = await db().query<{ ip: string; n: string; addrs: string; last: Date }>(
+    `SELECT ip, count(*) AS n, count(DISTINCT subject) AS addrs, max(at) AS last ${base}
+        AND ip <> ''
+      GROUP BY ip ORDER BY addrs DESC, n DESC LIMIT 50`, [SUSPICIOUS, window]);
+  const total = await db().query<{ n: string }>(`SELECT count(*) AS n ${base}`,
+    [SUSPICIOUS, window]);
+
+  return {
+    byAddress: byAddress.rows.map((r) => ({
+      subject: r.subject, attempts: Number(r.n), last: r.last.toISOString(),
+    })),
+    byIp: byIp.rows.map((r) => ({
+      ip: r.ip, attempts: Number(r.n), addresses: Number(r.addrs),
+      last: r.last.toISOString(),
+    })),
+    total: Number(total.rows[0]?.n ?? 0),
+  };
+}
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS dm_audit (
