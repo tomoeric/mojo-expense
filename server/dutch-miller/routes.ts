@@ -4,6 +4,10 @@ import express, {
 import { parseRfidFile } from "./rfid-parse.js";
 import { addRfids, listRfids, rfidCounts, setRfidActive, useRfid } from "./rfid.js";
 import {
+  DISPLAY_TZ, createSignup, getSignup, isMojoStaff, listSignups, newHandle, setComplete,
+  type SignupInput,
+} from "./signups.js";
+import {
   DM_PAGES, dmAccessFor, isDmPage, listDmUsers, removeDmUser, saveDmUser,
   type DmPageKey, type DmRole,
 } from "./users.js";
@@ -142,3 +146,99 @@ dutchMillerRouter.post("/rfid/active", requirePage("rfid-review"), async (req: R
   const out = await setRfidActive(numbers, body.active !== false);
   res.json({ ...out, counts: await rfidCounts() });
 });
+
+/* ------------------------------------------------------------------ *
+ * Member signups
+ * ------------------------------------------------------------------ */
+
+/** A blank entry's generated values, minted and signed by the server. */
+dutchMillerRouter.post(
+  "/signups/new",
+  requirePage("member-signups"),
+  (_req: Request, res: Response) => {
+    res.json({ ...newHandle(), displayTimezone: DISPLAY_TZ });
+  },
+);
+
+/**
+ * The tags this form may offer.
+ *
+ * Served from here rather than the RFID page's own route so that somebody
+ * given Member Signups and nothing else can still fill the dropdown — and
+ * so it cannot return anything but an available tag.
+ */
+dutchMillerRouter.get(
+  "/signups/rfid-options",
+  requirePage("member-signups"),
+  async (_req: Request, res: Response) => {
+    const { rows } = await listRfids({ status: "active", limit: 500 });
+    res.json({ options: rows.map((r) => r.number) });
+  },
+);
+
+dutchMillerRouter.get(
+  "/signups",
+  requirePage("member-signups"),
+  async (req: Request, res: Response) => {
+    const status = String(req.query.status ?? "all");
+    res.json({
+      ...(await listSignups({
+        status: status === "new" || status === "complete" ? status : "all",
+        search: String(req.query.search ?? ""),
+        limit: Number(req.query.limit ?? 100),
+        offset: Number(req.query.offset ?? 0),
+      })),
+      // Whether the person reading may set the MOJO-side mark. The button
+      // follows this; the route below decides it again regardless.
+      canComplete: isMojoStaff(req.viewingAs?.real.email ?? req.user?.email ?? ""),
+    });
+  },
+);
+
+dutchMillerRouter.get(
+  "/signups/:guid",
+  requirePage("member-signups"),
+  async (req: Request, res: Response) => {
+    const row = await getSignup(String(req.params.guid ?? ""));
+    if (!row) { res.status(404).json({ error: "No such signup." }); return; }
+    res.json({ row });
+  },
+);
+
+/** Confirm & Submit. One member, one tag, one transaction — see `createSignup`. */
+dutchMillerRouter.post(
+  "/signups",
+  requirePage("member-signups"),
+  async (req: Request, res: Response) => {
+    const out = await createSignup(
+      (req.body ?? {}) as Partial<SignupInput>, req.user?.email ?? "");
+    if (out.ok) { res.json({ row: out.row, alreadyExisted: out.alreadyExisted }); return; }
+    if (out.kind === "validation") { res.status(400).json({ errors: out.errors }); return; }
+    // 409: the entered data is fine and worth keeping — the form says so and
+    // asks for a different tag rather than throwing the entry away.
+    res.status(409).json({ error: out.reason, kind: out.kind });
+  },
+);
+
+/**
+ * The MOJO-side mark.
+ *
+ * Not an administrator's privilege: being an administrator of Dutch Miller
+ * says nothing about working at MOJO, and this mark is MOJO saying it has
+ * dealt with the signup.
+ */
+dutchMillerRouter.post(
+  "/signups/:guid/complete",
+  requirePage("member-signups"),
+  async (req: Request, res: Response) => {
+    const who = req.viewingAs?.real.email ?? req.user?.email ?? "";
+    if (!isMojoStaff(who)) {
+      res.status(403).json({ error: "Only a MOJO employee can mark a signup complete." });
+      return;
+    }
+    const complete = (req.body ?? {}).complete !== false;
+    const row = await setComplete(String(req.params.guid ?? ""), complete, who);
+    if (!row) { res.status(404).json({ error: "No such signup." }); return; }
+    res.json({ row });
+  },
+);

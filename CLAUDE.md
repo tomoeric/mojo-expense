@@ -95,7 +95,32 @@ the blocks.
   winner when two requests arrive together, and a used tag can never be made
   active again. Excel dropping a leading zero turns `01234+567890` into ten
   digits; the parser refuses those and says why rather than padding a guess.
-- Tests: `scripts/test-rfid.ts`, `scripts/test-dm-users.ts` (both need
+- **Member Signups is two sub-pages of ONE page**, `#/member-signups/review`
+  and `#/member-signups/add`. Access is granted at the parent, because a
+  tick-box per tab would only be a way to hand somebody Add New without
+  Review Existing. The rail renders `DM_PAGES[].children` as a dropdown —
+  that is why the top tab row from the mockup is not there.
+- **The generated values are minted AND SIGNED by the server** (`newHandle`
+  / `handleIsOurs` in `signups.ts`, HMAC over `SESSION_SECRET`). The form
+  carries the signature through verification untouched. Without it
+  "read-only" is a styling choice: a client could post any creation time or
+  replay a GUID. This is why there is no table of half-started drafts.
+- **The tag is claimed in the SAME transaction that writes the member**, with
+  a conditional `UPDATE … WHERE status = 'active'` rather than a read then a
+  write, plus a unique index on `dm_member_signups.rfid` underneath. A tag
+  issued with no member is lost; a member with no tag means the next customer
+  gets the same one. `ON CONFLICT (guid) DO NOTHING` makes a retry or a
+  double-click idempotent. **Selecting a tag in the form does nothing** — only
+  Confirm & Submit claims it.
+- **Two internal marks.** `submitted_at` — reached MOJO; always set, because
+  the row only exists once it has (a separate always-true boolean would be a
+  flag waiting to disagree with reality). `completed_at`/`completed_by` — a
+  MOJO employee dealt with it, set only by an `@mojocarwash.com` account
+  (`isMojoStaff`), NOT by a Dutch Miller administrator: being an admin of the
+  dealer's app says nothing about working at MOJO. Reversible, because the
+  alternative to an undo is a wrong record nobody can correct.
+- Tests: `scripts/test-rfid.ts`, `scripts/test-dm-users.ts`,
+  `scripts/test-signups.ts` (all need
   `DATABASE_URL`). The users test SKIPS against a non-empty `dm_users` rather
   than deleting somebody's configuration.
 

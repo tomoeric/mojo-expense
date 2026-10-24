@@ -22,7 +22,24 @@ import { db, ensureSchema } from "../db.js";
  * list what is available without anybody keeping a second copy in sync.
  */
 export const DM_PAGES = [
-  { key: "rfid-review", label: "RFID Review", blurb: "Upload RFID numbers and review active and used ones." },
+  {
+    key: "member-signups",
+    label: "Member Signups",
+    blurb: "Enrol a member and assign them an RFID tag.",
+    // Sub-pages of one page, not pages of their own: access is granted at
+    // the parent, so a tick-box per tab would only be a way to hand somebody
+    // Add New without Review Existing.
+    children: [
+      { key: "review", label: "Review Existing" },
+      { key: "add", label: "Add New" },
+    ],
+  },
+  {
+    key: "rfid-review",
+    label: "RFID Review",
+    blurb: "Upload RFID numbers and review active and used ones.",
+    children: [],
+  },
 ] as const;
 
 export type DmPageKey = (typeof DM_PAGES)[number]["key"];

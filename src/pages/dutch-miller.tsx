@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Building2, Users } from "lucide-react";
+import { Building2, ChevronRight, Users } from "lucide-react";
 import { UserMenu } from "@/components/user-menu";
 import { DmRfidPage } from "@/pages/dm-rfid";
+import { DmSignupsPage } from "@/pages/dm-signups";
 import { DmUsersPage } from "@/pages/dm-users";
 import type { AppKey, SessionUser } from "@/lib/api";
 
@@ -21,38 +22,70 @@ import type { AppKey, SessionUser } from "@/lib/api";
  * decoration.
  */
 
+type PageDef = {
+  key: string;
+  label: string;
+  blurb: string;
+  /** Sub-pages, shown as a dropdown under the rail item. May be empty. */
+  children: readonly { key: string; label: string }[];
+};
+
 type Access = {
   role: "admin" | "user";
   pages: string[];
   unconfigured: boolean;
   email: string;
-  allPages: readonly { key: string; label: string; blurb: string }[];
+  allPages: readonly PageDef[];
 };
 
 /** Reachable from the user menu as well as the rail — it administers, not works. */
-const USERS_PAGE = {
+const USERS_PAGE: PageDef = {
   key: "users",
   label: "Users",
   blurb: "Who may open Dutch Miller, and what they can reach.",
+  children: [],
 };
 
-function useHash(fallback: string, known: string[]): [string, (k: string) => void] {
-  const read = () => {
-    const first = window.location.hash.replace(/^#\/?/, "").split("/")[0] ?? "";
-    return known.includes(first) ? first : fallback;
+/**
+ * `#/<page>` or `#/<page>/<sub-page>`.
+ *
+ * The sub-page is part of the address rather than state inside the page, so
+ * the rail's dropdown items are real links: back, forward and a pasted URL
+ * all land where they say they will.
+ */
+type Route = { page: string; sub: string };
+
+function useRoute(pages: readonly PageDef[]): [Route, (page: string, sub?: string) => void] {
+  const keys = pages.map((p) => `${p.key}:${p.children.map((c) => c.key).join("|")}`).join(",");
+
+  const read = (): Route => {
+    const [first = "", second = ""] = window.location.hash.replace(/^#\/?/, "").split("/");
+    const page = pages.find((p) => p.key === first) ?? pages[0];
+    if (!page) return { page: "", sub: "" };
+    const sub = page.children.some((c) => c.key === second)
+      ? second
+      : (page.children[0]?.key ?? "");
+    return { page: page.key, sub };
   };
+
   const [route, set] = useState(read);
-  // `known` is empty until access arrives, so re-read once it lands: a pasted
-  // link to a real page would otherwise be rewritten to the fallback purely
-  // because the answer had not come back yet.
-  const keys = known.join(",");
+
+  // `pages` is empty until the server answers, so re-read once it lands: a
+  // pasted link to a real page would otherwise be rewritten to the first one
+  // purely because the answer had not come back yet.
   useEffect(() => {
     set(read());
     const on = () => set(read());
     window.addEventListener("hashchange", on);
     return () => window.removeEventListener("hashchange", on);
   }, [keys]);
-  return [route, (k) => { window.location.hash = `/${k}`; set(k); }];
+
+  return [route, (page, sub) => {
+    const target = pages.find((p) => p.key === page);
+    const use = sub ?? target?.children[0]?.key ?? "";
+    window.location.hash = use ? `/${page}/${use}` : `/${page}`;
+    set({ page, sub: use });
+  }];
 }
 
 export function DutchMillerApp({
@@ -77,10 +110,11 @@ export function DutchMillerApp({
 
   const access = me.data;
   const dmAdmin = access?.role === "admin";
-  const rail = (access?.allPages ?? []).filter(
-    (p) => dmAdmin || (access?.pages ?? []).includes(p.key));
-  const known = [...rail.map((p) => p.key), ...(dmAdmin ? [USERS_PAGE.key] : [])];
-  const [route, setRoute] = useHash(known[0] ?? "", known);
+  const rail: PageDef[] = [
+    ...(access?.allPages ?? []).filter((p) => dmAdmin || (access?.pages ?? []).includes(p.key)),
+    ...(dmAdmin ? [USERS_PAGE] : []),
+  ];
+  const [route, go] = useRoute(rail);
 
   return (
     <div className="min-h-screen">
@@ -99,7 +133,7 @@ export function DutchMillerApp({
               onSwitchApp={onSwitchApp}
               product="dutch-miller"
               dmAdmin={dmAdmin}
-              onDmUsers={() => setRoute(USERS_PAGE.key)}
+              onDmUsers={() => go(USERS_PAGE.key)}
             />
           )}
         </div>
@@ -113,49 +147,38 @@ export function DutchMillerApp({
       )}
 
       <div className="mx-auto flex max-w-[1600px] gap-6 px-5 py-6">
-        <nav className="hidden w-52 shrink-0 space-y-1 md:block">
+        <nav aria-label="Dutch Miller" className="hidden w-56 shrink-0 space-y-0.5 md:block">
           {rail.map((p) => (
-            <button
+            <RailItem
               key={p.key}
-              type="button"
-              onClick={() => setRoute(p.key)}
-              title={p.blurb}
-              className={`block w-full rounded-md px-3 py-2 text-left text-sm transition-colors ${
-                route === p.key
-                  ? "bg-muted font-semibold"
-                  : "text-muted-foreground hover:bg-muted/60"
-              }`}
-            >
-              {p.label}
-            </button>
+              page={p}
+              route={route}
+              icon={p.key === USERS_PAGE.key ? <Users className="h-3.5 w-3.5 shrink-0" /> : null}
+              onGo={go}
+            />
           ))}
-          {dmAdmin && (
-            <button
-              type="button"
-              onClick={() => setRoute(USERS_PAGE.key)}
-              title={USERS_PAGE.blurb}
-              className={`mt-2 flex w-full items-center gap-2 rounded-md border-t border-border px-3 pt-3 pb-2 text-left text-sm transition-colors ${
-                route === USERS_PAGE.key
-                  ? "font-semibold"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <Users className="h-3.5 w-3.5 shrink-0" />
-              {USERS_PAGE.label}
-            </button>
-          )}
         </nav>
 
         <div className="min-w-0 flex-1">
-          {/* The same choices as the rail, for a phone. */}
-          {known.length > 1 && (
+          {/* The same destinations as the rail, for a phone. */}
+          {rail.length > 0 && (
             <select
-              value={route}
-              onChange={(e) => setRoute(e.target.value)}
+              value={`${route.page}/${route.sub}`}
+              onChange={(e) => {
+                const [page = "", sub = ""] = e.target.value.split("/");
+                go(page, sub);
+              }}
               className="mb-4 w-full rounded-md border border-border bg-background px-2.5 py-2 text-sm md:hidden"
             >
-              {rail.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
-              {dmAdmin && <option value={USERS_PAGE.key}>{USERS_PAGE.label}</option>}
+              {rail.map((p) => (
+                p.children.length === 0
+                  ? <option key={p.key} value={`${p.key}/`}>{p.label}</option>
+                  : p.children.map((c) => (
+                      <option key={`${p.key}/${c.key}`} value={`${p.key}/${c.key}`}>
+                        {p.label} › {c.label}
+                      </option>
+                    ))
+              ))}
             </select>
           )}
 
@@ -163,11 +186,82 @@ export function DutchMillerApp({
           {me.isError && (
             <p className="text-sm font-semibold text-red-600">{(me.error as Error).message}</p>
           )}
-          {access && known.length === 0 && <NothingAssigned email={access.email} />}
-          {access && route === "rfid-review" && <DmRfidPage />}
-          {access && route === USERS_PAGE.key && dmAdmin && <DmUsersPage me={access.email} />}
+          {access && rail.length === 0 && <NothingAssigned email={access.email} />}
+          {access && route.page === "member-signups" && (
+            <DmSignupsPage
+              view={route.sub === "add" ? "add" : "review"}
+              onView={(v) => go("member-signups", v)}
+            />
+          )}
+          {access && route.page === "rfid-review" && <DmRfidPage />}
+          {access && route.page === USERS_PAGE.key && dmAdmin && <DmUsersPage me={access.email} />}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * One rail entry, with its sub-pages as a dropdown beneath it.
+ *
+ * The group opens when you are inside it and can be opened to look without
+ * leaving where you are — but clicking the parent navigates as well as
+ * expands, because a heading that only toggles is a dead end for anybody
+ * who clicked it meaning to go there.
+ */
+function RailItem({
+  page, route, icon, onGo,
+}: {
+  page: PageDef;
+  route: Route;
+  icon: React.ReactNode;
+  onGo: (page: string, sub?: string) => void;
+}) {
+  const here = route.page === page.key;
+  const [open, setOpen] = useState(here);
+  useEffect(() => { if (here) setOpen(true); }, [here]);
+  const expandable = page.children.length > 0;
+
+  return (
+    <div>
+      <button
+        type="button"
+        title={page.blurb}
+        aria-expanded={expandable ? open : undefined}
+        onClick={() => {
+          if (here && expandable) setOpen((v) => !v);
+          else { setOpen(true); onGo(page.key); }
+        }}
+        className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors ${
+          here ? "bg-muted font-semibold" : "text-muted-foreground hover:bg-muted/60"
+        }`}
+      >
+        {icon}
+        <span className="flex-1 truncate">{page.label}</span>
+        {expandable && (
+          <ChevronRight
+            className={`h-3.5 w-3.5 shrink-0 transition-transform ${open ? "rotate-90" : ""}`}
+          />
+        )}
+      </button>
+      {expandable && open && (
+        <div className="mt-0.5 space-y-0.5 border-l border-border pb-1 pl-3 ml-4">
+          {page.children.map((c) => (
+            <button
+              key={c.key}
+              type="button"
+              onClick={() => onGo(page.key, c.key)}
+              className={`block w-full rounded-md px-2.5 py-1.5 text-left text-sm transition-colors ${
+                here && route.sub === c.key
+                  ? "bg-muted/70 font-semibold"
+                  : "text-muted-foreground hover:bg-muted/50"
+              }`}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
