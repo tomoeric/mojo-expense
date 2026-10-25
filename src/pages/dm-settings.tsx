@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bell, Clock, Loader2, Send } from "lucide-react";
+import { AlertTriangle, Bell, CheckCircle2, Clock, Loader2, Send } from "lucide-react";
 
+type ReviewerCheck = {
+  email: string; ok: boolean; problems: string[]; because: string;
+};
 type Notify = {
   reviewer: string;
   notifiers: string[];
@@ -25,6 +28,9 @@ export function DmSettingsPage() {
   const [enabled, setEnabled] = useState(true);
   const [copySubmitter, setCopySubmitter] = useState(false);
   const [dirty, setDirty] = useState(false);
+  // The last answer the server gave about the reviewer, from the load
+  // or the save — whichever came later.
+  const [saved, setSaved] = useState<{ reviewerCheck?: ReviewerCheck }>({});
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
 
@@ -33,7 +39,9 @@ export function DmSettingsPage() {
     queryFn: async () => {
       const res = await fetch("/api/dutch-miller/settings/notifications");
       if (!res.ok) throw new Error((await res.json()).error ?? "Could not load.");
-      return (await res.json()) as { notify: Notify; mailConfigured: boolean };
+      return (await res.json()) as {
+        notify: Notify; mailConfigured: boolean; reviewerCheck: ReviewerCheck;
+      };
     },
   });
 
@@ -45,6 +53,7 @@ export function DmSettingsPage() {
     setText(data.data.notify.notifiers.join("\n"));
     setEnabled(data.data.notify.enabled);
     setCopySubmitter(data.data.notify.copySubmitter);
+    setSaved({ reviewerCheck: data.data.reviewerCheck });
   }, [data.data, dirty]);
 
   const save = useMutation({
@@ -56,13 +65,14 @@ export function DmSettingsPage() {
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "Could not save.");
-      return body as { notify: Notify };
+      return body as { notify: Notify; reviewerCheck: ReviewerCheck };
     },
     onSuccess: (b) => {
       setError("");
       setDirty(false);
       setReviewer(b.notify.reviewer);
       setText(b.notify.notifiers.join("\n"));
+      setSaved({ reviewerCheck: b.reviewerCheck });
       setNote(`Saved. ${b.notify.reviewer || "no reviewer"}`
         + `${b.notify.notifiers.length > 0
           ? `, plus ${b.notify.notifiers.length} notified`
@@ -150,6 +160,13 @@ export function DmSettingsPage() {
               placeholder="name@mojocarwash.com"
               className="w-full max-w-md rounded-md border border-border bg-background px-3 py-2 font-mono text-sm"
             />
+            {/* Checked against what they can actually DO, every time the
+                page opens — not only when it is saved. The reviewer can
+                stop being able to approve long afterwards, because
+                somebody else changed their role, and the failure is
+                silent: the email goes out with a link to a record they
+                will be refused. */}
+            {!dirty && <ReviewerStatus check={saved.reviewerCheck} />}
           </div>
 
           <div>
@@ -480,5 +497,44 @@ function RemindersSection() {
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * Whether the configured reviewer can actually complete the review.
+ *
+ * Three ways it goes wrong and all of them are silent: an address with
+ * no account, an account that is invited or disabled, and an account
+ * that is active but does not hold the one role that approves. Nobody
+ * finds out until a dealer rings asking why their member still cannot
+ * wash.
+ *
+ * Reported rather than refused. There are reasons to point
+ * notifications at somebody while a role is sorted out, and blocking
+ * the save would leave the previous reviewer in place with nothing on
+ * screen saying so.
+ */
+function ReviewerStatus({ check }: { check?: ReviewerCheck }) {
+  if (!check) return null;
+  if (check.ok) {
+    return (
+      <p className="mt-1.5 flex items-start gap-1.5 text-xs text-emerald-700 dark:text-emerald-400">
+        <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <span>{check.because}</span>
+      </p>
+    );
+  }
+  return (
+    <div className="mt-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2">
+      <p className="flex items-center gap-1.5 text-xs font-semibold text-amber-900 dark:text-amber-200">
+        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+        {check.email
+          ? "This reviewer cannot complete the review they would be sent"
+          : "No reviewer is set"}
+      </p>
+      <ul className="mt-1 space-y-0.5 text-xs text-amber-900 dark:text-amber-200">
+        {check.problems.map((p) => <li key={p}>• {p}</li>)}
+      </ul>
+    </div>
   );
 }

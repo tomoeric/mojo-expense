@@ -32,6 +32,25 @@ type UploadResult = {
 const day = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString() : "—");
 
 /**
+ * The words people use, over the values the database stores.
+ *
+ * `active`/`used` are what every role, guard and query names, so they
+ * stay. What a person holding a sheet of stickers means is available
+ * and assigned.
+ */
+const STATUS_LABEL: Record<Status, string> = {
+  active: "available", inactive: "held back", used: "assigned",
+};
+
+const STATUS_NOTE: Record<Status, string> = {
+  active: "In the pool. The next member signed up can be given this one.",
+  inactive: "Still unused, deliberately kept out of the pool. Can be made "
+    + "available again at any time.",
+  used: "Issued to a member. Permanent — a tag is a physical sticker, and a "
+    + "number handed out twice would end up on two vehicles.",
+};
+
+/**
  * The member a tag was issued to, if any.
  *
  * Read out of `used_for`, which the signup writes as "Member signup
@@ -136,9 +155,12 @@ export function DmRfidPage() {
 
   const counts = list.data?.counts;
   const canDelete = list.data?.canDelete ?? false;
+  // "Available" and "Assigned" are what the states actually mean to
+  // somebody holding a sheet of stickers. The stored values stay
+  // `active` and `used` — every role, guard and query names them.
   const chips: { key: Tab; label: string; n: number | undefined }[] = [
-    { key: "active", label: "Active", n: counts?.active },
-    { key: "used", label: "Used", n: counts?.used },
+    { key: "active", label: "Available", n: counts?.active },
+    { key: "used", label: "Assigned", n: counts?.used },
     { key: "inactive", label: "Held back", n: counts?.inactive },
     { key: "all", label: "All", n: counts?.total },
   ];
@@ -279,6 +301,27 @@ export function DmRfidPage() {
         />
       </div>
 
+      {/* What each view means, where somebody choosing between them
+          will read it. "Held back" and "Deleted" are the two people
+          get wrong, and they differ in exactly one way that matters:
+          one is reversible and one is not. */}
+      <p className="text-xs text-muted-foreground">
+        {tab === "active" && STATUS_NOTE.active}
+        {tab === "used" && STATUS_NOTE.used}
+        {tab === "inactive" && STATUS_NOTE.inactive}
+        {tab === "deleted" && (
+          "Removed from the pool for good, with the reason attached. The row stays "
+          + "so the number can still be accounted for. Not reversible here, and "
+          + "re-uploading a file containing it will not bring it back."
+        )}
+        {tab === "all" && (
+          "Every tag the pool holds. Held back is reversible; deleted is not. "
+          + "Deleting a MEMBER does not free their tag unless whoever deleted the "
+          + "record explicitly released it — a sticker already on a windshield must "
+          + "never be handed out again."
+        )}
+      </p>
+
       <div className="overflow-x-auto rounded-lg border border-border">
         <table className="w-full text-sm">
           <thead className="bg-muted/50 text-xs text-muted-foreground">
@@ -331,12 +374,15 @@ export function DmRfidPage() {
                       deleted
                     </span>
                   ) : (
-                    <span className={
-                      r.status === "used" ? "text-muted-foreground"
-                        : r.status === "active" ? "font-semibold text-emerald-700 dark:text-emerald-400"
-                        : "text-amber-700 dark:text-amber-400"
-                    }>
-                      {r.status === "inactive" ? "held back" : r.status}
+                    <span
+                      title={STATUS_NOTE[r.status]}
+                      className={
+                        r.status === "used" ? "text-muted-foreground"
+                          : r.status === "active" ? "font-semibold text-emerald-700 dark:text-emerald-400"
+                            : "text-amber-700 dark:text-amber-400"
+                      }
+                    >
+                      {STATUS_LABEL[r.status]}
                     </span>
                   )}
                 </td>

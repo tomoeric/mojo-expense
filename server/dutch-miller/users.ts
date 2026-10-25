@@ -287,6 +287,77 @@ export async function dmAccessFor(email: string): Promise<Access> {
 export const canAdminister = (a: Access): boolean =>
   a.role === "admin" || a.role === "super";
 
+export type ReviewerCheck = {
+  email: string;
+  /** Can this person actually complete the review they are being sent? */
+  ok: boolean;
+  /** Everything wrong with the choice, in the order somebody should fix it. */
+  problems: string[];
+  /** Why it IS fine, when it is — usually the super-admin exception. */
+  because: string;
+};
+
+/**
+ * Is the configured CSC Reviewer a person who can actually approve?
+ *
+ * Checked rather than assumed, because the failure is silent and
+ * expensive: notifications go out to somebody with a link to a record
+ * they cannot complete, and nobody finds out until a dealer rings up
+ * asking why their member still cannot wash. The three ways it goes
+ * wrong are an address with no account at all, an account that is
+ * invited or disabled, and an account that is active but does not
+ * hold the role that approves.
+ *
+ * Deliberately a REPORT rather than a refusal. An administrator may
+ * have a reason to point notifications at somebody while a role is
+ * being sorted out, and refusing the save would leave the old
+ * reviewer in place with nothing on screen to say so.
+ */
+export async function checkReviewer(email: string): Promise<ReviewerCheck> {
+  const who = clean(email);
+  if (who === "") {
+    return {
+      email: "", ok: false, because: "",
+      problems: ["No CSC Reviewer is set, so new members notify nobody."],
+    };
+  }
+  if (isSuperEmail(who)) {
+    return {
+      email: who, ok: true, problems: [],
+      because: "Super administrator — approval is inherited from configuration, "
+        + "not from a role. This is why approvals work with nobody holding CSC.",
+    };
+  }
+  const access = await dmAccessFor(who);
+  const problems: string[] = [];
+  const row = await getDmUser(who);
+  if (!row) {
+    problems.push("That address has no Dutch Miller account. Invite them, or give "
+      + "them a role, before notifications are sent to them.");
+  } else if (row.status === "invited") {
+    problems.push("That account was invited but has not been set up yet, so it has "
+      + "no access at all until they open their link.");
+  } else if (row.status === "disabled") {
+    problems.push("That account is disabled and cannot sign in.");
+  }
+  if (row?.status === "active" && !access.approves) {
+    problems.push(`${access.roleName || "Their role"} cannot approve a membership. `
+      + "Only the built-in CSC role can. Change their role, or choose a reviewer "
+      + "who holds it.");
+  }
+  if (row?.status === "active" && !access.pages.includes("member-signups")) {
+    problems.push("They cannot open Member Signups, so the link in the "
+      + "notification would be refused.");
+  }
+  return {
+    email: who,
+    ok: problems.length === 0,
+    problems,
+    because: problems.length === 0
+      ? `Holds ${access.roleName || "a role"}, which can approve.` : "",
+  };
+}
+
 /* ------------------------------------------------------------------ *
  * Writing
  * ------------------------------------------------------------------ */

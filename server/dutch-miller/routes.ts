@@ -6,11 +6,12 @@ import {
   addRfids, deleteRfids, listRfids, rfidCounts, setRfidActive, useRfid,
 } from "./rfid.js";
 import {
-  DISPLAY_TZ, createSignup, deleteSignup, getSignup, listSignups, markOpened, newHandle,
-  setComplete, type SignupInput, type SignupRow,
+  DISPLAY_TZ, confirmSticker, createSignup, deleteSignup, getSignup, listSignups,
+  markOpened, newHandle, setComplete, type SignupInput, type SignupRow,
 } from "./signups.js";
 import {
-  DM_PAGES, assertEmail, canAdminister, dmAccessFor, getDmUser, isDmPage, isStaff,
+  DM_PAGES, assertEmail, canAdminister, checkReviewer, dmAccessFor, getDmUser,
+  isDmPage, isStaff,
   isSuperEmail, listDmUsers, removeDmUser, revokeDmSessions, saveDmUser, superEmails,
   setDmUserEnabled, staffDomainList,
   type DmPageKey, type DmRole, type StoredRole,
@@ -28,7 +29,8 @@ import {
   type Classification, type InvestigationStatus,
 } from "./investigations.js";
 import { BULK_COLUMNS, parseBulk, templateCsv } from "./bulk.js";
-import { DEFAULT_ROLE, listRoles, removeRole, saveRole } from "./roles.js";
+import { CSC_ROLE, DEFAULT_ROLE, listRoles, removeRole, saveRole } from "./roles.js";
+import { ACTIONS, actionsFor } from "./actions.js";
 import { dutchMillerNamed } from "../auth/apps.js";
 import { publicOrigin } from "../origin.js";
 import { emitChange, streamChanges } from "../events.js";
@@ -280,7 +282,28 @@ const requireSuper = requireSuperTo("change roles");
 
 // Readable by any administrator — assigning one means seeing the list.
 dutchMillerRouter.get("/roles", requireDmAdmin, async (_req: Request, res: Response) => {
-  res.json({ roles: await listRoles(), allPages: DM_PAGES });
+  const roles = await listRoles();
+  res.json({
+    roles: roles.map((r) => ({ ...r, actions: actionsFor(r) })),
+    allPages: DM_PAGES,
+    // Page access and action permissions are different questions, and a
+    // list of pages answers only one of them. These are DERIVED from the
+    // rules the guards already apply — never stored per role — so the
+    // editor shows them read-only rather than as checkboxes that would
+    // broaden access the first time somebody saved one.
+    allActions: ACTIONS,
+    approvalPolicy: {
+      roleKey: CSC_ROLE,
+      note: "Approving a membership belongs to the built-in CSC role and to "
+        + "nothing else. The pinned super administrator inherits it from "
+        + "configuration — which is why approvals work even with nobody "
+        + "holding CSC. It is asserted on every boot and cannot be granted "
+        + "to another role.",
+    },
+    // The pinned owner is not a row, so it has no role to list. Shown
+    // beside the roles because "who can approve?" is answered by both.
+    superAdmin: { actions: actionsFor({ pages: [], administers: true, approves: true, pinnedSuper: true }) },
+  });
 });
 
 // Creating and editing them is the super administrator's alone. A role is
@@ -438,7 +461,15 @@ dutchMillerRouter.delete("/users/:email", requireDmAdmin, async (req: Request, r
 
 dutchMillerRouter.get("/settings/notifications", requireDmAdmin,
   async (_req: Request, res: Response) => {
-    res.json({ notify: await getSignupNotify(), mailConfigured: isMailConfigured() });
+    const notify = await getSignupNotify();
+    res.json({
+      notify,
+      mailConfigured: isMailConfigured(),
+      // Checked every time the page opens, not only when it is saved:
+      // the reviewer can stop being able to approve long afterwards,
+      // by somebody else changing their role.
+      reviewerCheck: await checkReviewer(notify.reviewer),
+    });
   });
 
 dutchMillerRouter.post("/settings/notifications", requireDmAdmin,
@@ -472,12 +503,16 @@ dutchMillerRouter.post("/settings/notifications", requireDmAdmin,
         copySubmitter: body.copySubmitter === true,
       }, actor(req));
       await audit({
-        action: "notify.changed", actor: actor(req),
+        action: "notify.changed", ...who(req),
         detail: notify.enabled
           ? `reviewer ${notify.reviewer} · ${notify.notifiers.length} notified`
           : "off",
       });
-      res.json({ notify });
+      // Saved either way, and reported. An administrator may have a
+      // reason to point notifications at somebody while a role is being
+      // sorted out; refusing the save would leave the OLD reviewer in
+      // place with nothing on screen saying so.
+      res.json({ notify, reviewerCheck: await checkReviewer(notify.reviewer) });
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
     }
@@ -545,6 +580,9 @@ dutchMillerRouter.post("/settings/notifications/sample", requireDmAdmin,
         firstName: "Sample", lastName: "Member", plateDlw: "ABC 1234", plateState: "WV",
         vehicleMake: "Ford", vehicleModel: "Bronco", vehicleYear: "2024",
         vehicleColor: "Blue", rfid: "00000+000000", stickerAttached: true,
+        stickerState: "confirmed",
+        stickerConfirmedAt: new Date().toISOString(),
+        stickerConfirmedBy: "sample@mojocarwash.com",
       },
       submittedAt: new Date().toISOString(),
       submittedBy: to,
@@ -1136,7 +1174,9 @@ dutchMillerRouter.post(
         ...(body.row ?? {}),
         ...newHandle(),
         rfid: "",
-        // The file said YES; the parser refused the row otherwise.
+        // Satisfies the shared validator and claims nothing: the tag is
+        // allocated below, so `createSignup` writes the record PENDING
+        // and somebody confirms the sticker against the manifest.
         stickerAttached: true,
       } as Partial<SignupInput>,
       actor(req),
@@ -1150,6 +1190,48 @@ dutchMillerRouter.post(
     if (!out.alreadyExisted) void notifySignup(out.row, publicOrigin(req));
     emitChange("signups");
     res.json({ row: out.row });
+  },
+);
+
+/**
+ * The assignment manifest: which tag belongs on which vehicle.
+ *
+ * The piece that makes an import honest. The server chose the numbers,
+ * one at a time, after the file was written — so without this, the
+ * person holding a sheet of stickers has no way to match them to cars,
+ * and the only way to "confirm" anything would be to tick a box and
+ * hope. One row per member, with the exact number.
+ */
+dutchMillerRouter.post(
+  "/signups/bulk/manifest",
+  requirePage("member-signups"),
+  async (req: Request, res: Response) => {
+    const b = (req.body ?? {}) as { guids?: unknown };
+    const guids = Array.isArray(b.guids) ? b.guids.map(String).slice(0, 2000) : [];
+    const rows: SignupRow[] = [];
+    for (const g of guids) {
+      const row = await getSignup(g);
+      if (row) rows.push(row);
+    }
+    void audit({
+      action: "export.members", ...who(req),
+      detail: `${rows.length} row(s) · assignment manifest`,
+    });
+    res.json({
+      columns: [
+        "First Name", "Last Name", "Plate", "State", "Vehicle Year", "Vehicle Make",
+        "Vehicle Model", "Vehicle Color", "RFID", "Sticker Confirmed", "Reference",
+      ],
+      rows: rows.map((r) => [
+        r.customer.firstName, r.customer.lastName,
+        r.customer.plateDlw ?? "", r.customer.plateState ?? "",
+        r.customer.vehicleYear ?? "", r.customer.vehicleMake ?? "",
+        r.customer.vehicleModel ?? "", r.customer.vehicleColor ?? "",
+        r.customer.rfid,
+        r.customer.stickerState === "confirmed" ? "Yes" : "Not yet",
+        r.guid,
+      ]),
+    });
   },
 );
 
@@ -1229,7 +1311,11 @@ dutchMillerRouter.post(
             ? "That signup is already complete, and completing is final."
             : out.reason === "deleted"
               ? "That member record has been deleted."
-              : "Open the signup and read it before marking it complete.",
+              : out.reason === "sticker-unconfirmed"
+                ? "Nobody has confirmed the sticker is on this vehicle yet. "
+                  + "Approving says the member can drive up and wash, which only "
+                  + "works once the tag is on the glass."
+                : "Open the signup and read it before marking it complete.",
       });
       return;
     }
@@ -1240,6 +1326,37 @@ dutchMillerRouter.post(
     void audit({
       action: "signup.completed", resource: out.row.guid, ...who(req),
       detail: `${out.row.customer.firstName} ${out.row.customer.lastName}`,
+    });
+    emitChange("signups");
+    res.json({ row: out.row });
+  },
+);
+
+/**
+ * Somebody has checked that the sticker is on this vehicle.
+ *
+ * Open to anybody who can use Member Signups, which is deliberate: it
+ * is usually the dealer who applied it, working from the import's
+ * manifest, and making MOJO confirm a thing only the dealership can
+ * see would be theatre. Who confirmed it is recorded either way.
+ */
+dutchMillerRouter.post(
+  "/signups/:guid/sticker",
+  requirePage("member-signups"),
+  async (req: Request, res: Response) => {
+    const out = await confirmSticker(String(req.params.guid ?? ""), actor(req));
+    if (!out.ok) {
+      res.status(out.reason === "not-found" ? 404 : 409).json({
+        error: out.reason === "not-found" ? "No such signup."
+          : out.reason === "deleted" ? "That member record has been deleted."
+            : "That sticker is already confirmed.",
+      });
+      return;
+    }
+    void audit({
+      action: "sticker.confirmed", resource: out.row.guid, ...who(req),
+      detail: `RFID ${out.row.customer.rfid} on `
+        + `${out.row.customer.firstName} ${out.row.customer.lastName}'s vehicle`,
     });
     emitChange("signups");
     res.json({ row: out.row });

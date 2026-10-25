@@ -111,6 +111,32 @@ ALTER TABLE dm_member_signups ADD COLUMN IF NOT EXISTS plate_state text;
 ALTER TABLE dm_member_signups
   ADD COLUMN IF NOT EXISTS sticker_attached boolean NOT NULL DEFAULT false;
 /*
+ * Attached, waiting, or never recorded — three states, not two.
+ *
+ * A boolean could not tell them apart, and the difference matters.
+ * Records written before this column existed default to false and read
+ * as "Not confirmed", which says somebody checked and found no sticker
+ * when in fact nobody was ever asked. An import is a third thing again:
+ * the tag is allocated by the server, so at the moment of import the
+ * sticker cannot be on the glass yet and nobody can honestly say it is.
+ *
+ *   confirmed  somebody ticked the box at submission
+ *   pending    allocated by an import; attach the sticker, then confirm
+ *   legacy     predates the question. NOT evidence of anything.
+ *
+ * Backfilled once, from what the boolean already said. Nothing is
+ * rewritten to true: a confirmation nobody gave is not ours to invent.
+ */
+ALTER TABLE dm_member_signups ADD COLUMN IF NOT EXISTS sticker_state text;
+ALTER TABLE dm_member_signups ADD COLUMN IF NOT EXISTS sticker_confirmed_at timestamptz;
+ALTER TABLE dm_member_signups ADD COLUMN IF NOT EXISTS sticker_confirmed_by text;
+UPDATE dm_member_signups
+   SET sticker_state = CASE WHEN sticker_attached THEN 'confirmed' ELSE 'legacy' END
+ WHERE sticker_state IS NULL;
+UPDATE dm_member_signups
+   SET sticker_confirmed_at = submitted_at, sticker_confirmed_by = submitted_by
+ WHERE sticker_state = 'confirmed' AND sticker_confirmed_at IS NULL;
+/*
  * Deleted by a super administrator, with the reason they had to give.
  *
  * A column rather than a DELETE, and the whole point of the feature:
@@ -139,6 +165,24 @@ let ready: Promise<void> | null = null;
 const ensure = (): Promise<void> =>
   (ready ??= ensureSchema().then(async () => { await db().query(SCHEMA); }));
 
+/**
+ * How we know — or do not know — that the sticker is on the glass.
+ *
+ * Three values because the honest answers are three. A boolean made a
+ * record written before the question existed read as "somebody checked
+ * and found none", which is a claim nobody made.
+ */
+export const STICKER_STATES = ["confirmed", "pending", "legacy"] as const;
+export type StickerState = (typeof STICKER_STATES)[number];
+export const isStickerState = (v: unknown): v is StickerState =>
+  typeof v === "string" && (STICKER_STATES as readonly string[]).includes(v);
+
+export const STICKER_LABEL: Record<StickerState, string> = {
+  confirmed: "Confirmed on the windshield",
+  pending: "Allocated — sticker not confirmed yet",
+  legacy: "Legacy — confirmation was never recorded",
+};
+
 export type SignupRow = {
   guid: string;
   createdAt: string;
@@ -153,6 +197,14 @@ export type SignupRow = {
     rfid: string;
     /** Confirmed at submission: the sticker is on the windshield. */
     stickerAttached: boolean;
+    /**
+     * Which of the three the boolean above cannot distinguish.
+     * `pending` is an import, where the tag was allocated afterwards.
+     * `legacy` predates the question and is NOT evidence of anything.
+     */
+    stickerState: StickerState;
+    stickerConfirmedAt: string | null;
+    stickerConfirmedBy: string | null;
   };
   submittedAt: string;
   submittedBy: string;
@@ -320,6 +372,9 @@ type Db = {
   vehicle_make: string | null; vehicle_model: string | null;
   vehicle_year: string | null; vehicle_color: string | null; rfid: string;
   sticker_attached: boolean;
+  sticker_state: string | null;
+  sticker_confirmed_at: Date | null;
+  sticker_confirmed_by: string | null;
   submitted_at: Date; submitted_by: string;
   notified_at: Date | null; opened_at: Date | null; opened_by: string | null;
   completed_at: Date | null; completed_by: string | null;
@@ -346,6 +401,11 @@ const shape = (r: Db): SignupRow => ({
     vehicleColor: r.vehicle_color,
     rfid: r.rfid,
     stickerAttached: r.sticker_attached,
+    stickerState: isStickerState(r.sticker_state)
+      ? r.sticker_state
+      : (r.sticker_attached ? "confirmed" : "legacy"),
+    stickerConfirmedAt: r.sticker_confirmed_at?.toISOString() ?? null,
+    stickerConfirmedBy: r.sticker_confirmed_by,
   },
   submittedAt: r.submitted_at.toISOString(),
   submittedBy: r.submitted_by,
@@ -364,7 +424,8 @@ const shape = (r: Db): SignupRow => ({
 
 const COLS = `guid, created_at, display_timezone, dlw_contract_id, deal_number,
   customer_id, first_name, last_name, plate_dlw, vehicle_make, vehicle_model,
-  vehicle_year, vehicle_color, rfid, sticker_attached, submitted_at, submitted_by,
+  vehicle_year, vehicle_color, rfid, sticker_attached, sticker_state,
+  sticker_confirmed_at, sticker_confirmed_by, submitted_at, submitted_by,
   notified_at, opened_at, opened_by, completed_at, completed_by,
   deleted_at, deleted_by, delete_note`;
 
@@ -533,22 +594,39 @@ export async function createSignup(
     // Whichever was claimed is the one that goes on the record.
     clean.rfid = claim.rows[0]!.number;
 
+    /*
+     * An import may NOT attest that a sticker is on a windshield.
+     *
+     * The tag is chosen by the server, after the file was written, so
+     * at this moment nobody — not the person who filled in the
+     * spreadsheet, not the server — knows which number will end up on
+     * which vehicle. The old code wrote `true` here because the file
+     * said YES, which was a confirmation about a tag that did not
+     * exist when it was given. The record lands PENDING instead, and
+     * somebody confirms it against the manifest once the sticker is
+     * actually on the glass.
+     */
+    const confirmed = opts.assignAnyRfid ? false : clean.stickerAttached;
+
     const ins = await client.query<Db>(
       `INSERT INTO dm_member_signups (
          guid, created_at, display_timezone,
          dlw_contract_id, deal_number, customer_id,
          first_name, last_name, plate_dlw, plate_state, vehicle_make, vehicle_model,
-         vehicle_year, vehicle_color, rfid, sticker_attached, submitted_by)
+         vehicle_year, vehicle_color, rfid, sticker_attached, sticker_state,
+          sticker_confirmed_at, sticker_confirmed_by, submitted_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
                NULLIF($9, ''), NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''),
-               NULLIF($13, ''), NULLIF($14, ''), $15, $16, $17)
+               NULLIF($13, ''), NULLIF($14, ''), $15, $16, $17,
+               CASE WHEN $16 THEN now() ELSE NULL END,
+               CASE WHEN $16 THEN $18 ELSE '' END, $18)
        ON CONFLICT (guid) DO NOTHING
        RETURNING ${COLS}`,
       [clean.guid, clean.createdAt, DISPLAY_TZ,
         clean.dlwContractId, clean.dealNumber, clean.customerId,
         clean.firstName, clean.lastName, clean.plateDlw, clean.plateState,
         clean.vehicleMake, clean.vehicleModel, clean.vehicleYear, clean.vehicleColor,
-        clean.rfid, clean.stickerAttached, by]);
+        clean.rfid, confirmed, confirmed ? "confirmed" : "pending", by]);
 
     if (ins.rowCount === 0) {
       // Two submissions of the SAME entry, overlapping. The other one won
@@ -682,24 +760,73 @@ export async function markOpened(guid: string, by: string): Promise<SignupRow | 
  * and gave the tracker a state it could move backwards through, which
  * is not a tracker.
  */
+export type ConfirmResult =
+  | { ok: true; row: SignupRow }
+  | { ok: false; reason: "not-found" | "already" | "deleted" };
+
+/**
+ * Somebody has checked the sticker is on this vehicle.
+ *
+ * The step an import cannot take for you. A bulk run allocates the tag
+ * and lands the record PENDING; whoever applies the sticker, working
+ * from the manifest, confirms it here against the number they actually
+ * stuck on. That is the only honest order of events — the spreadsheet
+ * was written before the number existed.
+ *
+ * Also the way out for a legacy record: those predate the question, so
+ * confirming one now records who looked and when, rather than
+ * backfilling a claim nobody made.
+ */
+export async function confirmSticker(guid: string, by: string): Promise<ConfirmResult> {
+  await ensure();
+  const existing = await getSignup(guid);
+  if (!existing) return { ok: false, reason: "not-found" };
+  if (existing.deletedAt) return { ok: false, reason: "deleted" };
+  if (existing.customer.stickerState === "confirmed") return { ok: false, reason: "already" };
+  const { rows } = await db().query<Db>(
+    `UPDATE dm_member_signups
+        SET sticker_attached = true, sticker_state = 'confirmed',
+            sticker_confirmed_at = now(), sticker_confirmed_by = $2
+      WHERE guid = $1 AND deleted_at IS NULL AND sticker_state <> 'confirmed'
+  RETURNING ${COLS}`, [guid, by]);
+  if (rows.length === 0) return { ok: false, reason: "already" };
+  return { ok: true, row: shape(rows[0]!) };
+}
+
 export type CompleteResult =
   | { ok: true; row: SignupRow }
-  | { ok: false; reason: "not-found" | "not-opened" | "already" | "deleted" };
+  | {
+    ok: false;
+    reason: "not-found" | "not-opened" | "already" | "deleted" | "sticker-unconfirmed";
+  };
 
 export async function setComplete(guid: string, by: string): Promise<CompleteResult> {
   await ensure();
+  /*
+   * The sticker must be CONFIRMED, not merely required somewhere.
+   *
+   * Approving means the member can drive up and wash, and that only
+   * works if a tag is on the glass. A typed signup confirms it at
+   * submission; an imported one cannot, because the number was
+   * allocated afterwards. Enforced here rather than in the form, so
+   * neither path can reach approval without somebody having looked —
+   * and a legacy record, which predates the question entirely, needs
+   * the same look rather than an assumption in either direction.
+   */
   const { rows } = await db().query<Db>(
     `UPDATE dm_member_signups
         SET completed_at = now(), completed_by = $2
       WHERE guid = $1 AND completed_at IS NULL AND opened_at IS NOT NULL
-        AND deleted_at IS NULL
+        AND deleted_at IS NULL AND sticker_state = 'confirmed'
     RETURNING ${COLS}`, [guid, by]);
   if (rows[0]) return { ok: true, row: shape(rows[0]) };
 
-  // Nothing moved. Say which of the three it was, so the page can
-  // explain rather than just refuse.
+  // Nothing moved. Say which of them it was, so the page can explain
+  // rather than just refuse.
   const existing = await getSignup(guid);
   if (!existing) return { ok: false, reason: "not-found" };
   if (existing.deletedAt) return { ok: false, reason: "deleted" };
-  return { ok: false, reason: existing.completedAt ? "already" : "not-opened" };
+  if (existing.completedAt) return { ok: false, reason: "already" };
+  if (existing.openedAt === null) return { ok: false, reason: "not-opened" };
+  return { ok: false, reason: "sticker-unconfirmed" };
 }

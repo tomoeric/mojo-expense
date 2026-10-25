@@ -35,6 +35,10 @@ export type SignupRow = {
     vehicleMake: string | null; vehicleModel: string | null;
     vehicleYear: string | null; vehicleColor: string | null; rfid: string;
     stickerAttached: boolean;
+    /** confirmed · pending (imported) · legacy (predates the question). */
+    stickerState: "confirmed" | "pending" | "legacy";
+    stickerConfirmedAt: string | null;
+    stickerConfirmedBy: string | null;
   };
   submittedAt: string;
   submittedBy: string;
@@ -303,6 +307,23 @@ function ReviewExisting() {
     },
   });
 
+  const confirmSticker = useMutation({
+    mutationFn: async (guid: string) => {
+      const res = await fetch(`/api/dutch-miller/signups/${guid}/sticker`, {
+        method: "POST",
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Could not confirm it.");
+      return body as { row: SignupRow };
+    },
+    onSuccess: (b) => {
+      setError("");
+      setOpen((o) => (o && o.guid === b.row.guid ? b.row : o));
+      void qc.invalidateQueries({ queryKey: ["dm-signups"] });
+    },
+    onError: (e) => setError((e as Error).message),
+  });
+
   const remove = useMutation({
     mutationFn: async (v: { guid: string; note: string; releaseTag: boolean }) => {
       const res = await fetch(`/api/dutch-miller/signups/${v.guid}/delete`, {
@@ -477,6 +498,8 @@ function ReviewExisting() {
             total: rows.length,
           }}
           onComplete={() => complete.mutate(openRow.guid)}
+          onConfirmSticker={() => confirmSticker.mutate(openRow.guid)}
+          confirming={confirmSticker.isPending}
           onOpened={() => opened.mutate(openRow.guid)}
           onStep={(d) => {
             const at = rows.findIndex((r) => r.guid === openRow.guid);
@@ -744,6 +767,27 @@ function csvCell(v: string): string {
  * it being in hand, and that is the whole question they would
  * otherwise ring up to ask.
  */
+/**
+ * What we actually know about the sticker, in words.
+ *
+ * Three answers, because a boolean made a record written before the
+ * question existed read as "somebody checked and found none" — which
+ * is a claim nobody ever made.
+ */
+function stickerText(row: SignupRow): string {
+  const c = row.customer;
+  if (c.stickerState === "confirmed") {
+    return c.stickerConfirmedBy
+      ? `Confirmed by ${c.stickerConfirmedBy}`
+      : "Confirmed";
+  }
+  if (c.stickerState === "pending") {
+    return `Tag ${c.rfid} allocated by an import — not confirmed on the vehicle yet`;
+  }
+  return "Legacy record — confirmation was never recorded. "
+    + "This does not mean the sticker is missing.";
+}
+
 function StatusBadge({ row }: { row: SignupRow }) {
   // First, because it outranks everything else that could be true of
   // the record — a deleted membership that still read "Completed by
@@ -781,17 +825,19 @@ function StatusBadge({ row }: { row: SignupRow }) {
 }
 
 function ViewSignup({
-  row, canComplete, canDelete, busy, position, onComplete, onDelete, onOpened,
-  onStep, onClose,
+  row, canComplete, canDelete, busy, confirming, position, onComplete, onDelete,
+  onConfirmSticker, onOpened, onStep, onClose,
 }: {
   row: SignupRow;
   canComplete: boolean;
   canDelete: boolean;
   busy: boolean;
+  confirming: boolean;
   /** Where this one sits in the list behind the dialog, for the arrows. */
   position: { index: number; total: number };
   onComplete: () => void;
   onDelete: () => void;
+  onConfirmSticker: () => void;
   onOpened: () => void;
   onStep: (delta: -1 | 1) => void;
   onClose: () => void;
@@ -824,8 +870,13 @@ function ViewSignup({
           {canComplete && !row.completedAt && !row.deletedAt && (
             <button
               type="button"
-              disabled={busy || !row.openedAt}
-              title={row.openedAt ? undefined : "Opening this record is what makes it reviewable."}
+              disabled={busy || !row.openedAt
+                || row.customer.stickerState !== "confirmed"}
+              title={!row.openedAt
+                ? "Opening this record is what makes it reviewable."
+                : row.customer.stickerState !== "confirmed"
+                  ? "Nobody has confirmed the sticker is on this vehicle yet."
+                  : undefined}
               onClick={onComplete}
               className="inline-flex items-center gap-2 rounded-md bg-foreground px-3 py-1.5 text-sm font-semibold text-background disabled:opacity-50"
             >
@@ -879,6 +930,45 @@ function ViewSignup({
           </p>
         )}
 
+        {/* The step an import cannot take for you.
+            A bulk run allocates the tag AFTER the file was written, so
+            nobody filling in that spreadsheet could know which sticker
+            goes on which car. Somebody confirms it here, against the
+            manifest, and approval waits for them. */}
+        {row.customer.stickerState !== "confirmed" && !row.deletedAt && (
+          <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3">
+            <p className="flex items-start gap-2 text-sm text-amber-900 dark:text-amber-200">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                {row.customer.stickerState === "pending" ? (
+                  <>
+                    <strong>RFID {row.customer.rfid} is allocated to this member,
+                    but nobody has confirmed it is on the vehicle.</strong>{" "}
+                    The number was chosen when the file was imported, after the
+                    spreadsheet was written — so it could not have been confirmed
+                    in advance. Apply the sticker, then confirm it here.
+                  </>
+                ) : (
+                  <>
+                    <strong>This record predates the sticker question.</strong>{" "}
+                    No confirmation was ever recorded, which is not the same as
+                    the sticker being missing. Check the vehicle and confirm.
+                  </>
+                )}
+              </span>
+            </p>
+            <button
+              type="button"
+              disabled={confirming}
+              onClick={onConfirmSticker}
+              className="mt-2.5 inline-flex items-center gap-2 rounded-md border border-amber-600/50 bg-background px-3 py-1.5 text-sm font-semibold hover:bg-muted disabled:opacity-50"
+            >
+              {confirming && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Confirm the sticker is on this vehicle
+            </button>
+          </div>
+        )}
+
         <Bucket title="Auto Data" note="Automatically generated · locked">
           <Readout label="Date Created" value={dateIn(row.createdAt, tz)} />
           <Readout label="Time Created" value={timeIn(row.createdAt, tz)} />
@@ -906,9 +996,7 @@ function ViewSignup({
           <Readout label="RFID" value={row.customer.rfid} mono />
           <Readout
             label="Sticker attached"
-            value={row.customer.stickerAttached
-              ? "Confirmed at submission"
-              : "Not confirmed"}
+            value={stickerText(row)}
           />
         </Bucket>
 

@@ -45,7 +45,8 @@ export function DmBulkDialog({ onClose, onDone }: { onClose: () => void; onDone:
   const [reviewing, setReviewing] = useState<boolean | null>(null);
   const [asking, setAsking] = useState(false);
   const [at, setAt] = useState(0);
-  const [added, setAdded] = useState<{ line: number; name: string; rfid: string }[]>([]);
+  const [added, setAdded] = useState<
+    { line: number; name: string; rfid: string; guid: string }[]>([]);
   const [failed, setFailed] = useState<{ line: number; name: string; why: string }[]>([]);
   const [finished, setFinished] = useState(false);
 
@@ -110,12 +111,41 @@ export function DmBulkDialog({ onClose, onDone }: { onClose: () => void; onDone:
         }]);
         return false;
       }
-      setAdded((a) => [...a, { line: row.line, name, rfid: body.row.customer.rfid }]);
+      setAdded((a) => [...a, {
+        line: row.line, name, rfid: body.row.customer.rfid, guid: body.row.guid,
+      }]);
       return true;
     } catch {
       setFailed((f) => [...f, { line: row.line, name, why: "The server could not be reached." }]);
       return false;
     }
+  };
+
+  /**
+   * Which tag went on which vehicle, as a file somebody can carry.
+   *
+   * Built from the server rather than from what this page happens to
+   * hold, so a run that was interrupted still produces the real list.
+   */
+  const downloadManifest = async () => {
+    const res = await fetch("/api/dutch-miller/signups/bulk/manifest", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ guids: added.map((a) => a.guid) }),
+    });
+    if (!res.ok) return;
+    const body = (await res.json()) as { columns: string[]; rows: string[][] };
+    const cell = (v: string) =>
+      (/[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+    const csv = [body.columns, ...body.rows]
+      .map((line) => line.map(cell).join(",")).join("\r\n");
+    const url = URL.createObjectURL(
+      new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `rfid-assignments-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const finish = async (reviewed: boolean) => {
@@ -417,11 +447,40 @@ export function DmBulkDialog({ onClose, onDone }: { onClose: () => void; onDone:
           {(added.length > 0 || failed.length > 0) && (
             <div className="space-y-2">
               {finished && (
-                <p className="flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2.5 text-sm text-emerald-800 dark:text-emerald-300">
-                  <CheckCircle2 className="h-4 w-4 shrink-0" />
-                  {added.length} member{added.length === 1 ? "" : "s"} added
-                  {failed.length > 0 ? `, ${failed.length} not` : ""}.
-                </p>
+                <>
+                  <p className="flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2.5 text-sm text-emerald-800 dark:text-emerald-300">
+                    <CheckCircle2 className="h-4 w-4 shrink-0" />
+                    {added.length} member{added.length === 1 ? "" : "s"} added
+                    {failed.length > 0 ? `, ${failed.length} not` : ""}.
+                  </p>
+                  {/* The step that makes the import honest. The server
+                      chose these numbers, one at a time, after the file
+                      was written — so without this list nobody can match
+                      a sheet of stickers to the right cars, and
+                      "confirmed" would mean ticking a box and hoping. */}
+                  {added.length > 0 && (
+                    <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3">
+                      <p className="flex items-start gap-2 text-sm text-amber-900 dark:text-amber-200">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span>
+                          <strong>No sticker is confirmed yet.</strong> An import
+                          allocates the tags; it cannot say they are on the glass,
+                          because the numbers were chosen just now. Download the
+                          manifest, apply each sticker to the vehicle it names, then
+                          confirm it on the member's record. Approval waits for that.
+                        </span>
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => void downloadManifest()}
+                        className="mt-2.5 inline-flex items-center gap-2 rounded-md border border-amber-600/50 bg-background px-3 py-1.5 text-sm font-semibold hover:bg-muted"
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                        Download the assignment manifest
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
               <details open={failed.length > 0} className="rounded-lg border border-border px-4 py-2">
                 <summary className="cursor-pointer text-sm">

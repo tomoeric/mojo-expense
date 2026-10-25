@@ -3,10 +3,20 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Crown, Loader2, Plus, Trash2 } from "lucide-react";
 
 type PageDef = { key: string; label: string; blurb: string };
+type ActionDef = { key: string; label: string; source: string };
 type Role = {
   key: string; name: string; pages: string[];
   administers: boolean; approves: boolean; builtin: boolean; holders?: number;
   createdAt: string | null; createdBy: string | null;
+  /** Derived from the rules the guards apply. Never stored, never edited. */
+  actions: Record<string, boolean>;
+};
+type Payload = {
+  roles: Role[];
+  allPages: readonly PageDef[];
+  allActions: ActionDef[];
+  approvalPolicy: { roleKey: string; note: string };
+  superAdmin: { actions: Record<string, boolean> };
 };
 
 type Draft = { key?: string; name: string; pages: string[]; administers: boolean };
@@ -31,7 +41,7 @@ export function DmRolesPage() {
     queryFn: async () => {
       const res = await fetch("/api/dutch-miller/roles");
       if (!res.ok) throw new Error((await res.json()).error ?? "Could not load.");
-      return (await res.json()) as { roles: Role[]; allPages: readonly PageDef[] };
+      return (await res.json()) as Payload;
     },
   });
 
@@ -58,6 +68,7 @@ export function DmRolesPage() {
 
   const roles = data.data?.roles ?? [];
   const pages = data.data?.allPages ?? [];
+  const allActions = data.data?.allActions ?? [];
 
   return (
     <div className="space-y-4">
@@ -65,10 +76,11 @@ export function DmRolesPage() {
         <div>
           <h1 className="flex items-center gap-2 text-lg font-semibold">
             <Crown className="h-4 w-4" />
-            Roles
+            Roles &amp; Permissions
           </h1>
           <p className="text-sm text-muted-foreground">
-            What each kind of person can open in Dutch Miller. Super administrator only.
+            What each kind of person can <strong>open</strong>, and what they can{" "}
+            <strong>do</strong>. Super administrator only.
           </p>
         </div>
         <button
@@ -170,9 +182,60 @@ export function DmRolesPage() {
                 )}
               </div>
             </div>
+
+            {/* The two questions, side by side. A list of pages answers
+                only one of them, which is how "can a service writer
+                approve?" came to have no visible answer anywhere. */}
+            <details className="mt-3 border-t border-border pt-2">
+              <summary className="cursor-pointer text-xs text-muted-foreground">
+                Page access and action permissions
+              </summary>
+              <div className="mt-2 grid gap-4 sm:grid-cols-2">
+                <div>
+                  <p className="text-xs font-semibold">Page access</p>
+                  <ul className="mt-1 space-y-0.5">
+                    {pages.map((pg) => (
+                      <Mark
+                        key={pg.key}
+                        on={r.administers || r.pages.includes(pg.key)}
+                        label={pg.label}
+                        note={r.administers && !r.pages.includes(pg.key)
+                          ? "via administering" : ""}
+                      />
+                    ))}
+                  </ul>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold">Action permissions</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    Worked out from the rules the server enforces. Not editable —
+                    see the note below.
+                  </p>
+                  <ul className="mt-1 space-y-0.5">
+                    {allActions.map((a) => (
+                      <Mark
+                        key={a.key}
+                        on={Boolean(r.actions?.[a.key])}
+                        label={a.label}
+                        note={a.source}
+                      />
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </details>
           </div>
         ))}
       </div>
+
+      {/* The question the role list cannot answer on its own: nobody
+          holds CSC, and approvals work anyway. */}
+      {data.data?.approvalPolicy && (
+        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-900 dark:text-amber-200">
+          <p className="font-semibold">Who can approve a membership</p>
+          <p className="mt-1">{data.data.approvalPolicy.note}</p>
+        </div>
+      )}
 
       <p className="text-xs text-muted-foreground">
         A role cannot be removed while anybody holds it — move them first. Built-in roles can
@@ -270,5 +333,32 @@ function RoleEditor({
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * One permission, on or off, with where it comes from.
+ *
+ * A tick rather than a checkbox, deliberately: none of these is stored
+ * per role, so an editable-looking control would broaden access the
+ * first time somebody saved one. The source line is what makes a tick
+ * checkable — "approve a membership" says why it is off, rather than
+ * leaving somebody hunting for the box.
+ */
+function Mark({ on, label, note }: { on: boolean; label: string; note?: string }) {
+  return (
+    <li className="flex items-start gap-1.5 text-xs">
+      <span
+        aria-hidden
+        className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${
+          on ? "bg-emerald-500" : "bg-muted-foreground/30"
+        }`}
+      />
+      <span className={on ? "" : "text-muted-foreground"}>
+        {label}
+        <span className="sr-only">{on ? " — allowed" : " — not allowed"}</span>
+        {note && <span className="block text-[11px] text-muted-foreground">{note}</span>}
+      </span>
+    </li>
   );
 }

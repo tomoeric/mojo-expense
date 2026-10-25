@@ -28,7 +28,6 @@ const check = (what: string, ok: boolean, detail = "") => {
 
 const HEAD = BULK_COLUMNS.map((c) => c.header).join(",");
 /** Every example row needs the attestation, as a real file would. */
-const YES = ",YES";
 const TAG = (i: number) => `70${String(i).padStart(3, "0")}+7${String(i).padStart(5, "0")}`;
 const TAGS = [1, 2, 3].map(TAG);
 const GUIDS: string[] = [];
@@ -63,7 +62,7 @@ try {
 
   console.log("\n4. One bad row refuses the whole file");
   const mixed = parseBulk(
-    `${HEAD}\n0041,,,Dana,Reyes,,,,,,,YES\n0042,,,,Jones,,,,,,,YES\n`);
+    `${HEAD}\n0041,,,Dana,Reyes,,,,,,\n0042,,,,Jones,,,,,,\n`);
   check("the file is refused", mixed.ok === false);
   check("…and BOTH rows still come back, so the good one is not hidden",
     mixed.rows.length === 2);
@@ -74,10 +73,10 @@ try {
     Object.keys(mixed.rows[0]!.errors).length === 0);
 
   console.log("\n5. Field rules match the form's");
-  const bad = parseBulk(`${HEAD}\n0041,,,Dana,Reyes,ABC123,ZZ,99,Ford,Bronco,Blue,YES\n`);
+  const bad = parseBulk(`${HEAD}\n0041,,,Dana,Reyes,ABC123,ZZ,99,Ford,Bronco,Blue\n`);
   check("a state that is not one", Boolean(bad.rows[0]!.errors.State));
   check("a two-digit year", Boolean(bad.rows[0]!.errors["Vehicle Year"]));
-  const ok = parseBulk(`${HEAD}\n0041,,,Dana,Reyes,ABC123,wv,2024,Ford,Bronco,Blue,YES\n`);
+  const ok = parseBulk(`${HEAD}\n0041,,,Dana,Reyes,ABC123,wv,2024,Ford,Bronco,Blue\n`);
   check("a lower-case state is accepted and lifted",
     ok.ok && ok.rows[0]!.values.plateState === "WV", ok.rows[0]!.values.plateState);
   check("leading zeros survive", ok.rows[0]!.values.dlwContractId === "0041");
@@ -86,31 +85,40 @@ try {
   // Nearly always one car entered twice. Catching it costs nothing
   // here and costs a tag afterwards.
   const dupe = parseBulk(
-    `${HEAD}\n0041,,,Dana,Reyes,ABC123,WV,,,,,YES\n0042,,,Sam,Lee,abc123,WV,,,,,YES\n`);
+    `${HEAD}\n0041,,,Dana,Reyes,ABC123,WV,,,,\n0042,,,Sam,Lee,abc123,WV,,,,\n`);
   check("is refused", dupe.ok === false);
   check("…pointing at the first one", /row 2/.test(dupe.rows[1]!.errors.Plate ?? ""),
     dupe.rows[1]!.errors.Plate ?? "");
   check("the same plate in a different state is fine",
-    parseBulk(`${HEAD}\n0041,,,Dana,Reyes,ABC123,WV,,,,,YES\n0042,,,Sam,Lee,ABC123,OH,,,,,YES\n`).ok);
+    parseBulk(`${HEAD}\n0041,,,Dana,Reyes,ABC123,WV,,,,\n0042,,,Sam,Lee,ABC123,OH,,,,\n`).ok);
 
-  console.log("\n6b. The sticker attestation");
-  // Bulk must not be a way round the confirmation the form requires.
-  const noSticker = parseBulk(`${HEAD}\n0041,,,Dana,Reyes,,,,,,,\n`);
-  check("a row without it is refused", noSticker.ok === false);
-  check("…by name", Boolean(noSticker.rows[0]!.errors["Sticker Attached"]),
-    Object.keys(noSticker.rows[0]!.errors).join(","));
-  // "pending" must never be read as somebody confirming a sticker is
-  // on a windshield.
-  const vague = parseBulk(`${HEAD}\n0041,,,Dana,Reyes,,,,,,,pending\n`);
-  check("anything that is not yes is refused", vague.ok === false);
-  for (const yes of ["YES", "yes", "y", "TRUE", "1", "x", "Done"]) {
-    check(`"${yes}" is taken as yes`,
-      parseBulk(`${HEAD}\n0041,,,Dana,Reyes,,,,,,,${yes}\n`).ok === true);
-  }
+  console.log("\n6b. An import cannot attest to a sticker");
+  /*
+   * The column is GONE, and that is the fix rather than a regression.
+   *
+   * It used to be required to say YES — a confirmation about a tag that
+   * did not exist when it was given, because the number is allocated
+   * by the server after the file is written. Nobody filling in a
+   * spreadsheet can know which sticker goes on which windshield.
+   */
+  check("there is no Sticker Attached column",
+    !BULK_COLUMNS.some((c) => (c.header as string) === "Sticker Attached"),
+    BULK_COLUMNS.map((c) => c.header).join(","));
+  check("…nor in the template", !templateCsv().includes("Sticker"));
+  const plain = parseBulk(`${HEAD}\n0041,,,Dana,Reyes,,,,,,\n`);
+  check("a row without one is accepted", plain.ok === true,
+    JSON.stringify(plain.rows[0]?.errors));
+  // Somebody will still put the old column in a file they kept.
+  const stale = parseBulk(
+    `${HEAD},Sticker Attached\n0041,,,Dana,Reyes,,,,,,\n`);
+  check("an old file with the column still imports", stale.ok === true,
+    JSON.stringify(stale.rows[0]?.errors));
+  check("…and the column is simply ignored",
+    !JSON.stringify(stale.rows[0]!.values).includes("YES"));
 
   console.log("\n7. Column order and extra columns");
   const shuffled = parseBulk(
-    "Last Name,Nickname,First Name,DLW Contract ID,Sticker Attached\nReyes,Dan,Dana,0041,YES\n");
+    "Last Name,Nickname,First Name,DLW Contract ID\nReyes,Dan,Dana,0041\n");
   check("headers in any order", shuffled.ok === true,
     JSON.stringify(shuffled.rows[0]?.errors));
   check("…read from the right columns",
