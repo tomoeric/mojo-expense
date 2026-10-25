@@ -307,6 +307,17 @@ export function requireApp(app: AppKey) {
     if (!isAuthConfigured()) { next(); return; }
     const real = req.viewingAs?.real ?? req.user;
     if (real && appsFor(real.email, real.via ?? "microsoft").includes(app)) { next(); return; }
+    // A signed-in account reaching for the other product. Ordinary when
+    // it is a stale tab; a pattern when it is not, which is why it goes
+    // on the record rather than only into a 403.
+    void import("../dutch-miller/audit.js").then(({ audit, requestMeta }) => audit({
+      action: "access.denied",
+      subject: real?.email ?? "",
+      actor: req.user?.email ?? "",
+      actorReal: real?.email ?? "",
+      detail: `app ${app}`,
+      ...requestMeta(req as never),
+    })).catch(() => {});
     res.status(403).json({ error: `You do not have access to ${APP_LABEL[app]}.` });
   };
 }
@@ -319,6 +330,30 @@ export function requireApp(app: AppKey) {
  * is worth watching. Whose-and-whether only — `listCredentials` never
  * returns a password, and nothing here goes near one.
  */
+/**
+ * Write one event, without making the caller wait or care.
+ *
+ * A dynamic import because `auth` is below `dutch-miller` in the
+ * dependency order and must stay there — the sign-in path cannot come
+ * to depend on the second product's modules loading. Fire and forget:
+ * an audit write that can fail a sign-in turns a logging problem into
+ * an outage.
+ */
+function logEvent(
+  req: Request,
+  action: "signin.ok" | "session.ended" | "viewas.started" | "viewas.ended",
+  e: { subject?: string; actor?: string; detail?: string },
+): void {
+  void import("../dutch-miller/audit.js").then(({ audit, requestMeta }) => audit({
+    action,
+    subject: e.subject,
+    actor: e.actor ?? e.subject,
+    actorReal: req.viewingAs?.real.email ?? req.user?.email ?? "",
+    detail: e.detail,
+    ...requestMeta(req as never),
+  })).catch(() => {});
+}
+
 authRouter.get("/auth/view-as/people", async (req: Request, res: Response) => {
   const real = req.viewingAs?.real ?? req.user;
   if (isAuthConfigured() && !isAdminUser(real)) {
@@ -358,12 +393,16 @@ authRouter.post("/auth/view-as", (req: Request, res: Response) => {
     return;
   }
   const email = String((req.body as { email?: unknown })?.email ?? "").trim().toLowerCase();
-  if (!email) {
-    res.clearCookie(VIEW_AS_COOKIE, { path: "/" });
-    res.json({ viewingAs: null });
-    return;
-  }
-  if (real && email === real.email.trim().toLowerCase()) {
+  const stopping = !email || (real !== undefined
+    && email === real.email.trim().toLowerCase());
+  if (stopping) {
+    if (req.viewingAs) {
+      void logEvent(req, "viewas.ended", {
+        subject: req.viewingAs.viewed,
+        actor: real?.email,
+        detail: `${real?.email ?? "somebody"} stopped viewing as ${req.viewingAs.viewed}`,
+      });
+    }
     res.clearCookie(VIEW_AS_COOKIE, { path: "/" });
     res.json({ viewingAs: null });
     return;
@@ -375,6 +414,14 @@ authRouter.post("/auth/view-as", (req: Request, res: Response) => {
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
+  });
+  // Both identities, on one line. An action taken during a view belongs
+  // to the viewed account AND to the administrator who chose to wear it,
+  // and a trail recording only one cannot answer either question later.
+  void logEvent(req, "viewas.started", {
+    subject: email,
+    actor: real?.email,
+    detail: `${real?.email ?? "an administrator"} started viewing as ${email}`,
   });
   res.json({ viewingAs: { real: real?.email ?? null, viewed: email } });
 });
@@ -501,6 +548,12 @@ authRouter.get("/callback", async (req: Request, res: Response) => {
     };
 
     setSessionCookie(res, user);
+    // A SUCCESSFUL sign-in, recorded like a refused one. Keeping only
+    // the failures made the log unreadable in the one case it is for:
+    // an investigator asking whether an attempt eventually worked had
+    // nothing to read. It is kept out of the triage feed, not out of
+    // the record.
+    void logEvent(req, "signin.ok", { subject: email, detail: "Microsoft SSO" });
     res.redirect(returnTo);
   } catch (err) {
     console.error("OIDC callback error:", err);
@@ -509,7 +562,13 @@ authRouter.get("/callback", async (req: Request, res: Response) => {
   }
 });
 
-authRouter.get("/logout", (_req: Request, res: Response) => {
+authRouter.get("/logout", (req: Request, res: Response) => {
+  if (req.user?.email) {
+    void logEvent(req, "session.ended", {
+      subject: req.user.email,
+      detail: `signed out of the ${req.user.via ?? "microsoft"} session`,
+    });
+  }
   clearSessionCookie(res);
   // Local sign-out only — deliberately not a tenant-wide Entra sign-out, which
   // would also sign the user out of Outlook, Teams and every other M365 app.

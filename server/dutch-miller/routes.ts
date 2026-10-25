@@ -16,8 +16,17 @@ import {
   type DmPageKey, type DmRole, type StoredRole,
 } from "./users.js";
 import {
-  LOCKOUT, audit, listAudit, listSecurityLog, requestMeta, securitySummary,
+  LOCKOUT, audit, collectionHealth, listAudit, listEvents, listSecurityLog,
+  requestMeta, securitySummary,
+  type AuditAction, type EventCategory, type Outcome, type Severity,
 } from "./audit.js";
+import { EVENT_META, OUTCOMES, SEVERITIES } from "./event-catalog.js";
+import { THRESHOLDS, concerns, coverage } from "./detect.js";
+import {
+  CLASSIFICATIONS, INVESTIGATION_STATUSES, getInvestigation, investigationCounts,
+  listInvestigations, openInvestigation, updateInvestigation,
+  type Classification, type InvestigationStatus,
+} from "./investigations.js";
 import { BULK_COLUMNS, parseBulk, templateCsv } from "./bulk.js";
 import { DEFAULT_ROLE, listRoles, removeRole, saveRole } from "./roles.js";
 import { dutchMillerNamed } from "../auth/apps.js";
@@ -102,6 +111,7 @@ function requirePage(page: DmPageKey) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const access = await dmAccessFor(req.user?.email ?? "");
     if (canAdminister(access) || access.pages.includes(page)) { next(); return; }
+    denied(req, `page ${page}`);
     res.status(403).json({ error: "You do not have access to that page." });
   };
 }
@@ -110,6 +120,7 @@ function requirePage(page: DmPageKey) {
 async function requireDmAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
   const email = req.viewingAs?.real.email ?? req.user?.email ?? "";
   if (canAdminister(await dmAccessFor(email))) { next(); return; }
+  denied(req, "administrator only");
   res.status(403).json({ error: "Only a Dutch Miller administrator can do that." });
 }
 
@@ -133,6 +144,29 @@ const roleOf = async (req: Request): Promise<DmRole> =>
   (await dmAccessFor(req.viewingAs?.real.email ?? req.user?.email ?? "")).role;
 
 const actor = (req: Request): string => req.viewingAs?.real.email ?? req.user?.email ?? "";
+
+/**
+ * Everything an event needs about who and where, in one place.
+ *
+ * `actor` is the EFFECTIVE identity and `actorReal` the person at the
+ * keyboard — the same outside a view, different inside one. Spread into
+ * every `audit()` call under here so a new route cannot record less
+ * than the others, or quietly drop the real actor.
+ */
+const who = (req: Request): {
+  actor: string; actorReal: string; ip: string; userAgent: string;
+  path: string; forwarded: string;
+} => ({
+  actor: req.user?.email ?? "",
+  actorReal: req.viewingAs?.real.email ?? req.user?.email ?? "",
+  ...requestMeta(req),
+});
+
+/** A refusal, recorded. One line per denial, with the route it was for. */
+const denied = (req: Request, why: string): void => {
+  void audit({ action: "access.denied", subject: req.user?.email ?? "", detail: why,
+    ...who(req) });
+};
 
 dutchMillerRouter.get("/users", requireDmAdmin, async (req: Request, res: Response) => {
   const [users, roles] = await Promise.all([listDmUsers(), listRoles()]);
@@ -237,6 +271,7 @@ function requireSuperTo(what: string) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const real = req.viewingAs?.real ?? req.user;
     if (isStaff(real) && isSuperEmail(real?.email ?? "")) { next(); return; }
+    denied(req, `super administrator only — ${what}`);
     res.status(403).json({ error: `Only a super administrator can ${what}.` });
   };
 }
@@ -585,19 +620,197 @@ dutchMillerRouter.get("/security", requireDmAdmin, async (req: Request, res: Res
 });
 
 /**
+ * The triage view: patterns, not single events.
+ *
+ * Read-only and computed on request. Nothing here opens a case, sends
+ * anything, or writes a classification — a concern is a reason for a
+ * person to look, and that is all it is allowed to be.
+ */
+dutchMillerRouter.get("/security/concerns", requireDmAdmin,
+  async (_req: Request, res: Response) => {
+    res.json({
+      concerns: await concerns(),
+      thresholds: THRESHOLDS,
+      counts: await investigationCounts(),
+    });
+  });
+
+/** What this app can and cannot see. Stated, because the gap matters. */
+dutchMillerRouter.get("/security/coverage", requireDmAdmin,
+  async (_req: Request, res: Response) => {
+    res.json({ sources: coverage(), health: await collectionHealth() });
+  });
+
+const asCategory = (v: unknown): EventCategory | "all" | undefined => {
+  const s = String(v ?? "");
+  return s === "security" || s === "access" || s === "business" || s === "all"
+    ? s : undefined;
+};
+
+/**
+ * Every event, filtered.
+ *
+ * The one read behind Security, Sign-ins and Audit History alike —
+ * three views of one table rather than three logs, because the first
+ * question an investigator asks is "what else happened around then"
+ * and separate tables cannot answer it.
+ */
+dutchMillerRouter.get("/events", requireDmAdmin, async (req: Request, res: Response) => {
+  const q = req.query;
+  const preset = q.preset === "signins" || q.preset === "suspicious"
+    ? q.preset : undefined;
+  const outcome = (OUTCOMES as readonly string[]).includes(String(q.outcome ?? ""))
+    ? (String(q.outcome) as Outcome) : undefined;
+  const minSeverity = (SEVERITIES as readonly string[]).includes(String(q.minSeverity ?? ""))
+    ? (String(q.minSeverity) as Severity) : undefined;
+  res.json({
+    ...(await listEvents({
+      category: asCategory(q.category),
+      preset,
+      who: String(q.who ?? ""),
+      ip: String(q.ip ?? ""),
+      action: (EVENT_META as Record<string, unknown>)[String(q.action ?? "")]
+        ? String(q.action) : undefined,
+      outcome,
+      minSeverity,
+      resource: String(q.resource ?? ""),
+      search: String(q.search ?? ""),
+      days: Number(q.days ?? 90),
+      limit: Number(q.limit ?? 200),
+      offset: Number(q.offset ?? 0),
+    })),
+    // So the filter dropdowns are built from the catalogue rather than
+    // from a second copy in the UI that can drift from it.
+    actions: Object.entries(EVENT_META).map(([key, m]) => ({
+      key, label: m.label, category: m.category,
+      outcome: m.outcome, severity: m.severity,
+    })),
+  });
+});
+
+/**
  * The audit trail.
  *
  * Admin-only, and read-only: there is no route that edits or deletes a
  * line, deliberately. A log somebody can tidy up is not evidence of
- * anything.
+ * anything. Per-account History is this same read with a subject, not
+ * a second implementation.
  */
 dutchMillerRouter.get("/audit", requireDmAdmin, async (req: Request, res: Response) => {
   res.json({
     entries: await listAudit({
       subject: String(req.query.subject ?? ""),
+      resource: String(req.query.resource ?? ""),
       limit: Number(req.query.limit ?? 200),
     }),
   });
+});
+
+/* ------------------------------------------------------------------ *
+ * Investigations
+ * ------------------------------------------------------------------ */
+
+const asStatus = (v: unknown): InvestigationStatus | undefined =>
+  (INVESTIGATION_STATUSES as readonly string[]).includes(String(v ?? ""))
+    ? (String(v) as InvestigationStatus) : undefined;
+const asClassification = (v: unknown): Classification | undefined =>
+  (CLASSIFICATIONS as readonly string[]).includes(String(v ?? ""))
+    ? (String(v) as Classification) : undefined;
+
+dutchMillerRouter.get("/investigations", requireDmAdmin,
+  async (req: Request, res: Response) => {
+    res.json({
+      cases: await listInvestigations({
+        status: asStatus(req.query.status) ?? "all",
+        limit: Number(req.query.limit ?? 100),
+      }),
+      counts: await investigationCounts(),
+      statuses: INVESTIGATION_STATUSES,
+      classifications: CLASSIFICATIONS,
+    });
+  });
+
+dutchMillerRouter.get("/investigations/:id", requireDmAdmin,
+  async (req: Request, res: Response) => {
+    const row = await getInvestigation(String(req.params.id ?? ""));
+    if (!row) { res.status(404).json({ error: "No such investigation." }); return; }
+    // The events it points at, read fresh from the trail rather than
+    // copied into the case: the case holds ids, never evidence.
+    const events = row.eventIds.length > 0
+      ? (await listEvents({ days: 3650, limit: 500 })).rows
+        .filter((e) => row.eventIds.includes(e.id))
+      : [];
+    res.json({ case: row, events });
+  });
+
+dutchMillerRouter.post("/investigations", requireDmAdmin,
+  async (req: Request, res: Response) => {
+    const b = (req.body ?? {}) as {
+      title?: unknown; eventIds?: unknown; evidence?: unknown; note?: unknown;
+    };
+    try {
+      const made = await openInvestigation({
+        title: String(b.title ?? ""),
+        by: actor(req),
+        eventIds: Array.isArray(b.eventIds) ? b.eventIds.map(String) : [],
+        evidence: String(b.evidence ?? ""),
+        note: String(b.note ?? ""),
+      });
+      await audit({
+        action: "investigation.opened", resource: made.id, ...who(req),
+        detail: made.title,
+      });
+      res.json({ case: made });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+dutchMillerRouter.post("/investigations/:id", requireDmAdmin,
+  async (req: Request, res: Response) => {
+    const b = (req.body ?? {}) as {
+      status?: unknown; classification?: unknown; assignee?: unknown;
+      resolution?: unknown; note?: unknown; addEventIds?: unknown;
+    };
+    const out = await updateInvestigation({
+      id: String(req.params.id ?? ""),
+      by: actor(req),
+      status: asStatus(b.status),
+      classification: asClassification(b.classification),
+      assignee: b.assignee === undefined ? undefined : String(b.assignee),
+      resolution: b.resolution === undefined ? undefined : String(b.resolution),
+      note: String(b.note ?? ""),
+      addEventIds: Array.isArray(b.addEventIds) ? b.addEventIds.map(String) : [],
+    });
+    if (!out.ok) { res.status(400).json({ error: out.reason }); return; }
+    await audit({
+      action: "investigation.updated", resource: out.row.id, ...who(req),
+      detail: `${out.row.title} · ${out.row.status} · ${out.row.classification}`,
+    });
+    res.json({ case: out.row });
+  });
+
+/**
+ * Record that data left the app.
+ *
+ * The export itself is built in the browser from rows it already has,
+ * so there is no download route to hang this on — and an export that
+ * leaves no trace is exactly the one worth tracing. The page posts
+ * here as it downloads. Best-effort by nature: it records the exports
+ * the app performs, and nothing stops somebody copying a table by
+ * hand, which the Coverage view says out loud.
+ */
+dutchMillerRouter.post("/exported", async (req: Request, res: Response) => {
+  const b = (req.body ?? {}) as { kind?: unknown; rows?: unknown; detail?: unknown };
+  const kind = String(b.kind ?? "");
+  const action: AuditAction = kind === "rfid" ? "export.rfid"
+    : kind === "security" ? "export.security" : "export.members";
+  const rows = Math.max(0, Math.min(Number(b.rows) || 0, 1_000_000));
+  await audit({
+    action, ...who(req),
+    detail: `${rows} row(s)${b.detail ? ` · ${String(b.detail).slice(0, 120)}` : ""}`,
+  });
+  res.json({ ok: true });
 });
 
 /** 25 MB. A spreadsheet of a million numbers is about 12. */
@@ -663,6 +876,11 @@ dutchMillerRouter.post(
 
       const result = await addRfids(
         parsed.numbers, parsed.rejected, parsed.cells, req.user?.email ?? "");
+      void audit({
+        action: "rfid.uploaded", ...who(req),
+        detail: `${result.added} added from ${parsed.numbers.length} readable `
+          + `of ${parsed.cells} cells`,
+      });
       emitChange("rfid");
       res.json({ ...result, counts: await rfidCounts() });
     } catch (err) {
@@ -730,9 +948,8 @@ dutchMillerRouter.post(
     if ("error" in out) { res.status(400).json({ error: out.error }); return; }
     await audit({
       action: "rfid.deleted",
-      actor: actor(req),
       detail: `${out.deleted} removed · ${String(body.note ?? "").trim().slice(0, 200)}`,
-      ...requestMeta(req),
+      ...who(req),
     });
     emitChange("rfid");
     res.json({ ...out, counts: await rfidCounts() });
@@ -753,6 +970,11 @@ dutchMillerRouter.post("/rfid/active", requirePage("rfid-review"), async (req: R
   const body = (req.body ?? {}) as { numbers?: unknown; active?: unknown };
   const numbers = Array.isArray(body.numbers) ? body.numbers.map(String) : [];
   const out = await setRfidActive(numbers, body.active !== false);
+  void audit({
+    action: "rfid.held", ...who(req),
+    detail: `${out.changed} ${body.active !== false ? "released into" : "held back from"} `
+      + "the pool",
+  });
   emitChange("rfid");
   res.json({ ...out, counts: await rfidCounts() });
 });
@@ -828,7 +1050,14 @@ dutchMillerRouter.post(
       // Not awaited, and not inside the transaction: the member exists and
       // the tag is claimed by now, so a bounced email must not tell the
       // dealer their signup failed. Outcomes land in the audit trail.
-      if (!out.alreadyExisted) void notifySignup(out.row, publicOrigin(req));
+      if (!out.alreadyExisted) {
+        void notifySignup(out.row, publicOrigin(req));
+        void audit({
+          action: "signup.created", resource: out.row.guid, ...who(req),
+          detail: `${out.row.customer.firstName} ${out.row.customer.lastName} · `
+            + `RFID ${out.row.customer.rfid}`,
+        });
+      }
       emitChange("signups");
       res.json({ row: out.row, alreadyExisted: out.alreadyExisted });
       return;
@@ -956,10 +1185,13 @@ dutchMillerRouter.post(
   async (req: Request, res: Response) => {
     // Opening is recorded for whoever would act on it, which is the
     // same person who could approve it.
-    const who = req.viewingAs?.real.email ?? req.user?.email ?? "";
+    const reader = req.viewingAs?.real.email ?? req.user?.email ?? "";
     if (!(await canApprove(req))) { res.json({ row: null }); return; }
-    const row = await markOpened(String(req.params.guid ?? ""), who);
-    if (row) emitChange("signups");
+    const row = await markOpened(String(req.params.guid ?? ""), reader);
+    if (row) {
+      void audit({ action: "signup.opened", resource: row.guid, ...who(req) });
+      emitChange("signups");
+    }
     res.json({ row });
   },
 );
@@ -980,7 +1212,7 @@ dutchMillerRouter.post(
   requirePage("member-signups"),
   async (req: Request, res: Response) => {
     const real = req.viewingAs?.real ?? req.user;
-    const who = real?.email ?? "";
+    const approver = real?.email ?? "";
     if (!(await canApprove(req))) {
       res.status(403).json({
         error: "Only the CSC role can approve a membership. "
@@ -988,7 +1220,7 @@ dutchMillerRouter.post(
       });
       return;
     }
-    const out = await setComplete(String(req.params.guid ?? ""), who);
+    const out = await setComplete(String(req.params.guid ?? ""), approver);
     if (!out.ok) {
       res.status(out.reason === "not-found" ? 404 : 409).json({
         error: out.reason === "not-found"
@@ -1005,6 +1237,10 @@ dutchMillerRouter.post(
     // wash. Not awaited — the approval is already recorded, and a
     // bounced email must not make it look otherwise.
     void notifyApproved(out.row, publicOrigin(req));
+    void audit({
+      action: "signup.completed", resource: out.row.guid, ...who(req),
+      detail: `${out.row.customer.firstName} ${out.row.customer.lastName}`,
+    });
     emitChange("signups");
     res.json({ row: out.row });
   },
@@ -1052,12 +1288,12 @@ dutchMillerRouter.post(
     }
     await audit({
       action: "signup.deleted",
-      actor: actor(req),
       subject: out.row.submittedBy,
+      resource: out.row.guid,
       detail: `${out.row.customer.firstName} ${out.row.customer.lastName} · `
         + `RFID ${out.row.customer.rfid}${out.tagReleased ? " (released)" : ""} · `
         + `${out.row.deleteNote ?? ""}`,
-      ...requestMeta(req),
+      ...who(req),
     });
     emitChange("signups");
     emitChange("rfid");

@@ -344,6 +344,13 @@ dealerAuthRouter.post("/continue", async (req: Request, res: Response) => {
     // Same-browser but not yet trusted: start the two weeks now, so the
     // next sign-in from here is the one that skips the code.
     if (!trusted) await rememberDevice(req, res, out.email);
+    // The session actually exists now. Recorded apart from the link
+    // being redeemed, because a redeemed link that then failed the
+    // account check is a different fact from somebody getting in.
+    await audit({
+      action: "login.ok", subject: out.email, ...from(req),
+      detail: trusted ? "trusted device" : "same browser",
+    });
     res.json({ kind: "login", signedIn: true });
     return;
   }
@@ -394,6 +401,10 @@ dealerAuthRouter.post("/verify", async (req: Request, res: Response) => {
   await audit({
     action: "code.verified", subject: p.email, ...from(req),
     detail: `device trusted for ${TRUST_DAYS} days`,
+  });
+  await audit({
+    action: "login.ok", subject: p.email, ...from(req),
+    detail: "emailed link plus confirmation code",
   });
   res.json({ ok: true, trustDays: TRUST_DAYS });
 });
