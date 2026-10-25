@@ -157,9 +157,12 @@ const actor = (req: Request): string => req.viewingAs?.real.email ?? req.user?.e
  * than the others, or quietly drop the real actor.
  */
 const who = (req: Request): {
-  actor: string; actorReal: string; ip: string; userAgent: string;
+  app: string; actor: string; actorReal: string; ip: string; userAgent: string;
   path: string; forwarded: string;
 } => ({
+  // Everything written from this file is Dutch Miller's. The other
+  // product's security log does not carry it, and vice versa.
+  app: "dutch-miller",
   actor: req.user?.email ?? "",
   actorReal: req.viewingAs?.real.email ?? req.user?.email ?? "",
   ...requestMeta(req),

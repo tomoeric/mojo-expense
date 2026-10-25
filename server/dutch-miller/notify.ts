@@ -164,6 +164,7 @@ export async function notifySignup(s: SignupRow, origin?: string): Promise<void>
     if (to.length === 0) return;
     if (!isMailConfigured()) {
       await audit({
+        app: "dutch-miller",
         action: "notify.failed", subject: s.customer.rfid,
         detail: "email is not configured",
       });
@@ -194,12 +195,14 @@ export async function notifySignup(s: SignupRow, origin?: string): Promise<void>
       // the step as grey. This is what turns it green without a reload.
       emitChange("signups");
       await audit({
+        app: "dutch-miller",
         action: "notify.sent", subject: s.guid, resource: s.guid, actor: s.submittedBy,
         detail: `${to.length - failed.length} of ${to.length} accepted for delivery`,
       });
     }
     if (failed.length > 0) {
       await audit({
+        app: "dutch-miller",
         action: "notify.failed", subject: s.guid, resource: s.guid, actor: s.submittedBy,
         detail: `gave up after ${RETRY.maxAttempts} attempts: ${failed.join(", ")}`,
       });
@@ -209,6 +212,7 @@ export async function notifySignup(s: SignupRow, origin?: string): Promise<void>
     // This is the one place that must swallow rather than propagate.
     console.error("signup notification failed:", err);
     await audit({
+      app: "dutch-miller",
       action: "notify.failed", subject: s.guid,
       detail: err instanceof Error ? err.message.slice(0, 200) : "unknown",
     });
@@ -293,7 +297,7 @@ export async function notifyApproved(s: SignupRow, origin?: string): Promise<voi
     const to = s.submittedBy.trim().toLowerCase();
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return;
     if (!isMailConfigured()) {
-      await audit({ action: "approved.failed", subject: s.guid, detail: "email is not configured" });
+      await audit({ app: "dutch-miller", action: "approved.failed", subject: s.guid, detail: "email is not configured" });
       return;
     }
     const { subject, html } = approvedEmail(s, { origin });
@@ -306,18 +310,21 @@ export async function notifyApproved(s: SignupRow, origin?: string): Promise<voi
     // that their member may now wash.
     if (out.state === "failed") {
       await audit({
+        app: "dutch-miller",
         action: "approved.failed", subject: s.guid, resource: s.guid,
         detail: `${to} · ${out.attempts} attempt(s) · ${out.error}`,
       });
       return;
     }
     await audit({
+      app: "dutch-miller",
       action: "approved.sent", subject: s.guid, resource: s.guid,
       detail: out.duplicate ? `${to} (already sent)` : to,
     });
   } catch (err) {
     console.error("approval email failed:", err);
     await audit({
+      app: "dutch-miller",
       action: "approved.failed", subject: s.guid,
       detail: err instanceof Error ? err.message.slice(0, 200) : "unknown",
     });

@@ -131,6 +131,41 @@ try {
     review?.caveat ?? "");
   check("…at medium, not critical", review?.severity === "medium");
 
+  console.log("\n6b. The other product's events stay out of this log");
+  /*
+   * One deployment, two products, one table — and two security logs.
+   * An Emburse API route being refused is not a Dutch Miller matter,
+   * and a dealer administrator should not have to wade past it.
+   */
+  await audit({
+    action: "access.denied", app: "emburse", subject: TAG, ip: IP,
+    path: "GET /api/expenses", detail: "app emburse",
+  });
+  await audit({
+    action: "access.denied", app: "dutch-miller", subject: TAG, ip: IP,
+    path: "GET /api/dutch-miller/roles", detail: "super administrator only",
+  });
+  const mine = (await listEvents({ who: TAG, days: 1 })).rows;
+  check("the other product's refusal is not here",
+    !mine.some((r) => r.app === "emburse"),
+    mine.filter((r) => r.app === "emburse").map((r) => r.path).join(","));
+  check("…and no Emburse route is mentioned at all",
+    !mine.some((r) => r.path.includes("/api/expenses")));
+  check("this product's refusal IS here",
+    mine.some((r) => r.action === "access.denied" && r.app === "dutch-miller"));
+  check("…and shared sign-in events still are",
+    mine.some((r) => r.action === "signin.ok"));
+  // The count has to agree with the rows, or neither is believed.
+  const scoped = await listEvents({ who: TAG, days: 1 });
+  check("the total matches what is shown",
+    scoped.total === scoped.rows.length, `${scoped.total} vs ${scoped.rows.length}`);
+  check("the refusals feed is scoped too",
+    !(await listSecurityLog({ days: 1 })).some((r) => r.app === "emburse"));
+  // Nothing was deleted: it is the other log's business, not nobody's.
+  const kept = await db().query<{ n: string }>(
+    "SELECT count(*) AS n FROM dm_audit WHERE app = 'emburse' AND ip = $1", [IP]);
+  check("…but the event is still recorded", Number(kept.rows[0]?.n ?? 0) === 1);
+
   console.log("\n7. Missing coverage is stated, not implied");
   const sources = coverage();
   check("upstream sources are listed as NOT connected",

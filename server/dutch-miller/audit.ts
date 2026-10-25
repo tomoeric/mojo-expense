@@ -82,6 +82,31 @@ ALTER TABLE dm_audit ADD COLUMN IF NOT EXISTS resource text NOT NULL DEFAULT '';
  * one time it is certain not to have happened.
  */
 ALTER TABLE dm_audit ADD COLUMN IF NOT EXISTS occurred_at timestamptz;
+/*
+ * WHICH PRODUCT the event is about.
+ *
+ * One deployment runs two products, and they share this table because
+ * they share a sign-in. They do not share a security log: an Emburse
+ * API route being refused is not a Dutch Miller matter, and a dealer
+ * administrator reading their security page should not have to wade
+ * past it to find the attempts that concern them.
+ *
+ * Three values. 'dutch-miller' and 'emburse' belong to one product;
+ * EMPTY means shared — signing in, signing out, a tenant account
+ * refused at the door — which genuinely concerns both and appears in
+ * either log.
+ *
+ * Nothing is deleted or reclassified by this. Rows written before the
+ * column read as shared, with the one exception below: an Emburse
+ * app refusal is unambiguous from its own detail line, so those are
+ * labelled rather than left to clutter the wrong log forever.
+ */
+ALTER TABLE dm_audit ADD COLUMN IF NOT EXISTS app text NOT NULL DEFAULT '';
+UPDATE dm_audit SET app = 'emburse'
+ WHERE app = '' AND action = 'access.denied' AND detail = 'app emburse';
+UPDATE dm_audit SET app = 'dutch-miller'
+ WHERE app = '' AND action = 'access.denied' AND detail = 'app dutch-miller';
+CREATE INDEX IF NOT EXISTS dm_audit_app ON dm_audit (app, at DESC);
 CREATE INDEX IF NOT EXISTS dm_audit_ip ON dm_audit (ip, at DESC);
 CREATE INDEX IF NOT EXISTS dm_audit_recent ON dm_audit (at DESC);
 CREATE INDEX IF NOT EXISTS dm_audit_subject ON dm_audit (subject, action, at DESC);
@@ -94,6 +119,8 @@ const ensure = (): Promise<void> =>
 
 export type AuditEntry = {
   id: string;
+  /** Which product. Empty means it concerns both. */
+  app: string;
   /** When the row was written. */
   receivedAt: string;
   /** When it happened. The same thing for events this app records itself. */
@@ -184,6 +211,13 @@ export function redact(text: string): string {
 export async function audit(e: {
   action: AuditAction;
   subject?: string;
+  /**
+   * Which product this concerns. Omitted means BOTH.
+   *
+   * Set it whenever an event belongs to one product only, so the other
+   * one's security log does not carry it.
+   */
+  app?: string;
   /** The effective identity. During a view, that is the VIEWED person. */
   actor?: string;
   /** Who was really at the keyboard. Only differs during a view. */
@@ -203,31 +237,43 @@ export async function audit(e: {
     await db().query(
       `INSERT INTO dm_audit
          (actor, actor_real, action, subject, resource, detail, ip, user_agent,
-          path, forwarded, occurred_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+          path, forwarded, occurred_at, app)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
       [(e.actor ?? "").toLowerCase(), (e.actorReal ?? "").toLowerCase(), e.action,
         (e.subject ?? "").toLowerCase(), (e.resource ?? "").slice(0, 200),
         redact(e.detail ?? ""), e.ip ?? "",
         (e.userAgent ?? "").slice(0, 300), safePath(e.path ?? ""),
-        (e.forwarded ?? "").slice(0, 300), e.occurredAt ?? null]);
+        (e.forwarded ?? "").slice(0, 300), e.occurredAt ?? null,
+        (e.app ?? "").slice(0, 32)]);
   } catch (err) {
     console.error("audit write failed:", err instanceof Error ? err.message : err);
   }
 }
 
 const COLS = `id, at, occurred_at, actor, actor_real, action, subject, resource,
-              detail, ip, user_agent, path, forwarded`;
+              detail, ip, user_agent, path, forwarded, app`;
+
+/**
+ * Everything a Dutch Miller reader should see, and nothing else.
+ *
+ * Its own product plus the shared sign-in events. Appended to every
+ * read in this module rather than left to each caller, because a new
+ * query that forgets it leaks the other product's routes back into
+ * this log — which is the exact thing being fixed.
+ */
+const DM_SCOPE = "(app = '' OR app = 'dutch-miller')";
 
 type DbEntry = {
   id: string; at: Date; occurred_at: Date | null; actor: string; actor_real: string;
   action: string; subject: string; resource: string; detail: string; ip: string;
-  user_agent: string; path: string; forwarded: string;
+  user_agent: string; path: string; forwarded: string; app: string;
 };
 
 const shapeEntry = (r: DbEntry): AuditEntry => {
   const m = metaFor(r.action);
   return {
     id: String(r.id),
+    app: r.app,
     receivedAt: r.at.toISOString(),
     at: (r.occurred_at ?? r.at).toISOString(),
     actor: r.actor,
@@ -330,6 +376,7 @@ export async function listEvents(q: EventQuery = {}): Promise<{
   const days = Math.min(Math.max(Number(q.days) || 90, 1), 3650);
   args.push(String(days));
   where.push(`at > now() - ($${args.length} || ' days')::interval`);
+  where.push(DM_SCOPE);
 
   const clause = `WHERE ${where.join(" AND ")}`;
   const limit = Math.min(Math.max(Number(q.limit) || 200, 1), 2000);
@@ -388,7 +435,7 @@ export async function securitySummary(days = 30): Promise<{
 }> {
   await ensure();
   const window = String(Math.min(Math.max(days, 1), 365));
-  const base = `FROM dm_audit WHERE action = ANY($1::text[])
+  const base = `FROM dm_audit WHERE action = ANY($1::text[]) AND ${DM_SCOPE}
                   AND at > now() - ($2 || ' days')::interval`;
 
   const byAddress = await db().query<{ subject: string; n: string; last: Date }>(
@@ -460,6 +507,7 @@ export async function listViewAsSessions(opts: {
   const days = Math.min(Math.max(Number(opts.days) || 90, 1), 3650);
   args.push(String(days));
   where.push(`at > now() - ($${args.length} || ' days')::interval`);
+  where.push(DM_SCOPE);
   // Either account: the administrator or the person being viewed.
   if (opts.who?.trim()) {
     args.push(opts.who.trim().toLowerCase());
@@ -514,10 +562,12 @@ export async function collectionHealth(): Promise<{
 }> {
   await ensure();
   const span = await db().query<{ n: string; oldest: Date | null; newest: Date | null }>(
-    "SELECT count(*) AS n, min(at) AS oldest, max(at) AS newest FROM dm_audit");
+    `SELECT count(*) AS n, min(at) AS oldest, max(at) AS newest
+       FROM dm_audit WHERE ${DM_SCOPE}`);
   const byCategory = await Promise.all(EVENT_CATEGORIES.map(async (category) => {
     const r = await db().query<{ n: string; last: Date | null }>(
-      "SELECT count(*) AS n, max(at) AS last FROM dm_audit WHERE action = ANY($1::text[])",
+      `SELECT count(*) AS n, max(at) AS last FROM dm_audit
+        WHERE action = ANY($1::text[]) AND ${DM_SCOPE}`,
       [actionsIn(category)]);
     return {
       category,
@@ -573,6 +623,7 @@ export async function lockState(email: string): Promise<LockState> {
        FROM dm_audit
       WHERE subject = $1
         AND action = ANY($2::text[])
+        AND ${DM_SCOPE}
         AND at > now() - ($3 || ' minutes')::interval`,
     [who, FAILURES, String(LOCKOUT.windowMinutes)]);
   const recent = Number(rows[0]?.n ?? 0);

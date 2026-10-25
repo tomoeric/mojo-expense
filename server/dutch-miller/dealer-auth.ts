@@ -52,7 +52,14 @@ const PENDING_TTL_MS = 20 * 60 * 1000;
  * Everything here goes through one helper so a route added later
  * cannot quietly record less than the others.
  */
-const from = (req: Request) => requestMeta(req as never);
+/*
+ * Every event from this file is Dutch Miller's.
+ *
+ * The emailed-link door exists only for this product — a dealer
+ * account can never hold the other one — so a refused link is a
+ * Dutch Miller matter and nothing else's.
+ */
+const from = (req: Request) => ({ app: "dutch-miller", ...requestMeta(req as never) });
 
 const origin = (req: Request): string => publicOrigin(req);
 

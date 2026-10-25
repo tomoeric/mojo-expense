@@ -326,6 +326,14 @@ the blocks.
   `event-catalog.ts`, never stored on the row. That is why the whole pre-existing
   trail arrives classified with no migration. Adding an action means one entry
   there — a row whose action has no entry reads as `unknown`, never as a guess.
+- **Two products, one table, TWO security logs.** `dm_audit.app` is
+  `dutch-miller`, `emburse`, or empty for shared (signing in, signing out,
+  view-as). Every Dutch Miller read appends `DM_SCOPE`, so the other product's
+  refused API routes never appear on this security page — a new query that
+  forgets it leaks them straight back. Nothing is deleted: an Emburse denial is
+  still recorded, it is simply the other log's business. Sign-in events are
+  tagged by what the person actually HOLDS, so somebody with Emburse alone does
+  not clutter the dealer log.
 - **Successful sign-ins ARE recorded.** They were dropped once to keep the log
   short, which left it unable to answer the only question it is for: did the
   attempt eventually work. They are kept out of the Concerns feed, not out of the

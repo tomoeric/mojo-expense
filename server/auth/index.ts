@@ -313,6 +313,11 @@ export function requireApp(app: AppKey) {
     // on the record rather than only into a 403.
     void import("../dutch-miller/audit.js").then(({ audit, requestMeta }) => audit({
       action: "access.denied",
+      // Tagged with the product that refused it, so an Emburse route
+      // being turned down never appears on the Dutch Miller security
+      // page. It is still recorded; it is simply the other product's
+      // business.
+      app,
       subject: real?.email ?? "",
       actor: req.user?.email ?? "",
       actorReal: real?.email ?? "",
@@ -340,6 +345,19 @@ export function requireApp(app: AppKey) {
  * an audit write that can fail a sign-in turns a logging problem into
  * an outage.
  */
+/**
+ * Whose log an event about this person belongs in.
+ *
+ * Empty — meaning both — when they hold both products, or when we
+ * cannot tell. Erring toward shared is the right way round: an event
+ * in one log too many is noise, and one in none at all is a gap.
+ */
+function appScopeFor(email: string): string {
+  if (!email) return "";
+  const mine = appsFor(email, "microsoft");
+  return mine.length === 1 ? mine[0]! : "";
+}
+
 function logEvent(
   req: Request,
   action: "signin.ok" | "session.ended" | "viewas.started" | "viewas.ended",
@@ -347,6 +365,11 @@ function logEvent(
 ): void {
   void import("../dutch-miller/audit.js").then(({ audit, requestMeta }) => audit({
     action,
+    // Tagged by what the person actually holds. Somebody who only has
+    // Emburse signing in is not a Dutch Miller matter and does not
+    // belong on its security page; somebody who holds both is, so
+    // their sign-in stays shared and appears in either log.
+    app: appScopeFor(e.subject ?? e.actor ?? ""),
     subject: e.subject,
     actor: e.actor ?? e.subject,
     actorReal: req.viewingAs?.real.email ?? req.user?.email ?? "",
@@ -538,6 +561,9 @@ authRouter.get("/callback", async (req: Request, res: Response) => {
       // reaching for an app they have not been given.
       void import("../dutch-miller/audit.js").then(({ audit, requestMeta }) => audit({
         action: "signin.denied",
+        // The whole deployment refused them, not one product, so this
+        // belongs in both logs.
+        app: "",
         subject: email,
         detail: "signed in to the tenant but not on the allow-list",
         ...requestMeta(req as never),

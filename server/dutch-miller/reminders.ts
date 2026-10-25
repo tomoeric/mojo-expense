@@ -143,6 +143,7 @@ export async function runReminders(force = false): Promise<{
   const failed = results.filter((x) => x.status === "rejected").length;
   if (!force) await noteReminderSent(now.stamp);
   await audit({
+    app: "dutch-miller",
     action: failed === to.length ? "reminder.failed" : "reminder.sent",
     detail: `${rows.length} outstanding · ${to.length - failed} of ${to.length} sent`
       + (force ? " · sent by hand" : ""),

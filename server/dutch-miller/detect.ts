@@ -59,7 +59,23 @@ type Grouped = {
   k: string; n: string; first: Date; last: Date; ids: (string | number)[];
 };
 
-const WINDOW = `at > now() - (${THRESHOLDS.windowHours} || ' hours')::interval`;
+/*
+ * Dutch Miller's own events, plus the shared sign-in ones.
+ *
+ * Without this, an Emburse route being refused raises a concern on
+ * the Dutch Miller security page — somebody else's product's noise,
+ * counted toward somebody else's thresholds.
+ */
+const SCOPE = "(app = '' OR app = 'dutch-miller')";
+
+/** The same two conditions, for a query that has aliased the table. */
+const scoped = (alias = ""): string => {
+  const p = alias ? `${alias}.` : "";
+  return `(${p}app = '' OR ${p}app = 'dutch-miller') `
+    + `AND ${p}at > now() - (${THRESHOLDS.windowHours} || ' hours')::interval`;
+};
+
+const WINDOW = scoped();
 
 let ready: Promise<void> | null = null;
 const ensure = (): Promise<void> => (ready ??= ensureSchema());
@@ -146,7 +162,7 @@ export async function concerns(): Promise<Concern[]> {
        FROM dm_audit a JOIN failed f ON f.subject = a.subject
       WHERE a.action IN ('signin.ok', 'login.ok', 'code.verified')
         AND a.at > f.last_fail - interval '1 hour'
-        AND ${"a." + WINDOW}
+        AND ${scoped("a")}
       GROUP BY a.subject LIMIT 25`, [SUSPICIOUS]);
   for (const r of after.rows) {
     out.push({
