@@ -36,7 +36,7 @@ export function DmAuditPage({ subject = "" }: { subject?: string }) {
       });
       if (who.trim()) p.set("who", who.trim());
       if (search.trim()) p.set("search", search.trim());
-      const res = await fetch(`/api/dutch-miller/events?${p}`);
+      const res = await fetch(`/api/dutch-miller/event-log?${p}`);
       if (!res.ok) throw new Error((await res.json()).error ?? "Could not load.");
       return (await res.json()) as { rows: DmEvent[]; total: number };
     },

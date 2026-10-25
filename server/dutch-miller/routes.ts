@@ -694,7 +694,16 @@ const asCategory = (v: unknown): EventCategory | "all" | undefined => {
  * question an investigator asks is "what else happened around then"
  * and separate tables cannot answer it.
  */
-dutchMillerRouter.get("/events", requireDmAdmin, async (req: Request, res: Response) => {
+/*
+ * `/event-log`, not `/events`.
+ *
+ * `/events` is the live SSE stream, registered above, and Express
+ * takes the first match — so this route was silently shadowed and the
+ * whole security workspace read an event stream instead of its data.
+ * Caught by booting the server and curling it; worth remembering that
+ * a typecheck cannot see a route collision.
+ */
+dutchMillerRouter.get("/event-log", requireDmAdmin, async (req: Request, res: Response) => {
   const q = req.query;
   const preset = q.preset === "signins" || q.preset === "suspicious"
     ? q.preset : undefined;

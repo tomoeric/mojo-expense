@@ -231,7 +231,7 @@ function Events({ preset, blurb }: { preset: "suspicious" | "signins"; blurb: st
       if (who.trim()) p.set("who", who.trim());
       if (ip.trim()) p.set("ip", ip.trim());
       if (minSeverity) p.set("minSeverity", minSeverity);
-      const res = await fetch(`/api/dutch-miller/events?${p}`);
+      const res = await fetch(`/api/dutch-miller/event-log?${p}`);
       if (!res.ok) throw new Error((await res.json()).error ?? "Could not load.");
       return (await res.json()) as { rows: DmEvent[]; total: number };
     },
