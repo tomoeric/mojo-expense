@@ -316,6 +316,85 @@ the blocks.
   (`isMojoStaff`), NOT by a Dutch Miller administrator: being an admin of the
   dealer's app says nothing about working at MOJO. Reversible, because the
   alternative to an undo is a wrong record nobody can correct.
+## The security workspace and the event trail
+
+- **ONE table, three views.** `dm_audit` holds security, access and business
+  events alike; Security, Sign-ins and Audit History are reads over it, not
+  separate logs. An investigator's first question is "what else happened around
+  then", and three tables cannot answer it.
+- **Category, outcome and severity are DERIVED from the action**, in
+  `event-catalog.ts`, never stored on the row. That is why the whole pre-existing
+  trail arrives classified with no migration. Adding an action means one entry
+  there — a row whose action has no entry reads as `unknown`, never as a guess.
+- **Successful sign-ins ARE recorded.** They were dropped once to keep the log
+  short, which left it unable to answer the only question it is for: did the
+  attempt eventually work. They are kept out of the Concerns feed, not out of the
+  record. Never "fix" noise by dropping events.
+- **`audit()` redacts.** Every detail line goes through `redact()` and every path
+  loses its query string, because a sign-in link in a query string is exactly how
+  a credential lands in the log meant to prove none leaked. Never bypass it.
+- **`actor` is the EFFECTIVE identity, `actor_real` the person at the keyboard.**
+  An action taken during a view belongs to both. Use the `who(req)` helper in
+  `routes.ts` for every `audit()` call so a new route cannot record less.
+- **Nothing automatic may call anything an incident.** `detect.ts` produces
+  CONCERNS: a stated threshold, the count that met it, the events behind it, and
+  a caveat saying what the pattern is NOT. One failure is never a concern. A
+  sign-in after a run of refusals is raised FOR REVIEW and says so. Only a person,
+  in `investigations.ts`, can record `confirmed-incident`, and only with a written
+  conclusion.
+- **Investigations never touch the evidence.** `dm_audit` is append-only — no code
+  updates or deletes a row. Status, classification, notes and ownership live in
+  `dm_investigations` / `dm_investigation_notes`, pointing at events by id.
+- **Coverage & health states the gap.** Entra, the WAF and the network are NOT
+  connected, and the page says an empty log is not proof nothing happened. If a
+  source is ever connected, say so there; never imply coverage that does not exist.
+
+## Member and RFID rules that must not be re-broken
+
+- **An import may NEVER attest that a sticker is attached.** The tag is allocated
+  by the server, one row at a time, AFTER the file was written — so nobody filling
+  in that spreadsheet can know which sticker goes on which windshield. Bulk rows
+  land `sticker_state = 'pending'`; the assignment manifest says which tag belongs
+  to which vehicle; somebody confirms afterwards. Do not put a "Sticker Attached"
+  column back in the template.
+- **Three sticker states, not a boolean.** `confirmed` (somebody ticked it at
+  submission), `pending` (an import allocated it), `legacy` (predates the
+  question). A boolean made old rows read as "somebody checked and found none",
+  which is a claim nobody made. Never backfill `legacy` to confirmed.
+- **Approval requires `sticker_state = 'confirmed'`**, enforced in `setComplete`,
+  not in the form. Approving means the member can drive up and wash.
+- **Deleting a MEMBER does not free their tag** unless whoever deleted the record
+  explicitly released it. A sticker already on a windshield must never be issued
+  twice.
+- **A deleted RFID never returns to the pool** — not by re-uploading the file that
+  brought it in, not through Make active, not through `useRfid`.
+
+## Email delivery
+
+- **`sendOnce` (delivery.ts), not `sendMail`, for anything a person waits on.**
+  Bounded retries (3 attempts, growing pause), transient failures only — a refused
+  mailbox is not retried, because the answer will not change. Keyed on
+  resource + kind + email so a second call cannot send a second copy.
+- **Recipients are independent.** One bad address must never stop the reviewer's
+  message; `Promise.allSettled` over one send each, never a combined
+  `toRecipients`.
+- **"Sent" means ACCEPTED BY MICROSOFT.** Delivery, bounces and reads are not
+  observable here. Never word anything as though they were.
+- **The CSC Reviewer is validated on every settings load**, against whether they
+  can actually approve — reported, never refused, so a save cannot silently leave
+  the previous reviewer in place.
+
+## Permissions
+
+- **Page access and action permissions are different questions.** `actions.ts`
+  derives what a role can DO from the rules the guards apply; it is read-only in
+  the UI on purpose. These are not stored per role, so editable checkboxes would
+  broaden access the first time somebody saved one.
+- **Approving belongs to the built-in CSC role and the pinned super admin.** The
+  super admin inherits it from configuration — which is why approvals work with
+  nobody holding CSC. Say that on screen rather than leaving it inferable from the
+  code.
+
 - **A view is STARTED from the eye icon on a person's row in Users**, never
   from the header. There is no picker beside the account menu — the row
   already says who they are, what role they hold and how many pages they see,

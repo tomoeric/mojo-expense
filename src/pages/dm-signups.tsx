@@ -969,6 +969,8 @@ function ViewSignup({
           </div>
         )}
 
+        <Deliveries guid={row.guid} />
+
         <Bucket title="Auto Data" note="Automatically generated · locked">
           <Readout label="Date Created" value={dateIn(row.createdAt, tz)} />
           <Readout label="Time Created" value={timeIn(row.createdAt, tz)} />
@@ -1772,6 +1774,80 @@ function Modal({
         </div>
         {children}
       </div>
+    </div>
+  );
+}
+
+/**
+ * What was attempted about this member, and how it went.
+ *
+ * Beside the record, because this is where somebody asks. The wording
+ * is careful on purpose: Microsoft ACCEPTING a message is the last
+ * fact this application has. Whether it arrived, bounced later, or was
+ * read is not observable from here, and a product that says "sent" and
+ * means "delivered" is how a dealer gets told their email went
+ * through when it did not.
+ */
+function Deliveries({ guid }: { guid: string }) {
+  const q = useQuery({
+    queryKey: ["dm-deliveries", guid],
+    queryFn: async () => {
+      const res = await fetch(`/api/dutch-miller/signups/${guid}/deliveries`);
+      if (!res.ok) throw new Error("Could not load.");
+      return (await res.json()) as {
+        deliveries: {
+          id: string; kind: string; email: string; audience: string;
+          state: "sending" | "sent" | "failed"; attempts: number;
+          firstAt: string; lastAt: string; error: string;
+        }[];
+        retry: { maxAttempts: number };
+      };
+    },
+  });
+
+  const rows = q.data?.deliveries ?? [];
+  if (rows.length === 0) return null;
+  const failed = rows.filter((r) => r.state === "failed");
+
+  return (
+    <div className="rounded-lg border border-border">
+      <p className="border-b border-border px-3 py-2 text-xs font-semibold">
+        Email about this member
+      </p>
+      {failed.length > 0 && (
+        <p className="flex items-start gap-2 border-b border-border bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-400">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            {failed.length} message{failed.length === 1 ? "" : "s"} could not be sent
+            after {q.data?.retry.maxAttempts ?? 3} attempts. The member record and its
+            RFID are unaffected — only the notification failed.
+          </span>
+        </p>
+      )}
+      {rows.map((r) => (
+        <div key={r.id} className="flex items-start justify-between gap-3 border-b border-border px-3 py-1.5 text-xs last:border-b-0">
+          <span className="min-w-0">
+            <span className="block truncate">{r.email}</span>
+            <span className="block text-[11px] text-muted-foreground">
+              {r.kind === "approved" ? "Approval" : "New member"}
+              {r.audience ? ` · ${r.audience}` : ""}
+              {r.attempts > 1 ? ` · ${r.attempts} attempts` : ""}
+              {r.error ? ` · ${r.error}` : ""}
+            </span>
+          </span>
+          <span className={`shrink-0 font-semibold ${
+            r.state === "sent" ? "text-emerald-700 dark:text-emerald-400"
+              : r.state === "failed" ? "text-red-700 dark:text-red-400"
+                : "text-muted-foreground"
+          }`}>
+            {r.state === "sent" ? "accepted" : r.state === "failed" ? "failed" : "sending"}
+          </span>
+        </div>
+      ))}
+      <p className="px-3 py-1.5 text-[11px] text-muted-foreground">
+        &ldquo;Accepted&rdquo; means Microsoft took the message for delivery. Whether it
+        arrived, or was read, is not something this application can see.
+      </p>
     </div>
   );
 }

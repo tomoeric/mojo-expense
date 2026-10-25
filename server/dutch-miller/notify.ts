@@ -1,6 +1,7 @@
 import { button, escapeHtml, isMailConfigured, layout, sendMail } from "../mail.js";
 import { publicOrigin, signupUrl } from "../origin.js";
 import { audit } from "./audit.js";
+import { RETRY, sendOnce } from "./delivery.js";
 import { recipientsFor } from "./settings.js";
 import { DISPLAY_TZ, markNotified, type SignupRow } from "./signups.js";
 import { emitChange } from "../events.js";
@@ -169,15 +170,22 @@ export async function notifySignup(s: SignupRow, origin?: string): Promise<void>
       return;
     }
 
-    // One message each, built for its reader. Also one SEND each: a
-    // single bad address in a combined `toRecipients` can take the
-    // whole thing with it.
+    // One message each, built for its reader. Also one SEND each,
+    // independently: a single bad address in a combined
+    // `toRecipients` can take the whole thing with it, and the
+    // reviewer must still get theirs when a notifier's mailbox is
+    // gone. `sendOnce` adds the bounded retry and makes a second call
+    // for the same message a no-op.
     const results = await Promise.allSettled(to.map((r) => {
       const { subject, html } = signupEmail(s, { origin, as: r.as });
-      return sendMail(r.email, subject, html);
+      return sendOnce({
+        resource: s.guid, kind: "signup", email: r.email, audience: r.as,
+        subject, html,
+      });
     }));
     const failed = results
-      .map((r, i) => (r.status === "rejected" ? to[i]!.email : null))
+      .map((r, i) => (
+        r.status === "rejected" || r.value.state === "failed" ? to[i]!.email : null))
       .filter((a): a is string => a !== null);
 
     if (failed.length < to.length) {
@@ -186,14 +194,14 @@ export async function notifySignup(s: SignupRow, origin?: string): Promise<void>
       // the step as grey. This is what turns it green without a reload.
       emitChange("signups");
       await audit({
-        action: "notify.sent", subject: s.guid, actor: s.submittedBy,
-        detail: `${to.length - failed.length} of ${to.length}`,
+        action: "notify.sent", subject: s.guid, resource: s.guid, actor: s.submittedBy,
+        detail: `${to.length - failed.length} of ${to.length} accepted for delivery`,
       });
     }
     if (failed.length > 0) {
       await audit({
-        action: "notify.failed", subject: s.guid, actor: s.submittedBy,
-        detail: `could not reach ${failed.join(", ")}`,
+        action: "notify.failed", subject: s.guid, resource: s.guid, actor: s.submittedBy,
+        detail: `gave up after ${RETRY.maxAttempts} attempts: ${failed.join(", ")}`,
       });
     }
   } catch (err) {
@@ -289,8 +297,24 @@ export async function notifyApproved(s: SignupRow, origin?: string): Promise<voi
       return;
     }
     const { subject, html } = approvedEmail(s, { origin });
-    await sendMail(to, subject, html);
-    await audit({ action: "approved.sent", subject: s.guid, detail: to });
+    const out = await sendOnce({
+      resource: s.guid, kind: "approved", email: to, audience: "submitter",
+      subject, html,
+    });
+    // Approval is final, so this message is too: `sendOnce` keyed on
+    // the signup means a retry anywhere cannot tell the dealer twice
+    // that their member may now wash.
+    if (out.state === "failed") {
+      await audit({
+        action: "approved.failed", subject: s.guid, resource: s.guid,
+        detail: `${to} · ${out.attempts} attempt(s) · ${out.error}`,
+      });
+      return;
+    }
+    await audit({
+      action: "approved.sent", subject: s.guid, resource: s.guid,
+      detail: out.duplicate ? `${to} (already sent)` : to,
+    });
   } catch (err) {
     console.error("approval email failed:", err);
     await audit({

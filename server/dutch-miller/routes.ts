@@ -40,6 +40,7 @@ import {
 } from "./settings.js";
 import { runReminders } from "./reminders.js";
 import { notifyApproved, notifySignup, signupEmail } from "./notify.js";
+import { RETRY, deliveriesFor } from "./delivery.js";
 import { inviteUser } from "./dealer-auth.js";
 import {
   isMailConfigured, layout, mailAppIsSeparate, mailFrom, mailProblem, sendMail,
@@ -1073,7 +1074,27 @@ dutchMillerRouter.get(
   async (req: Request, res: Response) => {
     const row = await getSignup(String(req.params.guid ?? ""));
     if (!row) { res.status(404).json({ error: "No such signup." }); return; }
-    res.json({ row });
+    res.json({ row, deliveries: await deliveriesFor(row.guid) });
+  },
+);
+
+/**
+ * What was attempted about this member, and how it went.
+ *
+ * Beside the record rather than only in the log, because the question
+ * is always asked here: a grey "email sent" step with no explanation
+ * is the thing somebody rings up about. It reports ACCEPTANCE by
+ * Microsoft, which is the last fact this application has — delivery
+ * and reading are not observable from here, and the page says so.
+ */
+dutchMillerRouter.get(
+  "/signups/:guid/deliveries",
+  requirePage("member-signups"),
+  async (req: Request, res: Response) => {
+    res.json({
+      deliveries: await deliveriesFor(String(req.params.guid ?? "")),
+      retry: RETRY,
+    });
   },
 );
 

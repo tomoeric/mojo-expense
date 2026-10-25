@@ -425,12 +425,21 @@ function RemindersSection() {
                   <option value="AM">AM</option>
                   <option value="PM">PM</option>
                 </select>
+                {/* Named, not assumed. A schedule with no zone beside
+                    it is read as "my time" by whoever is looking, and
+                    half the year that is an hour out. */}
                 <span className="ml-1 text-xs text-muted-foreground">
-                  {data.data?.timezone.replace("America/", "").replace("_", " ")}
+                  {tzLabel(data.data?.timezone ?? "America/Chicago")}
                 </span>
               </div>
             </div>
           </div>
+
+          <p className="text-xs text-muted-foreground">
+            Times are {tzLabel(data.data?.timezone ?? "America/Chicago")}, and follow
+            daylight saving — 9:00 AM stays 9:00 AM in the office through the
+            March and November changes.
+          </p>
 
           <div>
             <span className="mb-1 block text-xs text-muted-foreground">
@@ -537,4 +546,22 @@ function ReviewerStatus({ check }: { check?: ReviewerCheck }) {
       </ul>
     </div>
   );
+}
+
+/**
+ * "Central Time (CDT)" rather than "Chicago".
+ *
+ * The abbreviation is read from the browser against the schedule's own
+ * zone, so it says CST or CDT according to the date rather than
+ * whichever one somebody typed into a string once.
+ */
+function tzLabel(zone: string): string {
+  try {
+    const abbr = new Intl.DateTimeFormat("en-US", {
+      timeZone: zone, timeZoneName: "short",
+    }).formatToParts(new Date()).find((p) => p.type === "timeZoneName")?.value ?? "";
+    return abbr ? `${abbr} (${zone.replace("America/", "").replace("_", " ")})` : zone;
+  } catch {
+    return zone;
+  }
 }
