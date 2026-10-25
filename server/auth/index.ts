@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import * as oidc from "openid-client";
 import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
 import {
@@ -10,7 +11,7 @@ import {
 } from "./session.js";
 import { isDbConfigured } from "../db.js";
 import { noteVisit, whileAway } from "../visits.js";
-import { VIEW_AS_COOKIE } from "./view-as.js";
+import { VIEW_AS_COOKIE, formatViewAs } from "./view-as.js";
 import { listCredentials } from "../emburse/credentials.js";
 import { allowList, isAllowed, matchesList, parseEmailList } from "./allow.js";
 import { isSuperEmail } from "../dutch-miller/users.js";
@@ -342,13 +343,16 @@ export function requireApp(app: AppKey) {
 function logEvent(
   req: Request,
   action: "signin.ok" | "session.ended" | "viewas.started" | "viewas.ended",
-  e: { subject?: string; actor?: string; detail?: string },
+  e: { subject?: string; actor?: string; detail?: string; sid?: string },
 ): void {
   void import("../dutch-miller/audit.js").then(({ audit, requestMeta }) => audit({
     action,
     subject: e.subject,
     actor: e.actor ?? e.subject,
     actorReal: req.viewingAs?.real.email ?? req.user?.email ?? "",
+    // The view-as session id, for the pair of events that bracket one
+    // view. Empty for everything else.
+    resource: e.sid ?? "",
     detail: e.detail,
     ...requestMeta(req as never),
   })).catch(() => {});
@@ -397,9 +401,13 @@ authRouter.post("/auth/view-as", (req: Request, res: Response) => {
     && email === real.email.trim().toLowerCase());
   if (stopping) {
     if (req.viewingAs) {
+      // The SAME session id the start carried, so the two pair up
+      // without anybody having to guess which end belongs to which
+      // start when one person is viewed twice in an afternoon.
       void logEvent(req, "viewas.ended", {
         subject: req.viewingAs.viewed,
         actor: real?.email,
+        sid: req.viewingAs.sid,
         detail: `${real?.email ?? "somebody"} stopped viewing as ${req.viewingAs.viewed}`,
       });
     }
@@ -409,7 +417,8 @@ authRouter.post("/auth/view-as", (req: Request, res: Response) => {
   }
   // Session-length, not remembered: coming back tomorrow as somebody else by
   // accident is a worse failure than having to press the button again.
-  res.cookie(VIEW_AS_COOKIE, email, {
+  const sid = randomBytes(12).toString("hex");
+  res.cookie(VIEW_AS_COOKIE, formatViewAs(email, sid), {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
@@ -421,6 +430,7 @@ authRouter.post("/auth/view-as", (req: Request, res: Response) => {
   void logEvent(req, "viewas.started", {
     subject: email,
     actor: real?.email,
+    sid,
     detail: `${real?.email ?? "an administrator"} started viewing as ${email}`,
   });
   res.json({ viewingAs: { real: real?.email ?? null, viewed: email } });

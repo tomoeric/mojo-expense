@@ -50,12 +50,37 @@ function mayView(user: SessionUser): boolean {
 
 export const VIEW_AS_COOKIE = "view_as";
 
+/**
+ * The cookie carries the viewed address AND a session id.
+ *
+ * The id is what lets the start and the end of one view be paired
+ * afterwards. Without it, two views of the same person in one
+ * afternoon are indistinguishable in the trail, and the only way to
+ * report a duration is to guess which end belongs to which start —
+ * which is exactly the kind of invention an audit view must not do.
+ *
+ * Older cookies hold a bare address and still work: they simply have
+ * no id, and the session reads as one whose end was never recorded.
+ */
+export type ViewAs = { email: string; sid: string };
+
+export function parseViewAs(raw: string | undefined): ViewAs | null {
+  const value = (raw ?? "").trim().toLowerCase();
+  if (!value) return null;
+  const [email = "", sid = ""] = value.split("|");
+  if (!email) return null;
+  return { email, sid: /^[a-z0-9]{8,40}$/.test(sid) ? sid : "" };
+}
+
+export const formatViewAs = (email: string, sid: string): string =>
+  `${email.trim().toLowerCase()}|${sid}`;
+
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request {
       /** Set only while an admin is looking through somebody else's eyes. */
-      viewingAs?: { real: SessionUser; viewed: string };
+      viewingAs?: { real: SessionUser; viewed: string; sid: string };
     }
   }
 }
@@ -99,8 +124,9 @@ const CONTROLS = /^\/api\/(auth\/view-as|export-run|reviewer-imports)$/;
 const READS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 export function viewAsMiddleware(req: Request, res: Response, next: NextFunction): void {
-  const wanted = (req.cookies?.[VIEW_AS_COOKIE] as string | undefined)?.trim().toLowerCase();
-  if (!wanted) return next();
+  const parsed = parseViewAs(req.cookies?.[VIEW_AS_COOKIE] as string | undefined);
+  if (!parsed) return next();
+  const wanted = parsed.email;
 
   const real = req.user;
   // No identity, or not an admin: the cookie means nothing. Not an error —
@@ -114,7 +140,7 @@ export function viewAsMiddleware(req: Request, res: Response, next: NextFunction
     return next();
   }
 
-  req.viewingAs = { real, viewed: wanted };
+  req.viewingAs = { real, viewed: wanted, sid: parsed.sid };
   // Everything downstream reads req.user, so this is the whole swap. Name and
   // id come along so a page that greets somebody greets the right person.
   req.user = { ...real, email: wanted, name: wanted, id: `view-as:${wanted}` };

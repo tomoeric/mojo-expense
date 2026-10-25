@@ -250,8 +250,8 @@ const shapeEntry = (r: DbEntry): AuditEntry => {
 export type EventQuery = {
   /** One of the three views. Omitted searches everything. */
   category?: EventCategory | "all";
-  /** Narrower than a category — the Sign-ins view, or a triage feed. */
-  preset?: "signins" | "suspicious";
+  /** Narrower than a category — Sign-ins, the triage feed, or view-as. */
+  preset?: "signins" | "suspicious" | "viewas";
   /** Matched against subject, actor and the real actor. */
   who?: string;
   ip?: string;
@@ -283,11 +283,27 @@ export async function listEvents(q: EventQuery = {}): Promise<{
 
   const actions = q.preset === "signins" ? SIGNIN_ACTIONS
     : q.preset === "suspicious" ? SUSPICIOUS
-      : q.category && q.category !== "all" ? actionsIn(q.category)
-        : null;
+      : q.preset === "viewas" ? VIEW_AS_ACTIONS
+        : q.category && q.category !== "all" ? actionsIn(q.category)
+          : null;
   if (actions) {
     args.push(actions);
     where.push(`action = ANY($${args.length}::text[])`);
+  }
+  /*
+   * View-as START and END are session metadata, and they live in
+   * their own view. Kept out of every other one — and out of its
+   * counts and its export — rather than filtered in the browser,
+   * because a total that disagrees with the rows beneath it is worse
+   * than either number alone.
+   *
+   * Only the two bracketing events. What an administrator DID inside
+   * a view is ordinary activity, keeps both identities, and stays
+   * where somebody looking for it will find it.
+   */
+  if (q.preset !== "viewas") {
+    args.push(VIEW_AS_ACTIONS);
+    where.push(`action <> ALL($${args.length}::text[])`);
   }
   if (q.action) {
     args.push(q.action);
@@ -395,6 +411,98 @@ export async function securitySummary(days = 30): Promise<{
     })),
     total: Number(total.rows[0]?.n ?? 0),
   };
+}
+
+/**
+ * View-as sessions: one row per view, start paired with its end.
+ *
+ * Its own view because the brief is right that it reads as a
+ * different KIND of thing. Starting and stopping a view is session
+ * metadata about an administrator; what they did while inside one is
+ * ordinary activity, stays attributed to both identities, and stays
+ * in the general views where somebody looking for it will find it.
+ * Only the two bracketing events move here.
+ *
+ * Paired on the SESSION ID both events carry, never on "the next end
+ * for the same pair of addresses" — that guess is wrong the moment
+ * one person is viewed twice in an afternoon, and a duration computed
+ * from it would be fiction. A start with no matching end is reported
+ * as exactly that. Nothing here invents an end time.
+ */
+export const VIEW_AS_ACTIONS: AuditAction[] = ["viewas.started", "viewas.ended"];
+
+export type ViewAsSession = {
+  /** The session id both events carry. Empty for pre-id records. */
+  sid: string;
+  /** The administrator who was really at the keyboard. */
+  administrator: string;
+  /** Whose app they were looking at. */
+  viewed: string;
+  startedAt: string;
+  /** Null when no end was ever recorded. NOT a guess. */
+  endedAt: string | null;
+  /** Seconds, only when both ends are real. */
+  durationSeconds: number | null;
+  ip: string;
+  userAgent: string;
+  startEventId: string;
+  endEventId: string | null;
+};
+
+export async function listViewAsSessions(opts: {
+  who?: string;
+  days?: number;
+  limit?: number;
+} = {}): Promise<ViewAsSession[]> {
+  await ensure();
+  const where: string[] = ["action = ANY($1::text[])"];
+  const args: unknown[] = [VIEW_AS_ACTIONS];
+  const days = Math.min(Math.max(Number(opts.days) || 90, 1), 3650);
+  args.push(String(days));
+  where.push(`at > now() - ($${args.length} || ' days')::interval`);
+  // Either account: the administrator or the person being viewed.
+  if (opts.who?.trim()) {
+    args.push(opts.who.trim().toLowerCase());
+    where.push(`(subject = $${args.length} OR actor = $${args.length}
+                 OR actor_real = $${args.length})`);
+  }
+  const { rows } = await db().query<DbEntry>(
+    `SELECT ${COLS} FROM dm_audit WHERE ${where.join(" AND ")}
+      ORDER BY at DESC, id DESC LIMIT 2000`, args);
+
+  const limit = Math.min(Math.max(Number(opts.limit) || 200, 1), 1000);
+  const ends = new Map<string, DbEntry>();
+  for (const r of rows) {
+    if (r.action === "viewas.ended" && r.resource) ends.set(r.resource, r);
+  }
+
+  const out: ViewAsSession[] = [];
+  for (const r of rows) {
+    if (r.action !== "viewas.started") continue;
+    const end = r.resource ? ends.get(r.resource) : undefined;
+    const startedAt = (r.occurred_at ?? r.at);
+    const endedAt = end ? (end.occurred_at ?? end.at) : null;
+    out.push({
+      sid: r.resource,
+      administrator: r.actor_real || r.actor,
+      viewed: r.subject,
+      startedAt: startedAt.toISOString(),
+      endedAt: endedAt ? endedAt.toISOString() : null,
+      // Only when both ends are real events. A view left open, or one
+      // ended by a cookie expiring, has no end — and saying so is the
+      // honest answer, not a number worked out from when the trail
+      // happens to stop.
+      durationSeconds: endedAt
+        ? Math.max(0, Math.round((endedAt.getTime() - startedAt.getTime()) / 1000))
+        : null,
+      ip: r.ip,
+      userAgent: r.user_agent,
+      startEventId: String(r.id),
+      endEventId: end ? String(end.id) : null,
+    });
+    if (out.length >= limit) break;
+  }
+  return out;
 }
 
 /** How far back the trail actually goes, and how much of it there is. */

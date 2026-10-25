@@ -106,7 +106,7 @@ export function DmSettingsPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-lg font-semibold">Email Settings</h1>
+        <h1 className="text-lg font-semibold">Email &amp; Notifications</h1>
         <p className="text-sm text-muted-foreground">
           What Dutch Miller sends, and when. Administrators only.
         </p>
@@ -241,7 +241,10 @@ export function DmSettingsPage() {
       <p className="text-xs text-muted-foreground">
         Notifications are sent for member signups only, at the moment one is submitted.
         A failed send never fails the signup — the member is saved and the RFID claimed
-        first — and every attempt is recorded in the audit trail on the Users page.
+        first — and every attempt is recorded in{" "}
+        <a href="#/admin/audit" className="font-medium text-sky-600 hover:underline">
+          Audit History
+        </a>.
       </p>
     </div>
   );

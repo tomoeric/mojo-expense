@@ -63,31 +63,40 @@ type Access = {
  * were doing, because setting somebody's role is a thirty-second errand
  * and losing your place to run it is the annoying part.
  */
-const ADMIN_PAGE: PageDef = {
-  key: "admin",
-  label: "Administration",
-  blurb: "Who can use Dutch Miller, what they can do, and what it has recorded.",
-  children: [
-    { key: "users", label: "Users & Access" },
-    { key: "roles", label: "Roles & Permissions" },
-    { key: "security", label: "Security" },
-    { key: "email", label: "Email & Notifications" },
-    { key: "audit", label: "Audit History" },
-  ],
-};
+/**
+ * The administrative destinations, each reached DIRECTLY.
+ *
+ * They sit under the account icon rather than in the rail, because
+ * the rail is for the pages people come here to work in. There is no
+ * Administration entry and no landing page in front of them: one
+ * click from the menu opens the actual page, with its own title.
+ *
+ * Each is still a real route — `#/admin/<key>` — so the back button,
+ * a refresh and a pasted link all behave, and links bookmarked when
+ * these were tabs still land in the right place.
+ */
+const ADMIN_PAGES: { key: string; label: string; superOnly?: boolean }[] = [
+  { key: "users", label: "Users & Access" },
+  { key: "roles", label: "Roles & Permissions", superOnly: true },
+  { key: "security", label: "Security" },
+  { key: "email", label: "Email & Notifications" },
+  { key: "audit", label: "Audit History" },
+];
 
 /**
- * Which administration destinations this person may open.
+ * Which of them this person may open.
  *
- * Filtered here AND enforced on every route behind them. Sharing one
- * parent does not widen anything: Roles is still the super
- * administrator's alone, and the server refuses it regardless of what
- * this returns.
+ * Filtered here AND enforced on every route behind them: this decides
+ * what the menu offers, never what the server allows.
  */
-const adminTabs = (role: "super" | "admin" | "user") =>
-  ADMIN_PAGE.children.filter((c) => c.key !== "roles" || role === "super");
+const adminFor = (role: "super" | "admin" | "user") =>
+  ADMIN_PAGES.filter((p) => !p.superOnly || role === "super");
 
-const MENU_PAGES: PageDef[] = [ADMIN_PAGE];
+/** One routable page holding all of them, so `#/admin/<key>` works. */
+const MENU_PAGES: PageDef[] = [{
+  key: "admin", label: "Administration", blurb: "",
+  children: ADMIN_PAGES.map((p) => ({ key: p.key, label: p.label })),
+}];
 
 /**
  * `#/<page>` or `#/<page>/<sub-page>`.
@@ -161,10 +170,10 @@ export function DutchMillerApp({
   const rail: PageDef[] = (access?.allPages ?? [])
     .filter((p) => dmAdmin || (access?.pages ?? []).includes(p.key));
   // The menu pages are routable without being in the rail.
-  const tabs = adminTabs(access?.role ?? "user");
+  const admin = adminFor(access?.role ?? "user");
   const [route, go] = useRoute([
     ...rail,
-    ...(dmAdmin ? [{ ...ADMIN_PAGE, children: tabs }] : []),
+    ...(dmAdmin ? [{ ...MENU_PAGES[0]!, children: admin }] : []),
   ]);
   const [users, setUsers] = useState(false);
   // Audit History, filtered to one account. Set by the history icon on
@@ -213,7 +222,8 @@ export function DutchMillerApp({
                 isAdmin={isAdmin}
                 product="dutch-miller"
                 dmAdmin={dmAdmin}
-                onDmAdmin={() => go("admin", "users")}
+                dmDestinations={admin}
+                onDmGo={(key) => { setHistoryFor(""); go("admin", key); }}
               />
             )}
           </div>
@@ -282,33 +292,10 @@ export function DutchMillerApp({
           )}
           {access && route.page === "rfid-instructions" && <DmRfidInstructionsPage />}
           {access && route.page === "rfid-review" && <DmRfidPage />}
+          {/* Straight to the page. No heading above it, no tab row —
+              each destination carries its own single title. */}
           {access && route.page === "admin" && dmAdmin && (
-            <div className="space-y-4">
-              <div>
-                <h1 className="text-lg font-semibold">Administration</h1>
-                <p className="text-sm text-muted-foreground">{ADMIN_PAGE.blurb}</p>
-              </div>
-              {/* Only the destinations this person may open — and every
-                  route behind them refuses independently, so sharing one
-                  parent widens nothing. */}
-              <div role="tablist" className="flex flex-wrap items-center gap-1 border-b border-border">
-                {tabs.map((t) => (
-                  <button
-                    key={t.key}
-                    role="tab"
-                    type="button"
-                    aria-selected={route.sub === t.key}
-                    onClick={() => { setHistoryFor(""); go("admin", t.key); }}
-                    className={`-mb-px border-b-2 px-3 py-2 text-sm transition-colors ${
-                      route.sub === t.key
-                        ? "border-foreground font-semibold"
-                        : "border-transparent text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    {t.label}
-                  </button>
-                ))}
-              </div>
+            <>
               {route.sub === "users" && (
                 <DmPeopleDialog
                   embedded
@@ -323,7 +310,7 @@ export function DutchMillerApp({
               {route.sub === "security" && <DmSecurityPage />}
               {route.sub === "email" && <DmSettingsPage />}
               {route.sub === "audit" && <DmAuditPage subject={historyFor} />}
-            </div>
+            </>
           )}
         </div>
       </div>

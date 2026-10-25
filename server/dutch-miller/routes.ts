@@ -18,7 +18,7 @@ import {
 } from "./users.js";
 import {
   LOCKOUT, audit, collectionHealth, listAudit, listEvents, listSecurityLog,
-  requestMeta, securitySummary,
+  listViewAsSessions, requestMeta, securitySummary,
   type AuditAction, type EventCategory, type Outcome, type Severity,
 } from "./audit.js";
 import { EVENT_META, OUTCOMES, SEVERITIES } from "./event-catalog.js";
@@ -706,7 +706,7 @@ const asCategory = (v: unknown): EventCategory | "all" | undefined => {
 dutchMillerRouter.get("/event-log", requireDmAdmin, async (req: Request, res: Response) => {
   const q = req.query;
   const preset = q.preset === "signins" || q.preset === "suspicious"
-    ? q.preset : undefined;
+    || q.preset === "viewas" ? q.preset : undefined;
   const outcome = (OUTCOMES as readonly string[]).includes(String(q.outcome ?? ""))
     ? (String(q.outcome) as Outcome) : undefined;
   const minSeverity = (SEVERITIES as readonly string[]).includes(String(q.minSeverity ?? ""))
@@ -753,6 +753,27 @@ dutchMillerRouter.get("/audit", requireDmAdmin, async (req: Request, res: Respon
     }),
   });
 });
+
+/**
+ * View-as sessions, start paired with end.
+ *
+ * Its own read because it answers a different question from the event
+ * list: not "what happened" but "who was wearing whose identity, and
+ * for how long". Paired on the session id both events carry, so two
+ * views of the same person in one afternoon do not get muddled, and a
+ * start with no end is reported as exactly that rather than given an
+ * invented one.
+ */
+dutchMillerRouter.get("/view-as-sessions", requireDmAdmin,
+  async (req: Request, res: Response) => {
+    res.json({
+      sessions: await listViewAsSessions({
+        who: String(req.query.who ?? ""),
+        days: Number(req.query.days ?? 90),
+        limit: Number(req.query.limit ?? 200),
+      }),
+    });
+  });
 
 /* ------------------------------------------------------------------ *
  * Investigations

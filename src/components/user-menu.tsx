@@ -1,9 +1,17 @@
 import { useState } from "react";
 import {
-  LogOut, UserRound, SlidersHorizontal, KeyRound, LayoutGrid, Check, ChevronRight,
-  Crown, Shield, Users,
+  Crown, KeyRound, LogOut, ScrollText, Shield, SlidersHorizontal, UserRound, Users,
 } from "lucide-react";
 import { APP_LABEL, type AppKey, type SessionUser } from "@/lib/api";
+
+/** One per administrative destination, so the menu scans at a glance. */
+const DM_ICON: Record<string, React.ReactNode> = {
+  users: <Users className="h-4 w-4" />,
+  roles: <Crown className="h-4 w-4" />,
+  security: <Shield className="h-4 w-4" />,
+  email: <SlidersHorizontal className="h-4 w-4" />,
+  audit: <ScrollText className="h-4 w-4" />,
+};
 
 /** Signed-in identity + sign out, in the dark header bar. */
 export function UserMenu({
@@ -11,7 +19,8 @@ export function UserMenu({
   isAdmin,
   product = "emburse",
   dmAdmin = false,
-  onDmAdmin,
+  dmDestinations = [],
+  onDmGo,
 }: {
   user: SessionUser;
   isAdmin: boolean;
@@ -24,8 +33,15 @@ export function UserMenu({
   product?: AppKey;
   /** Administers Dutch Miller — a separate question from Emburse's `isAdmin`. */
   dmAdmin?: boolean;
-  /** Opens the Administration workspace. Absent hides the item. */
-  onDmAdmin?: () => void;
+  /**
+   * The administrative pages this person may open, in menu order.
+   *
+   * Built from what the server already said they hold, so the menu
+   * never offers a door into a 403 — and listing one here grants
+   * nothing: every route behind them refuses independently.
+   */
+  dmDestinations?: { key: string; label: string }[];
+  onDmGo?: (key: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [appsOpen, setAppsOpen] = useState(false);
@@ -86,24 +102,28 @@ export function UserMenu({
                 )}
               </>
             )}
-            {/* ONE destination, not four. Administration is a workspace
-                with its own tabs — Users & Access, Roles & Permissions,
-                Security, Email & Notifications, Audit History — and each
-                of those routes still refuses independently, so sharing a
-                parent widens nothing. */}
-            {product === "dutch-miller" && dmAdmin && onDmAdmin && (
-              <button
-                type="button"
-                onClick={() => { setOpen(false); onDmAdmin(); }}
-                className="flex w-full items-center gap-2 border-b border-border px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted"
-              >
-                <SlidersHorizontal className="h-4 w-4" />
-                Administration
-              </button>
-            )}
+            {/* Each destination, directly. No Administration entry and
+                no intermediate page: one click opens the actual page.
+                The list comes from the server's answer about this
+                person, so it never offers a door into a 403, and every
+                route behind it still refuses on its own. */}
+            {product === "dutch-miller" && dmAdmin && onDmGo
+              && dmDestinations.map((d) => (
+                <button
+                  key={d.key}
+                  type="button"
+                  onClick={() => { setOpen(false); onDmGo(d.key); }}
+                  className="flex w-full items-center gap-2 border-b border-border px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted"
+                >
+                  {DM_ICON[d.key] ?? <SlidersHorizontal className="h-4 w-4" />}
+                  {d.label}
+                </button>
+              ))}
+            {/* The separator the brief asks for: sign-out is a
+                different kind of thing from the destinations above. */}
             <a
               href="/api/logout"
-              className="flex items-center gap-2 border-t border-border px-3 py-2.5 text-sm transition-colors hover:bg-muted"
+              className="flex items-center gap-2 border-t-2 border-border px-3 py-2.5 text-sm transition-colors hover:bg-muted"
             >
               <LogOut className="h-4 w-4" />
               Sign out

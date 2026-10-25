@@ -1,7 +1,7 @@
 import { Fragment, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Eye, Loader2, Mail, Pencil, Power, ScrollText, Search, Send, ShieldCheck,
+  ChevronDown, Eye, Loader2, Mail, Pencil, Power, ScrollText, Search, Send, ShieldCheck,
   Trash2, UserRound, X,
 } from "lucide-react";
 
@@ -111,7 +111,7 @@ export function DmPeopleDialog({
   const groups = useMemo(() => {
     const q = filter.trim().toLowerCase();
     const matches = (p: Person) =>
-      (!onlyNoRole || !p.user)
+      (!onlyNoRole || (!p.user && !p.pinnedSuper))
       && (q === "" || p.email.includes(q) || p.name.toLowerCase().includes(q)
         || (p.business ?? "").toLowerCase().includes(q));
     const all = data.data?.people ?? [];
@@ -119,7 +119,17 @@ export function DmPeopleDialog({
       microsoft: all.filter((p) => p.source === "microsoft" && matches(p)),
       invited: all.filter((p) => p.source === "invited" && matches(p)),
       total: all.filter(matches).length,
-      noRole: all.filter((p) => !p.user).length,
+      /*
+       * "No role yet" means somebody who cannot do anything.
+       *
+       * The pinned super administrator has no ROW, so they used to be
+       * counted here — the one account that holds everything sitting
+       * in a warning list of people waiting for access. Their lack of
+       * a row is still true and still shown on their line; it is not
+       * a problem anybody should be asked to fix, and assigning them
+       * a role to silence it would narrow the owner's own access.
+       */
+      noRole: all.filter((p) => !p.user && !p.pinnedSuper).length,
     };
   }, [data.data, filter, onlyNoRole]);
 
@@ -153,14 +163,6 @@ export function DmPeopleDialog({
             >
               <Mail className="h-3.5 w-3.5" />
               Test email
-            </button>
-            <button
-              type="button"
-              onClick={() => onHistory("")}
-              className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs hover:bg-muted"
-            >
-              <ScrollText className="h-3.5 w-3.5" />
-              Audit History
             </button>
             <button
               type="button"
@@ -312,103 +314,38 @@ export function DmPeopleDialog({
                 )}
               </div>
 
-              <div className="flex shrink-0 items-center gap-1">
-                {/* A pinned super administrator is set in configuration,
-                    not here — the server refuses every one of these for
-                    them, and a button that always fails is worse than none. */}
-                {!p.pinnedSuper && (
-                  <button
-                    type="button"
-                    title={p.user ? "Change role" : "Give access"}
-                    onClick={() => setEditing(p)}
-                    className="rounded-md border border-border p-1.5 text-muted-foreground hover:bg-muted"
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                  </button>
-                )}
-                {/* Only a super admin may view as, and only somebody who
-                    actually has an account to view. */}
-                {iAmSuper && !p.pinnedSuper && p.user && p.user.status === "active" && (
-                  <button
-                    type="button"
-                    title={`View Dutch Miller as ${p.name}`}
-                    onClick={() => onViewAs(p.email)}
-                    className="rounded-md border border-border p-1.5 text-muted-foreground hover:bg-muted"
-                  >
-                    <Eye className="h-3.5 w-3.5" />
-                  </button>
-                )}
-                {p.user && !p.pinnedSuper && (
-                  <button
-                    type="button"
-                    disabled={act.isPending}
-                    title={p.user.status === "disabled"
-                      ? "Restore access — the role and history are already here"
-                      : "Disable access — keeps the account, its role and its history"}
-                    onClick={() => act.mutate({
-                      url: `/api/dutch-miller/users/${encodeURIComponent(p.email)}/enabled`,
-                      body: { enabled: p.user!.status === "disabled" },
-                    })}
-                    className={`rounded-md border p-1.5 hover:bg-muted disabled:opacity-50 ${
-                      p.user.status === "disabled"
-                        ? "border-red-500/50 text-red-600"
-                        : "border-border text-muted-foreground"
-                    }`}
-                  >
-                    <Power className="h-3.5 w-3.5" />
-                  </button>
-                )}
-                {p.user?.authMethod === "link" && p.user.status === "invited" && (
-                  <button
-                    type="button"
-                    disabled={act.isPending || mailOff}
-                    title="Send the invitation again"
-                    onClick={() => act.mutate(
-                      { url: `/api/dutch-miller/users/${encodeURIComponent(p.email)}/invite` },
-                      { onSuccess: () => setNote(`Invitation re-sent to ${p.email}.`) })}
-                    className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50"
-                  >
-                    Resend
-                  </button>
-                )}
-                <button
-                  type="button"
-                  title="History for this account"
-                  onClick={() => onHistory(p.email)}
-                  className="rounded-md border border-border p-1.5 text-muted-foreground hover:bg-muted"
-                >
-                  <ScrollText className="h-3.5 w-3.5" />
-                </button>
-                {/* Removing is not the same as switching off, and the
-                    difference is worth the extra click: switching off keeps
-                    the record and its history, this does not. */}
-                {p.user && !p.pinnedSuper && (
-                  <button
-                    type="button"
-                    disabled={act.isPending}
-                    title="Remove"
-                    onClick={() => {
-                      if (window.confirm(
-                        `Remove ${p.email}?\n\n`
-                        + "REMOVE deletes the account row: their role, their invitation "
-                        + "and their details go. Their sessions end immediately.\n\n"
-                        + "DISABLE ACCESS keeps all of that and simply refuses them, "
-                        + "which is what you want if they may come back.\n\n"
-                        + "Either way the audit history stays — every event they were "
-                        + "part of, and every member record they submitted, is "
-                        + "untouched by this.")) {
-                        act.mutate({
-                          url: `/api/dutch-miller/users/${encodeURIComponent(p.email)}`,
-                          method: "DELETE",
-                        });
-                      }
-                    }}
-                    className="rounded-md border border-border p-1.5 text-muted-foreground hover:bg-muted disabled:opacity-40"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                )}
-              </div>
+              <ManageMenu
+                person={p}
+                iAmSuper={iAmSuper}
+                busy={act.isPending}
+                mailOff={Boolean(mailOff)}
+                onEdit={() => setEditing(p)}
+                onViewAs={() => onViewAs(p.email)}
+                onHistory={() => onHistory(p.email)}
+                onToggle={() => act.mutate({
+                  url: `/api/dutch-miller/users/${encodeURIComponent(p.email)}/enabled`,
+                  body: { enabled: p.user!.status === "disabled" },
+                })}
+                onResend={() => act.mutate(
+                  { url: `/api/dutch-miller/users/${encodeURIComponent(p.email)}/invite` },
+                  { onSuccess: () => setNote(`Invitation re-sent to ${p.email}.`) })}
+                onRemove={() => {
+                  if (window.confirm(
+                    `Remove ${p.email}?\n\n`
+                    + "REMOVE deletes the account row: their role, their invitation "
+                    + "and their details go. Their sessions end immediately.\n\n"
+                    + "DISABLE ACCESS keeps all of that and simply refuses them, "
+                    + "which is what you want if they may come back.\n\n"
+                    + "Either way the audit history stays — every event they were "
+                    + "part of, and every member record they submitted, is "
+                    + "untouched by this.")) {
+                    act.mutate({
+                      url: `/api/dutch-miller/users/${encodeURIComponent(p.email)}`,
+                      method: "DELETE",
+                    });
+                  }
+                }}
+              />
             </div>
             {editing?.email === p.email && (
               <AssignRole
@@ -662,5 +599,165 @@ function InviteRow({
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * Everything you can do to one person, behind one labelled control.
+ *
+ * It used to be a row of five unlabelled icons, which is a guessing
+ * game for actions that are not alike: changing somebody's role, and
+ * deleting their account, should not be two similar grey squares a
+ * few pixels apart.
+ *
+ * Grouped rather than merely labelled, for the same reason. Role and
+ * history are routine; wearing somebody's identity is not; disabling
+ * and removing are the two that end access, and removing is the one
+ * that cannot be undone, so it is last, separated, and red.
+ *
+ * An action that cannot apply is ABSENT, never greyed: the pinned
+ * super administrator is set in configuration and the server refuses
+ * every one of these for them, so offering a button that always fails
+ * only teaches people to distrust buttons.
+ */
+function ManageMenu({
+  person, iAmSuper, busy, mailOff,
+  onEdit, onViewAs, onHistory, onToggle, onResend, onRemove,
+}: {
+  person: Person;
+  iAmSuper: boolean;
+  busy: boolean;
+  mailOff: boolean;
+  onEdit: () => void;
+  onViewAs: () => void;
+  onHistory: () => void;
+  onToggle: () => void;
+  onResend: () => void;
+  onRemove: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const p = person;
+  const pick = (fn: () => void) => () => { setOpen(false); fn(); };
+
+  return (
+    <div className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-xs hover:bg-muted"
+      >
+        Manage
+        <ChevronDown className="h-3 w-3" />
+      </button>
+
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div
+            role="menu"
+            className="absolute right-0 z-20 mt-1 w-60 overflow-hidden rounded-lg border border-border bg-card shadow-lg"
+          >
+            {!p.pinnedSuper && (
+              <Item icon={<Pencil className="h-3.5 w-3.5" />} onClick={pick(onEdit)}>
+                {p.user ? "Change role" : "Give access"}
+              </Item>
+            )}
+            <Item icon={<ScrollText className="h-3.5 w-3.5" />} onClick={pick(onHistory)}>
+              Account history
+            </Item>
+
+            {/* Wearing somebody's identity is not a routine errand, so
+                it is kept apart from the two above it. */}
+            {iAmSuper && !p.pinnedSuper && p.user && p.user.status === "active" && (
+              <Item
+                icon={<Eye className="h-3.5 w-3.5" />}
+                onClick={pick(onViewAs)}
+                note="See exactly what they see. Nothing can be changed while viewing."
+                divide
+              >
+                View as {p.name.split(" ")[0] ?? "them"}
+              </Item>
+            )}
+
+            {p.user?.authMethod === "link" && p.user.status === "invited" && (
+              <Item
+                icon={<Send className="h-3.5 w-3.5" />}
+                onClick={pick(onResend)}
+                disabled={busy || mailOff}
+                divide
+              >
+                Resend invitation
+              </Item>
+            )}
+
+            {p.user && !p.pinnedSuper && (
+              <Item
+                icon={<Power className="h-3.5 w-3.5" />}
+                onClick={pick(onToggle)}
+                disabled={busy}
+                note={p.user.status === "disabled"
+                  ? "Their role and history are already here."
+                  : "Keeps the account, its role and its history."}
+                divide
+              >
+                {p.user.status === "disabled" ? "Restore access" : "Disable access"}
+              </Item>
+            )}
+
+            {p.user && !p.pinnedSuper && (
+              <Item
+                icon={<Trash2 className="h-3.5 w-3.5" />}
+                onClick={pick(onRemove)}
+                disabled={busy}
+                note="Deletes the account row. The audit history stays."
+                danger
+                divide
+              >
+                Remove
+              </Item>
+            )}
+
+            {p.pinnedSuper && (
+              <p className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
+                Super Admin, pinned in configuration. Their access is not assigned
+                here and cannot be changed from this app.
+              </p>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function Item({
+  icon, children, onClick, disabled, note, danger, divide,
+}: {
+  icon: React.ReactNode;
+  children: React.ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+  note?: string;
+  danger?: boolean;
+  divide?: boolean;
+}) {
+  return (
+    <button
+      role="menuitem"
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={`flex w-full items-start gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-muted disabled:opacity-40 ${
+        divide ? "border-t border-border" : ""
+      } ${danger ? "text-red-600" : ""}`}
+    >
+      <span className="mt-0.5 shrink-0">{icon}</span>
+      <span className="min-w-0">
+        {children}
+        {note && <span className="mt-0.5 block text-[11px] text-muted-foreground">{note}</span>}
+      </span>
+    </button>
   );
 }
