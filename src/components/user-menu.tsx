@@ -9,30 +9,12 @@ import { APP_LABEL, type AppKey, type SessionUser } from "@/lib/api";
 export function UserMenu({
   user,
   isAdmin,
-  apps = [],
-  app = null,
-  onSwitchApp,
-  viewingAs = false,
   product = "emburse",
   dmAdmin = false,
-  onDmUsers,
-  onDmRoles,
-  onDmSecurity,
-  onDmSettings,
+  onDmAdmin,
 }: {
   user: SessionUser;
   isAdmin: boolean;
-  /**
-   * Every product this person may use. One or none means no switcher, so
-   * only somebody holding BOTH Dutch Miller and Emburse is offered the
-   * App item — for anybody else it would be a menu entry with a single
-   * choice in it, which is furniture.
-   */
-  apps?: AppKey[];
-  app?: AppKey | null;
-  onSwitchApp?: (next: AppKey) => void;
-  /** A view is on, so this menu is wearing somebody else's name. */
-  viewingAs?: boolean;
   /**
    * Which product's items to offer below the switcher. Identity, the
    * switcher and sign-out are shared; everything else is one app's own, and
@@ -42,25 +24,11 @@ export function UserMenu({
   product?: AppKey;
   /** Administers Dutch Miller — a separate question from Emburse's `isAdmin`. */
   dmAdmin?: boolean;
-  /** Opens the Users dialog over whatever is on screen. */
-  onDmUsers?: () => void;
-  /** Only passed for a super administrator; absent hides the item. */
-  onDmRoles?: () => void;
-  onDmSecurity?: () => void;
-  onDmSettings?: () => void;
+  /** Opens the Administration workspace. Absent hides the item. */
+  onDmAdmin?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [appsOpen, setAppsOpen] = useState(false);
-  // Only for somebody who actually holds more than one. A switcher
-  // offering a single choice is furniture, and one offering a product
-  // they cannot open is a door into a 403.
-  //
-  // Hidden outright while viewing as somebody. `apps` is the REAL
-  // person's — a view changes whose data is on screen, never which
-  // products you hold — so under the viewed person's name it reads as a
-  // claim about them, and the one in the screenshot said a dealer held
-  // Emburse. Stop viewing first, then switch.
-  const canSwitch = apps.length > 1 && Boolean(onSwitchApp) && !viewingAs;
   const initials =
     user.name
       .split(/\s+/)
@@ -94,42 +62,6 @@ export function UserMenu({
               </p>
               <p className="mt-0.5 truncate text-xs text-muted-foreground">{user.email}</p>
             </div>
-            {canSwitch && (
-              <div className="border-b border-border">
-                <button
-                  type="button"
-                  onClick={() => setAppsOpen((v) => !v)}
-                  className="flex w-full items-center gap-2 px-3 py-2.5 text-sm transition-colors hover:bg-muted"
-                >
-                  <LayoutGrid className="h-4 w-4" />
-                  <span className="flex-1 text-left">App</span>
-                  <span className="truncate text-xs text-muted-foreground">
-                    {app ? APP_LABEL[app] : ""}
-                  </span>
-                  <ChevronRight
-                    className={`h-3.5 w-3.5 shrink-0 transition-transform ${appsOpen ? "rotate-90" : ""}`}
-                  />
-                </button>
-                {appsOpen && (
-                  <div className="bg-muted/40 pb-1">
-                    {apps.map((key) => (
-                      <button
-                        key={key}
-                        type="button"
-                        onClick={() => {
-                          setOpen(false);
-                          if (key !== app) onSwitchApp?.(key);
-                        }}
-                        className="flex w-full items-center gap-2 py-2 pr-3 pl-9 text-sm transition-colors hover:bg-muted"
-                      >
-                        <span className="flex-1 text-left">{APP_LABEL[key]}</span>
-                        {key === app && <Check className="h-3.5 w-3.5 shrink-0" />}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
             {product === "emburse" && (
               <>
                 {/* Everyone has their own Emburse login; only admins set the
@@ -154,49 +86,20 @@ export function UserMenu({
                 )}
               </>
             )}
-            {/* Administering the app, kept out of the rail: the rail is
-                for the pages people come here to work in. */}
-            {product === "dutch-miller" && dmAdmin && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => { setOpen(false); onDmUsers?.(); }}
-                  className="flex w-full items-center gap-2 border-b border-border px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted"
-                >
-                  <Users className="h-4 w-4" />
-                  Users
-                </button>
-                {onDmRoles && (
-                  <button
-                    type="button"
-                    onClick={() => { setOpen(false); onDmRoles(); }}
-                    className="flex w-full items-center gap-2 border-b border-border px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted"
-                  >
-                    <Crown className="h-4 w-4" />
-                    Roles
-                  </button>
-                )}
-                {onDmSecurity && (
-                  <button
-                    type="button"
-                    onClick={() => { setOpen(false); onDmSecurity(); }}
-                    className="flex w-full items-center gap-2 border-b border-border px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted"
-                  >
-                    <Shield className="h-4 w-4" />
-                    Security Log
-                  </button>
-                )}
-                {onDmSettings && (
-                  <button
-                    type="button"
-                    onClick={() => { setOpen(false); onDmSettings(); }}
-                    className="flex w-full items-center gap-2 border-b border-border px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted"
-                  >
-                    <SlidersHorizontal className="h-4 w-4" />
-                    Email Settings
-                  </button>
-                )}
-              </>
+            {/* ONE destination, not four. Administration is a workspace
+                with its own tabs — Users & Access, Roles & Permissions,
+                Security, Email & Notifications, Audit History — and each
+                of those routes still refuses independently, so sharing a
+                parent widens nothing. */}
+            {product === "dutch-miller" && dmAdmin && onDmAdmin && (
+              <button
+                type="button"
+                onClick={() => { setOpen(false); onDmAdmin(); }}
+                className="flex w-full items-center gap-2 border-b border-border px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted"
+              >
+                <SlidersHorizontal className="h-4 w-4" />
+                Administration
+              </button>
             )}
             <a
               href="/api/logout"

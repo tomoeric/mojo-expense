@@ -303,7 +303,7 @@ export function DmBulkDialog({ onClose, onDone }: { onClose: () => void; onDone:
               <span>
                 The file is fine, but there are only <strong>{check.available}</strong> active
                 RFID numbers for <strong>{rows.length}</strong> members. Upload more under
-                RFID Review first, or the run will stop when the pool empties.
+                RFID Inventory first, or the run will stop when the pool empties.
               </span>
             </p>
           )}

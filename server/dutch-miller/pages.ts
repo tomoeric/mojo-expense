@@ -28,9 +28,13 @@ export const DM_PAGES = [
     children: [],
   },
   {
+    // The key stays `rfid-review`: it is what every stored role, every
+    // guard and every bookmark names. Only the label changed, because
+    // the page is an inventory of tags and "review" described the one
+    // thing people do least with it.
     key: "rfid-review",
-    label: "RFID Review",
-    blurb: "Upload RFID numbers and review active and used ones.",
+    label: "RFID Inventory",
+    blurb: "Every tag: available, assigned, held back and removed.",
     children: [],
   },
 ] as const;

@@ -151,9 +151,9 @@ export function DmRfidPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-lg font-semibold">RFID Review</h1>
+        <h1 className="text-lg font-semibold">RFID Inventory</h1>
         <p className="text-sm text-muted-foreground">
-          Upload RFID numbers, and review which are available and which have been used.
+          Every tag the pool has ever held — available, assigned, held back and removed.
         </p>
       </div>
 

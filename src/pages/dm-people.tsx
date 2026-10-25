@@ -43,19 +43,29 @@ type Person = {
  * buttons.
  */
 export function DmPeopleDialog({
-  me, iAmSuper, onClose, onViewAs,
+  me, iAmSuper, onClose, onViewAs, onHistory, embedded = false,
 }: {
   me: string;
   iAmSuper: boolean;
   onClose: () => void;
   onViewAs: (email: string) => void;
+  /**
+   * Open Audit History for one account.
+   *
+   * The trail used to be a second table inside this dialog, reading the
+   * same route with a different renderer. One of them was always going
+   * to drift. Per-account history is now the Audit History page with the
+   * account filled in — the same read, so the two cannot disagree.
+   */
+  onHistory: (email: string) => void;
+  /** Rendered inside the Administration workspace rather than over it. */
+  embedded?: boolean;
 }) {
   const qc = useQueryClient();
   const [filter, setFilter] = useState("");
   const [onlyNoRole, setOnlyNoRole] = useState(false);
   const [editing, setEditing] = useState<Person | null>(null);
   const [inviting, setInviting] = useState(false);
-  const [trail, setTrail] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
 
@@ -115,14 +125,13 @@ export function DmPeopleDialog({
 
   const mailOff = data.data && !data.data.mailConfigured;
 
+  // The same body either way: over the page for the thirty-second
+  // errand, inside Administration when somebody came to do a round of
+  // them. One component, so the two cannot drift apart.
+  const Shell = embedded ? EmbeddedShell : DialogShell;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4 sm:p-8">
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="People"
-        className="w-full max-w-4xl rounded-xl border border-border bg-background shadow-xl"
-      >
+    <Shell>
         <div className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
           <div className="min-w-0">
             <h2 className="text-base font-semibold">Users</h2>
@@ -147,11 +156,11 @@ export function DmPeopleDialog({
             </button>
             <button
               type="button"
-              onClick={() => setTrail(trail === null ? "" : null)}
+              onClick={() => onHistory("")}
               className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs hover:bg-muted"
             >
               <ScrollText className="h-3.5 w-3.5" />
-              Audit trail
+              Audit History
             </button>
             <button
               type="button"
@@ -161,14 +170,16 @@ export function DmPeopleDialog({
               <Send className="h-3.5 w-3.5" />
               Invite someone
             </button>
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="Close"
-              className="rounded-md p-1 text-muted-foreground hover:bg-muted"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            {!embedded && (
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="Close"
+                className="rounded-md p-1 text-muted-foreground hover:bg-muted"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
           </div>
         </div>
 
@@ -218,7 +229,6 @@ export function DmPeopleDialog({
               })}
           />
         )}
-        {trail !== null && <AuditTrail subject={trail} onClose={() => setTrail(null)} />}
 
         <div className="max-h-[60vh] overflow-auto">
           {data.isPending && (
@@ -258,8 +268,8 @@ export function DmPeopleDialog({
                   )}
                   <SourceTag source={p.source} />
                   {p.pinnedSuper && (
-                    <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
-                      super admin
+                    <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-400">
+                      Super Admin
                     </span>
                   )}
                 </p>
@@ -275,13 +285,26 @@ export function DmPeopleDialog({
               </div>
 
               <div className="w-44 shrink-0 text-xs">
+                {/* Inherited access is not the absence of a role, which
+                    is how this used to read: the pinned super admin held
+                    no row, so the column said "No role yet" beside the
+                    one account that holds everything. */}
                 {p.pinnedSuper ? (
-                  <span className="font-semibold">Everything</span>
+                  <>
+                    <span className="font-semibold">Inherited full access</span>
+                    <span className="block text-muted-foreground">
+                      Pinned in configuration, not assigned here
+                    </span>
+                  </>
                 ) : p.user ? (
                   <>
                     <span className="font-semibold">{p.user.roleName ?? p.user.roleKey}</span>
                     {p.user.status !== "active" && (
-                      <span className="block text-muted-foreground">{p.user.status}</span>
+                      <span className="block text-muted-foreground">
+                        {p.user.status === "invited"
+                          ? "invited — no access until they set the account up"
+                          : "disabled — no access"}
+                      </span>
                     )}
                   </>
                 ) : (
@@ -319,7 +342,9 @@ export function DmPeopleDialog({
                   <button
                     type="button"
                     disabled={act.isPending}
-                    title={p.user.status === "disabled" ? "Switch on" : "Switch off"}
+                    title={p.user.status === "disabled"
+                      ? "Restore access — the role and history are already here"
+                      : "Disable access — keeps the account, its role and its history"}
                     onClick={() => act.mutate({
                       url: `/api/dutch-miller/users/${encodeURIComponent(p.email)}/enabled`,
                       body: { enabled: p.user!.status === "disabled" },
@@ -349,7 +374,7 @@ export function DmPeopleDialog({
                 <button
                   type="button"
                   title="History for this account"
-                  onClick={() => setTrail(p.email)}
+                  onClick={() => onHistory(p.email)}
                   className="rounded-md border border-border p-1.5 text-muted-foreground hover:bg-muted"
                 >
                   <ScrollText className="h-3.5 w-3.5" />
@@ -364,8 +389,14 @@ export function DmPeopleDialog({
                     title="Remove"
                     onClick={() => {
                       if (window.confirm(
-                        `Remove ${p.email}? Switching off instead keeps the record and `
-                        + "the audit trail.")) {
+                        `Remove ${p.email}?\n\n`
+                        + "REMOVE deletes the account row: their role, their invitation "
+                        + "and their details go. Their sessions end immediately.\n\n"
+                        + "DISABLE ACCESS keeps all of that and simply refuses them, "
+                        + "which is what you want if they may come back.\n\n"
+                        + "Either way the audit history stays — every event they were "
+                        + "part of, and every member record they submitted, is "
+                        + "untouched by this.")) {
                         act.mutate({
                           url: `/api/dutch-miller/users/${encodeURIComponent(p.email)}`,
                           method: "DELETE",
@@ -396,8 +427,37 @@ export function DmPeopleDialog({
             </section>
           ))}
         </div>
+    </Shell>
+  );
+}
 
+/**
+ * Over the page, or part of it.
+ *
+ * Two wrappers around one body. Users is reachable both ways on
+ * purpose: setting somebody's role is a thirty-second errand and
+ * losing your place to run it is the annoying part, while a round of
+ * them belongs in Administration beside Roles and Audit History.
+ */
+function DialogShell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4 sm:p-8">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Users"
+        className="w-full max-w-4xl rounded-xl border border-border bg-background shadow-xl"
+      >
+        {children}
       </div>
+    </div>
+  );
+}
+
+function EmbeddedShell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="overflow-hidden rounded-lg border border-border bg-background">
+      {children}
     </div>
   );
 }
@@ -601,72 +661,6 @@ function InviteRow({
           Cancel
         </button>
       </div>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ *
- * The audit trail
- * ------------------------------------------------------------------ */
-
-type Entry = {
-  id: string; at: string; actor: string; action: string;
-  subject: string; detail: string; ip: string;
-};
-
-function AuditTrail({ subject, onClose }: { subject: string; onClose: () => void }) {
-  const q = useQuery({
-    queryKey: ["dm-audit", subject],
-    queryFn: async () => {
-      const url = `/api/dutch-miller/audit${subject ? `?subject=${encodeURIComponent(subject)}` : ""}`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error((await res.json()).error ?? "Could not load.");
-      return (await res.json()) as { entries: Entry[] };
-    },
-  });
-
-  return (
-    <div className="rounded-lg border border-border bg-card">
-      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
-        <p className="text-sm font-semibold">Audit trail{subject ? ` · ${subject}` : ""}</p>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted"
-        >
-          Close
-        </button>
-      </div>
-      <div className="max-h-96 overflow-auto">
-        <table className="w-full text-xs">
-          <tbody>
-            {q.isPending && (
-              <tr><td className="px-4 py-6 text-center text-muted-foreground">Loading…</td></tr>
-            )}
-            {q.data?.entries.length === 0 && (
-              <tr><td className="px-4 py-6 text-center text-muted-foreground">
-                Nothing recorded yet.
-              </td></tr>
-            )}
-            {q.data?.entries.map((e) => (
-              <tr key={e.id} className="border-t border-border">
-                <td className="px-4 py-1.5 whitespace-nowrap text-muted-foreground">
-                  {new Date(e.at).toLocaleString()}
-                </td>
-                <td className="px-2 py-1.5 font-mono">{e.action}</td>
-                <td className="px-2 py-1.5 text-muted-foreground">{e.subject}</td>
-                <td className="px-2 py-1.5 text-muted-foreground">{e.actor || "—"}</td>
-                <td className="px-4 py-1.5 text-muted-foreground">{e.detail}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {/* Read-only on purpose: there is no route that edits or deletes a
-          line. A log somebody can tidy up is not evidence of anything. */}
-      <p className="border-t border-border px-4 py-2 text-xs text-muted-foreground">
-        Read-only. Entries are never edited or removed, and never contain a code or a link.
-      </p>
     </div>
   );
 }

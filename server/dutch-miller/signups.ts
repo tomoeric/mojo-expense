@@ -525,7 +525,7 @@ export async function createSignup(
       return {
         ok: false, kind: "rfid-taken",
         reason: clean.rfid === ""
-          ? "There are no active RFID numbers left in the pool. Upload more under RFID Review."
+          ? "There are no active RFID numbers left in the pool. Upload more under RFID Inventory."
           : `RFID ${clean.rfid} is no longer available — it has been used or held back `
             + "since this form was opened. Choose another one.",
       };

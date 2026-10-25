@@ -15,6 +15,7 @@ import { SignIn } from "@/components/sign-in";
 import {
   DealerContinue, DealerSignIn, DealerVerify, DealerWelcome,
 } from "@/pages/dealer-access";
+import { AppSwitcher } from "@/components/app-switcher";
 import { UserMenu } from "@/components/user-menu";
 import { DutchMillerApp } from "@/pages/dutch-miller";
 import { ViewAs } from "@/components/view-as";
@@ -288,9 +289,19 @@ export function App() {
     <div className="min-h-screen">
       <header className="border-b border-border bg-black text-white">
         <div className="mx-auto flex max-w-[1800px] items-center justify-between gap-4 px-5 py-3">
-          <div className="flex items-baseline gap-2.5">
-            <span className="text-base font-extrabold tracking-tight">MOJO Expense</span>
-            <span className="text-xs text-white/60">Emburse reviewer console</span>
+          <div className="flex items-center gap-3">
+            <div className="flex items-baseline gap-2.5">
+              <span className="text-base font-extrabold tracking-tight">MOJO Expense</span>
+              <span className="text-xs text-white/60">Emburse reviewer console</span>
+            </div>
+            {/* Only for somebody holding both products, and hidden while
+                a view is on — see `AppSwitcher`. */}
+            <AppSwitcher
+              apps={apps}
+              app={activeApp}
+              onSwitch={switchApp}
+              viewingAs={Boolean(auth.data?.viewingAs)}
+            />
           </div>
           <div className="flex items-center gap-3">
             <span className="hidden text-xs text-white/60 sm:inline">
@@ -307,10 +318,6 @@ export function App() {
               <UserMenu
                 user={auth.data.user}
                 isAdmin={auth.data.isAdmin}
-                apps={apps}
-                app={activeApp}
-                onSwitchApp={switchApp}
-                viewingAs={Boolean(auth.data.viewingAs)}
               />
             )}
           </div>

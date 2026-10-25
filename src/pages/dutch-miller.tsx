@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Building2, ChevronRight, Crown, SlidersHorizontal, Users } from "lucide-react";
+import { AppSwitcher } from "@/components/app-switcher";
 import { DmStopViewing } from "@/components/dm-stop-viewing";
 import { UserMenu } from "@/components/user-menu";
 import { DmRfidInstructionsPage } from "@/pages/dm-rfid-instructions";
@@ -9,6 +10,7 @@ import { DmSignupsPage } from "@/pages/dm-signups";
 import { useLiveUpdates } from "@/lib/live";
 import { DmPeopleDialog } from "@/pages/dm-people";
 import { DmRolesPage } from "@/pages/dm-roles";
+import { DmAuditPage } from "@/pages/dm-audit";
 import { DmSecurityPage } from "@/pages/dm-security";
 import { DmSettingsPage } from "@/pages/dm-settings";
 import type { AppKey, SessionUser } from "@/lib/api";
@@ -61,26 +63,31 @@ type Access = {
  * were doing, because setting somebody's role is a thirty-second errand
  * and losing your place to run it is the annoying part.
  */
-const MENU_PAGES: PageDef[] = [
-  {
-    key: "roles",
-    label: "Roles",
-    blurb: "What each kind of person can open. Super administrator only.",
-    children: [],
-  },
-  {
-    key: "security",
-    label: "Security Log",
-    blurb: "Failed sign-ins and other attempts worth a look.",
-    children: [],
-  },
-  {
-    key: "settings",
-    label: "Email Settings",
-    blurb: "What Dutch Miller emails, and when.",
-    children: [],
-  },
-];
+const ADMIN_PAGE: PageDef = {
+  key: "admin",
+  label: "Administration",
+  blurb: "Who can use Dutch Miller, what they can do, and what it has recorded.",
+  children: [
+    { key: "users", label: "Users & Access" },
+    { key: "roles", label: "Roles & Permissions" },
+    { key: "security", label: "Security" },
+    { key: "email", label: "Email & Notifications" },
+    { key: "audit", label: "Audit History" },
+  ],
+};
+
+/**
+ * Which administration destinations this person may open.
+ *
+ * Filtered here AND enforced on every route behind them. Sharing one
+ * parent does not widen anything: Roles is still the super
+ * administrator's alone, and the server refuses it regardless of what
+ * this returns.
+ */
+const adminTabs = (role: "super" | "admin" | "user") =>
+  ADMIN_PAGE.children.filter((c) => c.key !== "roles" || role === "super");
+
+const MENU_PAGES: PageDef[] = [ADMIN_PAGE];
 
 /**
  * `#/<page>` or `#/<page>/<sub-page>`.
@@ -154,19 +161,49 @@ export function DutchMillerApp({
   const rail: PageDef[] = (access?.allPages ?? [])
     .filter((p) => dmAdmin || (access?.pages ?? []).includes(p.key));
   // The menu pages are routable without being in the rail.
+  const tabs = adminTabs(access?.role ?? "user");
   const [route, go] = useRoute([
     ...rail,
-    ...(dmAdmin ? MENU_PAGES.filter((p) => p.key !== "roles" || access?.role === "super") : []),
+    ...(dmAdmin ? [{ ...ADMIN_PAGE, children: tabs }] : []),
   ]);
   const [users, setUsers] = useState(false);
+  // Audit History, filtered to one account. Set by the history icon on
+  // a person's row, cleared the moment another tab is picked.
+  const [historyFor, setHistoryFor] = useState("");
+
+  /**
+   * Enter a view. Started from a person's row, never from the header.
+   *
+   * A full reload afterwards: every cached query was answered for the
+   * real person, and leaving them in place is how a view half-starts.
+   */
+  const startViewAs = (email: string) => {
+    void fetch("/api/auth/view-as", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email }),
+    }).then(() => { window.location.href = "/"; });
+  };
 
   return (
     <div className="min-h-screen">
       <header className="border-b border-border bg-black text-white">
         <div className="mx-auto flex max-w-[1800px] items-center justify-between gap-4 px-5 py-3">
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold">Dutch Miller</p>
-            <p className="truncate text-xs text-white/60">Mammoth Holdings — SUDS Car Wash</p>
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold">Dutch Miller</p>
+              <p className="truncate text-xs text-white/60">
+                Mammoth Holdings — SUDS Car Wash
+              </p>
+            </div>
+            {/* Navigation, so it sits beside the product name rather than
+                under somebody's photograph. */}
+            <AppSwitcher
+              apps={apps}
+              app="dutch-miller"
+              onSwitch={onSwitchApp}
+              viewingAs={Boolean(access?.viewingAs)}
+            />
           </div>
           <div className="flex items-center gap-3">
             <DmStopViewing viewingAs={access?.viewingAs ?? null} />
@@ -174,16 +211,9 @@ export function DutchMillerApp({
               <UserMenu
                 user={user}
                 isAdmin={isAdmin}
-                apps={apps}
-                app="dutch-miller"
-                onSwitchApp={onSwitchApp}
-                viewingAs={Boolean(access?.viewingAs)}
                 product="dutch-miller"
                 dmAdmin={dmAdmin}
-                onDmUsers={() => setUsers(true)}
-              onDmRoles={access?.role === "super" ? () => go("roles") : undefined}
-              onDmSecurity={() => go("security")}
-              onDmSettings={() => go("settings")}
+                onDmAdmin={() => go("admin", "users")}
               />
             )}
           </div>
@@ -252,9 +282,49 @@ export function DutchMillerApp({
           )}
           {access && route.page === "rfid-instructions" && <DmRfidInstructionsPage />}
           {access && route.page === "rfid-review" && <DmRfidPage />}
-          {access && route.page === "roles" && access.role === "super" && <DmRolesPage />}
-          {access && route.page === "security" && dmAdmin && <DmSecurityPage />}
-          {access && route.page === "settings" && dmAdmin && <DmSettingsPage />}
+          {access && route.page === "admin" && dmAdmin && (
+            <div className="space-y-4">
+              <div>
+                <h1 className="text-lg font-semibold">Administration</h1>
+                <p className="text-sm text-muted-foreground">{ADMIN_PAGE.blurb}</p>
+              </div>
+              {/* Only the destinations this person may open — and every
+                  route behind them refuses independently, so sharing one
+                  parent widens nothing. */}
+              <div role="tablist" className="flex flex-wrap items-center gap-1 border-b border-border">
+                {tabs.map((t) => (
+                  <button
+                    key={t.key}
+                    role="tab"
+                    type="button"
+                    aria-selected={route.sub === t.key}
+                    onClick={() => { setHistoryFor(""); go("admin", t.key); }}
+                    className={`-mb-px border-b-2 px-3 py-2 text-sm transition-colors ${
+                      route.sub === t.key
+                        ? "border-foreground font-semibold"
+                        : "border-transparent text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+              {route.sub === "users" && (
+                <DmPeopleDialog
+                  embedded
+                  me={access.email}
+                  iAmSuper={access.role === "super"}
+                  onClose={() => undefined}
+                  onViewAs={startViewAs}
+                  onHistory={(email) => { setHistoryFor(email); go("admin", "audit"); }}
+                />
+              )}
+              {route.sub === "roles" && access.role === "super" && <DmRolesPage />}
+              {route.sub === "security" && <DmSecurityPage />}
+              {route.sub === "email" && <DmSettingsPage />}
+              {route.sub === "audit" && <DmAuditPage subject={historyFor} />}
+            </div>
+          )}
         </div>
       </div>
 
@@ -263,12 +333,11 @@ export function DutchMillerApp({
           me={access.email}
           iAmSuper={access.role === "super"}
           onClose={() => setUsers(false)}
-          onViewAs={(email) => {
-            void fetch("/api/auth/view-as", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ email }),
-            }).then(() => { window.location.href = "/"; });
+          onViewAs={startViewAs}
+          onHistory={(email) => {
+            setUsers(false);
+            setHistoryFor(email);
+            go("admin", "audit");
           }}
         />
       )}

@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, ChevronLeft, ChevronRight, Circle,
-  Download, Eye, FileSpreadsheet, Loader2, Lock, Send, Trash2, X,
+  Download, ExternalLink, Eye, FileSpreadsheet, Loader2, Lock, Send, Trash2, X,
 } from "lucide-react";
 import { DmBulkDialog } from "@/pages/dm-bulk";
 
@@ -665,6 +665,18 @@ function ExportMenu({ rows }: { rows: SignupRow[] }) {
     a.click();
     URL.revokeObjectURL(url);
     setOpen(false);
+    // Member data leaving the app, on the record. The file is built
+    // here from rows the page already has, so there is no download
+    // route to hang this on — and an export that leaves no trace is
+    // exactly the one worth tracing.
+    void fetch("/api/dutch-miller/exported", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "members", rows: rows.length,
+        detail: detailed ? "detailed export" : "list export",
+      }),
+    }).catch(() => undefined);
   };
 
   return (
@@ -1468,7 +1480,7 @@ function RfidField({
       {error && <p role="alert" className="mt-1 text-xs text-red-600">{error}</p>}
       {!loading && options.length === 0 && (
         <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
-          No active RFID numbers are left. Upload more under RFID Review.
+          No active RFID numbers are left. Upload more under RFID Inventory.
         </p>
       )}
     </div>
@@ -1506,8 +1518,21 @@ function StickerConfirm({
           bottom-left on the driver's side.
           <span className="text-red-500"> *</span>
           <span className="mt-0.5 block text-xs text-muted-foreground">
-            Applied inside the glass, flat and square, not obstructing the driver's view.
-            See RFID Instructions.
+            Applied inside the glass, flat and square, not obstructing the driver's view.{" "}
+            {/* A real link, not a sentence telling somebody where to go:
+                this is the one moment they need the picture, and
+                leaving the half-filled form to find it is why it goes
+                unread. */}
+            <a
+              href="#/rfid-instructions"
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="inline-flex items-center gap-0.5 font-medium text-sky-600 hover:underline"
+            >
+              See RFID Instructions
+              <ExternalLink className="h-3 w-3" />
+            </a>
           </span>
         </span>
       </label>
