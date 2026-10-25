@@ -44,6 +44,10 @@ const ROW: SignupRow = {
   openedBy: null,
   completedAt: null,
   completedBy: null,
+  deletedAt: null,
+  deletedBy: null,
+  deleteNote: null,
+  tagReleased: false,
 };
 
 try {

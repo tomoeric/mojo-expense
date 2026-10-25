@@ -1,8 +1,8 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowDown, ArrowUp, CheckCircle2, ChevronLeft, ChevronRight, Circle, Download,
-  Eye, FileSpreadsheet, Loader2, Lock, Send, X,
+  AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, ChevronLeft, ChevronRight, Circle,
+  Download, Eye, FileSpreadsheet, Loader2, Lock, Send, Trash2, X,
 } from "lucide-react";
 import { DmBulkDialog } from "@/pages/dm-bulk";
 
@@ -43,6 +43,11 @@ export type SignupRow = {
   openedBy: string | null;
   completedAt: string | null;
   completedBy: string | null;
+  /** Deleted records stay in the list, marked, with the reason attached. */
+  deletedAt: string | null;
+  deletedBy: string | null;
+  deleteNote: string | null;
+  tagReleased: boolean;
 };
 
 type Handle = { guid: string; createdAt: string; token: string; displayTimezone: string };
@@ -208,12 +213,15 @@ function useRequestedSignup(): string {
   return guid;
 }
 
+type Tab = "all" | "new" | "review" | "complete" | "deleted";
+
 function ReviewExisting() {
   const qc = useQueryClient();
   const requested = useRequestedSignup();
-  const [tab, setTab] = useState<"all" | "new" | "review" | "complete">("all");
+  const [tab, setTab] = useState<Tab>("all");
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState<SignupRow | null>(null);
+  const [deleting, setDeleting] = useState<SignupRow | null>(null);
   const [error, setError] = useState("");
   // Newest first is what somebody opening this page wants to see.
   const [sort, setSort] = useState<{ by: "customer" | "created"; dir: "asc" | "desc" }>(
@@ -227,8 +235,11 @@ function ReviewExisting() {
       if (!res.ok) throw new Error((await res.json()).error ?? "Could not load.");
       return (await res.json()) as {
         rows: SignupRow[]; total: number;
-        counts: { new: number; review: number; complete: number; total: number };
+        counts: {
+          new: number; review: number; complete: number; deleted: number; total: number;
+        };
         canComplete: boolean;
+        canDelete: boolean;
       };
     },
     /**
@@ -292,6 +303,29 @@ function ReviewExisting() {
     },
   });
 
+  const remove = useMutation({
+    mutationFn: async (v: { guid: string; note: string; releaseTag: boolean }) => {
+      const res = await fetch(`/api/dutch-miller/signups/${v.guid}/delete`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ note: v.note, releaseTag: v.releaseTag }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Could not delete it.");
+      return body as { row: SignupRow; tagReleased: boolean };
+    },
+    onSuccess: (b) => {
+      setError("");
+      setDeleting(null);
+      // Left open, now showing the deletion: the record did not go
+      // anywhere, and closing the dialog would suggest it had.
+      setOpen((o) => (o && o.guid === b.row.guid ? b.row : o));
+      void qc.invalidateQueries({ queryKey: ["dm-signups"] });
+      void qc.invalidateQueries({ queryKey: ["dm-rfid"] });
+    },
+    onError: (e) => setError((e as Error).message),
+  });
+
   /**
    * Sorted here rather than by the server.
    *
@@ -327,12 +361,19 @@ function ReviewExisting() {
 
   const counts = list.data?.counts;
   const canComplete = list.data?.canComplete ?? false;
-  const chips: { key: "all" | "new" | "review" | "complete"; label: string; n?: number }[] = [
+  const canDelete = list.data?.canDelete ?? false;
+  const chips: { key: Tab; label: string; n?: number }[] = [
     { key: "new", label: "Awaiting MOJO", n: counts?.new },
     { key: "review", label: "Under review", n: counts?.review },
     { key: "complete", label: "Completed", n: counts?.complete },
     { key: "all", label: "All", n: counts?.total },
   ];
+  // Only worth a chip once there is something in it, or for the one
+  // person who can put something in it. Everybody else is being shown
+  // a permanently empty filter.
+  if (canDelete || (counts?.deleted ?? 0) > 0) {
+    chips.push({ key: "deleted", label: "Deleted", n: counts?.deleted });
+  }
 
   return (
     <>
@@ -390,9 +431,13 @@ function ReviewExisting() {
               <tr
                 key={r.guid}
                 onClick={() => setOpen(r)}
-                className="cursor-pointer border-t border-border hover:bg-muted/40"
+                className={`cursor-pointer border-t border-border hover:bg-muted/40 ${
+                  r.deletedAt ? "text-muted-foreground" : ""
+                }`}
               >
-                <td className="px-3 py-2">{r.customer.firstName} {r.customer.lastName}</td>
+                <td className={`px-3 py-2 ${r.deletedAt ? "line-through" : ""}`}>
+                  {r.customer.firstName} {r.customer.lastName}
+                </td>
                 <td className="px-3 py-2 font-mono text-xs">{r.dealer.dlwContractId}</td>
                 <td className="px-3 py-2 font-mono text-xs">{r.dealer.dealNumber}</td>
                 <td className="px-3 py-2 font-mono text-xs tabular-nums">{r.customer.rfid}</td>
@@ -424,7 +469,9 @@ function ReviewExisting() {
         <ViewSignup
           row={openRow}
           canComplete={canComplete}
+          canDelete={canDelete}
           busy={complete.isPending}
+          onDelete={() => setDeleting(openRow)}
           position={{
             index: Math.max(0, rows.findIndex((r) => r.guid === openRow.guid)),
             total: rows.length,
@@ -437,6 +484,17 @@ function ReviewExisting() {
             if (next) setOpen(next);
           }}
           onClose={() => setOpen(null)}
+        />
+      )}
+
+      {deleting && (
+        <DeleteSignup
+          row={deleting}
+          busy={remove.isPending}
+          error={remove.isError ? (remove.error as Error).message : ""}
+          onCancel={() => setDeleting(null)}
+          onConfirm={(note, releaseTag) =>
+            remove.mutate({ guid: deleting.guid, note, releaseTag })}
         />
       )}
     </>
@@ -562,11 +620,14 @@ function ExportMenu({ rows }: { rows: SignupRow[] }) {
         "Plate", "State", "Vehicle Year", "Vehicle Make", "Vehicle Model", "Vehicle Color",
         "RFID", "Sticker Attached", "Status", "Date Created", "Time Created",
         "Submitted By", "Email Sent",
-        "Opened", "Opened By", "Completed", "Completed By", "Reference"]
+        "Opened", "Opened By", "Completed", "Completed By",
+        "Deleted", "Deleted By", "Delete Note", "RFID Released", "Reference"]
       : ["Customer", "DLW Contract ID", "Deal #", "RFID", "Date Created", "Status"];
 
     const status = (r: SignupRow) =>
-      r.completedAt ? "Completed" : r.openedAt ? "Under review" : "Submitted";
+      r.deletedAt ? "Deleted"
+        : r.completedAt ? "Completed"
+          : r.openedAt ? "Under review" : "Submitted";
 
     const body = rows.map((r) => (detailed
       ? [
@@ -582,6 +643,8 @@ function ExportMenu({ rows }: { rows: SignupRow[] }) {
         r.notifiedAt ? stamp(r.notifiedAt, r.displayTimezone) : "",
         r.openedAt ? stamp(r.openedAt, r.displayTimezone) : "", r.openedBy ?? "",
         r.completedAt ? stamp(r.completedAt, r.displayTimezone) : "", r.completedBy ?? "",
+        r.deletedAt ? stamp(r.deletedAt, r.displayTimezone) : "", r.deletedBy ?? "",
+        r.deleteNote ?? "", r.deletedAt ? (r.tagReleased ? "Yes" : "No") : "",
         r.guid,
       ]
       : [
@@ -670,6 +733,17 @@ function csvCell(v: string): string {
  * otherwise ring up to ask.
  */
 function StatusBadge({ row }: { row: SignupRow }) {
+  // First, because it outranks everything else that could be true of
+  // the record — a deleted membership that still read "Completed by
+  // MOJO" would be answering the wrong question.
+  if (row.deletedAt) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/15 px-2 py-0.5 text-xs font-semibold text-rose-700 dark:text-rose-400">
+        <Trash2 className="h-3 w-3" />
+        Deleted
+      </span>
+    );
+  }
   if (row.completedAt) {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
@@ -695,14 +769,17 @@ function StatusBadge({ row }: { row: SignupRow }) {
 }
 
 function ViewSignup({
-  row, canComplete, busy, position, onComplete, onOpened, onStep, onClose,
+  row, canComplete, canDelete, busy, position, onComplete, onDelete, onOpened,
+  onStep, onClose,
 }: {
   row: SignupRow;
   canComplete: boolean;
+  canDelete: boolean;
   busy: boolean;
   /** Where this one sits in the list behind the dialog, for the arrows. */
   position: { index: number; total: number };
   onComplete: () => void;
+  onDelete: () => void;
   onOpened: () => void;
   onStep: (delta: -1 | 1) => void;
   onClose: () => void;
@@ -710,8 +787,8 @@ function ViewSignup({
   const tz = row.displayTimezone;
   // Only the first time, and only for somebody who could act on it —
   // the server decides that again and ignores anybody else.
-  useEffect(() => { if (canComplete && !row.openedAt) onOpened(); },
-    [canComplete, row.openedAt, row.guid]);
+  useEffect(() => { if (canComplete && !row.openedAt && !row.deletedAt) onOpened(); },
+    [canComplete, row.openedAt, row.deletedAt, row.guid]);
   return (
     <Modal
       title={`${row.customer.firstName} ${row.customer.lastName}`}
@@ -732,7 +809,7 @@ function ViewSignup({
               offered again afterwards: completing means somebody read
               this one, and it is final. The server refuses both cases
               regardless. */}
-          {canComplete && !row.completedAt && (
+          {canComplete && !row.completedAt && !row.deletedAt && (
             <button
               type="button"
               disabled={busy || !row.openedAt}
@@ -744,11 +821,40 @@ function ViewSignup({
               Mark complete
             </button>
           )}
+          {canDelete && !row.deletedAt && (
+            <button
+              type="button"
+              onClick={onDelete}
+              className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-rose-500/50 px-3 py-1.5 text-sm font-semibold text-rose-700 hover:bg-rose-500/10 dark:text-rose-400"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Delete
+            </button>
+          )}
         </div>
+
+        {/* What happened to it, where somebody looking at the record
+            will actually read it — the note is the whole point of
+            keeping the row. */}
+        {row.deletedAt && (
+          <p className="flex items-start gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-800 dark:text-rose-300">
+            <Trash2 className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>
+              <strong>Deleted {stamp(row.deletedAt, tz)}
+              {row.deletedBy ? ` by ${row.deletedBy}` : ""}.</strong>{" "}
+              {row.deleteNote}
+              <span className="mt-1 block text-xs">
+                RFID {row.customer.rfid} {row.tagReleased
+                  ? "was put back in the pool."
+                  : "stays issued and cannot be given out again."}
+              </span>
+            </span>
+          </p>
+        )}
 
         {/* The point of the whole flow, said plainly. A dealer reading
             this wants one fact, and it is not a timestamp. */}
-        {row.completedAt && (
+        {row.completedAt && !row.deletedAt && (
           <p className="flex items-start gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-800 dark:text-emerald-300">
             <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
             <span>
@@ -794,6 +900,99 @@ function ViewSignup({
           />
         </Bucket>
 
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * Deleting a member record — the note, and what becomes of the tag.
+ *
+ * Two deliberate frictions. The note is required and short answers are
+ * refused, because "why is this member gone?" is asked months later and
+ * the only person who can answer it is the one pressing the button now.
+ * And the tag is a separate question with no default, because both
+ * answers are right sometimes: a duplicate entry should give its number
+ * back, a member who drove off with the sticker on the windscreen
+ * should not.
+ */
+function DeleteSignup({
+  row, busy, error, onCancel, onConfirm,
+}: {
+  row: SignupRow;
+  busy: boolean;
+  error: string;
+  onCancel: () => void;
+  onConfirm: (note: string, releaseTag: boolean) => void;
+}) {
+  const [note, setNote] = useState("");
+  const [release, setRelease] = useState(false);
+  const short = note.trim().length < 5;
+
+  return (
+    <Modal title="Delete member record" onClose={onCancel}>
+      <div className="space-y-4">
+        <p className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-900 dark:text-amber-200">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            <strong>{row.customer.firstName} {row.customer.lastName}</strong> stays in
+            the list, marked deleted, with your note attached. Nothing is erased —
+            this records that the membership should no longer count.
+          </span>
+        </p>
+
+        <label className="block">
+          <span className="mb-1 block text-xs font-semibold text-muted-foreground">
+            Why is this record being deleted? <span className="text-rose-600">Required</span>
+          </span>
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            rows={3}
+            placeholder="Duplicate of the entry submitted the same morning."
+            className="w-full rounded-md border border-border bg-background px-2.5 py-2 text-sm"
+          />
+        </label>
+
+        <label className="flex items-start gap-2.5 rounded-lg border border-border px-3 py-2.5 text-sm">
+          <input
+            type="checkbox"
+            checked={release}
+            onChange={(e) => setRelease(e.target.checked)}
+            className="mt-0.5 h-4 w-4"
+          />
+          <span>
+            <span className="font-medium">
+              Put RFID {row.customer.rfid} back in the pool
+            </span>
+            <span className="mt-0.5 block text-xs text-muted-foreground">
+              Only if the sticker was never attached to a vehicle. Leave this
+              unticked and the number stays issued, so it can never be handed out
+              a second time.
+            </span>
+          </span>
+        </label>
+
+        {error && <p className="text-sm font-semibold text-red-600">{error}</p>}
+
+        <div className="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={busy || short}
+            onClick={() => onConfirm(note.trim(), release)}
+            className="inline-flex items-center gap-2 rounded-md bg-rose-600 px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
+          >
+            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Delete record
+          </button>
+        </div>
       </div>
     </Modal>
   );

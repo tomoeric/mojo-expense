@@ -2,10 +2,12 @@ import express, {
   Router, type IRouter, type NextFunction, type Request, type Response,
 } from "express";
 import { parseRfidFile } from "./rfid-parse.js";
-import { addRfids, listRfids, rfidCounts, setRfidActive, useRfid } from "./rfid.js";
 import {
-  DISPLAY_TZ, createSignup, getSignup, listSignups, markOpened, newHandle, setComplete,
-  type SignupInput, type SignupRow,
+  addRfids, deleteRfids, listRfids, rfidCounts, setRfidActive, useRfid,
+} from "./rfid.js";
+import {
+  DISPLAY_TZ, createSignup, deleteSignup, getSignup, listSignups, markOpened, newHandle,
+  setComplete, type SignupInput, type SignupRow,
 } from "./signups.js";
 import {
   DM_PAGES, assertEmail, canAdminister, dmAccessFor, getDmUser, isDmPage, isStaff,
@@ -14,7 +16,7 @@ import {
   type DmPageKey, type DmRole, type StoredRole,
 } from "./users.js";
 import {
-  LOCKOUT, audit, listAudit, listSecurityLog, securitySummary,
+  LOCKOUT, audit, listAudit, listSecurityLog, requestMeta, securitySummary,
 } from "./audit.js";
 import { BULK_COLUMNS, parseBulk, templateCsv } from "./bulk.js";
 import { DEFAULT_ROLE, listRoles, removeRole, saveRole } from "./roles.js";
@@ -252,12 +254,22 @@ dutchMillerRouter.get("/people", requireDmAdmin, async (req: Request, res: Respo
  * Roles
  * ------------------------------------------------------------------ */
 
-/** 403 unless this person is the super administrator. */
-async function requireSuper(req: Request, res: Response, next: NextFunction): Promise<void> {
-  const real = req.viewingAs?.real ?? req.user;
-  if (isStaff(real) && isSuperEmail(real?.email ?? "")) { next(); return; }
-  res.status(403).json({ error: "Only a super administrator can change roles." });
+/**
+ * 403 unless this person is the super administrator.
+ *
+ * `isStaff` as well as the address, because the pin is an address and a
+ * door is not: an invited account that somehow reached this address must
+ * not inherit the keys with it.
+ */
+function requireSuperTo(what: string) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const real = req.viewingAs?.real ?? req.user;
+    if (isStaff(real) && isSuperEmail(real?.email ?? "")) { next(); return; }
+    res.status(403).json({ error: `Only a super administrator can ${what}.` });
+  };
 }
+
+const requireSuper = requireSuperTo("change roles");
 
 // Readable by any administrator — assigning one means seeing the list.
 dutchMillerRouter.get("/roles", requireDmAdmin, async (_req: Request, res: Response) => {
@@ -534,6 +546,10 @@ dutchMillerRouter.post("/settings/notifications/sample", requireDmAdmin,
       openedBy: null,
       completedAt: null,
       completedBy: null,
+      deletedAt: null,
+      deletedBy: null,
+      deleteNote: null,
+      tagReleased: false,
     };
     const { subject, html } = signupEmail(sample, { sample: true, origin: publicOrigin(req) });
     try {
@@ -709,14 +725,47 @@ dutchMillerRouter.get("/rfid", requirePage("rfid-review"), async (req: Request, 
   res.json({
     ...(await listRfids({
       status: status === "active" || status === "inactive" || status === "used"
-        ? status : "all",
+        || status === "deleted" ? status : "all",
       search: String(req.query.search ?? ""),
       limit: Number(req.query.limit ?? 100),
       offset: Number(req.query.offset ?? 0),
     })),
     counts: await rfidCounts(),
+    // Whether to show the button. The route below decides it again.
+    canDelete: isSuperEmail(req.viewingAs?.real.email ?? req.user?.email ?? ""),
   });
 });
+
+/**
+ * Remove numbers from the pool. Super administrator only, note required.
+ *
+ * The same shape as deleting a member record, and for the same reason:
+ * the row stays, marked, with the reason attached. Unlike holding a tag
+ * back, this is not something an administrator can do — a tag leaving the
+ * pool for good is the kind of decision that should have exactly one
+ * person's name on it.
+ */
+dutchMillerRouter.post(
+  "/rfid/delete",
+  requirePage("rfid-review"),
+  requireSuperTo("remove RFID numbers"),
+  async (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as { numbers?: unknown; note?: unknown };
+    const numbers = Array.isArray(body.numbers) ? body.numbers.map(String) : [];
+    const out = await deleteRfids({
+      numbers, note: String(body.note ?? ""), by: actor(req),
+    });
+    if ("error" in out) { res.status(400).json({ error: out.error }); return; }
+    await audit({
+      action: "rfid.deleted",
+      actor: actor(req),
+      detail: `${out.deleted} removed · ${String(body.note ?? "").trim().slice(0, 200)}`,
+      ...requestMeta(req),
+    });
+    emitChange("rfid");
+    res.json({ ...out, counts: await rfidCounts() });
+  },
+);
 
 /** Issue one. The server decides, once; see `useRfid`. */
 dutchMillerRouter.post("/rfid/use", requirePage("rfid-review"), async (req: Request, res: Response) => {
@@ -773,7 +822,7 @@ dutchMillerRouter.get(
     res.json({
       ...(await listSignups({
         status: status === "new" || status === "review" || status === "complete"
-          ? status : "all",
+          || status === "deleted" ? status : "all",
         search: String(req.query.search ?? ""),
         limit: Number(req.query.limit ?? 100),
         offset: Number(req.query.offset ?? 0),
@@ -781,6 +830,7 @@ dutchMillerRouter.get(
       // Whether the person reading may set the MOJO-side mark. The button
       // follows this; the route below decides it again regardless.
       canComplete: await canApprove(req),
+      canDelete: isSuperEmail(req.viewingAs?.real.email ?? req.user?.email ?? ""),
     });
   },
 );
@@ -973,7 +1023,9 @@ dutchMillerRouter.post(
           ? "No such signup."
           : out.reason === "already"
             ? "That signup is already complete, and completing is final."
-            : "Open the signup and read it before marking it complete.",
+            : out.reason === "deleted"
+              ? "That member record has been deleted."
+              : "Open the signup and read it before marking it complete.",
       });
       return;
     }
@@ -983,5 +1035,60 @@ dutchMillerRouter.post(
     void notifyApproved(out.row, publicOrigin(req));
     emitChange("signups");
     res.json({ row: out.row });
+  },
+);
+
+/**
+ * Delete a member record. Super administrator only, and never really.
+ *
+ * "Delete" here means marked deleted and kept: the row stays in the list,
+ * struck through, carrying the note whoever removed it had to write. A
+ * membership that simply vanished is one nobody can answer questions
+ * about afterwards — not the dealer who submitted it, not the person
+ * holding the tag, and not whoever is asked six months later why that
+ * vehicle is on the plan.
+ *
+ * The note is required by `deleteSignup`, not by the form, so a direct
+ * request cannot skip it.
+ *
+ * The tag goes back to the pool only if asked. Both answers are right
+ * sometimes — a duplicate entry should give its number back, a member
+ * who left with the sticker on the windscreen should not — and guessing
+ * either way silently is how a tag ends up on two vehicles.
+ */
+dutchMillerRouter.post(
+  "/signups/:guid/delete",
+  requirePage("member-signups"),
+  requireSuperTo("delete a member record"),
+  async (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as { note?: unknown; releaseTag?: unknown };
+    const out = await deleteSignup({
+      guid: String(req.params.guid ?? ""),
+      note: String(body.note ?? ""),
+      by: actor(req),
+      releaseTag: body.releaseTag === true,
+    });
+    if (!out.ok) {
+      res.status(out.reason === "not-found" ? 404 : 400).json({
+        error: out.reason === "not-found"
+          ? "No such signup."
+          : out.reason === "already"
+            ? "That record is already deleted."
+            : "Say why this record is being deleted — a few words at least.",
+      });
+      return;
+    }
+    await audit({
+      action: "signup.deleted",
+      actor: actor(req),
+      subject: out.row.submittedBy,
+      detail: `${out.row.customer.firstName} ${out.row.customer.lastName} · `
+        + `RFID ${out.row.customer.rfid}${out.tagReleased ? " (released)" : ""} · `
+        + `${out.row.deleteNote ?? ""}`,
+      ...requestMeta(req),
+    });
+    emitChange("signups");
+    emitChange("rfid");
+    res.json({ row: out.row, tagReleased: out.tagReleased });
   },
 );

@@ -14,7 +14,9 @@
  */
 import { zipSync, strToU8 } from "fflate";
 import { parseRfidFile, readCell } from "../server/dutch-miller/rfid-parse.js";
-import { addRfids, listRfids, rfidCounts, setRfidActive, useRfid } from "../server/dutch-miller/rfid.js";
+import {
+  addRfids, deleteRfids, listRfids, rfidCounts, setRfidActive, useRfid,
+} from "../server/dutch-miller/rfid.js";
 import { db } from "../server/db.js";
 
 let failures = 0;
@@ -156,6 +158,60 @@ try {
   check("a header and a note are not failures", tidy.rejected.length === 0,
     JSON.stringify(tidy.rejected));
   check("…and the real number is still found", tidy.numbers.length === 1);
+
+  /*
+   * 10. Removing a number from the pool.
+   *
+   * The dangerous mistake here is the opposite of the one for member
+   * records: a deleted tag must NOT come back. A number that quietly
+   * returned to the pool — on a re-upload of the same file, say —
+   * could be issued to a second vehicle while the first one still
+   * carries the sticker, and that cannot be undone by hand.
+   */
+  console.log("\n10. Removing a number keeps the row");
+  const doomed = mine(40);
+  await addRfids([doomed], [], 1, "boss@example.invalid");
+  const noNote = await deleteRfids({ numbers: [doomed], note: "x", by: "boss@example.invalid" });
+  check("a note is required", "error" in noNote);
+  const went = await deleteRfids({
+    numbers: [doomed], note: "Damaged in the October batch.", by: "boss@example.invalid",
+  });
+  check("it removes one", !("error" in went) && went.deleted === 1);
+  const marked = (await listRfids({ status: "deleted", search: doomed })).rows
+    .find((r) => r.number === doomed);
+  check("…and the row is STILL THERE", Boolean(marked));
+  check("…with who and why",
+    marked?.deletedBy === "boss@example.invalid"
+    && (marked?.deleteNote ?? "").startsWith("Damaged"));
+  check("removing it twice changes nothing",
+    !("error" in (await deleteRfids({
+      numbers: [doomed], note: "again, for the record", by: "boss@example.invalid",
+    })) ) );
+
+  console.log("\n11. A removed number is out of the pool, and stays out");
+  check("it is not in the active list",
+    !(await listRfids({ status: "active", search: doomed })).rows
+      .some((r) => r.number === doomed));
+  check("…nor in All", !(await listRfids({ status: "all", search: doomed })).rows
+    .some((r) => r.number === doomed));
+  check("…and cannot be issued",
+    !(await useRfid(doomed, "x@example.invalid", "")).ok);
+  check("…saying it was removed",
+    /removed from the pool/i.test(
+      ((await useRfid(doomed, "x@example.invalid", "")) as { reason?: string }).reason ?? ""));
+  // The one that would be easy to get wrong: uploading the same file
+  // again must not resurrect it.
+  const reupload = await addRfids([doomed], [], 1, "boss@example.invalid");
+  check("re-uploading the file does not bring it back", reupload.added === 0);
+  check("…and says so", reupload.alreadyHeld.some((h) => h.number === doomed && h.deleted));
+  check("…it is still deleted",
+    !(await listRfids({ status: "active", search: doomed })).rows
+      .some((r) => r.number === doomed));
+  check("holding it back does not revive it either",
+    (await setRfidActive([doomed], true)).changed === 0);
+  const tally = await rfidCounts();
+  check("deleted numbers are counted apart from the pool", tally.deleted >= 1,
+    JSON.stringify(tally));
 
 } finally {
   await db().query("DELETE FROM dm_rfid WHERE number = ANY($1::text[])",

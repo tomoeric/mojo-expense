@@ -316,6 +316,28 @@ the blocks.
   (`isMojoStaff`), NOT by a Dutch Miller administrator: being an admin of the
   dealer's app says nothing about working at MOJO. Reversible, because the
   alternative to an undo is a wrong record nobody can correct.
+- **Deleting is a MARK, never a DELETE — super admin only, note required.**
+  Both member records (`deleteSignup`) and RFID numbers (`deleteRfids`) set
+  `deleted_at` / `deleted_by` / `delete_note` and keep the row; neither issues
+  a `DELETE`. A membership or a tag that simply vanished leaves nobody able to
+  answer why a vehicle is on the plan or what became of a number, which is the
+  question actually asked months later. The note is enforced in the model (≥5
+  characters), not by the form, so a direct request cannot skip it. Both lists
+  grow a **Deleted** chip, and the three live states still add up to **All** —
+  deleted is counted beside them, never inside.
+  - **A deleted member's tag stays issued unless explicitly released.** The
+    dialog asks; there is no default. Releasing is the only path back to the
+    pool, and it is the reason the unique index on `dm_member_signups.rfid` is
+    **partial** (`WHERE deleted_at IS NULL`, `dm_member_signups_rfid_live`) —
+    an unconditional one would let a deleted row hold a released number
+    forever.
+  - **A deleted RFID never comes back.** Not by re-uploading the file that
+    brought it in (`addRfids` reports it as held-and-removed and adds nothing),
+    not through Make active, and not through `useRfid`. A number returning
+    quietly could land on a second windscreen while the first still carries the
+    sticker.
+  - Every delete writes `signup.deleted` / `rfid.deleted` to the audit trail
+    with the note and the request's IP.
 - Tests: `scripts/test-rfid.ts`, `scripts/test-dm-users.ts`,
   `scripts/test-signups.ts` (all need
   `DATABASE_URL`). The users test SKIPS against a non-empty `dm_users` rather

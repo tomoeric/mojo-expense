@@ -25,6 +25,7 @@ export const AUDIT_ACTIONS = [
   "approved.sent", "approved.failed",
   "role.saved", "role.removed",
   "bulk.uploaded", "bulk.committed",
+  "signup.deleted", "rfid.deleted",
   "reminder.sent", "reminder.failed", "reminder.changed",
   /* Sign-in attempts worth looking at. See `SUSPICIOUS` below. */
   "login.unknown", "signin.denied", "session.rejected",

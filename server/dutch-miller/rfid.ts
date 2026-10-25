@@ -15,6 +15,11 @@ import { RFID_RE } from "./rfid-parse.js";
  *   active    — in the pool, available to be issued
  *   inactive  — held back; still unused, deliberately not available
  *   used      — issued. Terminal. Nothing moves a number out of it.
+ *
+ * Deleting is a fourth thing and not a state: a deleted number keeps its
+ * state and gains a deletion, so a tag that was issued still reads as
+ * issued. It leaves the pool and cannot be issued, but the row stays —
+ * a number that vanished is a number nobody can answer questions about.
  */
 
 const SCHEMA = `
@@ -32,6 +37,10 @@ CREATE TABLE IF NOT EXISTS dm_rfid (
   used_for    text
 );
 CREATE INDEX IF NOT EXISTS dm_rfid_status_idx ON dm_rfid (status, number);
+/* Deleted by a super administrator, with the reason they gave. */
+ALTER TABLE dm_rfid ADD COLUMN IF NOT EXISTS deleted_at  timestamptz;
+ALTER TABLE dm_rfid ADD COLUMN IF NOT EXISTS deleted_by  text;
+ALTER TABLE dm_rfid ADD COLUMN IF NOT EXISTS delete_note text;
 `;
 
 let ready: Promise<void> | null = null;
@@ -49,6 +58,10 @@ export type RfidRow = {
   usedAt: string | null;
   usedBy: string | null;
   usedFor: string | null;
+  /** Set once a super administrator removed it. The row stays either way. */
+  deletedAt: string | null;
+  deletedBy: string | null;
+  deleteNote: string | null;
 };
 
 export type UploadResult = {
@@ -58,7 +71,7 @@ export type UploadResult = {
   /** Repeats WITHIN the file. Counted once each; the first copy was kept. */
   duplicatesInFile: { number: string; copies: number }[];
   /** Already in the pool before this file. Not added again. */
-  alreadyHeld: { number: string; status: RfidStatus }[];
+  alreadyHeld: { number: string; status: RfidStatus; deleted: boolean }[];
   /** Cells that looked like an attempt and were not a number. */
   rejected: { raw: string; problem: string }[];
   /** Cells examined, so "it imported nothing" can be told from "wrong column". */
@@ -98,9 +111,14 @@ export async function addRfids(
     return { batch, added: 0, duplicatesInFile, alreadyHeld: [], rejected, cells };
   }
 
-  const held = await db().query<{ number: string; status: RfidStatus }>(
-    "SELECT number, status FROM dm_rfid WHERE number = ANY($1::text[])", [unique]);
-  const alreadyHeld = held.rows;
+  // A deleted number counts as held, and deliberately does NOT come back:
+  // re-uploading the same file must not undo somebody's decision to remove
+  // a tag. It is reported so the difference is visible.
+  const held = await db().query<{ number: string; status: RfidStatus; deleted_at: Date | null }>(
+    "SELECT number, status, deleted_at FROM dm_rfid WHERE number = ANY($1::text[])", [unique]);
+  const alreadyHeld = held.rows.map((r) => ({
+    number: r.number, status: r.status, deleted: r.deleted_at !== null,
+  }));
 
   // ON CONFLICT DO NOTHING as well as the check above: between the two
   // statements another upload can land, and the unique index is the only
@@ -114,22 +132,34 @@ export async function addRfids(
   return { batch, added: rowCount ?? 0, duplicatesInFile, alreadyHeld, rejected, cells };
 }
 
-export type RfidCounts = { active: number; inactive: number; used: number; total: number };
+export type RfidCounts = {
+  active: number; inactive: number; used: number; deleted: number; total: number;
+};
 
+/**
+ * The pool, counted.
+ *
+ * Deleted numbers are counted apart and are not in `total`: every other
+ * figure here is read as "how many tags do we have", and a removed tag is
+ * not one of them.
+ */
 export async function rfidCounts(): Promise<RfidCounts> {
   await ensure();
   const { rows } = await db().query<{ status: RfidStatus; n: string }>(
-    "SELECT status, count(*) AS n FROM dm_rfid GROUP BY status");
-  const out: RfidCounts = { active: 0, inactive: 0, used: 0, total: 0 };
+    "SELECT status, count(*) AS n FROM dm_rfid WHERE deleted_at IS NULL GROUP BY status");
+  const out: RfidCounts = { active: 0, inactive: 0, used: 0, deleted: 0, total: 0 };
   for (const r of rows) {
     out[r.status] = Number(r.n);
     out.total += Number(r.n);
   }
+  out.deleted = Number((await db().query<{ n: string }>(
+    "SELECT count(*) AS n FROM dm_rfid WHERE deleted_at IS NOT NULL")).rows[0]?.n ?? 0);
   return out;
 }
 
 export async function listRfids(opts: {
-  status?: RfidStatus | "all";
+  /** `deleted` is its own view; every other one excludes deleted numbers. */
+  status?: RfidStatus | "all" | "deleted";
   search?: string;
   limit?: number;
   offset?: number;
@@ -137,15 +167,20 @@ export async function listRfids(opts: {
   await ensure();
   const where: string[] = [];
   const args: unknown[] = [];
-  if (opts.status && opts.status !== "all") {
-    args.push(opts.status);
-    where.push(`status = $${args.length}`);
+  if (opts.status === "deleted") {
+    where.push("deleted_at IS NOT NULL");
+  } else {
+    where.push("deleted_at IS NULL");
+    if (opts.status && opts.status !== "all") {
+      args.push(opts.status);
+      where.push(`status = $${args.length}`);
+    }
   }
   if (opts.search?.trim()) {
     args.push(`%${opts.search.trim().replace(/[%_]/g, "")}%`);
     where.push(`number LIKE $${args.length}`);
   }
-  const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const clause = `WHERE ${where.join(" AND ")}`;
   const total = Number((await db().query<{ n: string }>(
     `SELECT count(*) AS n FROM dm_rfid ${clause}`, args)).rows[0]?.n ?? 0);
 
@@ -154,8 +189,10 @@ export async function listRfids(opts: {
   const { rows } = await db().query<{
     number: string; status: RfidStatus; added_at: Date; added_by: string;
     batch: string; used_at: Date | null; used_by: string | null; used_for: string | null;
+    deleted_at: Date | null; deleted_by: string | null; delete_note: string | null;
   }>(
-    `SELECT number, status, added_at, added_by, batch, used_at, used_by, used_for
+    `SELECT number, status, added_at, added_by, batch, used_at, used_by, used_for,
+            deleted_at, deleted_by, delete_note
        FROM dm_rfid ${clause}
       ORDER BY added_at DESC, number
       LIMIT $${args.length - 1} OFFSET $${args.length}`, args);
@@ -171,6 +208,9 @@ export async function listRfids(opts: {
       usedAt: r.used_at ? r.used_at.toISOString() : null,
       usedBy: r.used_by,
       usedFor: r.used_for,
+      deletedAt: r.deleted_at ? r.deleted_at.toISOString() : null,
+      deletedBy: r.deleted_by,
+      deleteNote: r.delete_note,
     })),
   };
 }
@@ -194,14 +234,25 @@ export async function useRfid(
 
   const { rows } = await db().query<{ status: RfidStatus }>(
     `UPDATE dm_rfid SET status = 'used', used_at = now(), used_by = $2, used_for = $3
-      WHERE number = $1 AND status <> 'used'
+      WHERE number = $1 AND status <> 'used' AND deleted_at IS NULL
       RETURNING status`, [number, by, usedFor.slice(0, 500)]);
 
   if (rows.length === 0) {
-    const held = await db().query<{ status: RfidStatus; used_at: Date | null; used_by: string | null }>(
-      "SELECT status, used_at, used_by FROM dm_rfid WHERE number = $1", [number]);
+    const held = await db().query<{
+      status: RfidStatus; used_at: Date | null; used_by: string | null;
+      deleted_at: Date | null; delete_note: string | null;
+    }>(
+      `SELECT status, used_at, used_by, deleted_at, delete_note
+         FROM dm_rfid WHERE number = $1`, [number]);
     const row = held.rows[0];
     if (!row) return { ok: false, reason: "That number is not in the pool." };
+    if (row.deleted_at) {
+      return {
+        ok: false,
+        reason: `RFID ${number} was removed from the pool`
+          + `${row.delete_note ? `: ${row.delete_note}` : "."}`,
+      };
+    }
     return {
       ok: false,
       reason: `Already used${row.used_by ? ` by ${row.used_by}` : ""}` +
@@ -230,12 +281,64 @@ export async function setRfidActive(
 
   const { rowCount } = await db().query(
     `UPDATE dm_rfid SET status = $2
-      WHERE number = ANY($1::text[]) AND status <> 'used'`,
+      WHERE number = ANY($1::text[]) AND status <> 'used' AND deleted_at IS NULL`,
     [wanted, active ? "active" : "inactive"]);
 
   const used = Number((await db().query<{ n: string }>(
-    "SELECT count(*) AS n FROM dm_rfid WHERE number = ANY($1::text[]) AND status = 'used'",
+    `SELECT count(*) AS n FROM dm_rfid
+      WHERE number = ANY($1::text[]) AND status = 'used' AND deleted_at IS NULL`,
     [wanted])).rows[0]?.n ?? 0);
 
   return { changed: rowCount ?? 0, refusedUsed: used };
+}
+
+/**
+ * Remove numbers from the pool, keeping the rows.
+ *
+ * A soft delete, for the same reason the member records are: a tag that
+ * disappears takes its history with it, and the question afterwards is
+ * always "what happened to this one?". The row stays, marked, with the
+ * note whoever removed it had to write.
+ *
+ * A USED number can be deleted — a tag gets destroyed, mis-stuck or
+ * replaced, and pretending otherwise would mean the pool can never be
+ * corrected. What deleting never does is free the number: it is gone
+ * from the pool, not back in it, and re-uploading a file that contains
+ * it will not revive it.
+ */
+export type RfidDeleteResult = {
+  deleted: number;
+  /** Numbers that were not there at all. */
+  missing: string[];
+  /** Numbers somebody had already deleted. Left as they were. */
+  already: string[];
+};
+
+export async function deleteRfids(opts: {
+  numbers: string[];
+  note: string;
+  by: string;
+}): Promise<RfidDeleteResult | { error: string }> {
+  await ensure();
+  const note = opts.note.trim();
+  if (note.length < 5) {
+    return { error: "Say why these numbers are being removed — a few words at least." };
+  }
+  const wanted = [...new Set(opts.numbers.map((n) => n.trim()).filter((n) => RFID_RE.test(n)))];
+  if (wanted.length === 0) return { error: "No RFID numbers to remove." };
+
+  const held = await db().query<{ number: string; deleted_at: Date | null }>(
+    "SELECT number, deleted_at FROM dm_rfid WHERE number = ANY($1::text[])", [wanted]);
+  const known = new Map(held.rows.map((r) => [r.number, r.deleted_at]));
+
+  const { rowCount } = await db().query(
+    `UPDATE dm_rfid SET deleted_at = now(), deleted_by = $2, delete_note = $3
+      WHERE number = ANY($1::text[]) AND deleted_at IS NULL`,
+    [wanted, opts.by, note.slice(0, 500)]);
+
+  return {
+    deleted: rowCount ?? 0,
+    missing: wanted.filter((n) => !known.has(n)),
+    already: wanted.filter((n) => known.get(n) != null),
+  };
 }

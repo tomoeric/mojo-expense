@@ -15,12 +15,12 @@
  * take a client's word for them.
  */
 import {
-  createSignup, getSignup, listSignups, markNotified, markOpened, newHandle,
-  setComplete, validateSignup,
+  createSignup, deleteSignup, getSignup, listSignups, markNotified, markOpened,
+  newHandle, setComplete, validateSignup,
 } from "../server/dutch-miller/signups.js";
 import { isStaff } from "../server/dutch-miller/users.js";
 import type { SessionUser } from "../server/auth/session.js";
-import { addRfids } from "../server/dutch-miller/rfid.js";
+import { addRfids, listRfids } from "../server/dutch-miller/rfid.js";
 import { db } from "../server/db.js";
 
 let failures = 0;
@@ -242,6 +242,89 @@ try {
   check("…and the three add up to the whole",
     all.counts.new + all.counts.review + all.counts.complete === all.counts.total,
     JSON.stringify(all.counts));
+
+  /*
+   * 11. Deleting, which is not deleting.
+   *
+   * The record has to survive it. A membership that simply vanished
+   * leaves nobody able to answer why a vehicle is on the plan — not the
+   * dealer who submitted it, not whoever is asked six months later. So
+   * what is tested is that the row is still there, still readable, and
+   * carries the reason somebody had to write.
+   */
+  console.log("\n11. Deleting keeps the record");
+  const doomed = entry({ rfid: TAGS[3]! });
+  const madeDoomed = await createSignup(doomed, ME);
+  check("there is something to delete", madeDoomed.ok === true);
+  check("a note is required",
+    (await deleteSignup({ guid: doomed.guid, note: "x", by: ME })).ok === false);
+  check("…and the record is untouched by the refusal",
+    (await getSignup(doomed.guid))!.deletedAt === null);
+  const gone = await deleteSignup({
+    guid: doomed.guid, note: "Duplicate of the entry submitted the same morning.", by: ME,
+  });
+  check("it deletes", gone.ok === true);
+  const after = await getSignup(doomed.guid);
+  check("…and the row is STILL THERE", after !== null);
+  check("…marked", Boolean(after?.deletedAt));
+  check("…by whom", after?.deletedBy === ME);
+  check("…with the reason", (after?.deleteNote ?? "").startsWith("Duplicate"));
+  check("…and every field it had", after?.customer.vehicleMake === "Ford");
+  check("deleting twice is refused",
+    (await deleteSignup({ guid: doomed.guid, note: "again, for the record", by: ME })).ok === false);
+
+  // The tag is the part that cannot be guessed at. Left alone by
+  // default: a member who drove off with the sticker on the windscreen
+  // must never have that number handed to somebody else.
+  const stillUsed = await listRfids({ status: "used", search: TAGS[3]! });
+  check("the tag stays issued unless asked otherwise",
+    stillUsed.rows.some((r) => r.number === TAGS[3]!));
+  check("…and the deletion says so", after?.tagReleased === false);
+
+  const released = entry({ rfid: TAGS[4]! });
+  await createSignup(released, ME);
+  const back = await deleteSignup({
+    guid: released.guid, note: "Entered against the wrong customer.", by: ME,
+    releaseTag: true,
+  });
+  check("asked to, it puts the tag back", back.ok === true && back.tagReleased);
+  const pool = await listRfids({ status: "active", search: TAGS[4]! });
+  check("…and the number is available again",
+    pool.rows.some((r) => r.number === TAGS[4]!));
+  check("…which the record records", (await getSignup(released.guid))!.tagReleased);
+
+  console.log("\n12. A deleted record is out of the way");
+  const live = await listSignups({ status: "all" });
+  check("it is not in the live list",
+    !live.rows.some((r) => r.guid === doomed.guid));
+  check("…nor in any of the three states",
+    !(await listSignups({ status: "new" })).rows.some((r) => r.guid === doomed.guid)
+    && !(await listSignups({ status: "review" })).rows.some((r) => r.guid === doomed.guid)
+    && !(await listSignups({ status: "complete" })).rows.some((r) => r.guid === doomed.guid));
+  check("…but it IS in the deleted one",
+    (await listSignups({ status: "deleted" })).rows.some((r) => r.guid === doomed.guid));
+  check("…and the chips still add up",
+    live.counts.new + live.counts.review + live.counts.complete === live.counts.total,
+    JSON.stringify(live.counts));
+  check("…with the deleted counted apart", live.counts.deleted >= 2,
+    String(live.counts.deleted));
+
+  // Both marks are refused afterwards. Without this, the email link
+  // sitting in somebody's inbox still approves a membership that was
+  // deleted this morning.
+  check("a deleted record cannot be opened",
+    (await markOpened(doomed.guid, "csc@mojocarwash.com")) === null);
+  const late = await setComplete(doomed.guid, "csc@mojocarwash.com");
+  check("…nor approved", late.ok === false && late.reason === "deleted",
+    late.ok ? "approved" : late.reason);
+
+  // The tag it gave back can be used again — by a NEW member, with the
+  // deleted one still on the books. The partial unique index is what
+  // allows that; a plain one would refuse the second signup forever.
+  const reused = entry({ rfid: TAGS[4]!, firstName: "Sam" });
+  const reissued = await createSignup(reused, ME);
+  check("a released tag can be issued to somebody else", reissued.ok === true,
+    reissued.ok ? "" : JSON.stringify(reissued));
 } finally {
   await db().query("DELETE FROM dm_member_signups WHERE guid = ANY($1::uuid[])", [GUIDS])
     .catch(() => {});

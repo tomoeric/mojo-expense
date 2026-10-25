@@ -1,13 +1,18 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Download, Loader2, Upload } from "lucide-react";
+import { AlertTriangle, Download, Loader2, Trash2, Upload, X } from "lucide-react";
 
 type Status = "active" | "inactive" | "used";
+/** The views. `deleted` is its own: every other one hides deleted numbers. */
+type Tab = "all" | Status | "deleted";
 type Row = {
   number: string; status: Status; addedAt: string; addedBy: string;
   batch: string; usedAt: string | null; usedBy: string | null; usedFor: string | null;
+  deletedAt: string | null; deletedBy: string | null; deleteNote: string | null;
 };
-type Counts = { active: number; inactive: number; used: number; total: number };
+type Counts = {
+  active: number; inactive: number; used: number; deleted: number; total: number;
+};
 type Refusal = {
   refused: true;
   error: string;
@@ -18,7 +23,7 @@ type Refusal = {
 type UploadResult = {
   added: number;
   duplicatesInFile: { number: string; copies: number }[];
-  alreadyHeld: { number: string; status: Status }[];
+  alreadyHeld: { number: string; status: Status; deleted: boolean }[];
   rejected: { raw: string; problem: string }[];
   cells: number;
   counts: Counts;
@@ -41,12 +46,13 @@ const memberLink = (r: Row): string => `/member-signups/review?open=${memberOf(r
 /** Upload RFID numbers, and review what is in the pool. */
 export function DmRfidPage() {
   const qc = useQueryClient();
-  const [tab, setTab] = useState<"all" | Status>("active");
+  const [tab, setTab] = useState<Tab>("active");
   const [search, setSearch] = useState("");
   const [result, setResult] = useState<UploadResult | null>(null);
   const [refused, setRefused] = useState<Refusal | null>(null);
   const [error, setError] = useState("");
   const [showFormat, setShowFormat] = useState(false);
+  const [deleting, setDeleting] = useState<Row | null>(null);
   const pick = useRef<HTMLInputElement>(null);
 
   const list = useQuery({
@@ -55,7 +61,9 @@ export function DmRfidPage() {
       const q = new URLSearchParams({ status: tab, search, limit: "200" });
       const res = await fetch(`/api/dutch-miller/rfid?${q}`);
       if (!res.ok) throw new Error((await res.json()).error ?? "Could not load.");
-      return (await res.json()) as { rows: Row[]; total: number; counts: Counts };
+      return (await res.json()) as {
+        rows: Row[]; total: number; counts: Counts; canDelete: boolean;
+      };
     },
   });
 
@@ -107,13 +115,38 @@ export function DmRfidPage() {
     onError: (e) => setError((e as Error).message),
   });
 
+  const remove = useMutation({
+    mutationFn: async (v: { numbers: string[]; note: string }) => {
+      const res = await fetch("/api/dutch-miller/rfid/delete", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify(v),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Could not remove it.");
+      return body as { deleted: number };
+    },
+    onSuccess: () => {
+      setDeleting(null);
+      setError("");
+      void qc.invalidateQueries({ queryKey: ["dm-rfid"] });
+      void qc.invalidateQueries({ queryKey: ["dm-signups"] });
+    },
+    onError: (e) => setError((e as Error).message),
+  });
+
   const counts = list.data?.counts;
-  const chips: { key: "all" | Status; label: string; n: number | undefined }[] = [
+  const canDelete = list.data?.canDelete ?? false;
+  const chips: { key: Tab; label: string; n: number | undefined }[] = [
     { key: "active", label: "Active", n: counts?.active },
     { key: "used", label: "Used", n: counts?.used },
     { key: "inactive", label: "Held back", n: counts?.inactive },
     { key: "all", label: "All", n: counts?.total },
   ];
+  // Shown once there is something in it, or to the one person who can
+  // put something in it. Nobody else needs a permanently empty filter.
+  if (canDelete || (counts?.deleted ?? 0) > 0) {
+    chips.push({ key: "deleted", label: "Deleted", n: counts?.deleted });
+  }
 
   return (
     <div className="space-y-4">
@@ -211,7 +244,8 @@ export function DmRfidPage() {
             {result.alreadyHeld.length > 0 && (
               <Detail
                 title={`${result.alreadyHeld.length} already in the pool — not added again`}
-                lines={result.alreadyHeld.map((d) => `${d.number} · ${d.status}`)}
+                lines={result.alreadyHeld.map((d) =>
+                  `${d.number} · ${d.deleted ? "removed from the pool — not restored" : d.status}`)}
               />
             )}
             {result.rejected.length > 0 && (
@@ -277,15 +311,34 @@ export function DmRfidPage() {
                 }`}
                 title={memberOf(r) ? "Open the member this tag was issued to" : undefined}
               >
-                <td className="px-3 py-2 font-mono tabular-nums">{r.number}</td>
-                <td className="px-3 py-2">
-                  <span className={
-                    r.status === "used" ? "text-muted-foreground"
-                      : r.status === "active" ? "font-semibold text-emerald-700 dark:text-emerald-400"
-                      : "text-amber-700 dark:text-amber-400"
-                  }>
-                    {r.status === "inactive" ? "held back" : r.status}
+                <td className="px-3 py-2 font-mono tabular-nums">
+                  <span className={r.deletedAt ? "line-through text-muted-foreground" : ""}>
+                    {r.number}
                   </span>
+                  {/* The reason, next to the number rather than behind a
+                      hover: it is the only thing this row is still for. */}
+                  {r.deletedAt && (
+                    <span className="mt-0.5 block font-sans text-xs text-rose-700 dark:text-rose-400">
+                      Removed {day(r.deletedAt)}{r.deletedBy ? ` by ${r.deletedBy}` : ""}
+                      {r.deleteNote ? ` — ${r.deleteNote}` : ""}
+                    </span>
+                  )}
+                </td>
+                <td className="px-3 py-2">
+                  {r.deletedAt ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/15 px-2 py-0.5 text-xs font-semibold text-rose-700 dark:text-rose-400">
+                      <Trash2 className="h-3 w-3" />
+                      deleted
+                    </span>
+                  ) : (
+                    <span className={
+                      r.status === "used" ? "text-muted-foreground"
+                        : r.status === "active" ? "font-semibold text-emerald-700 dark:text-emerald-400"
+                        : "text-amber-700 dark:text-amber-400"
+                    }>
+                      {r.status === "inactive" ? "held back" : r.status}
+                    </span>
+                  )}
                 </td>
                 <td className="px-3 py-2 text-muted-foreground">{day(r.addedAt)}</td>
                 {/* Which upload it arrived on, for tracing a bad file back
@@ -306,20 +359,33 @@ export function DmRfidPage() {
                     : (r.usedFor ?? "—")}
                 </td>
                 <td className="px-3 py-2 text-right">
-                  {/* A used number is never offered a way back into the pool —
-                      the server refuses it, and a button that always fails is
-                      worse than no button. */}
-                  {r.status !== "used" && (
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); setActive.mutate({
-                        numbers: [r.number], active: r.status !== "active",
-                      }); }}
-                      className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted"
-                    >
-                      {r.status === "active" ? "Hold back" : "Make active"}
-                    </button>
-                  )}
+                  <span className="inline-flex items-center justify-end gap-1.5">
+                    {/* A used number is never offered a way back into the pool —
+                        the server refuses it, and a button that always fails is
+                        worse than no button. */}
+                    {r.status !== "used" && !r.deletedAt && (
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); setActive.mutate({
+                          numbers: [r.number], active: r.status !== "active",
+                        }); }}
+                        className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted"
+                      >
+                        {r.status === "active" ? "Hold back" : "Make active"}
+                      </button>
+                    )}
+                    {canDelete && !r.deletedAt && (
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); setDeleting(r); }}
+                        aria-label={`Delete ${r.number}`}
+                        title="Remove this number from the pool"
+                        className="rounded-md border border-rose-500/40 p-1 text-rose-700 hover:bg-rose-500/10 dark:text-rose-400"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </span>
                 </td>
               </tr>
             ))}
@@ -332,6 +398,116 @@ export function DmRfidPage() {
           Narrow it with the search box.
         </p>
       )}
+
+      {deleting && (
+        <DeleteRfid
+          row={deleting}
+          busy={remove.isPending}
+          error={remove.isError ? (remove.error as Error).message : ""}
+          onCancel={() => setDeleting(null)}
+          onConfirm={(note) => remove.mutate({ numbers: [deleting.number], note })}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Removing a number from the pool.
+ *
+ * The note is required for the same reason it is on a member record:
+ * a tag that simply stopped existing leaves nobody able to say whether
+ * it was a bad batch, a damaged sticker or a mistake in a file. The
+ * number does NOT come free — it leaves the pool rather than returning
+ * to it, so a tag that may be on a windscreen can never be issued
+ * again.
+ */
+function DeleteRfid({
+  row, busy, error, onCancel, onConfirm,
+}: {
+  row: Row;
+  busy: boolean;
+  error: string;
+  onCancel: () => void;
+  onConfirm: (note: string) => void;
+}) {
+  const [note, setNote] = useState("");
+  const short = note.trim().length < 5;
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onCancel(); };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [onCancel]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4 sm:p-8">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Delete RFID number"
+        className="w-full max-w-lg space-y-4 rounded-xl border border-border bg-background p-5 shadow-xl"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <h2 className="text-base font-semibold">Remove RFID from the pool</h2>
+          <button
+            type="button"
+            onClick={onCancel}
+            aria-label="Close"
+            className="rounded-md p-1 text-muted-foreground hover:bg-muted"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <p className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-900 dark:text-amber-200">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            <strong className="font-mono">{row.number}</strong> stays in the list,
+            marked removed, with your note attached. It cannot be issued, and
+            re-uploading a file containing it will not bring it back.
+            {row.status === "used" && (
+              <span className="mt-1 block">
+                This number has already been issued. Removing it does not undo that.
+              </span>
+            )}
+          </span>
+        </p>
+
+        <label className="block">
+          <span className="mb-1 block text-xs font-semibold text-muted-foreground">
+            Why is this number being removed? <span className="text-rose-600">Required</span>
+          </span>
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            rows={3}
+            placeholder="Damaged in the batch delivered 14 October — stickers would not adhere."
+            className="w-full rounded-md border border-border bg-background px-2.5 py-2 text-sm"
+          />
+        </label>
+
+        {error && <p className="text-sm font-semibold text-red-600">{error}</p>}
+
+        <div className="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={busy || short}
+            onClick={() => onConfirm(note.trim())}
+            className="inline-flex items-center gap-2 rounded-md bg-rose-600 px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
+          >
+            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Remove number
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

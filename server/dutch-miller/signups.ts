@@ -99,8 +99,6 @@ UPDATE dm_member_signups s
          WHERE action = 'notify.sent' GROUP BY subject) a
  WHERE s.notified_at IS NULL
    AND a.subject = s.guid::text;
--- A tag belongs to one member. The last line of defence, below every check
--- in application code, and the reason a double submission cannot double-assign.
 ALTER TABLE dm_member_signups ADD COLUMN IF NOT EXISTS plate_state text;
 /*
  * The submitter's word that the tag is on the glass.
@@ -112,8 +110,27 @@ ALTER TABLE dm_member_signups ADD COLUMN IF NOT EXISTS plate_state text;
  */
 ALTER TABLE dm_member_signups
   ADD COLUMN IF NOT EXISTS sticker_attached boolean NOT NULL DEFAULT false;
-CREATE UNIQUE INDEX IF NOT EXISTS dm_member_signups_rfid_once
-  ON dm_member_signups (rfid);
+/*
+ * Deleted by a super administrator, with the reason they had to give.
+ *
+ * A column rather than a DELETE, and the whole point of the feature:
+ * the row stays readable, so "what happened to this membership?" has
+ * an answer months later.
+ */
+ALTER TABLE dm_member_signups ADD COLUMN IF NOT EXISTS deleted_at  timestamptz;
+ALTER TABLE dm_member_signups ADD COLUMN IF NOT EXISTS deleted_by  text;
+ALTER TABLE dm_member_signups ADD COLUMN IF NOT EXISTS delete_note text;
+/*
+ * A tag belongs to one LIVE member.
+ *
+ * Partial, replacing the unconditional index that came before it. A
+ * deleted record keeps the number it was issued, so an unconditional
+ * index would mean a tag handed back to the pool could never be issued
+ * again — the deleted row would hold it forever.
+ */
+DROP INDEX IF EXISTS dm_member_signups_rfid_once;
+CREATE UNIQUE INDEX IF NOT EXISTS dm_member_signups_rfid_live
+  ON dm_member_signups (rfid) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS dm_member_signups_recent
   ON dm_member_signups (submitted_at DESC);
 `;
@@ -144,6 +161,11 @@ export type SignupRow = {
   openedBy: string | null;
   completedAt: string | null;
   completedBy: string | null;
+  deletedAt: string | null;
+  deletedBy: string | null;
+  deleteNote: string | null;
+  /** Whether the tag went back to the pool when it was deleted. */
+  tagReleased: boolean;
 };
 
 /* ------------------------------------------------------------------ *
@@ -301,6 +323,7 @@ type Db = {
   submitted_at: Date; submitted_by: string;
   notified_at: Date | null; opened_at: Date | null; opened_by: string | null;
   completed_at: Date | null; completed_by: string | null;
+  deleted_at: Date | null; deleted_by: string | null; delete_note: string | null;
 };
 
 const shape = (r: Db): SignupRow => ({
@@ -331,31 +354,50 @@ const shape = (r: Db): SignupRow => ({
   openedBy: r.opened_by,
   completedAt: r.completed_at?.toISOString() ?? null,
   completedBy: r.completed_by,
+  deletedAt: r.deleted_at?.toISOString() ?? null,
+  deletedBy: r.deleted_by,
+  deleteNote: r.delete_note,
+  // Written into the note when it happens, so one column carries both
+  // the reason and the consequence.
+  tagReleased: (r.delete_note ?? "").includes(RELEASED_MARK),
 });
 
 const COLS = `guid, created_at, display_timezone, dlw_contract_id, deal_number,
   customer_id, first_name, last_name, plate_dlw, vehicle_make, vehicle_model,
   vehicle_year, vehicle_color, rfid, sticker_attached, submitted_at, submitted_by,
-  notified_at, opened_at, opened_by, completed_at, completed_by`;
+  notified_at, opened_at, opened_by, completed_at, completed_by,
+  deleted_at, deleted_by, delete_note`;
+
+/** Appended to the note when the tag went back to the pool. */
+export const RELEASED_MARK = "[tag released]";
 
 export async function listSignups(opts: {
-  status?: "all" | "new" | "review" | "complete";
+  status?: "all" | "new" | "review" | "complete" | "deleted";
   search?: string;
   limit?: number;
   offset?: number;
 } = {}): Promise<{
   rows: SignupRow[];
   total: number;
-  counts: { new: number; review: number; complete: number; total: number };
+  counts: {
+    new: number; review: number; complete: number; deleted: number; total: number;
+  };
 }> {
   await ensure();
   const where: string[] = [];
   const args: unknown[] = [];
   // Three states, and they do not overlap: nobody has looked yet,
-  // somebody has looked but not finished, finished.
+  // somebody has looked but not finished, finished. Together they are
+  // "all", which is why a deleted record is in none of them and in its
+  // own view instead: the chips have to add up, or none of them is
+  // believed.
+  if (opts.status !== "deleted") where.push("deleted_at IS NULL");
   if (opts.status === "new") where.push("completed_at IS NULL AND opened_at IS NULL");
-  if (opts.status === "review") where.push("completed_at IS NULL AND opened_at IS NOT NULL");
+  if (opts.status === "review") {
+    where.push("completed_at IS NULL AND opened_at IS NOT NULL");
+  }
   if (opts.status === "complete") where.push("completed_at IS NOT NULL");
+  if (opts.status === "deleted") where.push("deleted_at IS NOT NULL");
   const search = (opts.search ?? "").trim();
   if (search !== "") {
     args.push(`%${search.toLowerCase()}%`);
@@ -374,19 +416,26 @@ export async function listSignups(opts: {
       ORDER BY submitted_at DESC LIMIT ${limit} OFFSET ${offset}`, args);
   const total = await db().query<{ n: string }>(
     `SELECT count(*) AS n FROM dm_member_signups ${clause}`, args);
-  const counts = await db().query<{ n: string; done: string; looked: string }>(
+  const counts = await db().query<{
+    n: string; done: string; looked: string; gone: string;
+  }>(
     `SELECT count(*) AS n,
-            count(completed_at) AS done,
-            count(*) FILTER (WHERE completed_at IS NULL AND opened_at IS NOT NULL) AS looked
+            count(*) FILTER (WHERE deleted_at IS NULL AND completed_at IS NOT NULL) AS done,
+            count(*) FILTER (WHERE deleted_at IS NULL AND completed_at IS NULL
+                               AND opened_at IS NOT NULL) AS looked,
+            count(deleted_at) AS gone
        FROM dm_member_signups`);
 
-  const all = Number(counts.rows[0]?.n ?? 0);
+  // `total` is the live set — what the All chip shows — so the three
+  // states add up to it. Deleted is counted beside them, not inside.
   const done = Number(counts.rows[0]?.done ?? 0);
   const review = Number(counts.rows[0]?.looked ?? 0);
+  const deleted = Number(counts.rows[0]?.gone ?? 0);
+  const live = Number(counts.rows[0]?.n ?? 0) - deleted;
   return {
     rows: rows.rows.map(shape),
     total: Number(total.rows[0]?.n ?? 0),
-    counts: { new: all - done - review, review, complete: done, total: all },
+    counts: { new: live - done - review, review, complete: done, deleted, total: live },
   };
 }
 
@@ -459,14 +508,15 @@ export async function createSignup(
       ? await client.query<{ number: string }>(
         `UPDATE dm_rfid
             SET status = 'used', used_at = now(), used_by = $1, used_for = $2
-          WHERE number = (SELECT number FROM dm_rfid WHERE status = 'active'
-                           ORDER BY number LIMIT 1 FOR UPDATE SKIP LOCKED)
+          WHERE number = (SELECT number FROM dm_rfid
+                            WHERE status = 'active' AND deleted_at IS NULL
+                            ORDER BY number LIMIT 1 FOR UPDATE SKIP LOCKED)
         RETURNING number`,
         [by, `Member signup ${clean.guid}`])
       : await client.query<{ number: string }>(
         `UPDATE dm_rfid
             SET status = 'used', used_at = now(), used_by = $2, used_for = $3
-          WHERE number = $1 AND status = 'active'
+          WHERE number = $1 AND status = 'active' AND deleted_at IS NULL
         RETURNING number`,
         [clean.rfid, by, `Member signup ${clean.guid}`]);
 
@@ -515,12 +565,79 @@ export async function createSignup(
     await client.query("ROLLBACK").catch(() => {});
     // The unique index on rfid. Reachable only if the conditional claim
     // above was somehow bypassed, which is exactly when it matters.
-    if (String(err).includes("dm_member_signups_rfid_once")) {
+    if (String(err).includes("dm_member_signups_rfid_live")) {
       return {
         ok: false, kind: "rfid-taken",
         reason: `RFID ${clean.rfid} is already assigned to another member. Choose another one.`,
       };
     }
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export type DeleteResult =
+  | { ok: true; row: SignupRow; tagReleased: boolean }
+  | { ok: false; reason: "not-found" | "already" | "no-note" };
+
+/**
+ * Delete a signup, keeping the record.
+ *
+ * Soft, and noted, because the alternative loses the one fact that
+ * matters afterwards: an RFID tag is marked used and nobody can say
+ * what for. The row stays in the list, marked, with the reason and
+ * the name of whoever gave it.
+ *
+ * The tag is a separate decision, and the dangerous one. By default it
+ * stays used: the sticker may already be on a windshield, and putting
+ * that number back in the pool would hand the same tag to a second
+ * member. Releasing it is an explicit act by somebody who knows the
+ * sticker was never applied, and is written into the note so the
+ * consequence is recorded next to the reason.
+ */
+export async function deleteSignup(opts: {
+  guid: string;
+  note: string;
+  by: string;
+  releaseTag?: boolean;
+}): Promise<DeleteResult> {
+  await ensure();
+  const note = opts.note.trim();
+  // A note that says nothing is the same as no note, and this is the
+  // only record of why a membership stopped existing.
+  if (note.length < 5) return { ok: false, reason: "no-note" };
+
+  const existing = await getSignup(opts.guid);
+  if (!existing) return { ok: false, reason: "not-found" };
+  if (existing.deletedAt) return { ok: false, reason: "already" };
+
+  const client = await db().connect();
+  try {
+    await client.query("BEGIN");
+    let released = false;
+    if (opts.releaseTag) {
+      // Only from used back to active, and only this signup's tag.
+      const back = await client.query(
+        `UPDATE dm_rfid SET status = 'active', used_at = NULL, used_by = NULL, used_for = NULL
+          WHERE number = $1 AND status = 'used' AND deleted_at IS NULL`,
+        [existing.customer.rfid]);
+      released = (back.rowCount ?? 0) > 0;
+    }
+    const full = released ? `${note} ${RELEASED_MARK}` : note;
+    const { rows } = await client.query<Db>(
+      `UPDATE dm_member_signups
+          SET deleted_at = now(), deleted_by = $2, delete_note = $3
+        WHERE guid = $1 AND deleted_at IS NULL
+      RETURNING ${COLS}`, [opts.guid, opts.by, full.slice(0, 500)]);
+    if (rows.length === 0) {
+      await client.query("ROLLBACK");
+      return { ok: false, reason: "already" };
+    }
+    await client.query("COMMIT");
+    return { ok: true, row: shape(rows[0]!), tagReleased: released };
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
     client.release();
@@ -546,7 +663,7 @@ export async function markOpened(guid: string, by: string): Promise<SignupRow | 
   await ensure();
   const { rows } = await db().query<Db>(
     `UPDATE dm_member_signups SET opened_at = now(), opened_by = $2
-      WHERE guid = $1 AND opened_at IS NULL
+      WHERE guid = $1 AND opened_at IS NULL AND deleted_at IS NULL
     RETURNING ${COLS}`, [guid, by]);
   return rows[0] ? shape(rows[0]) : null;
 }
@@ -567,7 +684,7 @@ export async function markOpened(guid: string, by: string): Promise<SignupRow | 
  */
 export type CompleteResult =
   | { ok: true; row: SignupRow }
-  | { ok: false; reason: "not-found" | "not-opened" | "already" };
+  | { ok: false; reason: "not-found" | "not-opened" | "already" | "deleted" };
 
 export async function setComplete(guid: string, by: string): Promise<CompleteResult> {
   await ensure();
@@ -575,6 +692,7 @@ export async function setComplete(guid: string, by: string): Promise<CompleteRes
     `UPDATE dm_member_signups
         SET completed_at = now(), completed_by = $2
       WHERE guid = $1 AND completed_at IS NULL AND opened_at IS NOT NULL
+        AND deleted_at IS NULL
     RETURNING ${COLS}`, [guid, by]);
   if (rows[0]) return { ok: true, row: shape(rows[0]) };
 
@@ -582,5 +700,6 @@ export async function setComplete(guid: string, by: string): Promise<CompleteRes
   // explain rather than just refuse.
   const existing = await getSignup(guid);
   if (!existing) return { ok: false, reason: "not-found" };
+  if (existing.deletedAt) return { ok: false, reason: "deleted" };
   return { ok: false, reason: existing.completedAt ? "already" : "not-opened" };
 }
