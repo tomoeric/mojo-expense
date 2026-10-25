@@ -12,6 +12,7 @@ export function UserMenu({
   apps = [],
   app = null,
   onSwitchApp,
+  viewingAs = false,
   product = "emburse",
   dmAdmin = false,
   onDmUsers,
@@ -21,10 +22,17 @@ export function UserMenu({
 }: {
   user: SessionUser;
   isAdmin: boolean;
-  /** Every product this person may use. One or none means no switcher. */
+  /**
+   * Every product this person may use. One or none means no switcher, so
+   * only somebody holding BOTH Dutch Miller and Emburse is offered the
+   * App item — for anybody else it would be a menu entry with a single
+   * choice in it, which is furniture.
+   */
   apps?: AppKey[];
   app?: AppKey | null;
   onSwitchApp?: (next: AppKey) => void;
+  /** A view is on, so this menu is wearing somebody else's name. */
+  viewingAs?: boolean;
   /**
    * Which product's items to offer below the switcher. Identity, the
    * switcher and sign-out are shared; everything else is one app's own, and
@@ -46,7 +54,13 @@ export function UserMenu({
   // Only for somebody who actually holds more than one. A switcher
   // offering a single choice is furniture, and one offering a product
   // they cannot open is a door into a 403.
-  const canSwitch = apps.length > 1 && Boolean(onSwitchApp);
+  //
+  // Hidden outright while viewing as somebody. `apps` is the REAL
+  // person's — a view changes whose data is on screen, never which
+  // products you hold — so under the viewed person's name it reads as a
+  // claim about them, and the one in the screenshot said a dealer held
+  // Emburse. Stop viewing first, then switch.
+  const canSwitch = apps.length > 1 && Boolean(onSwitchApp) && !viewingAs;
   const initials =
     user.name
       .split(/\s+/)

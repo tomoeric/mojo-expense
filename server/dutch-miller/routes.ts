@@ -87,8 +87,6 @@ dutchMillerRouter.get("/me", async (req: Request, res: Response) => {
       : isStaff(real),
     via: req.viewingAs ? (row?.authMethod ?? "link") : (real?.via ?? "microsoft"),
     viewingAs: req.viewingAs ? { real: req.viewingAs.real.email, viewed: email } : null,
-    // Judged on the REAL person, so the way out never disappears.
-    canViewAs: isStaff(real) && isSuperEmail(real?.email ?? ""),
   });
 });
 
@@ -107,32 +105,6 @@ function requirePage(page: DmPageKey) {
     res.status(403).json({ error: "You do not have access to that page." });
   };
 }
-
-/**
- * Everybody a super admin can look at.
- *
- * The Dutch Miller roll, plus nothing else: this is not a way to view as
- * an arbitrary address. Invited-but-not-set-up accounts are included
- * deliberately — "what does this person see?" is most often asked about
- * somebody who has just been added and cannot find something.
- */
-dutchMillerRouter.get("/view-as/people", async (req: Request, res: Response) => {
-  const real = req.viewingAs?.real ?? req.user;
-  if (!isStaff(real) || !isSuperEmail(real?.email ?? "")) {
-    res.status(403).json({ error: "Only a super administrator can view as somebody else." });
-    return;
-  }
-  const people = (await listDmUsers()).map((u) => ({
-    email: u.email,
-    name: [u.firstName, u.lastName].filter(Boolean).join(" ") || u.email,
-    role: u.role,
-    status: u.status,
-    authMethod: u.authMethod,
-    business: u.business,
-    pages: u.role === "user" ? u.pages.length : DM_PAGES.length,
-  }));
-  res.json({ people });
-});
 
 /** 403 unless this person administers Dutch Miller. */
 async function requireDmAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {

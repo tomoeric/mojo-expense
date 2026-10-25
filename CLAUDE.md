@@ -316,6 +316,18 @@ the blocks.
   (`isMojoStaff`), NOT by a Dutch Miller administrator: being an admin of the
   dealer's app says nothing about working at MOJO. Reversible, because the
   alternative to an undo is a wrong record nobody can correct.
+- **A view is STARTED from the eye icon on a person's row in Users**, never
+  from the header. There is no picker beside the account menu — the row
+  already says who they are, what role they hold and how many pages they see,
+  and a second list in the header read as part of the signed-in identity. The
+  only header control is **Stop viewing** (`dm-stop-viewing.tsx`), which must
+  stay: once a view is on, everything below it is the other person's app,
+  Users included, so the exit cannot live inside it.
+- **The App switcher appears only for somebody holding BOTH products**, and
+  is hidden outright while viewing as somebody. `apps` comes from the REAL
+  person (a view changes whose data is on screen, never which products you
+  hold), so under the viewed person's name it read as a claim about them —
+  a dealer's menu offering Emburse. Stop viewing first, then switch.
 - **Deleting is a MARK, never a DELETE — super admin only, note required.**
   Both member records (`deleteSignup`) and RFID numbers (`deleteRfids`) set
   `deleted_at` / `deleted_by` / `delete_note` and keep the row; neither issues

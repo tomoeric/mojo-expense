@@ -310,6 +310,7 @@ export function App() {
                 apps={apps}
                 app={activeApp}
                 onSwitchApp={switchApp}
+                viewingAs={Boolean(auth.data.viewingAs)}
               />
             )}
           </div>

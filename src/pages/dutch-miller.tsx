@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Building2, ChevronRight, Crown, SlidersHorizontal, Users } from "lucide-react";
-import { DmViewAs } from "@/components/dm-view-as";
+import { DmStopViewing } from "@/components/dm-stop-viewing";
 import { UserMenu } from "@/components/user-menu";
 import { DmRfidInstructionsPage } from "@/pages/dm-rfid-instructions";
 import { DmRfidPage } from "@/pages/dm-rfid";
@@ -47,7 +47,6 @@ type Access = {
   allPages: readonly PageDef[];
   /** Set only while a super admin is looking through somebody else's eyes. */
   viewingAs: { real: string; viewed: string } | null;
-  canViewAs: boolean;
 };
 
 /**
@@ -170,10 +169,7 @@ export function DutchMillerApp({
             <p className="truncate text-xs text-white/60">Mammoth Holdings — SUDS Car Wash</p>
           </div>
           <div className="flex items-center gap-3">
-            <DmViewAs
-              canViewAs={access?.canViewAs ?? false}
-              viewingAs={access?.viewingAs ?? null}
-            />
+            <DmStopViewing viewingAs={access?.viewingAs ?? null} />
             {user && (
               <UserMenu
                 user={user}
@@ -181,6 +177,7 @@ export function DutchMillerApp({
                 apps={apps}
                 app="dutch-miller"
                 onSwitchApp={onSwitchApp}
+                viewingAs={Boolean(access?.viewingAs)}
                 product="dutch-miller"
                 dmAdmin={dmAdmin}
                 onDmUsers={() => setUsers(true)}
