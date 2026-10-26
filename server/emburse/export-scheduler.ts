@@ -99,6 +99,19 @@ ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS grid_section text;
 -- Off for everybody until switched on, deliberately: this is the one path
 -- that approves spending with no human in the loop, and nobody's automation
 -- should start because a column appeared.
+-- The manager queue, per reviewer, on or off.
+--
+-- Approval here is a chain: Eric approves, then it goes to Brian. The
+-- team-wide grid at /transactions/team is the queue they each approve
+-- FROM, and there are ordinary reasons to stop reading one person's for
+-- a while -- somebody away, or a stage being run by hand -- without
+-- switching their whole import off and losing their schedule, their
+-- Reimbursements and their automatic approvals with it.
+--
+-- ON for everybody, because that is what every existing reviewer is
+-- doing today and a column appearing must not quietly stop an import.
+ALTER TABLE reviewer_imports
+  ADD COLUMN IF NOT EXISTS manager_enabled boolean NOT NULL DEFAULT true;
 ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS auto_approve boolean NOT NULL DEFAULT false;
 ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS auto_approve_per_run integer;
 
@@ -761,6 +774,14 @@ export type ReviewerImport = {
   gridQuery: string | null;
   /** Whose Emburse login reads it. Null is themselves. */
   runAs: string | null;
+  /**
+   * Whether their scheduled import reads the MANAGER queue.
+   *
+   * Off skips only the team-wide grid. Their schedule, their other
+   * lists and their automatic approvals are untouched, which is the
+   * difference between this and `enabled`.
+   */
+  managerEnabled: boolean;
   /** Whether the sweep approves their unflagged expenses, under their login. */
   autoApprove: boolean;
   /** How many per pass, or null for the shared number. */
@@ -821,6 +842,16 @@ function shiftClock(hhmm: string, minutes: number): string {
  * exactly what "still pulling Eric's receipts even though scope was
  * changed" looks like from the outside.
  */
+/**
+ * The team-wide approval queue.
+ *
+ * The grid both approvers read FROM — Emburse calls the tab ADMIN on
+ * some tenants and MANAGER on others, but the path is the same. Named
+ * once here so the toggle and the scheduler cannot disagree about
+ * which grid is being switched off.
+ */
+export const MANAGER_GRID = "/transactions/team";
+
 export function gridPathFor(
   source: string | undefined,
   list: { path: string } | undefined,
@@ -841,7 +872,7 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
     return [{ userEmail: "", enabled: true, schedule: shared, shared: true,
               staggeredBy: 0, gridPath: null, gridSection: null, gridQuery: null,
               sections: null, receiptsOnly: null, sources: null, runAs: null,
-              autoApprove: false,
+              managerEnabled: true, autoApprove: false,
               autoApprovePerRun: null }];
   }
 
@@ -849,6 +880,7 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
     user_email: string; enabled: boolean; timezone: string | null; first_run: string | null;
     retry_hours: number | null; attempts_per_day: number | null; grace_minutes: number | null;
     all_day: boolean | null; grid_path: string | null; grid_section: string | null;
+    manager_enabled: boolean | null;
     auto_approve: boolean | null; auto_approve_per_run: number | null;
     grid_query: string | null; run_as: string | null; sections: unknown;
     receipts_only: boolean | null; sources: unknown;
@@ -895,6 +927,9 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
         ? (r!.sources as unknown[]).filter((x): x is string => typeof x === "string")
         : null,
       runAs: r?.run_as ?? null,
+      // On unless somebody turned it off — a reviewer with no row has
+      // never been configured and is importing today.
+      managerEnabled: r?.manager_enabled ?? true,
       autoApprove: r?.auto_approve ?? false,
       autoApprovePerRun: r?.auto_approve_per_run ?? null,
       /** True where every field came from the shared schedule (stagger aside). */
@@ -943,6 +978,8 @@ export async function setReviewerImport(
     gridQuery?: string | null;
     /** Whose login reads it. Empty or null means themselves. */
     runAs?: string | null;
+    /** Whether their scheduled import reads the manager queue. */
+    managerEnabled?: boolean;
     autoApprove?: boolean;
     autoApprovePerRun?: number | null;
   },
@@ -979,6 +1016,7 @@ export async function setReviewerImport(
   }
   if (input.gridQuery !== undefined) set.grid_query = blank(input.gridQuery);
   if (input.runAs !== undefined) set.run_as = blank(input.runAs)?.toLowerCase() ?? null;
+  if (input.managerEnabled !== undefined) set.manager_enabled = input.managerEnabled;
   if (input.autoApprove !== undefined) set.auto_approve = input.autoApprove;
   if (input.autoApprovePerRun !== undefined) set.auto_approve_per_run = input.autoApprovePerRun;
   set.updated_by = by;
@@ -1018,9 +1056,25 @@ export function startExportScheduler(): void {
         // THEIR lists. Transactions and Reimbursements are separate pages
         // with separate queues, and which of them somebody has anything in
         // is a fact about that person, not about the deployment.
-        const lists = who.sources
+        const lists = (who.sources
           ? every.filter((x) => who.sources!.includes(x.key))
-          : every.filter((x) => x.enabled);
+          : every.filter((x) => x.enabled))
+          /*
+           * The manager queue, if they have it switched off.
+           *
+           * Only that grid. Reimbursements is a different page with its
+           * own queue and keeps running, which is the whole point of
+           * this being separate from `enabled` — switching somebody's
+           * whole import off to pause one queue would take their
+           * schedule and their other lists with it.
+           *
+           * Judged on the path the run would ACTUALLY open, via
+           * `gridPathFor`, rather than on the list's own default: a
+           * reviewer pointed at the personal grid is not reading the
+           * manager queue, and this must not stop them.
+           */
+          .filter((x) => who.managerEnabled
+            || gridPathFor(x.key, x, who) !== MANAGER_GRID);
         // One timeline per reviewer PER LIST. Transactions and
         // Reimbursements are separate queues on separate pages, so sharing
         // a count means the first one read spends the other's attempts and

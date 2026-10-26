@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
-  Crown, KeyRound, LogOut, ScrollText, Shield, SlidersHorizontal, UserRound, Users,
+  Crown, KeyRound, ListChecks, LogOut, ScrollText, Shield, SlidersHorizontal,
+  UserRound, Users,
 } from "lucide-react";
 import { APP_LABEL, type AppKey, type SessionUser } from "@/lib/api";
 
@@ -21,6 +22,7 @@ export function UserMenu({
   dmAdmin = false,
   dmDestinations = [],
   onDmGo,
+  onManagerQueue,
 }: {
   user: SessionUser;
   isAdmin: boolean;
@@ -42,6 +44,14 @@ export function UserMenu({
    */
   dmDestinations?: { key: string; label: string }[];
   onDmGo?: (key: string) => void;
+  /**
+   * Opens the manager-queue switches. Absent hides the item.
+   *
+   * Only the account owner is given it — it switches off the queue
+   * the approvals come from, for somebody else, and that was asked to
+   * be one person's to flip rather than any administrator's.
+   */
+  onManagerQueue?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [appsOpen, setAppsOpen] = useState(false);
@@ -99,6 +109,16 @@ export function UserMenu({
                     <SlidersHorizontal className="h-4 w-4" />
                     Export settings
                   </a>
+                )}
+                {onManagerQueue && (
+                  <button
+                    type="button"
+                    onClick={() => { setOpen(false); onManagerQueue(); }}
+                    className="flex w-full items-center gap-2 border-b border-border px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted"
+                  >
+                    <ListChecks className="h-4 w-4" />
+                    Manager queue
+                  </button>
                 )}
               </>
             )}

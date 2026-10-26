@@ -392,6 +392,22 @@ the blocks.
   can actually approve — reported, never refused, so a save cannot silently leave
   the previous reviewer in place.
 
+## The manager queue switch (Emburse)
+
+- **`reviewer_imports.manager_enabled`, per reviewer, default ON.** Off skips only
+  the team-wide grid (`MANAGER_GRID` = `/transactions/team`) on that person's
+  SCHEDULED import. It deliberately does NOT touch their schedule, their other
+  lists (Reimbursements keeps running), their automatic approvals, or a run
+  started by hand — that narrowness is the whole reason it exists instead of
+  people switching `enabled` off and losing all of it.
+- Judged on the grid the run would actually open, via `gridPathFor`, not the
+  list's default: a reviewer pointed at the personal grid is not reading the
+  manager queue and must not be stopped by this.
+- **Owner-only, not admin.** `/api/manager-queue` is gated on `requireOwner`
+  (pinned `DM_SUPER_ADMINS`, Microsoft door). It is deliberately absent from the
+  generic `/reviewer-imports` POST so an administrator cannot flip it. `isOwner`
+  on `/auth/user` is what hides the menu item; the route decides again.
+
 ## Permissions
 
 - **Page access and action permissions are different questions.** `actions.ts`

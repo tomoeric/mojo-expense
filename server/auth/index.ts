@@ -242,6 +242,18 @@ authRouter.get("/auth/user", (req: Request, res: Response) => {
       const real = req.viewingAs?.real ?? req.user;
       return !isAuthConfigured() || isAdminUser(real);
     })(),
+    /*
+     * The account owner, pinned in configuration.
+     *
+     * A narrower thing than isAdmin, for the few controls that are one
+     * person's rather than any administrator's. Judged on the REAL
+     * person for the same reason isAdmin is: a view changes whose data
+     * is on screen, never who is looking at it. Microsoft door only.
+     */
+    isOwner: (() => {
+      const real = req.viewingAs?.real ?? req.user;
+      return Boolean(real && isMicrosoft(real) && isSuperEmail(real.email));
+    })(),
     // Who is really here, when that is not who the page is showing. The UI
     // needs it for the banner, and for keeping the exit visible: the one
     // control that must not disappear is the one that gets you back.

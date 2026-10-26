@@ -16,6 +16,7 @@ import {
   DealerContinue, DealerSignIn, DealerVerify, DealerWelcome,
 } from "@/pages/dealer-access";
 import { AppSwitcher } from "@/components/app-switcher";
+import { ManagerQueueDialog } from "@/components/manager-queue";
 import { UserMenu } from "@/components/user-menu";
 import { DutchMillerApp } from "@/pages/dutch-miller";
 import { ViewAs } from "@/components/view-as";
@@ -158,6 +159,10 @@ export function App() {
   // you picked was somewhere in a list. The line id is what makes the drawer
   // open on the thing you actually clicked.
   const [open, setOpen] = useState<{ report: ExpenseReport; lineId?: string } | null>(null);
+  // The manager-queue switches, opened from the account menu. A dialog
+  // rather than a page: it is a thirty-second errand and losing your
+  // place in the queue to run it is the annoying part.
+  const [managerQueue, setManagerQueue] = useState(false);
   const openOne = (report: ExpenseReport, lineId?: string) => setOpen({ report, lineId });
 
   const queryClient = useQueryClient();
@@ -318,6 +323,8 @@ export function App() {
               <UserMenu
                 user={auth.data.user}
                 isAdmin={auth.data.isAdmin}
+                onManagerQueue={auth.data.isOwner
+                  ? () => setManagerQueue(true) : undefined}
               />
             )}
           </div>
@@ -504,6 +511,8 @@ export function App() {
           auditConfigured={config.data?.auditConfigured ?? false}
         />
       )}
+
+      {managerQueue && <ManagerQueueDialog onClose={() => setManagerQueue(false)} />}
     </div>
   );
 }

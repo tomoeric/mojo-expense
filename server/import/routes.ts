@@ -10,8 +10,11 @@ import { ALL_SECTIONS, cleanSchedule, readSettings, writeSettings } from "./sett
 import { DEFAULT_SELECTORS, SELECTOR_HELP, STEP_SELECTORS, envLogin } from "../emburse/auto-export.js";
 import { claimUnclaimed, credentialStatus, deleteCredential, hasCredential, listCredentials, saveCredential,
          scopeFor, unclaimedExpenses } from "../emburse/credentials.js";
-import { attemptExport, isStopping, nextDue, recentRuns, reviewerImports, runScreenshot,
-         setReviewerImport, stopRun } from "../emburse/export-scheduler.js";
+import { MANAGER_GRID, attemptExport, gridPathFor, isStopping, nextDue, recentRuns,
+         reviewerImports, runScreenshot, setReviewerImport, stopRun }
+  from "../emburse/export-scheduler.js";
+import { isMicrosoft } from "../auth/session.js";
+import { isSuperEmail } from "../dutch-miller/users.js";
 import { browserQueue } from "../emburse/browser-lock.js";
 import { answerChallenge, cancelChallenge, currentChallenge } from "../emburse/challenge.js";
 import { adoptLegacyDevice, cookiesSavedAt, forgetCookies, legacyDevice }
@@ -136,6 +139,91 @@ importRouter.get("/imports", requireAuth, async (req: Request, res: Response) =>
  * Readable by any admin; the path and section are what to change when a
  * reviewer's export comes back with somebody else's rows in it.
  */
+/* ------------------------------------------------------------------ *
+ * The manager queue, per reviewer
+ * ------------------------------------------------------------------ */
+
+/**
+ * The owner, and nobody else.
+ *
+ * Not `requireAdmin`, deliberately. This switches off the queue the
+ * approvals actually come from, for somebody else, and the request
+ * was that it be one person's to flip — so it is pinned by
+ * configuration (DM_SUPER_ADMINS, which is the deployment owner
+ * rather than anything Dutch Miller-specific) rather than granted by
+ * a role an admin could give themselves.
+ *
+ * Microsoft door only, like every other authority here: an address
+ * alone stopped being an answer once outside people could be invited
+ * by email.
+ */
+function requireOwner(req: Request, res: Response, next: () => void): void {
+  const real = req.viewingAs?.real ?? req.user;
+  if (real && isMicrosoft(real) && isSuperEmail(real.email)) { next(); return; }
+  res.status(403).json({
+    error: "Only the account owner can switch a reviewer's manager queue on or off.",
+  });
+}
+
+/**
+ * Who reads the manager queue, and whether it is switched on.
+ *
+ * Reported per reviewer with the grid their import would actually
+ * open, because the switch is meaningless for somebody pointed at
+ * their personal list — and saying so is better than showing them a
+ * control that does nothing.
+ */
+importRouter.get("/manager-queue", requireAuth, requireOwner,
+  async (_req: Request, res: Response) => {
+    if (!guard(res)) return;
+    try {
+      const { sources } = await readSettings();
+      const reviewers = (await reviewerImports())
+        .filter((r) => r.userEmail !== "")
+        .map((r) => {
+          // The grid their run would open, not the list's default: a
+          // reviewer moved to the personal grid is not reading the
+          // manager queue and this switch does nothing for them.
+          const lists = r.sources
+            ? sources.filter((x) => r.sources!.includes(x.key))
+            : sources.filter((x) => x.enabled);
+          const reads = lists.some((x) => gridPathFor(x.key, x, r) === MANAGER_GRID);
+          return {
+            email: r.userEmail,
+            managerEnabled: r.managerEnabled,
+            /** False means the switch would change nothing for them. */
+            readsManagerQueue: reads,
+            importEnabled: r.enabled,
+            autoApprove: r.autoApprove,
+            otherLists: lists
+              .filter((x) => gridPathFor(x.key, x, r) !== MANAGER_GRID)
+              .map((x) => x.label),
+          };
+        });
+      res.json({ reviewers, managerGrid: MANAGER_GRID });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : "Could not read it." });
+    }
+  });
+
+importRouter.post("/manager-queue", requireAuth, requireOwner,
+  async (req: Request, res: Response) => {
+    if (!guard(res)) return;
+    const body = req.body as { email?: unknown; managerEnabled?: unknown };
+    const email = String(body.email ?? "").trim().toLowerCase();
+    if (!email) { res.status(400).json({ error: "Name the reviewer." }); return; }
+    const on = body.managerEnabled === true;
+    try {
+      // Only this column. Three screens write to this row, and a save
+      // that wrote every field would have each quietly undoing the others.
+      await setReviewerImport(email, { managerEnabled: on },
+        req.viewingAs?.real.email ?? req.user?.email ?? "");
+      res.json({ ok: true, email, managerEnabled: on });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : "Could not save it." });
+    }
+  });
+
 importRouter.get("/reviewer-imports", requireAuth, requireAdmin, async (_req: Request, res: Response) => {
   if (!guard(res)) return;
   try {

@@ -140,6 +140,8 @@ export type AuthResponse = {
   user: SessionUser | null;
   authConfigured: boolean;
   isAdmin: boolean;
+  /** The account owner, pinned in configuration. Narrower than isAdmin. */
+  isOwner?: boolean;
   /** Set only while an admin is looking through somebody else's eyes. */
   viewingAs?: { real: string; viewed: string } | null;
   /**
