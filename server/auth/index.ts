@@ -567,9 +567,26 @@ authRouter.get("/callback", async (req: Request, res: Response) => {
     const email = String(claims.email ?? claims.preferred_username ?? "");
     clearTransient(res);
 
-    if (!isAllowed(email)) {
-      // Authenticated in the tenant, but not on this app's allow-list.
-      // Worth recording: it is a real account somebody signed into,
+    /*
+     * May they use ANYTHING here?
+     *
+     * Not `isAllowed` alone, which is the EMBURSE list and was the
+     * only product when this gate was written. A second product
+     * arrived with its own list, and somebody on that one and not on
+     * AUTH_ALLOWED — Paul, assigned to Dutch Miller — was refused at
+     * the front door of the app he had been given, told to ask an
+     * administrator about a list that was never going to mention him.
+     *
+     * The door is the deployment's, so the question it asks has to be
+     * the deployment's: do they hold any app at all. Each product's
+     * own guard still decides the rest, and `requireApp` refuses the
+     * one they do not hold exactly as before — this widens the front
+     * door to people who already had a room behind it.
+     */
+    const holds = appsFor(email, "microsoft");
+    if (holds.length === 0) {
+      // Authenticated in the tenant, assigned to nothing. Worth
+      // recording: it is a real account somebody signed into,
       // reaching for an app they have not been given.
       void import("../dutch-miller/audit.js").then(({ audit, requestMeta }) => audit({
         action: "signin.denied",
@@ -577,7 +594,7 @@ authRouter.get("/callback", async (req: Request, res: Response) => {
         // belongs in both logs.
         app: "",
         subject: email,
-        detail: "signed in to the tenant but not on the allow-list",
+        detail: "signed in to the tenant but assigned to no app",
         ...requestMeta(req as never),
       })).catch(() => {});
       res.status(403).type("html").send(deniedPage(email));
@@ -637,11 +654,22 @@ const shell = (title: string, body: string): string => `<!doctype html>
     padding:.55rem 1.1rem;border-radius:.5rem;font-size:.875rem;font-weight:600}
 </style></head><body><div class="card">${body}</div></body></html>`;
 
+/**
+ * Signed in, assigned to nothing.
+ *
+ * Names BOTH lists, because there are two products and the page
+ * cannot know which one they were reaching for. It used to name
+ * MOJO Expense and AUTH_ALLOWED only, which sent a partner who had
+ * been given the dealer app to ask about a list that was never
+ * going to mention them.
+ */
 const deniedPage = (email: string): string =>
   shell(
     "Access denied",
-    `<h1>Access denied</h1><p>${escapeHtml(email)} is not on the access list for MOJO Expense.
-     Ask an administrator to add you to <code>AUTH_ALLOWED</code>.</p>
+    `<h1>Access denied</h1>
+     <p>${escapeHtml(email)} signed in, but is not assigned to anything here yet.</p>
+     <p>Ask an administrator to add you to <code>AUTH_ALLOWED</code> for MOJO Expense,
+     or to <code>DUTCH_MILLER_ALLOWED</code> for the partner portal.</p>
      <a href="/api/logout">Sign out</a>`,
   );
 

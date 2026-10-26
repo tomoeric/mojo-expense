@@ -81,6 +81,36 @@ try {
   check("asking for one you do NOT hold is ignored", appFor(BRIAN, "dutch-miller") === "emburse");
   check("…and so is nonsense", appFor(ERIC, "../admin") === "emburse");
   check("no preference falls back to the first held", appFor(PAUL, undefined) === "dutch-miller");
+
+  console.log("\n7. The FRONT DOOR asks about every app, not just Emburse");
+  /*
+   * The bug this pins, exactly as it happened.
+   *
+   * AUTH_ALLOWED is the Emburse list and was the only one when the
+   * sign-in gate was written. Paul is assigned to Dutch Miller and
+   * is not on it, so he authenticated in the tenant and was then
+   * refused at the front door of the app he had been given — and
+   * told to ask an administrator about a list that was never going
+   * to mention him.
+   */
+  env({
+    AUTH_ALLOWED: "eric.s@mojocarwash.com, brian.c@mojocarwash.com",
+    DUTCH_MILLER_ALLOWED: undefined,
+    EMBURSE_ALLOWED: undefined,
+  });
+  check("Paul is NOT on the Emburse list", !hasEmburse(PAUL));
+  check("…but he does hold Dutch Miller", hasDutchMiller(PAUL));
+  // The gate the callback uses. Anything other than zero gets in.
+  check("…so the door lets him in", appsFor(PAUL).length > 0,
+    appsFor(PAUL).join(","));
+  check("…and lands him in the partner app", appFor(PAUL, undefined) === "dutch-miller");
+  // And it must still shut on somebody with nothing.
+  check("a tenant account on neither list is still refused",
+    appsFor("nobody@mojocarwash.com").length === 0);
+  check("…and an outsider is too", appsFor("stranger@example.com").length === 0);
+  // Paul holds ONE app, so the other one stays shut behind its guard.
+  check("holding Dutch Miller does not hand him Emburse",
+    !appsFor(PAUL).includes("emburse"));
 } finally {
   // Nothing persistent to clean up — this only ever read env vars.
 }

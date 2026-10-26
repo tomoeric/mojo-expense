@@ -392,6 +392,21 @@ the blocks.
   can actually approve — reported, never refused, so a save cannot silently leave
   the previous reviewer in place.
 
+## The sign-in gate belongs to the DEPLOYMENT, not to Emburse
+
+- **The OIDC callback admits anybody who holds ANY app** —
+  `appsFor(email, "microsoft").length > 0`, never `isAllowed()` alone.
+  `AUTH_ALLOWED` is the EMBURSE list and was the only one when that gate was
+  written; checking it by itself refused a Dutch Miller partner at the front
+  door of the app they had been given, and told them to ask about a list that
+  would never mention them. Never narrow this back to one product's list.
+- Each product's own guard still decides the rest: `requireApp` refuses the one
+  they do not hold, exactly as before. Widening the door grants no room.
+- Signing in is NOT the same as having a Dutch Miller role. Somebody newly let
+  through lands on the shell with no pages until a super admin gives them one
+  under Users & Access. That is correct, and worth saying out loud when adding
+  somebody, because it looks like the fix did not work.
+
 ## The manager queue switch (Emburse)
 
 - **`reviewer_imports.manager_enabled`, per reviewer, default ON.** Off skips only
