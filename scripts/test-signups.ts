@@ -42,6 +42,7 @@ const entry = (over: Record<string, string> = {}) => {
     dlwContractId: "0041", dealNumber: "00712", customerId: "C-9",
     firstName: "Dana", lastName: "Reyes",
     plateDlw: "", vehicleMake: "Ford", vehicleModel: "Bronco",
+    customerPhone: "3045550133", customerEmail: "Dana@Example.com",
     vehicleYear: "2024", vehicleColor: "Blue", stickerAttached: true,
     rfid: TAGS[0]!,
     ...over,
@@ -92,6 +93,37 @@ try {
   check("surrounding space goes", trimmed.clean.dlwContractId === "0041",
     JSON.stringify(trimmed.clean.dlwContractId));
   check("…and the leading zero stays", trimmed.clean.dlwContractId.startsWith("0"));
+
+  console.log("\n1b. How to reach the MEMBER");
+  /*
+   * Not the dealer who submitted them, which is what submittedBy has
+   * always been. Both optional — a walk-in at a desk does not always
+   * hand over each — and both checked when given, because a mistyped
+   * address is worth catching while they are standing there.
+   */
+  check("neither is required", !validateSignup({}).errors.customerEmail
+    && !validateSignup({}).errors.customerPhone);
+  check("a bad address is refused",
+    Boolean(validateSignup({ customerEmail: "not an address" }).errors.customerEmail));
+  check("…and a good one is kept, lower-cased",
+    validateSignup({ customerEmail: "  Dana@Example.COM " }).clean.customerEmail
+      === "dana@example.com");
+  check("a number too short to be one is refused",
+    Boolean(validateSignup({ customerPhone: "555-013" }).errors.customerPhone));
+  // Written the way it is read aloud, so the list, the export and the
+  // email all agree without three callers formatting it themselves.
+  check("ten digits are formatted",
+    validateSignup({ customerPhone: "3045550133" }).clean.customerPhone
+      === "(304) 555-0133",
+    validateSignup({ customerPhone: "3045550133" }).clean.customerPhone);
+  check("…and a leading 1 is dropped first",
+    validateSignup({ customerPhone: "1 (304) 555-0133" }).clean.customerPhone
+      === "(304) 555-0133");
+  // Anything with words in it is somebody's extension or note, and a
+  // formatter that insists would throw it away.
+  check("an extension is kept as typed",
+    validateSignup({ customerPhone: "304-555-0133 ext 12" }).clean.customerPhone
+      === "304-555-0133 ext 12");
 
   console.log("\n2. The generated values are the server's");
   const forged = await createSignup(
@@ -221,6 +253,10 @@ try {
 
   console.log("\n10. Reading back");
   const got = await getSignup(one.guid);
+  check("the member's own contact details come back",
+    got?.customer.phone === "(304) 555-0133"
+      && got?.customer.email === "dana@example.com",
+    `${got?.customer.phone} / ${got?.customer.email}`);
   check("the three buckets come back grouped",
     got?.dealer.dealNumber === "00712" && got?.customer.vehicleMake === "Ford");
   const listed = await listSignups({ search: "reyes" });

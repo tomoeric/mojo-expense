@@ -6,7 +6,7 @@ type ReviewerCheck = {
   email: string; ok: boolean; problems: string[]; because: string;
 };
 type Notify = {
-  reviewer: string;
+  reviewers: string[];
   notifiers: string[];
   enabled: boolean;
   copySubmitter: boolean;
@@ -30,7 +30,7 @@ export function DmSettingsPage() {
   const [dirty, setDirty] = useState(false);
   // The last answer the server gave about the reviewer, from the load
   // or the save — whichever came later.
-  const [saved, setSaved] = useState<{ reviewerCheck?: ReviewerCheck }>({});
+  const [saved, setSaved] = useState<{ reviewerChecks?: ReviewerCheck[] }>({});
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
 
@@ -40,7 +40,7 @@ export function DmSettingsPage() {
       const res = await fetch("/api/dutch-miller/settings/notifications");
       if (!res.ok) throw new Error((await res.json()).error ?? "Could not load.");
       return (await res.json()) as {
-        notify: Notify; mailConfigured: boolean; reviewerCheck: ReviewerCheck;
+        notify: Notify; mailConfigured: boolean; reviewerChecks: ReviewerCheck[];
       };
     },
   });
@@ -49,11 +49,11 @@ export function DmSettingsPage() {
   // halfway through typing a list of addresses would wipe it.
   useEffect(() => {
     if (!data.data || dirty) return;
-    setReviewer(data.data.notify.reviewer);
+    setReviewer(data.data.notify.reviewers.join("\n"));
     setText(data.data.notify.notifiers.join("\n"));
     setEnabled(data.data.notify.enabled);
     setCopySubmitter(data.data.notify.copySubmitter);
-    setSaved({ reviewerCheck: data.data.reviewerCheck });
+    setSaved({ reviewerChecks: data.data.reviewerChecks });
   }, [data.data, dirty]);
 
   const save = useMutation({
@@ -61,19 +61,19 @@ export function DmSettingsPage() {
       const res = await fetch("/api/dutch-miller/settings/notifications", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ reviewer, notifiers: text, enabled, copySubmitter }),
+        body: JSON.stringify({ reviewers: reviewer, notifiers: text, enabled, copySubmitter }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "Could not save.");
-      return body as { notify: Notify; reviewerCheck: ReviewerCheck };
+      return body as { notify: Notify; reviewerChecks: ReviewerCheck[] };
     },
     onSuccess: (b) => {
       setError("");
       setDirty(false);
-      setReviewer(b.notify.reviewer);
+      setReviewer(b.notify.reviewers.join("\n"));
       setText(b.notify.notifiers.join("\n"));
-      setSaved({ reviewerCheck: b.reviewerCheck });
-      setNote(`Saved. ${b.notify.reviewer || "no reviewer"}`
+      setSaved({ reviewerChecks: b.reviewerChecks });
+      setNote(`Saved. ${b.notify.reviewers.join(", ") || "no reviewer"}`
         + `${b.notify.notifiers.length > 0
           ? `, plus ${b.notify.notifiers.length} notified`
           : ""}.`);
@@ -147,17 +147,20 @@ export function DmSettingsPage() {
               list where everybody assumes somebody else has it. */}
           <div>
             <label htmlFor="reviewer" className="mb-1 block text-xs font-semibold">
-              CSC Reviewer
+              CSC Reviewers
             </label>
             <p className="mb-1 text-xs text-muted-foreground">
-              One person. They get the email with a button straight to the record, and the
-              review is theirs.
+              One per line. Each gets the email with a button straight to the record,
+              and the review is theirs to do. Approving is one-way and first-come, so
+              a second reviewer opening a record that is already done is told so
+              rather than doing it twice.
             </p>
-            <input
+            <textarea
               id="reviewer"
+              rows={2}
               value={reviewer}
               onChange={(e) => { setReviewer(e.target.value); setDirty(true); setNote(""); }}
-              placeholder="name@mojocarwash.com"
+              placeholder={"csc@mojocarwash.com\nsecond.csc@mojocarwash.com"}
               className="w-full max-w-md rounded-md border border-border bg-background px-3 py-2 font-mono text-sm"
             />
             {/* Checked against what they can actually DO, every time the
@@ -166,7 +169,7 @@ export function DmSettingsPage() {
                 somebody else changed their role, and the failure is
                 silent: the email goes out with a link to a record they
                 will be refused. */}
-            {!dirty && <ReviewerStatus check={saved.reviewerCheck} />}
+            {!dirty && <ReviewerStatus checks={saved.reviewerChecks} />}
           </div>
 
           <div>
@@ -526,13 +529,30 @@ function RemindersSection() {
  * the save would leave the previous reviewer in place with nothing on
  * screen saying so.
  */
-function ReviewerStatus({ check }: { check?: ReviewerCheck }) {
-  if (!check) return null;
+function ReviewerStatus({ checks }: { checks?: ReviewerCheck[] }) {
+  if (!checks) return null;
+  // Nobody set at all is one message; otherwise one answer per person,
+  // because a list where only the third cannot approve is exactly as
+  // broken as a single one who cannot, and only naming them finds it.
+  if (checks.length === 0) {
+    return (
+      <div className="mt-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2">
+        <p className="flex items-center gap-1.5 text-xs font-semibold text-amber-900 dark:text-amber-200">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          No reviewer is set, so new members notify nobody.
+        </p>
+      </div>
+    );
+  }
+  return <>{checks.map((c) => <OneReviewer key={c.email} check={c} />)}</>;
+}
+
+function OneReviewer({ check }: { check: ReviewerCheck }) {
   if (check.ok) {
     return (
       <p className="mt-1.5 flex items-start gap-1.5 text-xs text-emerald-700 dark:text-emerald-400">
         <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-        <span>{check.because}</span>
+        <span><strong>{check.email}</strong> — {check.because}</span>
       </p>
     );
   }
@@ -540,9 +560,7 @@ function ReviewerStatus({ check }: { check?: ReviewerCheck }) {
     <div className="mt-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2">
       <p className="flex items-center gap-1.5 text-xs font-semibold text-amber-900 dark:text-amber-200">
         <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-        {check.email
-          ? "This reviewer cannot complete the review they would be sent"
-          : "No reviewer is set"}
+        {check.email} cannot complete the review they would be sent
       </p>
       <ul className="mt-1 space-y-0.5 text-xs text-amber-900 dark:text-amber-200">
         {check.problems.map((p) => <li key={p}>• {p}</li>)}

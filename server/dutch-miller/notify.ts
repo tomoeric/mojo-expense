@@ -116,6 +116,10 @@ export function signupEmail(s: SignupRow, opts: {
 
      ${bucket("Customer", [
        row("Name", `${s.customer.firstName} ${s.customer.lastName}`.trim()),
+       // The member's own contact details, so whoever reviews this
+       // can reach them without going back into the app to look.
+       row("Phone", s.customer.phone),
+       row("Email", s.customer.email),
        row("Plate (DLW)", [s.customer.plateDlw, s.customer.plateState]
          .filter(Boolean).join("  ·  ") || null),
        row("Vehicle", [s.customer.vehicleYear, s.customer.vehicleMake, s.customer.vehicleModel]

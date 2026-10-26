@@ -377,6 +377,30 @@ the blocks.
 - **A deleted RFID never returns to the pool** — not by re-uploading the file that
   brought it in, not through Make active, not through `useRfid`.
 
+## The member's own contact details
+
+- **`customer_phone` / `customer_email` are the MEMBER's**, not the dealer's —
+  `submitted_by` has always been the dealer. Optional (a walk-in at a desk does
+  not always hand over both), validated when given, and shown on the record, the
+  detailed export and the reviewer's email.
+- Phone is stored FORMATTED by `formatPhone()`, so the list, the export and the
+  email read the same without three callers agreeing on it. Anything with
+  letters in it — an extension, a note — is kept exactly as typed.
+- **Bulk columns are positional in the tests.** Adding a column to
+  `BULK_COLUMNS` shifts every fixture row in `test-bulk.ts`.
+
+## More than one CSC Reviewer
+
+- `SignupNotify.reviewers` is a LIST. It was one person, on the reasoning that
+  "who is reviewing this?" needs a single answer — which holds until that person
+  is on holiday. Safe to share because approving is one-way and first-come: a
+  second reviewer opening an approved record is told it is done.
+- `getSignupNotify()` still reads BOTH older shapes (a flat `recipients` list,
+  and a single `reviewer`). Do not drop that — the alternative to reading an old
+  setting is silently sending nobody anything.
+- A reviewer is never also a notifier, and `checkReviewer` runs per person, so a
+  list where only the third cannot approve still says which one.
+
 ## Vehicle year, make and model
 
 - **Year is arithmetic**, not a lookup: next year down to 1981 (the first

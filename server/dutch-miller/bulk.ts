@@ -36,6 +36,10 @@ export const BULK_COLUMNS = [
   { key: "customerId", header: "Customer ID #", required: false, note: "Optional." },
   { key: "firstName", header: "First Name", required: true, note: "" },
   { key: "lastName", header: "Last Name", required: true, note: "" },
+  { key: "customerPhone", header: "Phone", required: false,
+    note: "The MEMBER's number, not the dealership's. Optional." },
+  { key: "customerEmail", header: "Email", required: false,
+    note: "The member's own address. Optional." },
   { key: "plateDlw", header: "Plate", required: false, note: "Optional." },
   { key: "plateState", header: "State", required: false,
     note: "Two letters, e.g. WV. Optional." },
@@ -51,7 +55,8 @@ export type BulkColumnKey = (typeof BULK_COLUMNS)[number]["key"];
 export function templateCsv(): string {
   const head = BULK_COLUMNS.map((c) => c.header).join(",");
   const example = [
-    "0041", "00712", "C-9", "Dana", "Reyes", "ABC 1234", "WV",
+    "0041", "00712", "C-9", "Dana", "Reyes", "(304) 555-0133",
+    "dana@example.com", "ABC 1234", "WV",
     "2024", "Ford", "Bronco", "Blue",
   ].join(",");
   return `${head}\r\n${example}\r\n`;

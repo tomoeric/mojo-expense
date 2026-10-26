@@ -31,7 +31,10 @@ export type SignupRow = {
   displayTimezone: string;
   dealer: { dlwContractId: string; dealNumber: string; customerId: string };
   customer: {
-    firstName: string; lastName: string; plateDlw: string | null;
+    firstName: string; lastName: string;
+    /** How to reach the MEMBER. Both optional. */
+    phone: string | null; email: string | null;
+    plateDlw: string | null;
     plateState: string | null;
     vehicleMake: string | null; vehicleModel: string | null;
     vehicleYear: string | null; vehicleColor: string | null; rfid: string;
@@ -651,7 +654,8 @@ function ExportMenu({ rows }: { rows: SignupRow[] }) {
 
   const download = (detailed: boolean) => {
     const head = detailed
-      ? ["Customer", "First Name", "Last Name", "DLW Contract ID", "Deal #", "Customer ID #",
+      ? ["Customer", "First Name", "Last Name", "Phone", "Email",
+        "DLW Contract ID", "Deal #", "Customer ID #",
         "Plate", "State", "Vehicle Year", "Vehicle Make", "Vehicle Model", "Vehicle Color",
         "RFID", "Sticker Attached", "Status", "Date Created", "Time Created",
         "Submitted By", "Email Sent",
@@ -668,6 +672,7 @@ function ExportMenu({ rows }: { rows: SignupRow[] }) {
       ? [
         `${r.customer.firstName} ${r.customer.lastName}`.trim(),
         r.customer.firstName, r.customer.lastName,
+        r.customer.phone ?? "", r.customer.email ?? "",
         r.dealer.dlwContractId, r.dealer.dealNumber, r.dealer.customerId,
         r.customer.plateDlw ?? "", r.customer.plateState ?? "",
         r.customer.vehicleYear ?? "", r.customer.vehicleMake ?? "",
@@ -998,6 +1003,8 @@ function ViewSignup({
         <Bucket title="Customer">
           <Readout label="First Name" value={row.customer.firstName} />
           <Readout label="Last Name" value={row.customer.lastName} />
+          <Readout label="Phone" value={row.customer.phone} />
+          <Readout label="Email" value={row.customer.email} />
           <Readout
             label="Plate (DLW)"
             value={[row.customer.plateDlw, row.customer.plateState].filter(Boolean).join("  ")

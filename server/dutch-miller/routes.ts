@@ -584,7 +584,10 @@ dutchMillerRouter.get("/settings/notifications", requireDmAdmin,
       // Checked every time the page opens, not only when it is saved:
       // the reviewer can stop being able to approve long afterwards,
       // by somebody else changing their role.
-      reviewerCheck: await checkReviewer(notify.reviewer),
+      // One answer per reviewer. A list where one of them cannot
+      // approve is exactly as broken as a single one who cannot, and
+      // only saying so per person makes it findable.
+      reviewerChecks: await Promise.all(notify.reviewers.map(checkReviewer)),
     });
   });
 
@@ -594,12 +597,11 @@ dutchMillerRouter.post("/settings/notifications", requireDmAdmin,
     // Both fields arrive as raw text, because that is what somebody
     // pastes. The server decides what an address is and says which
     // entries it refused rather than quietly dropping them.
-    const reviewer = parseRecipients(body.reviewer);
-    if (reviewer.rejected.length > 0 || reviewer.ok.length > 1) {
+    const reviewer = parseRecipients(body.reviewers ?? body.reviewer);
+    if (reviewer.rejected.length > 0) {
       res.status(400).json({
-        error: reviewer.ok.length > 1
-          ? "There can be only one CSC Reviewer."
-          : `Not an email address: ${reviewer.rejected.slice(0, 3).join(", ")}`,
+        error: `Not an email address: ${reviewer.rejected.slice(0, 3).join(", ")}`,
+        rejected: reviewer.rejected,
       });
       return;
     }
@@ -613,7 +615,7 @@ dutchMillerRouter.post("/settings/notifications", requireDmAdmin,
     }
     try {
       const notify = await setSignupNotify({
-        reviewer: reviewer.ok[0] ?? "",
+        reviewers: reviewer.ok,
         notifiers: notifiers.ok,
         enabled: body.enabled !== false,
         copySubmitter: body.copySubmitter === true,
@@ -621,14 +623,17 @@ dutchMillerRouter.post("/settings/notifications", requireDmAdmin,
       await audit({
         action: "notify.changed", ...who(req),
         detail: notify.enabled
-          ? `reviewer ${notify.reviewer} · ${notify.notifiers.length} notified`
+          ? `${notify.reviewers.length} reviewer(s) · ${notify.notifiers.length} notified`
           : "off",
       });
       // Saved either way, and reported. An administrator may have a
       // reason to point notifications at somebody while a role is being
       // sorted out; refusing the save would leave the OLD reviewer in
       // place with nothing on screen saying so.
-      res.json({ notify, reviewerCheck: await checkReviewer(notify.reviewer) });
+      res.json({
+        notify,
+        reviewerChecks: await Promise.all(notify.reviewers.map(checkReviewer)),
+      });
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
     }
@@ -693,7 +698,8 @@ dutchMillerRouter.post("/settings/notifications/sample", requireDmAdmin,
       displayTimezone: DISPLAY_TZ,
       dealer: { dlwContractId: "0041", dealNumber: "00712", customerId: "C-9" },
       customer: {
-        firstName: "Sample", lastName: "Member", plateDlw: "ABC 1234", plateState: "WV",
+        firstName: "Sample", lastName: "Member",
+        phone: "(304) 555-0133", email: "member@example.invalid", plateDlw: "ABC 1234", plateState: "WV",
         vehicleMake: "Ford", vehicleModel: "Bronco", vehicleYear: "2024",
         vehicleColor: "Blue", rfid: "00000+000000", stickerAttached: true,
         stickerState: "confirmed",

@@ -33,7 +33,8 @@ const ROW: SignupRow = {
   displayTimezone: "America/Chicago",
   dealer: { dlwContractId: "0041", dealNumber: "00712", customerId: "C-9" },
   customer: {
-    firstName: "Dana", lastName: "Reyes", plateDlw: "ABC 1234", plateState: "WV",
+    firstName: "Dana", lastName: "Reyes",
+        phone: "(304) 555-0133", email: "member@example.invalid", plateDlw: "ABC 1234", plateState: "WV",
     vehicleMake: "Ford", vehicleModel: "Bronco", vehicleYear: "2024",
     vehicleColor: "Blue", rfid: "12345+678901", stickerAttached: true,
         stickerState: "confirmed",
@@ -73,11 +74,12 @@ try {
 
   console.log("\n2. Nobody is told until there is a reviewer");
   check("an unset setting sends to nobody", (await recipientsFor(ME)).length === 0);
-  check("…and reads as having no reviewer", (await getSignupNotify()).reviewer === "");
+  check("…and reads as having no reviewer",
+    (await getSignupNotify()).reviewers.length === 0);
 
-  console.log("\n3. The reviewer is one person");
+  console.log("\n3. Reviewers act; notifiers are only told");
   await setSignupNotify({
-    reviewer: "csc@mojocarwash.com",
+    reviewers: ["csc@mojocarwash.com"],
     notifiers: ["ops@mojocarwash.com", "memberships@mojocarwash.com"],
     enabled: true, copySubmitter: false,
   }, "tester@mojocarwash.com");
@@ -85,13 +87,13 @@ try {
   check("everybody is told", to.length === 3, JSON.stringify(to));
   check("…exactly one of them as the reviewer",
     to.filter((r) => r.as === "reviewer").length === 1);
-  check("…and the reviewer is first, since the message is theirs",
+  check("…and a reviewer is first, since the message is theirs",
     to[0]?.as === "reviewer" && to[0]?.email === "csc@mojocarwash.com");
   check("the rest are notifiers", to.slice(1).every((r) => r.as === "notifier"));
   // One address in two roles would get two messages disagreeing about
   // whose job it is.
   await setSignupNotify({
-    reviewer: "csc@mojocarwash.com",
+    reviewers: ["csc@mojocarwash.com"],
     notifiers: ["csc@mojocarwash.com", "ops@mojocarwash.com"],
     enabled: true, copySubmitter: false,
   }, "tester@mojocarwash.com");
@@ -102,23 +104,64 @@ try {
   let refused = "";
   try {
     await setSignupNotify({
-      reviewer: "", notifiers: ["ops@mojocarwash.com"], enabled: true, copySubmitter: false,
+      reviewers: [], notifiers: ["ops@mojocarwash.com"], enabled: true, copySubmitter: false,
     }, "tester@mojocarwash.com");
   } catch (e) { refused = (e as Error).message; }
-  check("switching on without one is refused", /CSC Reviewer/.test(refused), refused);
+  check("switching on with none is refused", /CSC Reviewer/.test(refused), refused);
   check("…because a crowd told it is not their job is nobody told",
-    (await getSignupNotify()).reviewer === "csc@mojocarwash.com");
+    (await getSignupNotify()).reviewers[0] === "csc@mojocarwash.com");
   let badOne = "";
   try {
     await setSignupNotify({
-      reviewer: "not an address", notifiers: [], enabled: true, copySubmitter: false,
+      reviewers: ["not an address"], notifiers: [], enabled: true, copySubmitter: false,
     }, "t");
   } catch (e) { badOne = (e as Error).message; }
   check("a reviewer that is not an address is refused", badOne !== "");
 
+  console.log("\n4b. More than one CSC");
+  /*
+   * One reviewer was the original rule, on the reasoning that "who is
+   * reviewing this?" should have a single answer. It holds until that
+   * person is on holiday, and a queue nobody can approve is worse
+   * than one two people might both open.
+   */
+  await setSignupNotify({
+    reviewers: ["csc@mojocarwash.com", "csc2@mojocarwash.com"],
+    notifiers: ["ops@mojocarwash.com"],
+    enabled: true, copySubmitter: false,
+  }, "tester@mojocarwash.com");
+  const two = await recipientsFor(ME);
+  check("both are reviewers",
+    two.filter((r) => r.as === "reviewer").length === 2, JSON.stringify(two));
+  check("…each getting the actionable message",
+    two.filter((r) => r.as === "reviewer")
+      .every((r) => signupEmail(ROW, {
+        as: r.as, origin: "https://partnersmojocarwash.com",
+      }).html.includes("Open in MOJO")),
+    "");
+  check("…and the notifier is still only told", two.some((r) => r.as === "notifier"));
+  // The same address twice is one person, however it was typed.
+  await setSignupNotify({
+    reviewers: ["csc@mojocarwash.com", "CSC@mojocarwash.com "],
+    notifiers: [], enabled: true, copySubmitter: false,
+  }, "tester@mojocarwash.com");
+  check("a repeat is one reviewer",
+    (await getSignupNotify()).reviewers.length === 1,
+    JSON.stringify((await getSignupNotify()).reviewers));
+  // And a reviewer is never also a notifier.
+  await setSignupNotify({
+    reviewers: ["csc@mojocarwash.com", "ops@mojocarwash.com"],
+    notifiers: ["ops@mojocarwash.com"], enabled: true, copySubmitter: false,
+  }, "tester@mojocarwash.com");
+  const split = await recipientsFor(ME);
+  check("somebody on both lists is a reviewer once",
+    split.filter((r) => r.email === "ops@mojocarwash.com").length === 1
+      && split.find((r) => r.email === "ops@mojocarwash.com")?.as === "reviewer",
+    JSON.stringify(split));
+
   console.log("\n5. Copying the submitter");
   await setSignupNotify({
-    reviewer: "csc@mojocarwash.com", notifiers: ["ops@mojocarwash.com"],
+    reviewers: ["csc@mojocarwash.com"], notifiers: ["ops@mojocarwash.com"],
     enabled: true, copySubmitter: true,
   }, "tester@mojocarwash.com");
   const withMe = await recipientsFor(ME);
@@ -129,12 +172,12 @@ try {
 
   console.log("\n6. Switched off means off");
   await setSignupNotify({
-    reviewer: "csc@mojocarwash.com", notifiers: ["ops@mojocarwash.com"],
+    reviewers: ["csc@mojocarwash.com"], notifiers: ["ops@mojocarwash.com"],
     enabled: false, copySubmitter: true,
   }, "tester@mojocarwash.com");
   check("nobody is told", (await recipientsFor(ME)).length === 0);
   check("…and both lists are kept for when it comes back on",
-    (await getSignupNotify()).reviewer === "csc@mojocarwash.com"
+    (await getSignupNotify()).reviewers[0] === "csc@mojocarwash.com"
       && (await getSignupNotify()).notifiers.length === 1);
 
   console.log("\n7. What the message says");

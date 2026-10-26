@@ -49,13 +49,18 @@ const NOTIFY_KEY = "signup_notify";
 
 export type SignupNotify = {
   /**
-   * The one person whose job this is.
+   * The people whose job this is. Each gets the actionable link.
    *
-   * Exactly one, because "who is reviewing this?" has to have a single
-   * answer. A shared list of reviewers is a list where everyone
-   * assumes somebody else has it.
+   * It used to be exactly one, on the reasoning that "who is
+   * reviewing this?" should have a single answer — a shared list
+   * being a list where everyone assumes somebody else has it. That
+   * holds right up until the one person is on holiday, and a queue
+   * nobody can approve is worse than one two people might both look
+   * at. Approving is already safe to share: it is one-way and
+   * first-come, so a second reviewer opening an approved record is
+   * told it is done rather than doing it twice.
    */
-  reviewer: string;
+  reviewers: string[];
   /** Everybody else who wants to see them. No action expected. */
   notifiers: string[];
   /** Off without clearing either list, so turning it back on is not a retype. */
@@ -113,16 +118,27 @@ export async function getSignupNotify(): Promise<SignupNotify> {
    * dropping it and silently sending nobody anything.
    */
   const legacy = list(stored?.recipients);
-  const reviewer = EMAIL_RE.test(clean(stored?.reviewer))
-    ? clean(stored?.reviewer)
-    : (legacy[0] ?? "");
+  /*
+   * Two older shapes, both still read.
+   *
+   * A flat `recipients` list came first; then a single `reviewer`
+   * with notifiers beside it. Either is turned into the list without
+   * anybody retyping anything, because the alternative to reading an
+   * old setting is silently sending nobody anything.
+   */
+  const stored_reviewers = Array.isArray(stored?.reviewers)
+    ? list(stored.reviewers)
+    : EMAIL_RE.test(clean(stored?.reviewer))
+      ? [clean(stored?.reviewer)]
+      : legacy.slice(0, 1);
+  const reviewers = [...new Set(stored_reviewers)];
   const notifiers = stored?.notifiers !== undefined
     ? list(stored.notifiers)
     : legacy.slice(1);
 
   return {
-    reviewer,
-    notifiers: [...new Set(notifiers)].filter((a) => a !== reviewer),
+    reviewers,
+    notifiers: [...new Set(notifiers)].filter((a) => !reviewers.includes(a)),
     enabled: stored?.enabled !== false && Boolean(stored),
     copySubmitter: stored?.copySubmitter === true,
     updatedAt: rows[0]?.updated_at.toISOString() ?? null,
@@ -131,21 +147,23 @@ export async function getSignupNotify(): Promise<SignupNotify> {
 }
 
 export async function setSignupNotify(
-  opts: { reviewer: string; notifiers: string[]; enabled: boolean; copySubmitter: boolean },
+  opts: {
+    reviewers: string[]; notifiers: string[]; enabled: boolean; copySubmitter: boolean;
+  },
   by: string,
 ): Promise<SignupNotify> {
-  const reviewer = opts.reviewer.trim().toLowerCase();
-  if (reviewer !== "" && !EMAIL_RE.test(reviewer)) {
-    throw new Error("The CSC Reviewer is not an email address.");
-  }
-  if (opts.enabled && reviewer === "") {
-    throw new Error("Set a CSC Reviewer, or switch notifications off.");
+  const reviewers = [...new Set(
+    opts.reviewers.map((r) => r.trim().toLowerCase()).filter((r) => r !== ""))];
+  const bad = reviewers.find((r) => !EMAIL_RE.test(r));
+  if (bad) throw new Error(`Not an email address: ${bad}`);
+  if (opts.enabled && reviewers.length === 0) {
+    throw new Error("Set at least one CSC Reviewer, or switch notifications off.");
   }
   await write(NOTIFY_KEY, {
-    reviewer,
+    reviewers,
     // Never both: one address in two roles would get two copies saying
     // different things about whose job it is.
-    notifiers: [...new Set(opts.notifiers)].filter((a) => a !== reviewer),
+    notifiers: [...new Set(opts.notifiers)].filter((a) => !reviewers.includes(a)),
     enabled: opts.enabled,
     copySubmitter: opts.copySubmitter,
   }, by);
@@ -155,18 +173,20 @@ export async function setSignupNotify(
 /**
  * Everybody who should hear about one signup, and in what capacity.
  *
- * Switched off, or no reviewer, means nobody — a notifier list on its
- * own would send a crowd of people a message telling each of them it
- * is not their job. The submitter's copy is last and deduplicated, so
- * nobody receives two.
+ * Switched off, or no reviewer at all, means nobody — a notifier
+ * list on its own would send a crowd of people a message telling
+ * each of them it is not their job. The submitter's copy is last and
+ * deduplicated, so nobody receives two.
  */
 export async function recipientsFor(
   submittedBy: string,
 ): Promise<{ email: string; as: Audience }[]> {
   const s = await getSignupNotify();
-  if (!s.enabled || s.reviewer === "") return [];
+  if (!s.enabled || s.reviewers.length === 0) return [];
 
-  const out: { email: string; as: Audience }[] = [{ email: s.reviewer, as: "reviewer" }];
+  const out: { email: string; as: Audience }[] = s.reviewers.map((email) => ({
+    email, as: "reviewer" as const,
+  }));
   for (const email of s.notifiers) {
     if (!out.some((r) => r.email === email)) out.push({ email, as: "notifier" });
   }

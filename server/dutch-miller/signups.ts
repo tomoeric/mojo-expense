@@ -147,6 +147,22 @@ ALTER TABLE dm_member_signups ADD COLUMN IF NOT EXISTS deleted_at  timestamptz;
 ALTER TABLE dm_member_signups ADD COLUMN IF NOT EXISTS deleted_by  text;
 ALTER TABLE dm_member_signups ADD COLUMN IF NOT EXISTS delete_note text;
 /*
+ * How to reach the MEMBER.
+ *
+ * Not the dealer who submitted them, which is what the submitted_by
+ * column has always been. When a tag will not read at the gate, or a
+ * membership has to be queried, the person who needs telling is the
+ * one sitting in the car — and until now nothing in the record said
+ * how to find them.
+ *
+ * Optional, because a walk-in is signed up at a desk and not every
+ * one of them hands over both. Validated when given, so a mistyped
+ * address is caught at the counter rather than discovered when the
+ * first email bounces.
+ */
+ALTER TABLE dm_member_signups ADD COLUMN IF NOT EXISTS customer_phone text;
+ALTER TABLE dm_member_signups ADD COLUMN IF NOT EXISTS customer_email text;
+/*
  * A tag belongs to one LIVE member.
  *
  * Partial, replacing the unconditional index that came before it. A
@@ -190,6 +206,9 @@ export type SignupRow = {
   dealer: { dlwContractId: string; dealNumber: string; customerId: string };
   customer: {
     firstName: string; lastName: string;
+    /** How to reach the MEMBER. Both optional; checked when given. */
+    phone: string | null;
+    email: string | null;
     plateDlw: string | null;
     plateState: string | null;
     vehicleMake: string | null; vehicleModel: string | null;
@@ -262,6 +281,7 @@ export type SignupInput = {
   guid: string; createdAt: string; token: string;
   dlwContractId: string; dealNumber: string; customerId: string;
   firstName: string; lastName: string;
+  customerPhone: string; customerEmail: string;
   plateDlw: string; plateState: string;
   vehicleMake: string; vehicleModel: string;
   vehicleYear: string; vehicleColor: string;
@@ -278,6 +298,28 @@ export type SignupInput = {
  * somebody will have to chase down later.
  */
 const t = (v: unknown): string => String(v ?? "").trim();
+
+const CUSTOMER_EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/;
+
+export const digitsOf = (v: string): string => v.replace(/\D/g, "");
+
+/**
+ * A phone number, written the way it is read aloud.
+ *
+ * Ten digits become (304) 555-0133, and eleven beginning with a 1
+ * lose the 1 first. Anything else is kept exactly as typed:
+ * extensions, country codes and the notes people put beside a number
+ * are all real, and a formatter that insists would throw them away.
+ *
+ * Stored formatted rather than as digits so the list, the export and
+ * the email all read the same without three callers agreeing on it.
+ */
+export function formatPhone(raw: string): string {
+  const d = digitsOf(raw);
+  const ten = d.length === 11 && d.startsWith("1") ? d.slice(1) : d;
+  if (ten.length !== 10 || /[a-z]/i.test(raw)) return raw;
+  return `(${ten.slice(0, 3)}) ${ten.slice(3, 6)}-${ten.slice(6)}`;
+}
 
 /**
  * The plate's state, as the two letters on the registration.
@@ -321,6 +363,8 @@ export function validateSignup(
     customerId: t(raw.customerId),
     firstName: t(raw.firstName),
     lastName: t(raw.lastName),
+    customerPhone: formatPhone(t(raw.customerPhone)),
+    customerEmail: t(raw.customerEmail).toLowerCase(),
     plateDlw: t(raw.plateDlw),
     plateState: t(raw.plateState).toUpperCase(),
     vehicleMake: t(raw.vehicleMake),
@@ -350,6 +394,22 @@ export function validateSignup(
   if (clean.rfid !== "" && !RFID_RE.test(clean.rfid)) {
     errors.rfid = "That is not an RFID number.";
   }
+  /*
+   * Both optional, both checked when given.
+   *
+   * A mistyped address is worth catching at the counter, while the
+   * member is standing there, rather than when the first email
+   * bounces three weeks later and nobody knows what it should have
+   * said. The phone test is deliberately loose — extensions,
+   * country codes and the way people actually write a number — and
+   * only refuses something that cannot be a phone number at all.
+   */
+  if (clean.customerEmail !== "" && !CUSTOMER_EMAIL_RE.test(clean.customerEmail)) {
+    errors.customerEmail = "That is not an email address.";
+  }
+  if (clean.customerPhone !== "" && digitsOf(clean.customerPhone).length < 10) {
+    errors.customerPhone = "A phone number needs at least ten digits.";
+  }
   // An attestation that can be skipped is decoration. The tag has
   // already left the pool by the time anyone looks at this record, so
   // the moment to ask is before it is submitted, not after.
@@ -368,6 +428,7 @@ type Db = {
   guid: string; created_at: Date; display_timezone: string;
   dlw_contract_id: string; deal_number: string; customer_id: string;
   first_name: string; last_name: string;
+  customer_phone: string | null; customer_email: string | null;
   plate_dlw: string | null; plate_state: string | null;
   vehicle_make: string | null; vehicle_model: string | null;
   vehicle_year: string | null; vehicle_color: string | null; rfid: string;
@@ -393,6 +454,8 @@ const shape = (r: Db): SignupRow => ({
   customer: {
     firstName: r.first_name,
     lastName: r.last_name,
+    phone: r.customer_phone,
+    email: r.customer_email,
     plateDlw: r.plate_dlw,
     plateState: r.plate_state,
     vehicleMake: r.vehicle_make,
@@ -423,7 +486,8 @@ const shape = (r: Db): SignupRow => ({
 });
 
 const COLS = `guid, created_at, display_timezone, dlw_contract_id, deal_number,
-  customer_id, first_name, last_name, plate_dlw, vehicle_make, vehicle_model,
+  customer_id, first_name, last_name, customer_phone, customer_email,
+  plate_dlw, vehicle_make, vehicle_model,
   vehicle_year, vehicle_color, rfid, sticker_attached, sticker_state,
   sticker_confirmed_at, sticker_confirmed_by, submitted_at, submitted_by,
   notified_at, opened_at, opened_by, completed_at, completed_by,
@@ -626,10 +690,12 @@ export async function createSignup(
       `INSERT INTO dm_member_signups (
          guid, created_at, display_timezone,
          dlw_contract_id, deal_number, customer_id,
-         first_name, last_name, plate_dlw, plate_state, vehicle_make, vehicle_model,
+         first_name, last_name, customer_phone, customer_email,
+         plate_dlw, plate_state, vehicle_make, vehicle_model,
          vehicle_year, vehicle_color, rfid, sticker_attached, sticker_state,
           sticker_confirmed_at, sticker_confirmed_by, submitted_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+               NULLIF($19, ''), NULLIF($20, ''),
                NULLIF($9, ''), NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''),
                NULLIF($13, ''), NULLIF($14, ''), $15, $16, $17,
                CASE WHEN $16 THEN now() ELSE NULL END,
@@ -640,7 +706,8 @@ export async function createSignup(
         clean.dlwContractId, clean.dealNumber, clean.customerId,
         clean.firstName, clean.lastName, clean.plateDlw, clean.plateState,
         clean.vehicleMake, clean.vehicleModel, clean.vehicleYear, clean.vehicleColor,
-        clean.rfid, confirmed, confirmed ? "confirmed" : "pending", by]);
+        clean.rfid, confirmed, confirmed ? "confirmed" : "pending", by,
+        clean.customerPhone, clean.customerEmail]);
 
     if (ins.rowCount === 0) {
       // Two submissions of the SAME entry, overlapping. The other one won
