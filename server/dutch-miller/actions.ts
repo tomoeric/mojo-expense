@@ -36,11 +36,11 @@ export type ActionDef = {
 
 export const ACTIONS: ActionDef[] = [
   { key: "member.submit", label: "Submit a member",
-    source: "Member Signups page access" },
+    source: "Member Signups — Add New" },
   { key: "member.import", label: "Import members from a file",
-    source: "Member Signups page access" },
+    source: "Member Signups — Add New" },
   { key: "member.review", label: "Open and review a member record",
-    source: "Member Signups page access" },
+    source: "Member Signups — Review Existing" },
   {
     key: "member.approve",
     label: "Approve a membership",
@@ -48,15 +48,15 @@ export const ACTIONS: ActionDef[] = [
       + "Not granted by administering, and not editable on any role.",
   },
   { key: "member.export", label: "Export member records",
-    source: "Member Signups page access" },
+    source: "Member Signups — Review Existing" },
   { key: "member.delete", label: "Delete a member record",
-    source: "Super administrator only" },
+    source: "Granted per role, plus the super administrator" },
   { key: "rfid.upload", label: "Upload RFID numbers",
     source: "RFID Inventory page access" },
   { key: "rfid.manage", label: "Hold back or release RFID numbers",
     source: "RFID Inventory page access" },
   { key: "rfid.delete", label: "Remove RFID numbers from the pool",
-    source: "Super administrator only" },
+    source: "Granted per role, plus the super administrator" },
   { key: "users.manage", label: "Invite people and set their roles",
     source: "Administering. Making somebody an ADMIN is super only." },
   { key: "roles.manage", label: "Create and edit roles",
@@ -82,6 +82,8 @@ export function actionsFor(a: {
   pages: readonly DmPageKey[];
   administers: boolean;
   approves: boolean;
+  deletesSignups?: boolean;
+  deletesRfid?: boolean;
   /** The pinned super administrator. Holds everything by configuration. */
   pinnedSuper?: boolean;
 }): EffectiveActions {
@@ -93,16 +95,20 @@ export function actionsFor(a: {
   const admin = sup || a.administers;
 
   return {
-    "member.submit": has("member-signups"),
-    "member.import": has("member-signups"),
+    // Two grants now, because enrolling and reviewing are different
+    // jobs: a front desk enrols and never approves, and somebody at
+    // MOJO reads the queue without ever typing a member in.
+    "member.submit": has("member-signups-add"),
+    "member.import": has("member-signups-add"),
     "member.review": has("member-signups"),
     // The one that is NOT a consequence of anything else.
     "member.approve": sup || a.approves,
     "member.export": has("member-signups"),
-    "member.delete": sup,
+    // Grantable per role now, and still never implied by administering.
+    "member.delete": sup || a.deletesSignups === true,
     "rfid.upload": has("rfid-review"),
     "rfid.manage": has("rfid-review"),
-    "rfid.delete": sup,
+    "rfid.delete": sup || a.deletesRfid === true,
     "users.manage": admin,
     "roles.manage": sup,
     "notifications.manage": admin,

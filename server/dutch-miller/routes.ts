@@ -3,15 +3,15 @@ import express, {
 } from "express";
 import { parseRfidFile } from "./rfid-parse.js";
 import {
-  addRfids, deleteRfids, listRfids, rfidCounts, setRfidActive, useRfid,
+  addRfids, deleteRfids, listRfids, rfidCounts, setRfidActive, setRfidTestOnly, useRfid,
 } from "./rfid.js";
 import {
   DISPLAY_TZ, confirmSticker, createSignup, deleteSignup, getSignup, listSignups,
   markOpened, newHandle, setComplete, type SignupInput, type SignupRow,
 } from "./signups.js";
 import {
-  DM_PAGES, assertEmail, canAdminister, checkReviewer, dmAccessFor, getDmUser,
-  isDmPage, isStaff,
+  DM_GRANTS, DM_PAGES, assertEmail, canAdminister, checkReviewer, dmAccessFor,
+  getDmUser, isDmPage, isStaff,
   isSuperEmail, listDmUsers, removeDmUser, revokeDmSessions, saveDmUser, superEmails,
   setDmUserEnabled, staffDomainList,
   type DmPageKey, type DmRole, type StoredRole,
@@ -90,6 +90,7 @@ dutchMillerRouter.get("/me", async (req: Request, res: Response) => {
     ...access,
     email,
     allPages: DM_PAGES,
+    allGrants: DM_GRANTS,
     // Whether the person whose view this is counts as MOJO staff. Inside a
     // view that is the VIEWED person — showing the viewer's own staff
     // controls would make the view a lie about what they can see. Writes
@@ -188,6 +189,7 @@ dutchMillerRouter.get("/users", requireDmAdmin, async (req: Request, res: Respon
     users: users.map((u) => ({ ...u, roleName: byKey.get(u.roleKey) ?? u.roleKey })),
     roles,
     allPages: DM_PAGES,
+    allGrants: DM_GRANTS,
     myRole: await roleOf(req),
     mailConfigured: isMailConfigured(),
     mailFrom: mailFrom(),
@@ -288,12 +290,37 @@ function requireSuperTo(what: string) {
 
 const requireSuper = requireSuperTo("change roles");
 
+/**
+ * May this person delete, now that a role can grant it?
+ *
+ * Super, or a role that has been handed the one in question. Judged
+ * on the REAL person, like every other authority here: a view changes
+ * whose data is on screen, never who is acting.
+ */
+function requireDelete(what: "signups" | "rfid") {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const real = req.viewingAs?.real ?? req.user;
+    const access = await dmAccessFor(real?.email ?? "");
+    const may = what === "signups" ? access.deletesSignups : access.deletesRfid;
+    if (may) { next(); return; }
+    denied(req, `delete ${what}`);
+    res.status(403).json({
+      error: what === "signups"
+        ? "Your role cannot delete a member record. A super administrator can "
+          + "grant it under Roles & Permissions."
+        : "Your role cannot remove RFID numbers. A super administrator can "
+          + "grant it under Roles & Permissions.",
+    });
+  };
+}
+
 // Readable by any administrator — assigning one means seeing the list.
 dutchMillerRouter.get("/roles", requireDmAdmin, async (_req: Request, res: Response) => {
   const roles = await listRoles();
   res.json({
     roles: roles.map((r) => ({ ...r, actions: actionsFor(r) })),
     allPages: DM_PAGES,
+    allGrants: DM_GRANTS,
     // Page access and action permissions are different questions, and a
     // list of pages answers only one of them. These are DERIVED from the
     // rules the guards already apply — never stored per role — so the
@@ -325,12 +352,20 @@ dutchMillerRouter.post("/roles", requireSuper, async (req: Request, res: Respons
       name: String(body.name ?? ""),
       pages: Array.isArray(body.pages) ? body.pages.filter(isDmPage) : [],
       administers: body.administers === true,
+      // Only a super administrator reaches this route, which is what
+      // makes these safe to accept: a grant that removes things must
+      // not be writable by somebody who could then grant it to
+      // themselves.
+      deletesSignups: body.deletesSignups === true,
+      deletesRfid: body.deletesRfid === true,
       by: actor(req),
     });
     await audit({
-      action: "role.saved", subject: role.key, actor: actor(req),
+      action: "role.saved", subject: role.key, resource: role.key, ...who(req),
       detail: `${role.name} · ${role.pages.length} page${role.pages.length === 1 ? "" : "s"}`
-        + `${role.administers ? " · administers" : ""}`,
+        + `${role.administers ? " · administers" : ""}`
+        + `${role.deletesSignups ? " · deletes members" : ""}`
+        + `${role.deletesRfid ? " · deletes RFIDs" : ""}`,
     });
     emitChange("roles");
     res.json({ role, roles: await listRoles() });
@@ -991,16 +1026,43 @@ dutchMillerRouter.get("/rfid", requirePage("rfid-review"), async (req: Request, 
   res.json({
     ...(await listRfids({
       status: status === "active" || status === "inactive" || status === "used"
-        || status === "deleted" ? status : "all",
+        || status === "deleted" || status === "test" ? status : "all",
       search: String(req.query.search ?? ""),
       limit: Number(req.query.limit ?? 100),
       offset: Number(req.query.offset ?? 0),
     })),
     counts: await rfidCounts(),
-    // Whether to show the button. The route below decides it again.
-    canDelete: isSuperEmail(req.viewingAs?.real.email ?? req.user?.email ?? ""),
+    // Whether to show the buttons. The routes below decide again.
+    canDelete: (await dmAccessFor(
+      req.viewingAs?.real.email ?? req.user?.email ?? "")).deletesRfid,
+    canTest: isSuperEmail(req.viewingAs?.real.email ?? req.user?.email ?? ""),
   });
 });
+
+/**
+ * Keep numbers back for testing, or release them into ordinary use.
+ *
+ * The owner's alone, like issuing one: the whole value of a test tag
+ * is that exactly one person can put it on a vehicle, and a mark
+ * anybody could clear would be a label rather than a rule.
+ */
+dutchMillerRouter.post(
+  "/rfid/test-only",
+  requirePage("rfid-review"),
+  requireSuperTo("keep RFID numbers back for testing"),
+  async (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as { numbers?: unknown; testOnly?: unknown };
+    const numbers = Array.isArray(body.numbers) ? body.numbers.map(String) : [];
+    const on = body.testOnly === true;
+    const out = await setRfidTestOnly(numbers, on);
+    await audit({
+      action: "rfid.held", ...who(req),
+      detail: `${out.changed} ${on ? "kept back for testing" : "released from testing"}`,
+    });
+    emitChange("rfid");
+    res.json({ ...out, counts: await rfidCounts() });
+  },
+);
 
 /**
  * Remove numbers from the pool. Super administrator only, note required.
@@ -1014,7 +1076,7 @@ dutchMillerRouter.get("/rfid", requirePage("rfid-review"), async (req: Request, 
 dutchMillerRouter.post(
   "/rfid/delete",
   requirePage("rfid-review"),
-  requireSuperTo("remove RFID numbers"),
+  requireDelete("rfid"),
   async (req: Request, res: Response) => {
     const body = (req.body ?? {}) as { numbers?: unknown; note?: unknown };
     const numbers = Array.isArray(body.numbers) ? body.numbers.map(String) : [];
@@ -1062,7 +1124,7 @@ dutchMillerRouter.post("/rfid/active", requirePage("rfid-review"), async (req: R
 /** A blank entry's generated values, minted and signed by the server. */
 dutchMillerRouter.post(
   "/signups/new",
-  requirePage("member-signups"),
+  requirePage("member-signups-add"),
   (_req: Request, res: Response) => {
     res.json({ ...newHandle(), displayTimezone: DISPLAY_TZ });
   },
@@ -1077,10 +1139,18 @@ dutchMillerRouter.post(
  */
 dutchMillerRouter.get(
   "/signups/rfid-options",
-  requirePage("member-signups"),
-  async (_req: Request, res: Response) => {
+  requirePage("member-signups-add"),
+  async (req: Request, res: Response) => {
+    const sup = isSuperEmail(req.viewingAs?.real.email ?? req.user?.email ?? "");
     const { rows } = await listRfids({ status: "active", limit: 500 });
-    res.json({ options: rows.map((r) => r.number) });
+    // A test tag is offered to the one person who may issue it, and
+    // marked, so it cannot be picked by mistake from a list of
+    // ordinary numbers.
+    const usable = sup ? rows : rows.filter((r) => !r.testOnly);
+    res.json({
+      options: usable.map((r) => r.number),
+      testOnly: usable.filter((r) => r.testOnly).map((r) => r.number),
+    });
   },
 );
 
@@ -1100,7 +1170,8 @@ dutchMillerRouter.get(
       // Whether the person reading may set the MOJO-side mark. The button
       // follows this; the route below decides it again regardless.
       canComplete: await canApprove(req),
-      canDelete: isSuperEmail(req.viewingAs?.real.email ?? req.user?.email ?? ""),
+      canDelete: (await dmAccessFor(
+        req.viewingAs?.real.email ?? req.user?.email ?? "")).deletesSignups,
     });
   },
 );
@@ -1138,10 +1209,16 @@ dutchMillerRouter.get(
 /** Confirm & Submit. One member, one tag, one transaction — see `createSignup`. */
 dutchMillerRouter.post(
   "/signups",
-  requirePage("member-signups"),
+  requirePage("member-signups-add"),
   async (req: Request, res: Response) => {
     const out = await createSignup(
-      (req.body ?? {}) as Partial<SignupInput>, req.user?.email ?? "");
+      (req.body ?? {}) as Partial<SignupInput>, req.user?.email ?? "",
+      {
+        // Judged on the REAL person: naming a test tag is the owner's,
+        // and a view must never be a way to borrow that.
+        mayUseTestTags: isSuperEmail(
+          req.viewingAs?.real.email ?? req.user?.email ?? ""),
+      });
     if (out.ok) {
       // Not awaited, and not inside the transaction: the member exists and
       // the tag is claimed by now, so a bounced email must not tell the
@@ -1172,7 +1249,7 @@ dutchMillerRouter.post(
 /** The layout and an example, so nobody has to guess at the headers. */
 dutchMillerRouter.get(
   "/signups/bulk/template",
-  requirePage("member-signups"),
+  requirePage("member-signups-add"),
   (_req: Request, res: Response) => {
     res.json({ columns: BULK_COLUMNS, csv: templateCsv() });
   },
@@ -1187,7 +1264,7 @@ dutchMillerRouter.get(
  */
 dutchMillerRouter.post(
   "/signups/bulk/check",
-  requirePage("member-signups"),
+  requirePage("member-signups-add"),
   express.raw({ type: ["text/csv", "text/plain", "application/octet-stream"], limit: "8mb" }),
   async (req: Request, res: Response) => {
     const file = req.body as Buffer;
@@ -1224,7 +1301,7 @@ dutchMillerRouter.post(
  */
 dutchMillerRouter.post(
   "/signups/bulk/commit",
-  requirePage("member-signups"),
+  requirePage("member-signups-add"),
   async (req: Request, res: Response) => {
     const body = (req.body ?? {}) as { row?: Record<string, unknown>; batch?: unknown };
     const out = await createSignup(
@@ -1262,7 +1339,7 @@ dutchMillerRouter.post(
  */
 dutchMillerRouter.post(
   "/signups/bulk/manifest",
-  requirePage("member-signups"),
+  requirePage("member-signups-add"),
   async (req: Request, res: Response) => {
     const b = (req.body ?? {}) as { guids?: unknown };
     const guids = Array.isArray(b.guids) ? b.guids.map(String).slice(0, 2000) : [];
@@ -1296,7 +1373,7 @@ dutchMillerRouter.post(
 /** The run is over: what went in, how, and who did it. */
 dutchMillerRouter.post(
   "/signups/bulk/done",
-  requirePage("member-signups"),
+  requirePage("member-signups-add"),
   async (req: Request, res: Response) => {
     const b = (req.body ?? {}) as { added?: unknown; failed?: unknown; reviewed?: unknown };
     const added = Number(b.added) || 0;
@@ -1477,7 +1554,7 @@ dutchMillerRouter.post(
 dutchMillerRouter.post(
   "/signups/:guid/delete",
   requirePage("member-signups"),
-  requireSuperTo("delete a member record"),
+  requireDelete("signups"),
   async (req: Request, res: Response) => {
     const body = (req.body ?? {}) as { note?: unknown; releaseTag?: unknown };
     const out = await deleteSignup({

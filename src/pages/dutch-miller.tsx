@@ -34,8 +34,14 @@ type PageDef = {
   key: string;
   label: string;
   blurb: string;
-  /** Sub-pages, shown as a dropdown under the rail item. May be empty. */
-  children: readonly { key: string; label: string }[];
+  /**
+   * Sub-pages, shown as a dropdown under the rail item.
+   *
+   * Each names the GRANT it needs, which is not always the group's own
+   * key: Member Signups is one heading over two separately granted
+   * pages, so somebody may hold Add New and not Review Existing.
+   */
+  children: readonly { key: string; label: string; grant?: string }[];
 };
 
 type Access = {
@@ -169,8 +175,20 @@ export function DutchMillerApp({
 
   const access = me.data;
   const dmAdmin = access?.role === "admin" || access?.role === "super";
+  /*
+   * The rail, filtered one SUB-PAGE at a time.
+   *
+   * A group appears when any of its pages is held, and shows only the
+   * ones that are — so a front desk that can enrol but not review sees
+   * Member Signups with Add New under it and nothing else, rather than
+   * a heading whose first item refuses them.
+   */
+  const held = (grant: string) => dmAdmin || (access?.pages ?? []).includes(grant);
   const rail: PageDef[] = (access?.allPages ?? [])
-    .filter((p) => dmAdmin || (access?.pages ?? []).includes(p.key));
+    .map((p) => (p.children.length === 0
+      ? p
+      : { ...p, children: p.children.filter((c) => held(c.grant ?? p.key)) }))
+    .filter((p) => (p.children.length === 0 ? held(p.key) : p.children.length > 0));
   // The menu pages are routable without being in the rail.
   const admin = adminFor(access?.role ?? "user");
   const [route, go] = useRoute([
@@ -285,7 +303,19 @@ export function DutchMillerApp({
             <p className="text-sm font-semibold text-red-600">{(me.error as Error).message}</p>
           )}
           {access && rail.length === 0 && <NothingAssigned email={access.email} />}
-          {access && route.page === "member-signups" && (
+          {/* The two halves are granted separately now, so a link into
+              the one somebody does not hold must say so rather than
+              render a page whose every request is refused. */}
+          {access && route.page === "member-signups"
+            && !held(route.sub === "add" ? "member-signups-add" : "member-signups") && (
+            <p className="rounded-lg border border-border bg-card px-4 py-3 text-sm">
+              You do not have access to{" "}
+              <strong>{route.sub === "add" ? "Add New" : "Review Existing"}</strong>.
+              Member Signups is granted in two parts; ask an administrator for this one.
+            </p>
+          )}
+          {access && route.page === "member-signups"
+            && held(route.sub === "add" ? "member-signups-add" : "member-signups") && (
             <DmSignupsPage
               view={route.sub === "add" ? "add" : "review"}
               onView={(v) => go("member-signups", v)}

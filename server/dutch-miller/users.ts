@@ -1,6 +1,6 @@
 import { db, ensureSchema } from "../db.js";
 import { isMicrosoft, type SessionUser } from "../auth/session.js";
-import { DM_PAGE_KEYS, isDmPage, type DmPageKey } from "./pages.js";
+import { DM_GRANTS, DM_PAGES, DM_PAGE_KEYS, isDmPage, type DmPageKey } from "./pages.js";
 import { ADMIN_ROLE, DEFAULT_ROLE, getRole } from "./roles.js";
 import { forgetDevices } from "./devices.js";
 
@@ -78,7 +78,7 @@ export const staffDomainList = (): string[] => staffDomains();
  * Re-exported here because most callers want "access" as one idea.
  */
 export {
-  DM_PAGES, DM_PAGE_KEYS, isDmPage, type DmPageKey,
+  DM_GRANTS, DM_PAGES, DM_PAGE_KEYS, isDmPage, type DmPageKey,
 } from "./pages.js";
 
 /**
@@ -223,6 +223,10 @@ export type Access = {
   role: DmRole;
   /** May mark a member signup approved. The CSC role, and nothing else. */
   approves: boolean;
+  /** May delete a member record. Super, or a role granted it. */
+  deletesSignups: boolean;
+  /** May remove RFID numbers from the pool. Super, or a role granted it. */
+  deletesRfid: boolean;
   /** The named role behind it, for display. Empty for a pinned super admin. */
   roleKey: string;
   roleName: string;
@@ -252,6 +256,7 @@ export async function dmAccessFor(email: string): Promise<Access> {
       // The owner is not locked out of their own app. Everybody else
       // needs the CSC role, including administrators.
       approves: true,
+      deletesSignups: true, deletesRfid: true,
       pages: [...DM_PAGE_KEYS], status: "active", pinned: true,
     };
   }
@@ -259,6 +264,7 @@ export async function dmAccessFor(email: string): Promise<Access> {
   const none: Access = {
     role: "user", roleKey: row?.roleKey ?? DEFAULT_ROLE, roleName: "",
     approves: false,
+    deletesSignups: false, deletesRfid: false,
     pages: [], status: row?.status ?? "invited", pinned: false,
   };
   if (!row || row.status !== "active") return none;
@@ -274,6 +280,11 @@ export async function dmAccessFor(email: string): Promise<Access> {
     roleKey: def.key,
     roleName: def.name,
     approves: def.approves,
+    // Granted by the role, never by administering: an administrator
+    // manages who can use the app, which says nothing about whether
+    // they should be striking memberships.
+    deletesSignups: def.deletesSignups,
+    deletesRfid: def.deletesRfid,
     // Administering means EVERY page, whatever the role's tick-boxes say.
     // The alternative is an administrator who can open Users and Roles but
     // not Member Signups, which nobody means by the word and which the

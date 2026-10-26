@@ -1151,7 +1151,7 @@ function AddNew({
     queryFn: async () => {
       const res = await fetch("/api/dutch-miller/signups/rfid-options");
       if (!res.ok) throw new Error("Could not load RFID numbers.");
-      return (await res.json()) as { options: string[] };
+      return (await res.json()) as { options: string[]; testOnly?: string[] };
     },
   });
 
@@ -1290,6 +1290,7 @@ function AddNew({
           value={form.rfid}
           error={errors.rfid}
           options={options.data?.options ?? []}
+          testOnly={options.data?.testOnly ?? []}
           loading={options.isPending}
           onChange={(v) => set("rfid", v)}
         />
@@ -1349,6 +1350,7 @@ function AddNew({
           form={form}
           handle={h}
           options={options.data?.options ?? []}
+          testOnly={options.data?.testOnly ?? []}
           busy={submit.isPending}
           conflict={conflict}
           placement={placement}
@@ -1373,12 +1375,13 @@ function AddNew({
  * ------------------------------------------------------------------ */
 
 function Verify({
-  form, handle, options, busy, conflict, placement,
+  form, handle, options, testOnly, busy, conflict, placement,
   onChange, onCancelEntry, onConfirm,
 }: {
   form: Form;
   handle: Handle;
   options: string[];
+  testOnly: string[];
   busy: boolean;
   conflict: string;
   placement: Placement;
@@ -1456,6 +1459,7 @@ function Verify({
           <RfidField
             value={form.rfid}
             options={options}
+            testOnly={testOnly}
             loading={false}
             onChange={(v) => editCustomer("rfid", v)}
           />
@@ -1560,9 +1564,20 @@ function Field({
  * submits thinking they still hold a tag they do not.
  */
 function RfidField({
-  value, options, loading, error, onChange,
+  value, options, testOnly = [], loading, error, onChange,
 }: {
-  value: string; options: string[]; loading: boolean; error?: string;
+  value: string;
+  options: string[];
+  /**
+   * Tags kept back for testing a gate.
+   *
+   * Only offered to the account owner at all, and labelled when they
+   * are: a test number sitting unmarked among ordinary ones is one
+   * mis-click away from a paying member's windshield.
+   */
+  testOnly?: string[];
+  loading: boolean;
+  error?: string;
   onChange: (v: string) => void;
 }) {
   const list = useMemo(
@@ -1583,9 +1598,19 @@ function RfidField({
         }`}
       >
         <option value="">{loading ? "Loading…" : "Select active RFID"}</option>
-        {list.map((n) => <option key={n} value={n}>{n}</option>)}
+        {list.map((n) => (
+          <option key={n} value={n}>
+            {n}{testOnly.includes(n) ? "  — TEST ONLY" : ""}
+          </option>
+        ))}
       </select>
       {error && <p role="alert" className="mt-1 text-xs text-red-600">{error}</p>}
+      {testOnly.includes(value) && (
+        <p className="mt-1 flex items-start gap-1.5 text-xs text-violet-700 dark:text-violet-400">
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+          This tag is kept back for testing. Do not use it for a real member.
+        </p>
+      )}
       {!loading && options.length === 0 && (
         <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
           No active RFID numbers are left. Upload more under RFID Inventory.

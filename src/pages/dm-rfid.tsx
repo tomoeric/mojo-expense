@@ -4,14 +4,17 @@ import { AlertTriangle, Download, Loader2, Trash2, Upload, X } from "lucide-reac
 
 type Status = "active" | "inactive" | "used";
 /** The views. `deleted` is its own: every other one hides deleted numbers. */
-type Tab = "all" | Status | "deleted";
+type Tab = "all" | Status | "deleted" | "test";
 type Row = {
   number: string; status: Status; addedAt: string; addedBy: string;
   batch: string; usedAt: string | null; usedBy: string | null; usedFor: string | null;
   deletedAt: string | null; deletedBy: string | null; deleteNote: string | null;
+  /** Kept back for testing. Never auto-assigned; owner only to issue. */
+  testOnly: boolean;
 };
 type Counts = {
-  active: number; inactive: number; used: number; deleted: number; total: number;
+  active: number; inactive: number; used: number; deleted: number;
+  testOnly: number; total: number;
 };
 type Refusal = {
   refused: true;
@@ -81,7 +84,8 @@ export function DmRfidPage() {
       const res = await fetch(`/api/dutch-miller/rfid?${q}`);
       if (!res.ok) throw new Error((await res.json()).error ?? "Could not load.");
       return (await res.json()) as {
-        rows: Row[]; total: number; counts: Counts; canDelete: boolean;
+        rows: Row[]; total: number; counts: Counts;
+        canDelete: boolean; canTest?: boolean;
       };
     },
   });
@@ -155,6 +159,24 @@ export function DmRfidPage() {
 
   const counts = list.data?.counts;
   const canDelete = list.data?.canDelete ?? false;
+  const canTest = list.data?.canTest ?? false;
+
+  const markTest = useMutation({
+    mutationFn: async (v: { numbers: string[]; testOnly: boolean }) => {
+      const res = await fetch("/api/dutch-miller/rfid/test-only", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify(v),
+      });
+      if (!res.ok) throw new Error((await res.json()).error ?? "Could not change it.");
+      return res.json();
+    },
+    onSuccess: () => {
+      setError("");
+      void qc.invalidateQueries({ queryKey: ["dm-rfid"] });
+      void qc.invalidateQueries({ queryKey: ["dm-rfid-options"] });
+    },
+    onError: (e) => setError((e as Error).message),
+  });
   // "Available" and "Assigned" are what the states actually mean to
   // somebody holding a sheet of stickers. The stored values stay
   // `active` and `used` — every role, guard and query names them.
@@ -166,6 +188,9 @@ export function DmRfidPage() {
   ];
   // Shown once there is something in it, or to the one person who can
   // put something in it. Nobody else needs a permanently empty filter.
+  if ((counts?.testOnly ?? 0) > 0 || canTest) {
+    chips.push({ key: "test", label: "Test only", n: counts?.testOnly });
+  }
   if (canDelete || (counts?.deleted ?? 0) > 0) {
     chips.push({ key: "deleted", label: "Deleted", n: counts?.deleted });
   }
@@ -309,6 +334,11 @@ export function DmRfidPage() {
         {tab === "active" && STATUS_NOTE.active}
         {tab === "used" && STATUS_NOTE.used}
         {tab === "inactive" && STATUS_NOTE.inactive}
+        {tab === "test" && (
+          "Kept back for testing a gate with a real sticker on a real vehicle. "
+          + "Never handed out by the pool, so no import can spend one, and only the "
+          + "account owner can name one on a signup."
+        )}
         {tab === "deleted" && (
           "Removed from the pool for good, with the reason attached. The row stays "
           + "so the number can still be accounted for. Not reversible here, and "
@@ -360,6 +390,11 @@ export function DmRfidPage() {
                   </span>
                   {/* The reason, next to the number rather than behind a
                       hover: it is the only thing this row is still for. */}
+                  {r.testOnly && !r.deletedAt && (
+                    <span className="ml-1.5 rounded-full bg-violet-500/15 px-1.5 py-0.5 font-sans text-[10px] font-semibold text-violet-700 dark:text-violet-400">
+                      test only
+                    </span>
+                  )}
                   {r.deletedAt && (
                     <span className="mt-0.5 block font-sans text-xs text-rose-700 dark:text-rose-400">
                       Removed {day(r.deletedAt)}{r.deletedBy ? ` by ${r.deletedBy}` : ""}
@@ -418,6 +453,21 @@ export function DmRfidPage() {
                         className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted"
                       >
                         {r.status === "active" ? "Hold back" : "Make active"}
+                      </button>
+                    )}
+                    {canTest && !r.deletedAt && (
+                      <button
+                        type="button"
+                        disabled={markTest.isPending}
+                        onClick={(e) => { e.stopPropagation(); markTest.mutate({
+                          numbers: [r.number], testOnly: !r.testOnly,
+                        }); }}
+                        title={r.testOnly
+                          ? "Release it into ordinary use"
+                          : "Keep this one back for testing — the pool will never issue it"}
+                        className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50"
+                      >
+                        {r.testOnly ? "Un-test" : "Test only"}
                       </button>
                     )}
                     {canDelete && !r.deletedAt && (

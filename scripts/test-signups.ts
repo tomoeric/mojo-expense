@@ -139,7 +139,7 @@ try {
     taken.ok ? "accepted" : taken.kind);
   check("…and says so in words the form can show",
     !taken.ok && taken.kind === "rfid-taken"
-      && /no longer available|already assigned/i.test(taken.reason));
+      && /not available|no longer available|already assigned/i.test(taken.reason));
   const none = await db().query<{ n: string }>(
     "SELECT count(*) AS n FROM dm_member_signups WHERE rfid = $1", [TAGS[0]]);
   check("…leaving no second member behind", none.rows[0]?.n === "1");

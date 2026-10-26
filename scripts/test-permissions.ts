@@ -40,12 +40,23 @@ try {
   const writer = actionsFor({
     pages: ["member-signups"], administers: false, approves: false,
   });
-  check("Member Signups brings submitting", writer["member.submit"]);
+  // Member Signups is TWO grants now: reviewing and adding. Review
+  // alone reads and exports; it does not enrol.
+  check("Review Existing brings reviewing", writer["member.review"]);
   check("…and exporting", writer["member.export"]);
+  check("…but not submitting — that is the other half",
+    writer["member.submit"] === false);
+  const desk = actionsFor({
+    pages: ["member-signups-add"], administers: false, approves: false,
+  });
+  check("Add New brings submitting", desk["member.submit"]);
+  check("…and importing", desk["member.import"]);
+  check("…but not reviewing", desk["member.review"] === false);
   // The one that a page list cannot answer, and the reason this module
   // exists: a role editor full of page tick-boxes shows nothing at all
   // about who may approve.
-  check("…but NOT approving", writer["member.approve"] === false);
+  check("…and neither half brings approving",
+    writer["member.approve"] === false && desk["member.approve"] === false);
   check("…nor managing users", writer["users.manage"] === false);
 
   console.log("\n2. Approving is not a consequence of anything else");
@@ -57,6 +68,8 @@ try {
   check("…and reads the security workspace", admin["security.view"]);
   check("…and still may NOT approve", admin["member.approve"] === false);
   check("…nor manage roles", admin["roles.manage"] === false);
+  // Still true now that deleting is GRANTABLE: it must never arrive
+  // by administering, or every administrator silently gains it.
   check("…nor delete a member record", admin["member.delete"] === false);
   const csc = actionsFor({ pages: ["member-signups"], administers: false, approves: true });
   check("CSC approves", csc["member.approve"]);

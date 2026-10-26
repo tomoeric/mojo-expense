@@ -41,6 +41,22 @@ CREATE INDEX IF NOT EXISTS dm_rfid_status_idx ON dm_rfid (status, number);
 ALTER TABLE dm_rfid ADD COLUMN IF NOT EXISTS deleted_at  timestamptz;
 ALTER TABLE dm_rfid ADD COLUMN IF NOT EXISTS deleted_by  text;
 ALTER TABLE dm_rfid ADD COLUMN IF NOT EXISTS delete_note text;
+/*
+ * Tags kept back for testing.
+ *
+ * A gate has to be tried with a real sticker on a real windshield,
+ * and the number that goes on the test vehicle must never land on a
+ * paying member. Marking it is not the same as holding it back: a
+ * held tag is simply out of the pool, while a test tag is usable, by
+ * one person, on purpose.
+ *
+ * Two rules follow, both enforced below rather than in the form. It
+ * is never handed out by the pool, so no bulk import can spend one;
+ * and naming it only works for a super administrator. Off for every
+ * existing tag, because a column appearing must not reclassify
+ * anything already in the pool.
+ */
+ALTER TABLE dm_rfid ADD COLUMN IF NOT EXISTS test_only boolean NOT NULL DEFAULT false;
 `;
 
 let ready: Promise<void> | null = null;
@@ -58,6 +74,8 @@ export type RfidRow = {
   usedAt: string | null;
   usedBy: string | null;
   usedFor: string | null;
+  /** Kept back for testing. Never auto-assigned; super admin only to issue. */
+  testOnly: boolean;
   /** Set once a super administrator removed it. The row stays either way. */
   deletedAt: string | null;
   deletedBy: string | null;
@@ -133,7 +151,8 @@ export async function addRfids(
 }
 
 export type RfidCounts = {
-  active: number; inactive: number; used: number; deleted: number; total: number;
+  active: number; inactive: number; used: number; deleted: number;
+  testOnly: number; total: number;
 };
 
 /**
@@ -147,19 +166,26 @@ export async function rfidCounts(): Promise<RfidCounts> {
   await ensure();
   const { rows } = await db().query<{ status: RfidStatus; n: string }>(
     "SELECT status, count(*) AS n FROM dm_rfid WHERE deleted_at IS NULL GROUP BY status");
-  const out: RfidCounts = { active: 0, inactive: 0, used: 0, deleted: 0, total: 0 };
+  const out: RfidCounts = {
+    active: 0, inactive: 0, used: 0, deleted: 0, testOnly: 0, total: 0,
+  };
   for (const r of rows) {
     out[r.status] = Number(r.n);
     out.total += Number(r.n);
   }
   out.deleted = Number((await db().query<{ n: string }>(
     "SELECT count(*) AS n FROM dm_rfid WHERE deleted_at IS NOT NULL")).rows[0]?.n ?? 0);
+  // Counted alongside, not apart: a test tag is a real tag in the
+  // pool, just one only the owner may issue.
+  out.testOnly = Number((await db().query<{ n: string }>(
+    `SELECT count(*) AS n FROM dm_rfid
+      WHERE test_only AND deleted_at IS NULL`)).rows[0]?.n ?? 0);
   return out;
 }
 
 export async function listRfids(opts: {
-  /** `deleted` is its own view; every other one excludes deleted numbers. */
-  status?: RfidStatus | "all" | "deleted";
+  /** `deleted` and `test` are their own views; the rest exclude deleted. */
+  status?: RfidStatus | "all" | "deleted" | "test";
   search?: string;
   limit?: number;
   offset?: number;
@@ -169,6 +195,8 @@ export async function listRfids(opts: {
   const args: unknown[] = [];
   if (opts.status === "deleted") {
     where.push("deleted_at IS NOT NULL");
+  } else if (opts.status === "test") {
+    where.push("deleted_at IS NULL AND test_only");
   } else {
     where.push("deleted_at IS NULL");
     if (opts.status && opts.status !== "all") {
@@ -190,9 +218,10 @@ export async function listRfids(opts: {
     number: string; status: RfidStatus; added_at: Date; added_by: string;
     batch: string; used_at: Date | null; used_by: string | null; used_for: string | null;
     deleted_at: Date | null; deleted_by: string | null; delete_note: string | null;
+    test_only: boolean;
   }>(
     `SELECT number, status, added_at, added_by, batch, used_at, used_by, used_for,
-            deleted_at, deleted_by, delete_note
+            deleted_at, deleted_by, delete_note, test_only
        FROM dm_rfid ${clause}
       ORDER BY added_at DESC, number
       LIMIT $${args.length - 1} OFFSET $${args.length}`, args);
@@ -208,6 +237,7 @@ export async function listRfids(opts: {
       usedAt: r.used_at ? r.used_at.toISOString() : null,
       usedBy: r.used_by,
       usedFor: r.used_for,
+      testOnly: r.test_only,
       deletedAt: r.deleted_at ? r.deleted_at.toISOString() : null,
       deletedBy: r.deleted_by,
       deleteNote: r.delete_note,
@@ -271,6 +301,28 @@ export async function useRfid(
  * thing the one-time rule exists to prevent — so it is refused here rather
  * than guarded by whoever writes the next caller.
  */
+/**
+ * Mark numbers as test-only, or let them back into ordinary use.
+ *
+ * A used tag can be marked either way — the point of a test tag is
+ * that it goes on a vehicle — but a DELETED one cannot: it is not in
+ * the pool at all and changing a label on it would only make the
+ * list lie.
+ */
+export async function setRfidTestOnly(
+  numbers: string[],
+  testOnly: boolean,
+): Promise<{ changed: number }> {
+  await ensure();
+  const wanted = numbers.filter((n) => RFID_RE.test(n));
+  if (wanted.length === 0) return { changed: 0 };
+  const { rowCount } = await db().query(
+    `UPDATE dm_rfid SET test_only = $2
+      WHERE number = ANY($1::text[]) AND deleted_at IS NULL`,
+    [wanted, testOnly]);
+  return { changed: rowCount ?? 0 };
+}
+
 export async function setRfidActive(
   numbers: string[],
   active: boolean,

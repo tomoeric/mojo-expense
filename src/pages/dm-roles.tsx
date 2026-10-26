@@ -7,19 +7,26 @@ type ActionDef = { key: string; label: string; source: string };
 type Role = {
   key: string; name: string; pages: string[];
   administers: boolean; approves: boolean; builtin: boolean; holders?: number;
+  deletesSignups: boolean; deletesRfid: boolean;
   createdAt: string | null; createdBy: string | null;
   /** Derived from the rules the guards apply. Never stored, never edited. */
   actions: Record<string, boolean>;
 };
 type Payload = {
   roles: Role[];
+  /** The rail's grouping. The editor uses `allGrants` instead. */
   allPages: readonly PageDef[];
+  /** What a role can actually be given, flat — one entry per grant. */
+  allGrants: readonly PageDef[];
   allActions: ActionDef[];
   approvalPolicy: { roleKey: string; note: string };
   superAdmin: { actions: Record<string, boolean> };
 };
 
-type Draft = { key?: string; name: string; pages: string[]; administers: boolean };
+type Draft = {
+  key?: string; name: string; pages: string[]; administers: boolean;
+  deletesSignups: boolean; deletesRfid: boolean;
+};
 
 /**
  * Roles, and what each one can open.
@@ -67,7 +74,10 @@ export function DmRolesPage() {
   });
 
   const roles = data.data?.roles ?? [];
-  const pages = data.data?.allPages ?? [];
+  // The flat list, because a role is given PAGES and the rail's
+  // grouping is a layout detail. Member Signups is one heading over
+  // two grants, and the editor has to offer both.
+  const pages = data.data?.allGrants ?? data.data?.allPages ?? [];
   const allActions = data.data?.allActions ?? [];
 
   return (
@@ -85,7 +95,10 @@ export function DmRolesPage() {
         </div>
         <button
           type="button"
-          onClick={() => setDraft({ name: "", pages: [], administers: false })}
+          onClick={() => setDraft({
+            name: "", pages: [], administers: false,
+            deletesSignups: false, deletesRfid: false,
+          })}
           className="inline-flex items-center gap-2 rounded-md bg-foreground px-3 py-2 text-sm font-semibold text-background"
         >
           <Plus className="h-4 w-4" />
@@ -131,6 +144,18 @@ export function DmRolesPage() {
                       approves memberships
                     </span>
                   )}
+                  {/* Worth seeing without opening the role: these are
+                      the two that remove things. */}
+                  {r.deletesSignups && (
+                    <span className="rounded-full bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 dark:text-rose-400">
+                      deletes members
+                    </span>
+                  )}
+                  {r.deletesRfid && (
+                    <span className="rounded-full bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 dark:text-rose-400">
+                      deletes RFIDs
+                    </span>
+                  )}
                 </p>
                 <p className="mt-0.5 text-xs text-muted-foreground">
                   {r.approves
@@ -152,7 +177,9 @@ export function DmRolesPage() {
                 <button
                   type="button"
                   onClick={() => setDraft({
-                    key: r.key, name: r.name, pages: [...r.pages], administers: r.administers,
+                    key: r.key, name: r.name, pages: [...r.pages],
+                    administers: r.administers,
+                    deletesSignups: r.deletesSignups, deletesRfid: r.deletesRfid,
                   })}
                   className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted"
                 >
@@ -313,6 +340,47 @@ function RoleEditor({
           Administers — every page, plus Users and Settings
         </label>
       )}
+
+      {/* Separated from the page list, and from administering, because
+          these are the only two that take something away. Both are
+          soft deletes — the record stays, struck through, with the
+          note whoever removed it had to write — which is what makes
+          them safe to grant rather than keep to one person. */}
+      <div>
+        <p className="mb-1 text-xs text-muted-foreground">Can delete</p>
+        <div className="space-y-1.5">
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={draft.deletesSignups}
+              onChange={(e) => onChange({ ...draft, deletesSignups: e.target.checked })}
+            />
+            <span>
+              Member records
+              <span className="block text-xs text-muted-foreground">
+                Marks a membership deleted, with a required note. The record stays
+                in the list and its RFID stays issued unless released.
+              </span>
+            </span>
+          </label>
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={draft.deletesRfid}
+              onChange={(e) => onChange({ ...draft, deletesRfid: e.target.checked })}
+            />
+            <span>
+              RFID numbers
+              <span className="block text-xs text-muted-foreground">
+                Removes tags from the pool, with a required note. They never come
+                back — not even by re-uploading the file that brought them in.
+              </span>
+            </span>
+          </label>
+        </div>
+      </div>
 
       <div className="flex items-center gap-2 border-t border-border pt-3">
         <button

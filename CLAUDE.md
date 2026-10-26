@@ -442,6 +442,23 @@ the blocks.
 
 ## Permissions
 
+- **`DM_GRANTS` is what a role is given; `DM_PAGES` is only the rail's layout.**
+  Member Signups is one heading over TWO grants — `member-signups` (Review
+  Existing) and `member-signups-add` (Add New) — because enrolling and reviewing
+  are different jobs. Guards follow: reads use the first, create/bulk the second.
+  The split backfilled Add New onto every role that held the old single grant,
+  once, behind a marker row in `dm_settings` so an admin who removes it does not
+  find it back after a restart.
+- **Deleting is grantable per role** (`dm_roles.deletes_signups` /
+  `deletes_rfid`), off by default, set only by a super administrator, and
+  **never implied by administering** — that rule has a test and must keep one.
+  Both are soft deletes, which is what makes them safe to hand out.
+- **Test-only tags** (`dm_rfid.test_only`): a real tag in the pool that the pool
+  will never hand out, so no import can spend one, and that only the pinned
+  owner can name on a signup (`mayUseTestTags`, judged on the REAL person).
+  Marking and un-marking is the owner's alone. Not the same as holding one back:
+  held is out of the pool, test is usable by one person on purpose.
+
 - **Page access and action permissions are different questions.** `actions.ts`
   derives what a role can DO from the rules the guards apply; it is read-only in
   the UI on purpose. These are not stored per role, so editable checkboxes would

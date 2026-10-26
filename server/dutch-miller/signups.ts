@@ -537,7 +537,19 @@ export async function createSignup(
    * in does not know which are free, and by the time they submit it
    * some will not be. So the row says who, and the pool decides which.
    */
-  opts: { assignAnyRfid?: boolean } = {},
+  opts: {
+    assignAnyRfid?: boolean;
+    /**
+     * Whether a tag kept back for testing may be named here.
+     *
+     * The super administrator only, and only on a typed entry: a
+     * gate has to be tried with a real sticker on a real windshield,
+     * and the number used for that must never reach a paying member.
+     * The pool never hands one out, so an import cannot spend one
+     * whatever this says.
+     */
+    mayUseTestTags?: boolean;
+  } = {},
 ): Promise<CreateResult> {
   await ensure();
   const { clean, errors } = validateSignup(raw, { rfidOptional: opts.assignAnyRfid });
@@ -571,6 +583,7 @@ export async function createSignup(
             SET status = 'used', used_at = now(), used_by = $1, used_for = $2
           WHERE number = (SELECT number FROM dm_rfid
                             WHERE status = 'active' AND deleted_at IS NULL
+                              AND NOT test_only
                             ORDER BY number LIMIT 1 FOR UPDATE SKIP LOCKED)
         RETURNING number`,
         [by, `Member signup ${clean.guid}`])
@@ -578,8 +591,9 @@ export async function createSignup(
         `UPDATE dm_rfid
             SET status = 'used', used_at = now(), used_by = $2, used_for = $3
           WHERE number = $1 AND status = 'active' AND deleted_at IS NULL
+            AND (NOT test_only OR $4)
         RETURNING number`,
-        [clean.rfid, by, `Member signup ${clean.guid}`]);
+        [clean.rfid, by, `Member signup ${clean.guid}`, opts.mayUseTestTags === true]);
 
     if (claim.rowCount === 0) {
       await client.query("ROLLBACK");
@@ -587,8 +601,8 @@ export async function createSignup(
         ok: false, kind: "rfid-taken",
         reason: clean.rfid === ""
           ? "There are no active RFID numbers left in the pool. Upload more under RFID Inventory."
-          : `RFID ${clean.rfid} is no longer available — it has been used or held back `
-            + "since this form was opened. Choose another one.",
+          : `RFID ${clean.rfid} is not available — it has been used, held back, or `
+            + "kept back for testing since this form was opened. Choose another one.",
       };
     }
     // Whichever was claimed is the one that goes on the record.
