@@ -77,6 +77,16 @@ export function signupEmail(s: SignupRow, opts: {
    * record that one of them owns, and "opened" stops meaning anything.
    */
   as?: "reviewer" | "notifier" | "submitter";
+  /**
+   * Which partner this signup belongs to.
+   *
+   * The email settings are shared, so one reviewer's inbox carries
+   * every partner's signups. Without the name on the message they
+   * are indistinguishable until it is opened — and the link would
+   * land in the wrong account, where the record correctly does not
+   * exist. Both are fixed by the same two fields.
+   */
+  partner?: { name: string; slug: string };
 } = {}): {
   subject: string;
   html: string;
@@ -85,12 +95,17 @@ export function signupEmail(s: SignupRow, opts: {
   // Straight to the record, so marking it complete does not start with
   // finding it. Omitted rather than guessed when there is no origin to
   // build from — a broken button is worse than none.
-  const link = as === "reviewer" ? signupUrl(opts.origin ?? publicOrigin(), s.guid) : "";
+  const link = as === "reviewer"
+    ? signupUrl(opts.origin ?? publicOrigin(), s.guid, opts.partner?.slug ?? "")
+    : "";
   const name = `${s.customer.firstName} ${s.customer.lastName}`.trim();
+  const partner = opts.partner?.name ?? "";
   const subject = opts.sample
     ? "Sample — new member signup"
-    // The reviewer's inbox should say it is theirs before they open it.
-    : `${as === "reviewer" ? "To review" : "FYI"}: new member signup — ${name} · ${s.customer.rfid}`;
+    // The reviewer's inbox should say it is theirs, and whose, before
+    // they open it.
+    : `${as === "reviewer" ? "To review" : "FYI"}: ${partner ? `${partner} — ` : ""}`
+      + `new member signup — ${name} · ${s.customer.rfid}`;
 
   const html = layout(
     opts.sample ? "Sample notification" : "New member signup",
@@ -104,7 +119,8 @@ export function signupEmail(s: SignupRow, opts: {
          <span style="display:block;margin-top:3px;font-size:14px;color:#52525b">
            RFID ${escapeHtml(s.customer.rfid)}</span>
          <span style="display:block;margin-top:3px;font-size:13px;color:#71717a">
-           Submitted by ${escapeHtml(s.submittedBy || "a dealer user")}</span>
+           Submitted by ${escapeHtml(s.submittedBy || "a dealer user")}${
+  partner ? ` · ${escapeHtml(partner)}` : ""}</span>
        </td></tr>
      </table>
 
@@ -147,8 +163,9 @@ export function signupEmail(s: SignupRow, opts: {
        row("Reference", s.guid),
      ].join(""))}`,
     as === "reviewer"
-      ? "Sent to you as the CSC Reviewer for Dutch Miller signups."
-      : "Sent for information. Change who receives these under Email Settings.",
+      ? `Sent to you as the CSC Reviewer${partner ? ` for ${partner}` : ""}. Reviewers are `
+        + "configured once for every partner, under Email & Notifications."
+      : "Sent for information. Change who receives these under Email & Notifications.",
   );
 
   return { subject, html };
@@ -162,7 +179,9 @@ export function signupEmail(s: SignupRow, opts: {
  * with it, and these are internal notifications where who else got it is
  * nobody's business anyway.
  */
-export async function notifySignup(s: SignupRow, origin?: string): Promise<void> {
+export async function notifySignup(
+  s: SignupRow, origin?: string, partner?: { name: string; slug: string },
+): Promise<void> {
   try {
     const to = await recipientsFor(s.submittedBy);
     if (to.length === 0) return;
@@ -182,7 +201,7 @@ export async function notifySignup(s: SignupRow, origin?: string): Promise<void>
     // gone. `sendOnce` adds the bounded retry and makes a second call
     // for the same message a no-op.
     const results = await Promise.allSettled(to.map((r) => {
-      const { subject, html } = signupEmail(s, { origin, as: r.as });
+      const { subject, html } = signupEmail(s, { origin, as: r.as, partner });
       return sendOnce({
         resource: s.guid, kind: "signup", email: r.email, audience: r.as,
         subject, html,

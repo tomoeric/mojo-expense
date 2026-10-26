@@ -18,5 +18,19 @@ export function publicOrigin(req?: Request): string {
 }
 
 /** Where a signup lives in the app, for a link somebody clicks from email. */
-export const signupUrl = (origin: string, guid: string): string =>
-  origin ? `${origin}/#/member-signups/review?open=${encodeURIComponent(guid)}` : "";
+/**
+ * A link straight to one member record, in the partner it belongs to.
+ *
+ * The slug is part of the address, not a hint. A reviewer who works
+ * across partners would otherwise land in whichever account their
+ * browser happened to resolve first and be told the record does not
+ * exist — which is exactly what the isolation rules do when they are
+ * working, and would read as a broken link.
+ *
+ * Without a slug the link still works for anybody who holds one
+ * account, which is every link sent before partners existed.
+ */
+export const signupUrl = (origin: string, guid: string, slug = ""): string =>
+  (origin
+    ? `${origin}/${slug}#/member-signups/review?open=${encodeURIComponent(guid)}`
+    : "");

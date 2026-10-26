@@ -114,6 +114,23 @@ export const EVENT_META = {
   "partner.scope": M("access", "succeeded", "medium",
     "Which partner accounts somebody can open was changed", true),
 
+  /* ---- The shared template, and each account's arrangement ----
+   *
+   * A template change reaches every partner at once, so it is
+   * recorded at a higher severity than one account rearranging its
+   * own page: the blast radius is the difference between them.
+   */
+  "template.block.created": M("access", "succeeded", "medium",
+    "A shared bucket was added to the template", true),
+  "template.block.changed": M("access", "succeeded", "medium",
+    "A shared bucket was changed, for every partner using it", true),
+  "template.layout.changed": M("access", "succeeded", "medium",
+    "The base layout a page starts on was changed", true),
+  "layout.saved": M("business", "succeeded", "info",
+    "A partner arranged one of its own pages"),
+  "layout.reset": M("business", "succeeded", "info",
+    "A partner put a page back to the shared layout"),
+
   /* ---- Looking through somebody else's eyes ---- */
   "viewas.started": M("access", "succeeded", "medium",
     "An administrator started viewing the app as somebody else", true),

@@ -15,7 +15,17 @@ type Notify = {
 };
 
 /**
- * Dutch Miller settings.
+ * Email and notification settings — SHARED across every partner.
+ *
+ * One schedule, one set of reviewers, one set of notifiers, for the
+ * whole platform. That is the brief's: a reviewer is a job somebody
+ * does across partners, and a per-partner copy of this page would
+ * mean seven lists where six are quietly out of date.
+ *
+ * The page says so rather than leaving it inferable, because the
+ * reverse — a setting that looks like this account's and is not — is
+ * how somebody switches off a partner's reminders and stops
+ * everybody's.
  *
  * One section for now. It is its own page rather than a panel on Users
  * because the next setting will not be about people, and a settings page
@@ -108,7 +118,9 @@ export function DmSettingsPage() {
       <div>
         <h1 className="text-lg font-semibold">Email &amp; Notifications</h1>
         <p className="text-sm text-muted-foreground">
-          What Dutch Miller sends, and when. Administrators only.
+          What the platform sends, and when. SHARED — these recipients, this
+          schedule and this wording apply to every partner account, and a change
+          here changes them all. Administrators only.
         </p>
       </div>
 

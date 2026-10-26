@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { ArrangeBar, BucketGrid, useLayout } from "@/components/buckets";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, ChevronLeft, ChevronRight, Circle,
@@ -78,6 +79,18 @@ const DEALER_FIELDS = [
 const CUSTOMER_FIELDS = [
   { key: "firstName", label: "First Name", required: true, placeholder: "First Name" },
   { key: "lastName", label: "Last Name", required: true, placeholder: "Last Name" },
+  /*
+   * How to reach the MEMBER, not the dealer who submitted them.
+   *
+   * They have been on the record, the bulk template, the detailed
+   * export and the reviewer's email since they were added; the one
+   * place they never appeared was the form somebody types a walk-in
+   * into, which is the place they are most often known. Optional,
+   * because a desk does not always get both, and validated by the
+   * server when given.
+   */
+  { key: "customerPhone", label: "Phone", required: false, placeholder: "Optional" },
+  { key: "customerEmail", label: "Email", required: false, placeholder: "Optional" },
   { key: "plateDlw", label: "Plate (DLW)", required: false, placeholder: "Optional" },
   { key: "vehicleYear", label: "Vehicle Year", required: false, placeholder: "YYYY" },
   { key: "vehicleMake", label: "Vehicle Make", required: false, placeholder: "Honda" },
@@ -106,7 +119,8 @@ type Form = Record<DealerKey | CustomerKey, string>
 
 const BLANK: Form = {
   dlwContractId: "", dealNumber: "", customerId: "",
-  firstName: "", lastName: "", plateDlw: "", plateState: "",
+  firstName: "", lastName: "", customerPhone: "", customerEmail: "",
+  plateDlw: "", plateState: "",
   vehicleMake: "", vehicleModel: "", vehicleYear: "", vehicleColor: "",
   rfid: "", stickerAttached: false,
 };
@@ -165,6 +179,10 @@ export function DmSignupsPage({
           with RFID {justSaved.customer.rfid}.
         </p>
       )}
+
+      {/* Arranging is per page and per account, so the bar follows the
+          sub-page rather than sitting above both. */}
+      <ArrangeBar page={view === "add" ? "member-signups-add" : "member-signups-review"} />
 
       {view === "review"
         ? <ReviewExisting />
@@ -986,41 +1004,13 @@ function ViewSignup({
           </div>
         )}
 
-        <Deliveries guid={row.guid} />
-
-        <Bucket title="Auto Data" note="Automatically generated · locked">
-          <Readout label="Date Created" value={dateIn(row.createdAt, tz)} />
-          <Readout label="Time Created" value={timeIn(row.createdAt, tz)} />
-          <Readout label="Unique GUID" value={row.guid} mono />
-        </Bucket>
-
-        <Bucket title="Dealer">
-          <Readout label="DLW Contract ID" value={row.dealer.dlwContractId} />
-          <Readout label="Deal #" value={row.dealer.dealNumber} />
-          <Readout label="Customer ID #" value={row.dealer.customerId} />
-        </Bucket>
-
-        <Bucket title="Customer">
-          <Readout label="First Name" value={row.customer.firstName} />
-          <Readout label="Last Name" value={row.customer.lastName} />
-          <Readout label="Phone" value={row.customer.phone} />
-          <Readout label="Email" value={row.customer.email} />
-          <Readout
-            label="Plate (DLW)"
-            value={[row.customer.plateDlw, row.customer.plateState].filter(Boolean).join("  ")
-              || null}
-          />
-          <Readout label="Vehicle Make" value={row.customer.vehicleMake} />
-          <Readout label="Vehicle Model" value={row.customer.vehicleModel} />
-          <Readout label="Vehicle Year" value={row.customer.vehicleYear} />
-          <Readout label="Vehicle Color" value={row.customer.vehicleColor} />
-          <Readout label="RFID" value={row.customer.rfid} mono />
-          <Readout
-            label="Sticker attached"
-            value={stickerText(row)}
-          />
-        </Bucket>
-
+        {/* The record itself, in whichever buckets this account has
+            arranged. The shared template decides what a bucket holds
+            and in what order; the account decides which buckets it
+            shows and how wide. An item the workflow depends on — the
+            tag, the sticker state, the names — cannot be taken off
+            either, which is enforced on the server rather than here. */}
+        <RecordBuckets row={row} tz={tz} />
       </div>
     </Modal>
   );
@@ -1263,91 +1253,22 @@ function AddNew({
         </p>
       )}
 
-      <Bucket title="Auto Data" note="Automatically generated · locked">
-        <Locked label="Date Created" value={h ? dateIn(h.createdAt, tz) : "…"} />
-        <Locked label="Time Created" value={h ? timeIn(h.createdAt, tz) : "…"} />
-        <Locked label="Unique GUID" value={h?.guid ?? "…"} mono />
-      </Bucket>
-
-      <Bucket title="Dealer" note="User input">
-        {DEALER_FIELDS.map((f) => (
-          <Field
-            key={f.key} label={f.label} required={f.required} error={errors[f.key]}
-            value={form[f.key]} placeholder={f.label} onChange={(v) => set(f.key, v)}
-          />
-        ))}
-      </Bucket>
-
-      <Bucket title="Customer" note="User input">
-        {CUSTOMER_FIELDS.map((f) => (
-          <Fragment key={f.key}>
-            {/* Year, make and model come from NHTSA's vehicle
-                catalogue. Suggestions, never a gate — see
-                `SuggestField`. */}
-            {f.key === "vehicleYear" ? (
-              <YearField
-                value={form.vehicleYear}
-                years={vehicles.years}
-                error={errors.vehicleYear}
-                onChange={(v) => set("vehicleYear", v)}
-              />
-            ) : f.key === "vehicleMake" ? (
-              <SuggestField
-                id="f-make"
-                label="Vehicle Make"
-                value={form.vehicleMake}
-                options={vehicles.makes}
-                placeholder="Honda"
-                error={errors.vehicleMake}
-                onChange={(v) => set("vehicleMake", v)}
-              />
-            ) : f.key === "vehicleModel" ? (
-              <SuggestField
-                id="f-model"
-                label="Vehicle Model"
-                value={form.vehicleModel}
-                options={vehicles.models}
-                placeholder="Accord"
-                error={errors.vehicleModel}
-                hint={form.vehicleMake && form.vehicleYear
-                  ? (vehicles.modelsLoading
-                    ? "Looking up models…"
-                    : vehicles.models.length === 0
-                      ? "No models listed for that make and year — type it in."
-                      : undefined)
-                  : "Pick a year and make for suggestions, or just type it."}
-                onChange={(v) => set("vehicleModel", v)}
-              />
-            ) : (
-            <Field
-              label={f.label} required={f.required} error={errors[f.key]}
-              value={form[f.key]} placeholder={f.placeholder} onChange={(v) => set(f.key, v)}
-            />
-            )}
-            {f.key === "plateDlw" && (
-              <StateField
-                value={form.plateState}
-                error={errors.plateState}
-                onChange={(v) => set("plateState", v)}
-              />
-            )}
-          </Fragment>
-        ))}
-        <RfidField
-          value={form.rfid}
-          error={errors.rfid}
-          options={options.data?.options ?? []}
-          testOnly={options.data?.testOnly ?? []}
-          loading={options.isPending}
-          onChange={(v) => set("rfid", v)}
-        />
-        <StickerConfirm
-          placement={placement}
-          checked={form.stickerAttached}
-          error={errors.stickerAttached}
-          onChange={(v) => set("stickerAttached", v)}
-        />
-      </Bucket>
+      {/* The form, in whichever buckets this account has arranged.
+          What is REQUIRED does not live here and never did — the
+          server validates every submission against its own rules, so
+          a field taken off this page cannot make a bad record. The
+          required ones cannot be taken off at all, enforced on the
+          save of the layout rather than trusted to this page. */}
+      <AddFormBuckets
+        h={h}
+        tz={tz}
+        form={form}
+        errors={errors}
+        set={set}
+        vehicles={vehicles}
+        options={options}
+        placement={placement}
+      />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <button
@@ -2103,4 +2024,211 @@ function Deliveries({ guid }: { guid: string }) {
       </p>
     </div>
   );
+}
+
+/**
+ * The member record, in the buckets this account has arranged.
+ *
+ * One switch from a registered item key to the thing that renders it.
+ * That switch IS the registry's other half: a key the server offers
+ * and this does not know renders nothing and the bucket drops it,
+ * rather than showing a titled box with a gap in it.
+ *
+ * The page keeps working with no layout saved at all — the server
+ * falls through to the shared base, which is the arrangement that
+ * was here before buckets existed.
+ */
+function RecordBuckets({ row, tz }: { row: SignupRow; tz: string }) {
+  const q = useLayout("member-signups-review");
+  const c = row.customer;
+
+  const render = (key: string): React.ReactNode => {
+    switch (key) {
+      case "createdDate": return <Readout label="Date Created" value={dateIn(row.createdAt, tz)} />;
+      case "createdTime": return <Readout label="Time Created" value={timeIn(row.createdAt, tz)} />;
+      case "guid": return <Readout label="Unique GUID" value={row.guid} mono />;
+      case "dlwContractId":
+        return <Readout label="DLW Contract ID" value={row.dealer.dlwContractId} />;
+      case "dealNumber": return <Readout label="Deal #" value={row.dealer.dealNumber} />;
+      case "customerId": return <Readout label="Customer ID #" value={row.dealer.customerId} />;
+      case "firstName": return <Readout label="First Name" value={c.firstName} />;
+      case "lastName": return <Readout label="Last Name" value={c.lastName} />;
+      case "phone": return <Readout label="Phone" value={c.phone} />;
+      case "email": return <Readout label="Email" value={c.email} />;
+      case "plate":
+        return (
+          <Readout
+            label="Plate (DLW)"
+            value={[c.plateDlw, c.plateState].filter(Boolean).join("  ") || null}
+          />
+        );
+      case "vehicleMake": return <Readout label="Vehicle Make" value={c.vehicleMake} />;
+      case "vehicleModel": return <Readout label="Vehicle Model" value={c.vehicleModel} />;
+      case "vehicleYear": return <Readout label="Vehicle Year" value={c.vehicleYear} />;
+      case "vehicleColor": return <Readout label="Vehicle Color" value={c.vehicleColor} />;
+      case "rfid": return <Readout label="RFID" value={c.rfid} mono />;
+      case "stickerAttached":
+        return <Readout label="Sticker attached" value={stickerText(row)} />;
+      case "submittedBy": return <Readout label="Submitted by" value={row.submittedBy} />;
+      case "openedBy": return <Readout label="Opened by MOJO" value={row.openedBy} />;
+      case "completedBy": return <Readout label="Approved by" value={row.completedBy} />;
+      case "deliveries": return <Deliveries guid={row.guid} />;
+      default: return null;
+    }
+  };
+
+  // Until the layout lands, the record rather than a spinner: this is
+  // a modal somebody opened to read one thing, and a flash of nothing
+  // where the fields go is worse than a frame of the default order.
+  const layout = q.data?.layout;
+  if (!layout) {
+    return (
+      <div className="space-y-4">
+        <Deliveries guid={row.guid} />
+        <Bucket title="Customer">
+          {["firstName", "lastName", "plate", "rfid", "stickerAttached"].map((k) => (
+            <div key={k}>{render(k)}</div>
+          ))}
+        </Bucket>
+      </div>
+    );
+  }
+  return <BucketGrid layout={layout} render={render} />;
+}
+
+/**
+ * The new-member form, in the buckets this account has arranged.
+ *
+ * The same switch as the record view, over the same registry — and
+ * the same rule, stated here because this is where it would be
+ * tempting to break it: WHAT IS REQUIRED IS NOT DECIDED BY THIS
+ * PAGE. The server validates every submission against its own rules,
+ * so a field taken off the form cannot produce a record that would
+ * otherwise have been refused; it can only produce a form that
+ * cannot be submitted. That is why a required field is marked
+ * essential in the registry and the layout save refuses to drop it,
+ * rather than this component quietly putting it back.
+ */
+function AddFormBuckets({
+  h, tz, form, errors, set, vehicles, options, placement,
+}: {
+  h: Handle | undefined;
+  tz: string;
+  form: Form;
+  errors: Record<string, string>;
+  set: (k: keyof Form, v: string | boolean) => void;
+  vehicles: {
+    years: string[]; makes: string[]; models: string[]; modelsLoading: boolean;
+  };
+  options: { data?: { options: string[]; testOnly?: string[] }; isPending: boolean };
+  placement: Placement;
+}) {
+  const q = useLayout("member-signups-add");
+  const field = (key: keyof Form, label: string, placeholder?: string, required = false) => (
+    <Field
+      label={label} required={required} error={errors[key]}
+      value={String(form[key] ?? "")} placeholder={placeholder ?? label}
+      onChange={(v) => set(key, v)}
+    />
+  );
+
+  const render = (key: string): React.ReactNode => {
+    switch (key) {
+      case "createdDate":
+        return <Locked label="Date Created" value={h ? dateIn(h.createdAt, tz) : "…"} />;
+      case "createdTime":
+        return <Locked label="Time Created" value={h ? timeIn(h.createdAt, tz) : "…"} />;
+      case "guid": return <Locked label="Unique GUID" value={h?.guid ?? "…"} mono />;
+      case "dlwContractId": return field("dlwContractId", "DLW Contract ID", undefined, true);
+      case "dealNumber": return field("dealNumber", "Deal #");
+      case "customerId": return field("customerId", "Customer ID #");
+      case "firstName": return field("firstName", "First Name", "First Name", true);
+      case "lastName": return field("lastName", "Last Name", "Last Name", true);
+      case "phone": return field("customerPhone", "Phone", "Optional");
+      case "email": return field("customerEmail", "Email", "Optional");
+      case "plate": return field("plateDlw", "Plate (DLW)", "Optional");
+      case "plateState":
+        return (
+          <StateField
+            value={form.plateState}
+            error={errors.plateState}
+            onChange={(v) => set("plateState", v)}
+          />
+        );
+      case "vehicleYear":
+        return (
+          <YearField
+            value={form.vehicleYear}
+            years={vehicles.years}
+            error={errors.vehicleYear}
+            onChange={(v) => set("vehicleYear", v)}
+          />
+        );
+      case "vehicleMake":
+        return (
+          <SuggestField
+            id="f-make" label="Vehicle Make" value={form.vehicleMake}
+            options={vehicles.makes} placeholder="Honda" error={errors.vehicleMake}
+            onChange={(v) => set("vehicleMake", v)}
+          />
+        );
+      case "vehicleModel":
+        return (
+          <SuggestField
+            id="f-model" label="Vehicle Model" value={form.vehicleModel}
+            options={vehicles.models} placeholder="Accord" error={errors.vehicleModel}
+            hint={form.vehicleMake && form.vehicleYear
+              ? (vehicles.modelsLoading
+                ? "Looking up models…"
+                : vehicles.models.length === 0
+                  ? "No models listed for that make and year — type it in."
+                  : undefined)
+              : "Pick a year and make for suggestions, or just type it."}
+            onChange={(v) => set("vehicleModel", v)}
+          />
+        );
+      case "vehicleColor": return field("vehicleColor", "Vehicle Color");
+      case "rfid":
+        return (
+          <RfidField
+            value={form.rfid}
+            error={errors.rfid}
+            options={options.data?.options ?? []}
+            testOnly={options.data?.testOnly ?? []}
+            loading={options.isPending}
+            onChange={(v) => set("rfid", v)}
+          />
+        );
+      case "stickerAttached":
+        return (
+          <StickerConfirm
+            placement={placement}
+            checked={form.stickerAttached}
+            error={errors.stickerAttached}
+            onChange={(v) => set("stickerAttached", v)}
+          />
+        );
+      default: return null;
+    }
+  };
+
+  /*
+   * Before the layout lands, the WHOLE form rather than a partial one.
+   *
+   * A fallback that showed only the required fields would be a form
+   * somebody could start filling in and then watch rearrange under
+   * them. Every registered item, in the shared order, is the same
+   * thing the base layout resolves to.
+   */
+  const layout = q.data?.layout;
+  if (!layout) {
+    return (
+      <Bucket title="New member" note="Loading this page's arrangement…">
+        {["dlwContractId", "firstName", "lastName", "rfid", "stickerAttached"].map((k) => (
+          <div key={k}>{render(k)}</div>
+        ))}
+      </Bucket>
+    );
+  }
+  return <BucketGrid layout={layout} render={render} />;
 }

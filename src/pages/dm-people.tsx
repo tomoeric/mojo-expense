@@ -157,8 +157,9 @@ export function DmPeopleDialog({
           <div className="min-w-0">
             <h2 className="text-base font-semibold">Users</h2>
             <p className="text-sm text-muted-foreground">
-              Everyone who can reach Dutch Miller: MOJO staff on the access list, and
-              everyone invited from outside.
+              Everyone who can reach the platform: MOJO staff on the access list, and
+              everyone invited from outside. One list, shared by every partner —
+              which partners somebody can open is set per person below.
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">

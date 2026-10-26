@@ -18,9 +18,8 @@ import { DmAuditPage } from "@/pages/dm-audit";
 import { DmVendorsPage } from "@/pages/dm-vendors";
 import { DmSecurityPage } from "@/pages/dm-security";
 import { DmSettingsPage } from "@/pages/dm-settings";
-import {
-  DmAccountSettingsPage, DmPartnersPage, DmTemplatePage,
-} from "@/pages/dm-partners";
+import { DmAccountSettingsPage, DmPartnersPage } from "@/pages/dm-partners";
+import { DmTemplatePage } from "@/pages/dm-template";
 import { openAccount, slugInPath } from "@/lib/partner";
 import type { AppKey, SessionUser } from "@/lib/api";
 

@@ -205,7 +205,68 @@ try {
   const kept = await call("GET", "/api/dutch-miller/accounts", OWNER);
   check("an account administrator still sees it, to bring it back",
     (kept.body.accounts as { id: string }[]).some((a) => a.id === probeId));
+  console.log("\n7. Layouts are per account, and the template is not an admin's to change");
+  // Back on, so the scoped admin can work in it again.
+  await call("POST", `/api/dutch-miller/accounts/${probeId}/status`, OWNER,
+    { body: { active: true, reason: "" } });
+
+  const page = "member-signups-review";
+  const mine = await call("GET", `/api/dutch-miller/blocks/${page}`, SCOPED,
+    { slug: probeSlug });
+  check("a page's layout answers", mine.status === 200, String(mine.status));
+  check("…for their own account",
+    (mine.body.account as { id: string }).id === probeId);
+  check("…and they may arrange it", mine.body.canArrange === true);
+
+  const arranged = await call("POST", `/api/dutch-miller/blocks/${page}/layout`, SCOPED,
+    {
+      slug: probeSlug,
+      body: {
+        layout: [
+          { blockId: "blk_review_customer", position: 10, width: 4, height: "auto" },
+          { blockId: "blk_review_auto", position: 20, width: 2, height: "auto" },
+        ],
+      },
+    });
+  check("they can arrange their own page", arranged.status === 200,
+    JSON.stringify(arranged.body).slice(0, 140));
+
+  // The one that matters over HTTP: arranging one account's page must
+  // not reach another's, and the header is the only thing naming it.
+  const dmLayout = await call("GET", `/api/dutch-miller/blocks/${page}`, OWNER,
+    { slug: "dutchmiller" });
+  const first = (dmLayout.body.layout as { id: string }[])[0];
+  check("DUTCH MILLER'S PAGE IS UNTOUCHED", first?.id === "blk_review_auto", first?.id);
+
+  const hidden = await call("POST", `/api/dutch-miller/blocks/${page}/layout`, SCOPED,
+    {
+      slug: probeSlug,
+      body: {
+        layout: [{
+          blockId: "blk_review_customer", position: 10, width: 6, height: "auto",
+          hidden: true,
+        }],
+      },
+    });
+  check("hiding a bucket the workflow depends on is refused", hidden.status === 400,
+    String(hidden.status));
+  check("…saying which item", String(hidden.body.error ?? "").includes("RFID"),
+    String(hidden.body.error ?? ""));
+
+  const forge = await call("POST", "/api/dutch-miller/template/blocks", SCOPED,
+    { slug: probeSlug, body: { page, name: "Sneaky", items: ["firstName"] } });
+  check("an admin cannot change the shared template", forge.status === 403,
+    String(forge.status));
+  const forgeBase = await call("POST", `/api/dutch-miller/template/layout/${page}`, SCOPED,
+    { slug: probeSlug, body: { layout: [] } });
+  check("…nor the base layout every partner starts on", forgeBase.status === 403,
+    String(forgeBase.status));
+
 } finally {
+  if (probeId) {
+    await db().query("DELETE FROM dm_account_layout WHERE account_id = $1", [probeId])
+      .catch(() => undefined);
+  }
   if (probeId) {
     await db().query("DELETE FROM dm_settings WHERE account_id = $1", [probeId])
       .catch(() => undefined);

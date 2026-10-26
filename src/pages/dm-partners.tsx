@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  AlertTriangle, Building2, Check, Layers, Loader2, Plus, Power, Settings2, X,
+  AlertTriangle, Building2, Check, Loader2, Plus, Power, Settings2, X,
 } from "lucide-react";
 import { Empty, SectionTitle } from "@/components/ui";
 import { openAccount } from "@/lib/partner";
@@ -461,55 +461,6 @@ function ManageAccount({
           >
             Close
           </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Shared Template.
- *
- * An honest statement of what the template IS today rather than an
- * editor that does not exist. Every account already renders from the
- * same deployed code, which is the part of "one template" that
- * matters and the part that is actually true — so this page says so,
- * and says plainly what is not built.
- */
-export function DmTemplatePage() {
-  // From the server rather than a constant here, so the number on
-  // screen is the one the running code actually records on an
-  // account. A second copy in the UI would drift within a release.
-  const version = useAccounts().data?.templateVersion ?? 1;
-  return (
-    <div className="space-y-5">
-      <SectionTitle
-        title="Shared Template"
-        description="What every partner account is built from."
-      />
-      <div className="space-y-3 rounded-xl border border-border bg-card p-5 text-sm">
-        <p className="flex items-center gap-2 font-semibold">
-          <Layers className="h-4 w-4" />
-          Template v{version}
-        </p>
-        <p className="text-muted-foreground">
-          There is one application and one copy of every page, form, validation rule and
-          workflow in it. Each partner account is that same deployed code plus its own
-          configuration and its own records — there is no per-partner fork, no snapshot
-          taken at provisioning, and nothing to re-copy when something changes.
-        </p>
-        <p className="text-muted-foreground">
-          A change shipped here therefore reaches every existing account, Dutch Miller
-          included, on the next deploy. What stays the account&rsquo;s own is its name and
-          affiliation, its RFID placement, its members, tags and vendors.
-        </p>
-        <div className="rounded-lg border border-border bg-background p-3">
-          <p className="font-semibold">Not built yet</p>
-          <p className="mt-1 text-muted-foreground">
-            Choosing and arranging blocks per page — adding, hiding, reordering and
-            resizing them per account — is specified but not implemented. Nothing on this
-            page pretends otherwise, and no account has a layout of its own yet.
-          </p>
         </div>
       </div>
     </div>

@@ -565,14 +565,73 @@ nothing — and on an EMPTY one it is the difference between the app coming up a
 the first request failing on whichever module happened to be touched first,
 which is exactly what a new environment hits.
 
-### What is NOT built
+### The shared template and editable buckets
 
-Stated here so nobody reports it as done. The brief's **editable buckets** — a
-catalogue of blocks in the template, chosen, reordered, resized and hidden per
-account and per page, with an editor for composing new ones out of named
-fields — is specified and not implemented. No account has a layout of its own;
-every page is the same page everywhere. The Shared Template screen says so
-rather than showing controls that do nothing.
+`server/dutch-miller/blocks.ts`. A PAGE has a fixed registry of items; a BUCKET
+is a named group of some of them, shared; a LAYOUT is which buckets one
+account's page shows, in what order and at what width. Four pages are built
+this way: Member Signups (Review Existing and Add New), RFID Instructions and
+RFID Inventory.
+
+- **The registry is the whole vocabulary.** `ITEM` in `blocks.ts` names every
+  field and piece of content a bucket may hold, per page. A key that is not in
+  it is REFUSED on save rather than rendered as a gap — a gap is the hardest
+  bug to notice and the person who notices it is a dealership. There is
+  deliberately no free-text field name anywhere in the editor.
+- **Definitions are shared; arrangements are the account's.** One bucket, so
+  improving it improves it everywhere on the next deploy with nothing to
+  re-copy. `dm_account_layout` holds overrides, and a row there is the only
+  thing that makes a page the account's own.
+- **Resolution happens at READ time, never at provisioning.** A new account is
+  given no rows. `layoutFor()` starts from `dm_template_layout` and lays the
+  account's overrides on top, which is what makes all three of these true at
+  once: an untouched page follows a change to the base; an arranged page keeps
+  its arrangement; a bucket added to the template later is available without
+  being imposed. Copying the base into a new account would be a fork on day one
+  and nothing on screen would say so. There is a test for exactly this.
+- **An account's `items` override is null when it matches the bucket.** So an
+  account that merely reordered a page still receives a field added to the
+  shared bucket later. Freezing the list on a reorder is the subtle way this
+  design turns back into a snapshot.
+- **ESSENTIAL items cannot be hidden, unticked, or edited out of the shared
+  bucket** — three separate code paths, three separate refusals, each tested.
+  Hiding is presentation only: it deletes nothing and relaxes no validation, so
+  an item a workflow depends on must stay on screen or the page quietly stops
+  working. `layoutFor` also ignores a `hidden` row on such a bucket, because a
+  row can arrive from a restore or a hand-edited database as well as a save.
+- **Required-ness is not decided by the form.** The server validates every
+  submission against its own rules, so a field taken off Add New cannot produce
+  a record that would otherwise be refused — only a form that cannot be
+  submitted. That is why required fields are registered essential rather than
+  re-added by the page.
+- **Archiving, never deleting.** A layout row still points at a retired bucket,
+  so a dangling id would mean a page that fails to resolve. Bringing it back
+  restores every account's arrangement exactly. A built-in cannot be retired:
+  the base layout is made of them and a page with none left is a blank screen
+  with no way back.
+- **Both arrangement controls are offered.** Buttons that move a bucket one
+  place AND dragging. The buttons are not a fallback — they are the ones that
+  work with a keyboard and on a phone.
+- **Restore deletes the overrides** rather than writing today's base into them,
+  which is what keeps the page FOLLOWING the template afterwards.
+- `scripts/test-blocks.ts` covers the model; `test-isolation.ts` covers the
+  routes, including that an administrator cannot touch the shared template.
+
+### Shared administration says so on the page
+
+Users & Access and Email & Notifications are platform-wide and now read that
+way — "everyone who can reach the platform", "these recipients apply to every
+partner account". They were still saying Dutch Miller, which is the kind of
+wording that makes somebody switch off one partner's reminders and stop
+everybody's.
+
+A signup notification carries the partner's NAME in its subject and its body,
+and its review link carries the partner's SLUG (`signupUrl(origin, guid,
+slug)`). The settings are shared, so one reviewer's inbox holds every partner's
+signups: without the name they are indistinguishable before opening, and
+without the slug the link lands in the wrong account, where the record
+correctly does not exist and the isolation rules working properly read as a
+broken link.
 
 ## The member's own contact details
 
@@ -770,7 +829,8 @@ rather than showing controls that do nothing.
     with the note and the request's IP.
 - Tests: `scripts/test-rfid.ts`, `scripts/test-dm-users.ts`,
   `scripts/test-signups.ts`, `scripts/test-accounts.ts` (partner isolation in
-  the model) and `scripts/test-isolation.ts` (the same, over HTTP, against a
+  the model), `scripts/test-blocks.ts` (the template and the per-account
+  layouts) and `scripts/test-isolation.ts` (isolation over HTTP, against a
   real server with a real session cookie — the only level at which a route
   collision or a mis-ordered middleware shows, and the level at which both have
   already bitten) — all need `DATABASE_URL`. The users test SKIPS against a non-empty `dm_users` rather

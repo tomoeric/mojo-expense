@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ArrangeBar, BucketGrid, useLayout } from "@/components/buckets";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Download, Eye, Loader2, Trash2, Upload, X } from "lucide-react";
 
@@ -199,29 +200,16 @@ export function DmRfidPage() {
     chips.push({ key: "deleted", label: "Deleted", n: counts?.deleted });
   }
 
-  return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-lg font-semibold">RFID Inventory</h1>
-        <p className="text-sm text-muted-foreground">
-          Every tag the pool has ever held — available, assigned, held back and removed.
-        </p>
-      </div>
-
-      {/* A view-only role gets the page without the upload card. The
-          rows, the counts and the search are the whole reason most
-          people open it; the buttons are not, and a disabled one only
-          teaches people to distrust buttons. */}
-      {!canManage && (
-        <p className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 px-4 py-2.5 text-sm text-muted-foreground">
-          <Eye className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>
-            <strong>View only.</strong> You can read the pool and search it. Uploading,
-            holding tags back and removing them belong to another role.
-          </span>
-        </p>
-      )}
-
+  /*
+   * The page's sections, named once.
+   *
+   * Pulled out of the return so the layout can place them rather than
+   * the markup fixing their order. Each is exactly what it was — the
+   * upload card keeps its own border because it is a card, and the
+   * bucket around it is the thing that moved.
+   */
+  const uploadSection = (
+    <>
       {canManage && (
       <div className="rounded-lg border border-border bg-card p-4">
         <div className="flex flex-wrap items-center gap-3">
@@ -324,7 +312,10 @@ export function DmRfidPage() {
         )}
       </div>
       )}
-
+    </>
+  );
+  const countsSection = (
+    <>
       <div className="flex flex-wrap items-center gap-2">
         {chips.map((c) => (
           <button
@@ -338,14 +329,21 @@ export function DmRfidPage() {
             {c.label}{c.n === undefined ? "" : ` ${c.n.toLocaleString()}`}
           </button>
         ))}
+      </div>
+    </>
+  );
+  const searchSection = (
+    <>
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search a number…"
-          className="ml-auto w-56 rounded-md border border-border bg-background px-2.5 py-1.5 text-sm"
+          className="w-full max-w-sm rounded-md border border-border bg-background px-2.5 py-1.5 text-sm"
         />
-      </div>
-
+    </>
+  );
+  const noteSection = (
+    <>
       {/* What each view means, where somebody choosing between them
           will read it. "Held back" and "Deleted" are the two people
           get wrong, and they differ in exactly one way that matters:
@@ -372,6 +370,10 @@ export function DmRfidPage() {
         )}
       </p>
 
+    </>
+  );
+  const tableSection = (
+    <>
       <div className="overflow-x-auto rounded-lg border border-border">
         <table className="w-full text-sm">
           <thead className="bg-muted/50 text-xs text-muted-foreground">
@@ -515,6 +517,48 @@ export function DmRfidPage() {
         </p>
       )}
 
+    </>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h1 className="text-lg font-semibold">RFID Inventory</h1>
+        <p className="text-sm text-muted-foreground">
+          Every tag the pool has ever held — available, assigned, held back and removed.
+        </p>
+      </div>
+
+      {/* A view-only role gets the page without the upload card. The
+          rows, the counts and the search are the whole reason most
+          people open it; the buttons are not, and a disabled one only
+          teaches people to distrust buttons. */}
+      {!canManage && (
+        <p className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 px-4 py-2.5 text-sm text-muted-foreground">
+          <Eye className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            <strong>View only.</strong> You can read the pool and search it. Uploading,
+            holding tags back and removing them belong to another role.
+          </span>
+        </p>
+      )}
+
+      {/* The page, in whichever buckets this account has arranged.
+          The filters, the search and the table are registered as
+          essential — a pool of thousands with no way to filter or
+          find is not a page somebody can be given instead. */}
+      <ArrangeBar page="rfid-review" />
+      <InventoryBuckets
+        canManage={canManage}
+        sections={{
+          upload: uploadSection,
+          format: showFormat ? <FormatHelp /> : null,
+          counts: countsSection,
+          search: searchSection,
+          note: noteSection,
+          table: tableSection,
+        }}
+      />
       {deleting && (
         <DeleteRfid
           row={deleting}
@@ -680,4 +724,44 @@ function Detail({ title, lines }: { title: string; lines: string[] }) {
       </ul>
     </details>
   );
+}
+
+/**
+ * The inventory page, in the buckets this account has arranged.
+ *
+ * The sections are handed in rather than built here, because they are
+ * tied to the page's state — the upload card holds a file input and a
+ * result, the filters hold the current tab. This component decides
+ * only WHERE they go.
+ *
+ * `upload` is shown to a role that may change the pool and to nobody
+ * else, whatever any layout says. Hiding a control is a presentation
+ * choice; showing one somebody may not use is a lie about their
+ * permissions, and the server would refuse the click anyway.
+ */
+function InventoryBuckets({
+  canManage, sections,
+}: {
+  canManage: boolean;
+  sections: Record<string, React.ReactNode>;
+}) {
+  const q = useLayout("rfid-review");
+  const render = (key: string): React.ReactNode => {
+    if (key === "upload" && !canManage) return null;
+    if (key === "format" && !canManage) return null;
+    return sections[key] ?? null;
+  };
+  const layout = q.data?.layout;
+  // Until it lands, the list and the way to filter it. A table with no
+  // filters is still the page; a spinner is not.
+  if (!layout) {
+    return (
+      <div className="space-y-4">
+        {sections.counts}
+        {sections.search}
+        {sections.table}
+      </div>
+    );
+  }
+  return <BucketGrid layout={layout} render={render} />;
 }

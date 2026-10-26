@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrangeBar, BucketGrid, useLayout } from "@/components/buckets";
 import { useState } from "react";
 import { AlertTriangle, Check, ImageOff, Loader2, X } from "lucide-react";
 
@@ -154,58 +155,12 @@ export function DmRfidInstructionsPage({ isAdmin = false }: { isAdmin?: boolean 
         <p className="text-sm font-semibold text-red-600">{(save.error as Error).message}</p>
       )}
 
-      <p className="rounded-lg border border-border bg-card px-4 py-3 text-sm">
-        <strong>{v.rule}</strong>{" "}
-        Apply it neatly and squarely to the glass, where it does not obstruct the driver's
-        view. The reader at the lane entrance is in a fixed position — a sticker placed
-        anywhere else may not scan, and the member will be stopped at the gate.
-      </p>
-
-      <Diagram src={v.image} alt={v.alt} caption={v.caption} placement={placement} />
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <section className="rounded-xl border border-emerald-500/40 bg-emerald-500/5 p-4">
-          <h2 className="flex items-center gap-2 text-sm font-semibold text-emerald-800 dark:text-emerald-300">
-            <Check className="h-4 w-4" />
-            Do
-          </h2>
-          <ul className="mt-2 space-y-1.5 text-sm">
-            {v.does.map((line) => (
-              <li key={line} className="flex gap-2">
-                <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" />
-                <span>{line}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-
-        <section className="rounded-xl border border-red-500/40 bg-red-500/5 p-4">
-          <h2 className="flex items-center gap-2 text-sm font-semibold text-red-700 dark:text-red-400">
-            <X className="h-4 w-4" />
-            Do not
-          </h2>
-          <ul className="mt-2 space-y-1.5 text-sm">
-            {v.donts.map((line) => (
-              <li key={line} className="flex gap-2">
-                <X className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-600" />
-                <span>{line}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      </div>
-
-      {/* The one mistake that is expensive rather than merely annoying:
-          a tag read onto the wrong vehicle is a membership nobody can
-          trace back without going through the pool by hand. */}
-      <p className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-900 dark:text-amber-200">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-        <span>
-          Check the number on the sticker against the one on the signup before applying it.
-          Each tag is issued to one member and one vehicle, and a tag on the wrong
-          windshield cannot be undone from here — it has to be replaced.
-        </span>
-      </p>
+      {/* The page, in whichever buckets this account has arranged. The
+          placement rule and the number-match warning cannot be hidden:
+          hiding either would not change the rule, only somebody's
+          chance of reading it before they stick a tag on glass. */}
+      <ArrangeBar page="rfid-instructions" />
+      <InstructionBuckets v={v} placement={placement} />
     </div>
   );
 }
@@ -307,4 +262,99 @@ function PlacementToggle({
       </p>
     </div>
   );
+}
+
+/**
+ * The instructions, in the buckets this account has arranged.
+ *
+ * The variants themselves do not move: inside and outside are two
+ * sets of copy for one stored setting, and which one is shown is the
+ * placement, never the layout. What an account can change is the
+ * order and the width of the pieces, and whether the illustrated
+ * guide and the two lists appear at all.
+ *
+ * The rule and the number-match warning are registered as essential,
+ * so neither can be taken off. Hiding "check the number" would not
+ * make a mis-stuck tag any easier to undo.
+ */
+function InstructionBuckets({ v, placement }: { v: Variant; placement: Placement }) {
+  const q = useLayout("rfid-instructions");
+
+  const render = (key: string): React.ReactNode => {
+    switch (key) {
+      case "rule":
+        return (
+          <p className="text-sm">
+            <strong>{v.rule}</strong>{" "}
+            Apply it neatly and squarely to the glass, where it does not obstruct the
+            driver&rsquo;s view. The reader at the lane entrance is in a fixed position — a
+            sticker placed anywhere else may not scan, and the member will be stopped at
+            the gate.
+          </p>
+        );
+      case "diagram":
+        return <Diagram src={v.image} alt={v.alt} caption={v.caption} placement={placement} />;
+      case "dos":
+        return (
+          <div>
+            <h4 className="flex items-center gap-2 text-sm font-semibold text-emerald-800 dark:text-emerald-300">
+              <Check className="h-4 w-4" />
+              Do
+            </h4>
+            <ul className="mt-2 space-y-1.5 text-sm">
+              {v.does.map((line) => (
+                <li key={line} className="flex gap-2">
+                  <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" />
+                  <span>{line}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      case "donts":
+        return (
+          <div>
+            <h4 className="flex items-center gap-2 text-sm font-semibold text-red-700 dark:text-red-400">
+              <X className="h-4 w-4" />
+              Do not
+            </h4>
+            <ul className="mt-2 space-y-1.5 text-sm">
+              {v.donts.map((line) => (
+                <li key={line} className="flex gap-2">
+                  <X className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-600" />
+                  <span>{line}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      case "numberMatch":
+        return (
+          <p className="flex items-start gap-2 text-sm text-amber-900 dark:text-amber-200">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>
+              Check the number on the sticker against the one on the signup before applying
+              it. Each tag is issued to one member and one vehicle, and a tag on the wrong
+              windshield cannot be undone from here — it has to be replaced.
+            </span>
+          </p>
+        );
+      default: return null;
+    }
+  };
+
+  // Until the layout lands, the rule and the warning. Not a spinner:
+  // somebody is standing at a vehicle holding a sticker.
+  const layout = q.data?.layout;
+  if (!layout) {
+    return (
+      <div className="space-y-4">
+        <div className="rounded-lg border border-border bg-card px-4 py-3">{render("rule")}</div>
+        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3">
+          {render("numberMatch")}
+        </div>
+      </div>
+    );
+  }
+  return <BucketGrid layout={layout} render={render} />;
 }

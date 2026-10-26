@@ -53,6 +53,12 @@ import {
 } from "../mail.js";
 import { forgetEpoch } from "../auth/index.js";
 import {
+  BLOCK_PAGES, HEIGHTS, PAGE_LABEL, WIDTHS, archiveBlock, essentialOn, isBlockPage,
+  accountsArranging, itemsOn, layoutFor, listBlocks, resetLayout, saveBaseLayout,
+  saveBlock, saveLayout,
+  type BlockPage,
+} from "./blocks.js";
+import {
   DUTCH_MILLER, PLATFORM_NAME, RESERVED_SLUGS, TEMPLATE_VERSION, type Account,
   accountLine, accountsFor, assignedAccounts, createAccount, forgetAccountAccess,
   holdersOf, listAccounts, renameAccount, setAccountStatus,
@@ -988,7 +994,12 @@ dutchMillerRouter.post("/settings/notifications/sample", requireDmAdmin,
       deleteNote: null,
       tagReleased: false,
     };
-    const { subject, html } = signupEmail(sample, { sample: true, origin: publicOrigin(req) });
+    const { subject, html } = signupEmail(sample, {
+      sample: true, origin: publicOrigin(req),
+      partner: req.account
+        ? { name: req.account.name, slug: req.account.slug }
+        : undefined,
+    });
     try {
       await sendMail(to, subject, html);
       res.json({ ok: true, to, usedRealSignup: Boolean(recent) });
@@ -1495,6 +1506,198 @@ dutchMillerRouter.post("/rfid/active", requirePage("rfid-review"), requireRfidWr
 /* ------------------------------------------------------------------ *
  * Member signups
  * ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ *
+ * The shared template, and each account's arrangement of it
+ * ------------------------------------------------------------------ */
+
+const asPage = (v: unknown): BlockPage | null =>
+  (isBlockPage(v) ? v : null);
+
+/**
+ * One page's layout, as this account actually sees it.
+ *
+ * Open to anybody who can open the page, because this IS the page —
+ * refusing it to a non-administrator would mean a blank screen
+ * rather than a screen they cannot rearrange. What they may CHANGE
+ * is a separate answer, returned alongside and decided again on the
+ * save below.
+ */
+dutchMillerRouter.get("/blocks/:page", async (req: Request, res: Response) => {
+  const page = asPage(req.params.page);
+  if (!page) { res.status(404).json({ error: "No such page." }); return; }
+  const account = accountOf(req, res);
+  if (!account) return;
+  // The grant that opens the page this layout is for. A layout is not
+  // a separate permission — it is the shape of something they can
+  // already read, or cannot.
+  const grant: DmPageKey = page === "member-signups-add" ? "member-signups-add"
+    : page === "member-signups-review" ? "member-signups"
+      : page === "rfid-instructions" ? "rfid-instructions" : "rfid-review";
+  const access = await dmAccessFor(req.user?.email ?? "");
+  if (!canAdminister(access) && !access.pages.includes(grant)) {
+    denied(req, `page ${grant}`);
+    res.status(403).json({ error: "You do not have access to that page." });
+    return;
+  }
+  res.json({
+    page,
+    label: PAGE_LABEL[page],
+    account: { id: account.id, name: account.name },
+    layout: await layoutFor(account.id, page),
+    /** The catalogue, so the editor can offer what is not placed yet. */
+    available: (await listBlocks(page)).filter((b) => b.archivedAt === null),
+    items: itemsOn(page),
+    essential: essentialOn(page),
+    widths: WIDTHS,
+    heights: HEIGHTS,
+    /* Arranging an account's own page is administering that account.
+       It is shown here and decided again on the write. */
+    canArrange: canAdminister(await dmAccessFor(
+      req.viewingAs?.real.email ?? req.user?.email ?? "")),
+  });
+});
+
+/**
+ * Save this account's arrangement of one page.
+ *
+ * Administering THIS account is enough — it is their own page, and
+ * nothing here reaches another partner. Changing the shared bucket
+ * underneath is a different route and a different permission.
+ */
+dutchMillerRouter.post("/blocks/:page/layout", requireDmAdmin,
+  async (req: Request, res: Response) => {
+    const page = asPage(req.params.page);
+    if (!page) { res.status(404).json({ error: "No such page." }); return; }
+    const account = accountOf(req, res);
+    if (!account) return;
+    const body = (req.body ?? {}) as { layout?: unknown };
+    const rows = Array.isArray(body.layout)
+      ? (body.layout as Record<string, unknown>[]).map((r) => ({
+        blockId: String(r.blockId ?? ""),
+        position: Number(r.position),
+        width: Number(r.width),
+        height: String(r.height ?? "auto"),
+        hidden: r.hidden === true,
+        items: Array.isArray(r.items) ? (r.items as unknown[]).map(String) : null,
+      }))
+      : [];
+    const out = await saveLayout(account.id, page, rows, actor(req));
+    if (!out.ok) { res.status(400).json({ error: out.problem }); return; }
+    await audit({
+      action: "layout.saved", ...who(req), resource: page,
+      detail: `${PAGE_LABEL[page]} — ${rows.length} bucket(s) arranged`,
+    });
+    emitChange("settings");
+    res.json({ layout: out.layout });
+  });
+
+/** Back to the base layout. Deleting the overrides, not copying the base. */
+dutchMillerRouter.post("/blocks/:page/reset", requireDmAdmin,
+  async (req: Request, res: Response) => {
+    const page = asPage(req.params.page);
+    if (!page) { res.status(404).json({ error: "No such page." }); return; }
+    const account = accountOf(req, res);
+    if (!account) return;
+    const layout = await resetLayout(account.id, page);
+    await audit({
+      action: "layout.reset", ...who(req), resource: page,
+      detail: `${PAGE_LABEL[page]} — back to the shared layout`,
+    });
+    emitChange("settings");
+    res.json({ layout });
+  });
+
+/**
+ * The catalogue itself.
+ *
+ * Readable by any administrator, because knowing what a bucket holds
+ * is how you decide whether to place it. Writable only by an account
+ * administrator: a bucket is shared, so changing one changes every
+ * partner's page at once.
+ */
+dutchMillerRouter.get("/template/blocks", requireDmAdmin,
+  async (_req: Request, res: Response) => {
+    res.json({
+      pages: await Promise.all(BLOCK_PAGES.map(async (p) => ({
+        key: p,
+        label: PAGE_LABEL[p],
+        items: itemsOn(p),
+        essential: essentialOn(p),
+        blocks: await listBlocks(p),
+        /* Which partners have arranged this page for themselves, so
+           the editor can say how many layouts a change will meet
+           rather than letting somebody find out afterwards. */
+        arranging: (await accountsArranging(p)).length,
+      }))),
+    });
+  });
+
+dutchMillerRouter.post("/template/blocks",
+  requireSuperTo("change the shared template"),
+  async (req: Request, res: Response) => {
+    const b = (req.body ?? {}) as {
+      id?: unknown; page?: unknown; name?: unknown; items?: unknown; columns?: unknown;
+    };
+    const page = asPage(b.page);
+    if (!page) { res.status(400).json({ error: "Choose a page." }); return; }
+    const out = await saveBlock({
+      id: typeof b.id === "string" && b.id ? b.id : undefined,
+      page,
+      name: String(b.name ?? ""),
+      items: Array.isArray(b.items) ? (b.items as unknown[]).map(String) : [],
+      columns: Number(b.columns),
+    }, actor(req));
+    if (!out.ok) { res.status(400).json({ error: out.problem }); return; }
+    await audit({
+      action: out.created ? "template.block.created" : "template.block.changed",
+      ...who(req), resource: out.block.id,
+      detail: `${PAGE_LABEL[page]} — ${out.block.name} (${out.block.items.length} item(s))`,
+    });
+    emitChange("settings");
+    res.json({ block: out.block, created: out.created });
+  });
+
+dutchMillerRouter.post("/template/blocks/:id/archive",
+  requireSuperTo("retire a shared bucket"),
+  async (req: Request, res: Response) => {
+    const b = (req.body ?? {}) as { archived?: unknown };
+    const archived = b.archived !== false;
+    const out = await archiveBlock(String(req.params.id ?? ""), archived);
+    if (!out.ok) { res.status(400).json({ error: out.problem }); return; }
+    await audit({
+      action: "template.block.changed", ...who(req),
+      resource: String(req.params.id ?? ""),
+      detail: archived ? "retired from the catalogue" : "brought back into the catalogue",
+    });
+    emitChange("settings");
+    res.json({ ok: true });
+  });
+
+/** The base layout a new account starts on, and an untouched page follows. */
+dutchMillerRouter.post("/template/layout/:page",
+  requireSuperTo("change the shared layout"),
+  async (req: Request, res: Response) => {
+    const page = asPage(req.params.page);
+    if (!page) { res.status(404).json({ error: "No such page." }); return; }
+    const body = (req.body ?? {}) as { layout?: unknown };
+    const rows = Array.isArray(body.layout)
+      ? (body.layout as Record<string, unknown>[]).map((r) => ({
+        blockId: String(r.blockId ?? ""),
+        position: Number(r.position),
+        width: Number(r.width),
+        height: String(r.height ?? "auto"),
+      }))
+      : [];
+    const out = await saveBaseLayout(page, rows);
+    if (!out.ok) { res.status(400).json({ error: out.problem }); return; }
+    await audit({
+      action: "template.layout.changed", ...who(req), resource: page,
+      detail: `${PAGE_LABEL[page]} — base layout set, ${rows.length} bucket(s)`,
+    });
+    emitChange("settings");
+    res.json({ ok: true });
+  });
 
 /* ------------------------------------------------------------------ *
  * Partner accounts
@@ -2023,7 +2226,8 @@ dutchMillerRouter.post(
       // the tag is claimed by now, so a bounced email must not tell the
       // dealer their signup failed. Outcomes land in the audit trail.
       if (!out.alreadyExisted) {
-        void notifySignup(out.row, publicOrigin(req));
+        void notifySignup(out.row, publicOrigin(req),
+          { name: account.name, slug: account.slug });
         void audit({
           action: "signup.created", resource: out.row.guid, ...who(req),
           detail: `${out.row.customer.firstName} ${out.row.customer.lastName} · `
@@ -2125,7 +2329,8 @@ dutchMillerRouter.post(
         out.kind === "validation" ? { errors: out.errors } : { error: out.reason });
       return;
     }
-    if (!out.alreadyExisted) void notifySignup(out.row, publicOrigin(req));
+    if (!out.alreadyExisted) void notifySignup(out.row, publicOrigin(req),
+          { name: account.name, slug: account.slug });
     emitChange("signups");
     res.json({ row: out.row });
   },
