@@ -227,6 +227,8 @@ export type Access = {
   deletesSignups: boolean;
   /** May remove RFID numbers from the pool. Super, or a role granted it. */
   deletesRfid: boolean;
+  /** Can open RFID Inventory, but may change nothing on it. */
+  rfidReadOnly: boolean;
   /** The named role behind it, for display. Empty for a pinned super admin. */
   roleKey: string;
   roleName: string;
@@ -256,7 +258,7 @@ export async function dmAccessFor(email: string): Promise<Access> {
       // The owner is not locked out of their own app. Everybody else
       // needs the CSC role, including administrators.
       approves: true,
-      deletesSignups: true, deletesRfid: true,
+      deletesSignups: true, deletesRfid: true, rfidReadOnly: false,
       pages: [...DM_PAGE_KEYS], status: "active", pinned: true,
     };
   }
@@ -264,7 +266,7 @@ export async function dmAccessFor(email: string): Promise<Access> {
   const none: Access = {
     role: "user", roleKey: row?.roleKey ?? DEFAULT_ROLE, roleName: "",
     approves: false,
-    deletesSignups: false, deletesRfid: false,
+    deletesSignups: false, deletesRfid: false, rfidReadOnly: false,
     pages: [], status: row?.status ?? "invited", pinned: false,
   };
   if (!row || row.status !== "active") return none;
@@ -285,6 +287,10 @@ export async function dmAccessFor(email: string): Promise<Access> {
     // they should be striking memberships.
     deletesSignups: def.deletesSignups,
     deletesRfid: def.deletesRfid,
+    // Administering is every PAGE, never a licence to change what is
+    // on one — a role deliberately set to look and not touch keeps
+    // that even when it also administers.
+    rfidReadOnly: def.rfidReadOnly,
     // Administering means EVERY page, whatever the role's tick-boxes say.
     // The alternative is an administrator who can open Users and Roles but
     // not Member Signups, which nobody means by the word and which the

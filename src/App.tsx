@@ -273,7 +273,12 @@ export function App() {
   const activeApp = auth.data?.app ?? apps[0] ?? "emburse";
 
   if (auth.data?.user && apps.length === 0) {
-    return <NoAppAssigned email={auth.data.user.email} />;
+    return (
+      <NoAppAssigned
+        email={auth.data.user.email}
+        viewingAs={auth.data.viewingAs ?? null}
+      />
+    );
   }
 
   if (activeApp === "dutch-miller") {
@@ -525,21 +530,62 @@ export function App() {
  * has to say so plainly. The alternative is an empty Emburse shell whose
  * every request answers 403, which reads as the app being broken.
  */
-function NoAppAssigned({ email }: { email: string }) {
+/**
+ * Signed in, assigned to nothing.
+ *
+ * This screen replaces the whole shell, header included — which is
+ * why it has to carry the way out of a view itself. A view now shows
+ * the VIEWED person's apps, so an administrator looking at somebody
+ * who holds nothing lands here, and without this they would be
+ * stuck on a page with only Sign out on it.
+ *
+ * Seeing it is the point rather than a problem: "they have not been
+ * assigned anything" is one of the most useful answers a view gives,
+ * and it is the exact state somebody rings up about.
+ */
+function NoAppAssigned({
+  email, viewingAs,
+}: {
+  email: string;
+  viewingAs: { real: string; viewed: string } | null;
+}) {
+  const stop = () => {
+    void fetch("/api/auth/view-as", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: null }),
+    }).then(() => { window.location.href = "/"; });
+  };
+
   return (
     <div className="grid min-h-screen place-items-center p-6">
       <div className="max-w-md rounded-xl border border-border bg-card p-6 text-center">
         <p className="text-sm font-semibold">No app is assigned to this account</p>
         <p className="mt-1 text-sm text-muted-foreground">
-          You are signed in as {email}, but it has not been given access to Emburse or
-          Dutch Miller. An administrator can add it to the relevant list.
+          {viewingAs
+            ? `${email} has not been given access to Emburse or Dutch Miller, so this
+               is everything they can see. Add them to the relevant list, or give them
+               a role, and this page becomes their app.`
+            : `You are signed in as ${email}, but it has not been given access to
+               Emburse or Dutch Miller. An administrator can add it to the relevant
+               list.`}
         </p>
-        <a
-          href="/api/logout"
-          className="mt-4 inline-block rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted"
-        >
-          Sign out
-        </a>
+        {viewingAs ? (
+          <button
+            type="button"
+            onClick={stop}
+            className="mt-4 inline-block rounded-md bg-amber-500/20 px-3 py-1.5 text-sm font-semibold hover:bg-amber-500/30"
+          >
+            Stop viewing as {viewingAs.viewed}
+          </button>
+        ) : (
+          <a
+            href="/api/logout"
+            className="mt-4 inline-block rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted"
+          >
+            Sign out
+          </a>
+        )}
       </div>
     </div>
   );

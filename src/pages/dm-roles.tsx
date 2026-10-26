@@ -7,7 +7,7 @@ type ActionDef = { key: string; label: string; source: string };
 type Role = {
   key: string; name: string; pages: string[];
   administers: boolean; approves: boolean; builtin: boolean; holders?: number;
-  deletesSignups: boolean; deletesRfid: boolean;
+  deletesSignups: boolean; deletesRfid: boolean; rfidReadOnly: boolean;
   createdAt: string | null; createdBy: string | null;
   /** Derived from the rules the guards apply. Never stored, never edited. */
   actions: Record<string, boolean>;
@@ -25,7 +25,7 @@ type Payload = {
 
 type Draft = {
   key?: string; name: string; pages: string[]; administers: boolean;
-  deletesSignups: boolean; deletesRfid: boolean;
+  deletesSignups: boolean; deletesRfid: boolean; rfidReadOnly: boolean;
 };
 
 /**
@@ -97,7 +97,7 @@ export function DmRolesPage() {
           type="button"
           onClick={() => setDraft({
             name: "", pages: [], administers: false,
-            deletesSignups: false, deletesRfid: false,
+            deletesSignups: false, deletesRfid: false, rfidReadOnly: false,
           })}
           className="inline-flex items-center gap-2 rounded-md bg-foreground px-3 py-2 text-sm font-semibold text-background"
         >
@@ -156,6 +156,11 @@ export function DmRolesPage() {
                       deletes RFIDs
                     </span>
                   )}
+                  {r.rfidReadOnly && (
+                    <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                      RFID view only
+                    </span>
+                  )}
                 </p>
                 <p className="mt-0.5 text-xs text-muted-foreground">
                   {r.approves
@@ -180,6 +185,7 @@ export function DmRolesPage() {
                     key: r.key, name: r.name, pages: [...r.pages],
                     administers: r.administers,
                     deletesSignups: r.deletesSignups, deletesRfid: r.deletesRfid,
+                    rfidReadOnly: r.rfidReadOnly,
                   })}
                   className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted"
                 >
@@ -338,6 +344,26 @@ function RoleEditor({
             onChange={(e) => onChange({ ...draft, administers: e.target.checked })}
           />
           Administers — every page, plus Users and Settings
+        </label>
+      )}
+
+      {/* Opening the page and changing it are different things, so
+          this sits with the page list rather than with the grants. */}
+      {draft.pages.includes("rfid-review") && (
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={draft.rfidReadOnly}
+            onChange={(e) => onChange({ ...draft, rfidReadOnly: e.target.checked })}
+          />
+          <span>
+            RFID Inventory is view only
+            <span className="block text-xs text-muted-foreground">
+              They can read the pool and search it. No uploading, no holding tags
+              back, no issuing and no removing — even if those are ticked below.
+            </span>
+          </span>
         </label>
       )}
 

@@ -32,6 +32,8 @@ export type DmRoleDef = {
   deletesSignups: boolean;
   /** May remove RFID numbers from the pool, with a note. Off unless granted. */
   deletesRfid: boolean;
+  /** Can open RFID Inventory, but changes nothing on it. */
+  rfidReadOnly: boolean;
   /** May open Users, Settings and the audit trail. */
   administers: boolean;
   /** May mark a member signup approved. Only the built-in CSC role. */
@@ -85,6 +87,20 @@ ALTER TABLE dm_roles ADD COLUMN IF NOT EXISTS approves boolean NOT NULL DEFAULT 
  */
 ALTER TABLE dm_roles ADD COLUMN IF NOT EXISTS deletes_signups boolean NOT NULL DEFAULT false;
 ALTER TABLE dm_roles ADD COLUMN IF NOT EXISTS deletes_rfid boolean NOT NULL DEFAULT false;
+/*
+ * RFID Inventory, to look at and not to touch.
+ *
+ * Most people who need the page need it to answer a question --
+ * which tag went on that car, how many are left -- and not to change
+ * anything. Opening it was all-or-nothing, so answering the question
+ * meant also being able to hold tags back and spend them.
+ *
+ * A modifier on the page rather than a second page, because it is
+ * the same page: the rows, the counts and the search are identical,
+ * and only the buttons differ. Off by default, so no existing role
+ * loses anything.
+ */
+ALTER TABLE dm_roles ADD COLUMN IF NOT EXISTS rfid_read_only boolean NOT NULL DEFAULT false;
 `;
 
 /*
@@ -158,7 +174,7 @@ const ensure = (): Promise<void> =>
 type Db = {
   key: string; name: string; pages: unknown; administers: boolean;
   approves: boolean; builtin: boolean; created_at: Date; created_by: string;
-  deletes_signups: boolean; deletes_rfid: boolean;
+  deletes_signups: boolean; deletes_rfid: boolean; rfid_read_only: boolean;
   holders?: string;
 };
 
@@ -172,6 +188,7 @@ const shape = (r: Db): DmRoleDef => ({
   // that have been handed one.
   deletesSignups: r.deletes_signups,
   deletesRfid: r.deletes_rfid,
+  rfidReadOnly: r.rfid_read_only,
   builtin: r.builtin,
   holders: r.holders === undefined ? undefined : Number(r.holders),
   createdAt: r.created_at.toISOString(),
@@ -182,7 +199,7 @@ export async function listRoles(): Promise<DmRoleDef[]> {
   await ensure();
   const { rows } = await db().query<Db>(
     `SELECT r.key, r.name, r.pages, r.administers, r.approves, r.builtin,
-            r.deletes_signups, r.deletes_rfid, r.created_at, r.created_by,
+            r.deletes_signups, r.deletes_rfid, r.rfid_read_only, r.created_at, r.created_by,
             (SELECT count(*) FROM dm_users u WHERE u.role_key = r.key) AS holders
        FROM dm_roles r
       ORDER BY r.administers DESC, r.builtin DESC, lower(r.name)`);
@@ -193,7 +210,7 @@ export async function getRole(key: string): Promise<DmRoleDef | null> {
   await ensure();
   const { rows } = await db().query<Db>(
     `SELECT key, name, pages, administers, approves, builtin,
-            deletes_signups, deletes_rfid, created_at, created_by
+            deletes_signups, deletes_rfid, rfid_read_only, created_at, created_by
        FROM dm_roles WHERE key = $1`, [key.trim().toLowerCase()]);
   return rows[0] ? shape(rows[0]) : null;
 }
@@ -212,6 +229,8 @@ export async function saveRole(opts: {
   /** Grantable, and off unless ticked. Both are soft deletes. */
   deletesSignups?: boolean;
   deletesRfid?: boolean;
+  /** Can open RFID Inventory without changing anything on it. */
+  rfidReadOnly?: boolean;
   by: string;
 }): Promise<DmRoleDef> {
   await ensure();
@@ -243,16 +262,18 @@ export async function saveRole(opts: {
   // role and is not something a role editor can hand out.
   await db().query(
     `INSERT INTO dm_roles (key, name, pages, administers, builtin, created_by,
-                           deletes_signups, deletes_rfid)
-          VALUES ($1, $2, $3::jsonb, $4, false, $5, $6, $7)
+                           deletes_signups, deletes_rfid, rfid_read_only)
+          VALUES ($1, $2, $3::jsonb, $4, false, $5, $6, $7, $8)
      ON CONFLICT (key) DO UPDATE
         SET name = EXCLUDED.name, pages = EXCLUDED.pages,
             deletes_signups = EXCLUDED.deletes_signups,
             deletes_rfid = EXCLUDED.deletes_rfid,
+            rfid_read_only = EXCLUDED.rfid_read_only,
             administers = CASE WHEN dm_roles.builtin THEN dm_roles.administers
                                ELSE EXCLUDED.administers END`,
     [key, name, JSON.stringify(pages), opts.administers, opts.by,
-      opts.deletesSignups === true, opts.deletesRfid === true]);
+      opts.deletesSignups === true, opts.deletesRfid === true,
+      opts.rfidReadOnly === true]);
   return (await getRole(key))!;
 }
 

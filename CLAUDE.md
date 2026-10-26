@@ -409,6 +409,23 @@ the blocks.
   can actually approve — reported, never refused, so a save cannot silently leave
   the previous reviewer in place.
 
+## View as must show the VIEWED person's scope
+
+- **What is SHOWN follows the viewed person; what is DONE follows the real one.**
+  A view exists to answer "what can they see?", so an administrator's own
+  buttons under somebody else's name is the view lying about the one thing it is
+  for. Display flags go through `shownFor(req)` (reads `req.user`, which the
+  middleware has already swapped); write guards keep using
+  `req.viewingAs?.real ?? req.user`.
+- Safe only because **every non-GET is refused while viewing** — view-as.ts's
+  allow-list. Do not loosen that to make something work inside a view.
+- Read guards follow the viewed person too: `requirePage`, `requireDmAdmin`,
+  `requireApp`, and the app list on `/auth/user`. So a view can land on "this
+  account is assigned to nothing", which is useful rather than broken.
+- **The exit must survive every one of those.** Stop viewing is driven by
+  `viewingAs`, never by `isAdmin` or by holding an app — including on the
+  nothing-assigned screen, which replaces the whole shell and so carries its own.
+
 ## The sign-in gate belongs to the DEPLOYMENT, not to Emburse
 
 - **The OIDC callback admits anybody who holds ANY app** —
@@ -453,6 +470,11 @@ the blocks.
   `deletes_rfid`), off by default, set only by a super administrator, and
   **never implied by administering** — that rule has a test and must keep one.
   Both are soft deletes, which is what makes them safe to hand out.
+- **RFID Inventory has a view-only mode** (`dm_roles.rfid_read_only`): the page,
+  the counts and the search, with no buttons at all. It beats a delete grant and
+  beats administering — administering is every PAGE, never a licence to change
+  what is on one. The owner is never read-only. Enforced by `requireRfidWrite` on
+  every RFID write, not just hidden.
 - **Test-only tags** (`dm_rfid.test_only`): a real tag in the pool that the pool
   will never hand out, so no import can spend one, and that only the pinned
   owner can name on a signup (`mayUseTestTags`, judged on the REAL person).

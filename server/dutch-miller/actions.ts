@@ -52,9 +52,9 @@ export const ACTIONS: ActionDef[] = [
   { key: "member.delete", label: "Delete a member record",
     source: "Granted per role, plus the super administrator" },
   { key: "rfid.upload", label: "Upload RFID numbers",
-    source: "RFID Inventory page access" },
+    source: "RFID Inventory page access, unless the role is view-only" },
   { key: "rfid.manage", label: "Hold back or release RFID numbers",
-    source: "RFID Inventory page access" },
+    source: "RFID Inventory page access, unless the role is view-only" },
   { key: "rfid.delete", label: "Remove RFID numbers from the pool",
     source: "Granted per role, plus the super administrator" },
   { key: "users.manage", label: "Invite people and set their roles",
@@ -84,6 +84,7 @@ export function actionsFor(a: {
   approves: boolean;
   deletesSignups?: boolean;
   deletesRfid?: boolean;
+  rfidReadOnly?: boolean;
   /** The pinned super administrator. Holds everything by configuration. */
   pinnedSuper?: boolean;
 }): EffectiveActions {
@@ -93,6 +94,9 @@ export function actionsFor(a: {
   const pages: readonly DmPageKey[] = sup || a.administers ? DM_PAGE_KEYS : a.pages;
   const has = (p: DmPageKey) => pages.includes(p);
   const admin = sup || a.administers;
+  // The owner is never read-only: the setting is a role's, and theirs
+  // is pinned in configuration rather than assigned.
+  const readOnly = !sup && a.rfidReadOnly === true;
 
   return {
     // Two grants now, because enrolling and reviewing are different
@@ -106,9 +110,11 @@ export function actionsFor(a: {
     "member.export": has("member-signups"),
     // Grantable per role now, and still never implied by administering.
     "member.delete": sup || a.deletesSignups === true,
-    "rfid.upload": has("rfid-review"),
-    "rfid.manage": has("rfid-review"),
-    "rfid.delete": sup || a.deletesRfid === true,
+    // Opening the page and changing it are different things: most
+    // people who need RFID Inventory need it to answer a question.
+    "rfid.upload": has("rfid-review") && !readOnly,
+    "rfid.manage": has("rfid-review") && !readOnly,
+    "rfid.delete": sup || (a.deletesRfid === true && !readOnly),
     "users.manage": admin,
     "roles.manage": sup,
     "notifications.manage": admin,

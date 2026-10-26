@@ -164,6 +164,48 @@ try {
     (await listRfids({ status: "test", search: TAGS[2]! })).rows.length === 0);
   check("…back among the available ones",
     (await listRfids({ status: "active", search: TAGS[2]! })).rows.length === 1);
+  console.log("\n6. RFID Inventory, to look at and not to touch");
+  /*
+   * Most people who need this page need it to answer a question —
+   * which tag went on that car, how many are left — and opening it
+   * used to come with the ability to spend tags.
+   */
+  const looker = await saveRole({
+    name: "Test Looker", pages: ["rfid-review"], administers: false,
+    rfidReadOnly: true, by: OWNER,
+  });
+  MADE.push(looker.key);
+  const look = actionsFor(looker);
+  check("they can open RFID Inventory", looker.pages.includes("rfid-review"));
+  check("…but cannot upload", look["rfid.upload"] === false);
+  check("…nor hold tags back", look["rfid.manage"] === false);
+  check("…nor remove any", look["rfid.delete"] === false);
+
+  // View-only beats a delete grant: ticking both is a contradiction
+  // and the narrower answer is the safe one.
+  const both = await saveRole({
+    name: "Test Looker Two", pages: ["rfid-review"], administers: false,
+    rfidReadOnly: true, deletesRfid: true, by: OWNER,
+  });
+  MADE.push(both.key);
+  check("view-only wins over a delete grant",
+    actionsFor(both)["rfid.delete"] === false);
+
+  // And administering is every PAGE, not a licence to change one.
+  const bossLooker = await saveRole({
+    name: "Test Looker Boss", pages: [], administers: true,
+    rfidReadOnly: true, by: OWNER,
+  });
+  MADE.push(bossLooker.key);
+  check("…and over administering", actionsFor(bossLooker)["rfid.manage"] === false);
+  check("…while they still hold the page",
+    actionsFor(bossLooker)["member.review"]);
+
+  // It reaches the person, and the owner is never read-only.
+  await saveDmUser({ email: DESK, roleKey: looker.key, by: OWNER, byRole: "super" });
+  check("the holder is read-only", (await dmAccessFor(DESK)).rfidReadOnly);
+  check("the owner never is", (await dmAccessFor(OWNER)).rfidReadOnly === false);
+
 } finally {
   await db().query("DELETE FROM dm_member_signups WHERE guid = ANY($1::uuid[])", [GUIDS])
     .catch(() => {});

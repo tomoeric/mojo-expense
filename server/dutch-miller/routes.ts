@@ -124,9 +124,18 @@ function requirePage(page: DmPageKey) {
   };
 }
 
-/** 403 unless this person administers Dutch Miller. */
+/**
+ * 403 unless this person administers Dutch Miller.
+ *
+ * Judged on the VIEWED person, like `requirePage`, so a view is
+ * faithful: an administrator looking at a dealer's app is refused
+ * the administration pages exactly as that dealer is, rather than
+ * reading Users and Roles while wearing their name. Safe because
+ * everything behind this is a read and every write is already
+ * refused while viewing.
+ */
 async function requireDmAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
-  const email = req.viewingAs?.real.email ?? req.user?.email ?? "";
+  const email = req.user?.email ?? "";
   if (canAdminister(await dmAccessFor(email))) { next(); return; }
   denied(req, "administrator only");
   res.status(403).json({ error: "Only a Dutch Miller administrator can do that." });
@@ -147,9 +156,64 @@ async function canApprove(req: Request): Promise<boolean> {
   return (await dmAccessFor(real?.email ?? "")).approves;
 }
 
-/** The role of whoever is making the request — several rules turn on it. */
+/**
+ * What the person whose app this IS can do.
+ *
+ * The VIEWED person inside a view, and yourself outside one — which
+ * is the opposite of the guards, deliberately. A guard asks "may this
+ * request go through", and the answer must be about whoever is really
+ * at the keyboard. These flags answer "what buttons belong on this
+ * page", and inside a view the whole point is to see somebody else's
+ * app: a super administrator's Delete sitting under a dealer's name
+ * is the view lying about the thing it exists to show.
+ *
+ * Safe because nothing can be written while viewing — every non-GET
+ * is already refused by the view-as middleware — so a button shown
+ * here can never become an action taken.
+ */
+const shownFor = async (req: Request): Promise<{
+  deletesSignups: boolean; deletesRfid: boolean; approves: boolean;
+  isSuper: boolean; rfidReadOnly: boolean;
+}> => {
+  const email = req.user?.email ?? "";
+  const a = await dmAccessFor(email);
+  const isSuper = a.role === "super";
+  return {
+    deletesSignups: a.deletesSignups,
+    deletesRfid: a.deletesRfid && !a.rfidReadOnly,
+    approves: a.approves,
+    isSuper,
+    rfidReadOnly: !isSuper && a.rfidReadOnly,
+  };
+};
+
+/**
+ * 403 unless this person may CHANGE the RFID pool.
+ *
+ * Opening the page and changing it are different permissions now:
+ * most people who need RFID Inventory need it to answer a question —
+ * which tag went on that car, how many are left — and a page that
+ * could only be granted whole meant answering it came with the
+ * ability to spend tags.
+ *
+ * Judged on the real person, like every other write guard.
+ */
+async function requireRfidWrite(
+  req: Request, res: Response, next: NextFunction,
+): Promise<void> {
+  const real = req.viewingAs?.real ?? req.user;
+  const a = await dmAccessFor(real?.email ?? "");
+  if (a.role === "super" || !a.rfidReadOnly) { next(); return; }
+  denied(req, "rfid read-only role");
+  res.status(403).json({
+    error: "Your role can read RFID Inventory but not change it. A super "
+      + "administrator can lift that under Roles & Permissions.",
+  });
+}
+
+/** The role this app is being shown as — the viewed person inside a view. */
 const roleOf = async (req: Request): Promise<DmRole> =>
-  (await dmAccessFor(req.viewingAs?.real.email ?? req.user?.email ?? "")).role;
+  (await dmAccessFor(req.user?.email ?? "")).role;
 
 const actor = (req: Request): string => req.viewingAs?.real.email ?? req.user?.email ?? "";
 
@@ -226,7 +290,10 @@ dutchMillerRouter.get("/people", requireDmAdmin, async (req: Request, res: Respo
   // admin cannot edit, disable or remove the account anyway, so listing
   // it would do nothing except advertise which address holds the keys —
   // and this list is the first thing a compromised admin session reads.
-  const iAmSuper = isSuperEmail(req.viewingAs?.real.email ?? req.user?.email ?? "");
+  // The viewed person's answer, so a view shows their list and not
+  // the viewer's — an administrator being viewed must not be shown
+  // the super administrator they cannot normally see.
+  const iAmSuper = (await shownFor(req)).isSuper;
   const users = (await listDmUsers()).filter((u) => iAmSuper || !isSuperEmail(u.email));
   const configured = new Map(users.map((u) => [u.email, u]));
 
@@ -301,7 +368,10 @@ function requireDelete(what: "signups" | "rfid") {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const real = req.viewingAs?.real ?? req.user;
     const access = await dmAccessFor(real?.email ?? "");
-    const may = what === "signups" ? access.deletesSignups : access.deletesRfid;
+    const may = what === "signups"
+      ? access.deletesSignups
+      // A view-only role does not delete, whatever else it was given.
+      : access.deletesRfid && (access.role === "super" || !access.rfidReadOnly);
     if (may) { next(); return; }
     denied(req, `delete ${what}`);
     res.status(403).json({
@@ -358,6 +428,7 @@ dutchMillerRouter.post("/roles", requireSuper, async (req: Request, res: Respons
       // themselves.
       deletesSignups: body.deletesSignups === true,
       deletesRfid: body.deletesRfid === true,
+      rfidReadOnly: body.rfidReadOnly === true,
       by: actor(req),
     });
     await audit({
@@ -365,7 +436,8 @@ dutchMillerRouter.post("/roles", requireSuper, async (req: Request, res: Respons
       detail: `${role.name} · ${role.pages.length} page${role.pages.length === 1 ? "" : "s"}`
         + `${role.administers ? " · administers" : ""}`
         + `${role.deletesSignups ? " · deletes members" : ""}`
-        + `${role.deletesRfid ? " · deletes RFIDs" : ""}`,
+        + `${role.deletesRfid ? " · deletes RFIDs" : ""}`
+        + `${role.rfidReadOnly ? " · RFID view only" : ""}`,
     });
     emitChange("roles");
     res.json({ role, roles: await listRoles() });
@@ -935,6 +1007,7 @@ const MAX_UPLOAD = 25 * 1024 * 1024;
 dutchMillerRouter.post(
   "/rfid/upload",
   requirePage("rfid-review"),
+  requireRfidWrite,
   express.raw({
     type: [
       "text/csv", "application/vnd.ms-excel",
@@ -1032,10 +1105,12 @@ dutchMillerRouter.get("/rfid", requirePage("rfid-review"), async (req: Request, 
       offset: Number(req.query.offset ?? 0),
     })),
     counts: await rfidCounts(),
-    // Whether to show the buttons. The routes below decide again.
-    canDelete: (await dmAccessFor(
-      req.viewingAs?.real.email ?? req.user?.email ?? "")).deletesRfid,
-    canTest: isSuperEmail(req.viewingAs?.real.email ?? req.user?.email ?? ""),
+    // What THIS app's owner can do — the viewed person inside a view.
+    // The routes below decide again, on the real person.
+    canDelete: (await shownFor(req)).deletesRfid,
+    canTest: (await shownFor(req)).isSuper,
+    // Whether the buttons belong on the page at all.
+    canManage: !(await shownFor(req)).rfidReadOnly,
   });
 });
 
@@ -1049,6 +1124,7 @@ dutchMillerRouter.get("/rfid", requirePage("rfid-review"), async (req: Request, 
 dutchMillerRouter.post(
   "/rfid/test-only",
   requirePage("rfid-review"),
+  requireRfidWrite,
   requireSuperTo("keep RFID numbers back for testing"),
   async (req: Request, res: Response) => {
     const body = (req.body ?? {}) as { numbers?: unknown; testOnly?: unknown };
@@ -1076,6 +1152,7 @@ dutchMillerRouter.post(
 dutchMillerRouter.post(
   "/rfid/delete",
   requirePage("rfid-review"),
+  requireRfidWrite,
   requireDelete("rfid"),
   async (req: Request, res: Response) => {
     const body = (req.body ?? {}) as { numbers?: unknown; note?: unknown };
@@ -1095,7 +1172,8 @@ dutchMillerRouter.post(
 );
 
 /** Issue one. The server decides, once; see `useRfid`. */
-dutchMillerRouter.post("/rfid/use", requirePage("rfid-review"), async (req: Request, res: Response) => {
+dutchMillerRouter.post("/rfid/use", requirePage("rfid-review"), requireRfidWrite,
+  async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as { number?: unknown; usedFor?: unknown };
   const out = await useRfid(
     String(body.number ?? ""), req.user?.email ?? "", String(body.usedFor ?? ""));
@@ -1104,7 +1182,8 @@ dutchMillerRouter.post("/rfid/use", requirePage("rfid-review"), async (req: Requ
 });
 
 /** Hold back, or put back in play. Never a used one. */
-dutchMillerRouter.post("/rfid/active", requirePage("rfid-review"), async (req: Request, res: Response) => {
+dutchMillerRouter.post("/rfid/active", requirePage("rfid-review"), requireRfidWrite,
+  async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as { numbers?: unknown; active?: unknown };
   const numbers = Array.isArray(body.numbers) ? body.numbers.map(String) : [];
   const out = await setRfidActive(numbers, body.active !== false);
@@ -1141,7 +1220,7 @@ dutchMillerRouter.get(
   "/signups/rfid-options",
   requirePage("member-signups-add"),
   async (req: Request, res: Response) => {
-    const sup = isSuperEmail(req.viewingAs?.real.email ?? req.user?.email ?? "");
+    const sup = (await shownFor(req)).isSuper;
     const { rows } = await listRfids({ status: "active", limit: 500 });
     // A test tag is offered to the one person who may issue it, and
     // marked, so it cannot be picked by mistake from a list of
@@ -1167,11 +1246,11 @@ dutchMillerRouter.get(
         limit: Number(req.query.limit ?? 100),
         offset: Number(req.query.offset ?? 0),
       })),
-      // Whether the person reading may set the MOJO-side mark. The button
-      // follows this; the route below decides it again regardless.
-      canComplete: await canApprove(req),
-      canDelete: (await dmAccessFor(
-        req.viewingAs?.real.email ?? req.user?.email ?? "")).deletesSignups,
+      // Whether the person whose app this is may set the MOJO-side
+      // mark. The button follows this; the route below decides it
+      // again, on whoever is really at the keyboard.
+      canComplete: (await shownFor(req)).approves && isStaff(req.user),
+      canDelete: (await shownFor(req)).deletesSignups,
     });
   },
 );

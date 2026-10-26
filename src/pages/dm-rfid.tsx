@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Download, Loader2, Trash2, Upload, X } from "lucide-react";
+import { AlertTriangle, Download, Eye, Loader2, Trash2, Upload, X } from "lucide-react";
 
 type Status = "active" | "inactive" | "used";
 /** The views. `deleted` is its own: every other one hides deleted numbers. */
@@ -85,7 +85,7 @@ export function DmRfidPage() {
       if (!res.ok) throw new Error((await res.json()).error ?? "Could not load.");
       return (await res.json()) as {
         rows: Row[]; total: number; counts: Counts;
-        canDelete: boolean; canTest?: boolean;
+        canDelete: boolean; canTest?: boolean; canManage?: boolean;
       };
     },
   });
@@ -160,6 +160,10 @@ export function DmRfidPage() {
   const counts = list.data?.counts;
   const canDelete = list.data?.canDelete ?? false;
   const canTest = list.data?.canTest ?? false;
+  // Opening the page and changing it are different permissions. A
+  // view-only role gets the rows, the counts and the search, and no
+  // buttons at all — rather than buttons that always refuse.
+  const canManage = list.data?.canManage ?? true;
 
   const markTest = useMutation({
     mutationFn: async (v: { numbers: string[]; testOnly: boolean }) => {
@@ -204,6 +208,21 @@ export function DmRfidPage() {
         </p>
       </div>
 
+      {/* A view-only role gets the page without the upload card. The
+          rows, the counts and the search are the whole reason most
+          people open it; the buttons are not, and a disabled one only
+          teaches people to distrust buttons. */}
+      {!canManage && (
+        <p className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 px-4 py-2.5 text-sm text-muted-foreground">
+          <Eye className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            <strong>View only.</strong> You can read the pool and search it. Uploading,
+            holding tags back and removing them belong to another role.
+          </span>
+        </p>
+      )}
+
+      {canManage && (
       <div className="rounded-lg border border-border bg-card p-4">
         <div className="flex flex-wrap items-center gap-3">
           <input
@@ -304,6 +323,7 @@ export function DmRfidPage() {
           </div>
         )}
       </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-2">
         {chips.map((c) => (
@@ -444,7 +464,7 @@ export function DmRfidPage() {
                     {/* A used number is never offered a way back into the pool —
                         the server refuses it, and a button that always fails is
                         worse than no button. */}
-                    {r.status !== "used" && !r.deletedAt && (
+                    {canManage && r.status !== "used" && !r.deletedAt && (
                       <button
                         type="button"
                         onClick={(e) => { e.stopPropagation(); setActive.mutate({
@@ -455,7 +475,7 @@ export function DmRfidPage() {
                         {r.status === "active" ? "Hold back" : "Make active"}
                       </button>
                     )}
-                    {canTest && !r.deletedAt && (
+                    {canManage && canTest && !r.deletedAt && (
                       <button
                         type="button"
                         disabled={markTest.isPending}
@@ -470,7 +490,7 @@ export function DmRfidPage() {
                         {r.testOnly ? "Un-test" : "Test only"}
                       </button>
                     )}
-                    {canDelete && !r.deletedAt && (
+                    {canManage && canDelete && !r.deletedAt && (
                       <button
                         type="button"
                         onClick={(e) => { e.stopPropagation(); setDeleting(r); }}

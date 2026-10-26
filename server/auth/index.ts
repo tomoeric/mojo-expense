@@ -233,27 +233,26 @@ authRouter.get("/auth/user", (req: Request, res: Response) => {
   res.json({
     user: req.user ? { ...req.user, isAdmin: isAdminUser(req.user) } : null,
     authConfigured: isAuthConfigured(),
-    // With sign-in off there is no identity, so the UI should not hide admin
-    // affordances behind a check the server is not making either.
-    // Judged on the real person, like the server does, so the page shows the
-    // admin surfaces their requests will actually be answered for. A view
-    // changes whose DATA is on screen, not who is looking at it.
-    isAdmin: (() => {
-      const real = req.viewingAs?.real ?? req.user;
-      return !isAuthConfigured() || isAdminUser(real);
-    })(),
+    /*
+     * With sign-in off there is no identity, so the UI should not hide
+     * admin affordances behind a check the server is not making either.
+     *
+     * Judged on the VIEWED person. A view exists to answer "what can
+     * they see?", and an administrator's own controls appearing under
+     * somebody else's name is the view lying about the one thing it is
+     * for. Safe because every write is refused while viewing, so a
+     * control shown can never become an action taken — and the way out
+     * does not depend on this: Stop viewing is driven by `viewingAs`.
+     */
+    isAdmin: !isAuthConfigured() || isAdminUser(req.user),
     /*
      * The account owner, pinned in configuration.
      *
      * A narrower thing than isAdmin, for the few controls that are one
-     * person's rather than any administrator's. Judged on the REAL
-     * person for the same reason isAdmin is: a view changes whose data
-     * is on screen, never who is looking at it. Microsoft door only.
+     * person's rather than any administrator's. Judged on the viewed
+     * person for the same reason isAdmin is. Microsoft door only.
      */
-    isOwner: (() => {
-      const real = req.viewingAs?.real ?? req.user;
-      return Boolean(real && isMicrosoft(real) && isSuperEmail(real.email));
-    })(),
+    isOwner: Boolean(req.user && isMicrosoft(req.user) && isSuperEmail(req.user.email)),
     // Who is really here, when that is not who the page is showing. The UI
     // needs it for the banner, and for keeping the exit visible: the one
     // control that must not disappear is the one that gets you back.
@@ -270,11 +269,18 @@ authRouter.get("/auth/user", (req: Request, res: Response) => {
   });
 });
 
-/** Every app the person actually at the keyboard may use. */
+/**
+ * Every app this request's identity may use.
+ *
+ * The VIEWED person inside a view: somebody assigned to one product
+ * should be seen in that product's shell, and "they are assigned to
+ * nothing" is one of the most useful things a view can show. The exit
+ * does not depend on it — Stop viewing is driven by `viewingAs`, and
+ * the nothing-assigned screen carries it too.
+ */
 function realAppsFor(req: Request): AppKey[] {
-  const real = req.viewingAs?.real ?? req.user;
   if (!isAuthConfigured()) return [...APPS];
-  return real ? appsFor(real.email, real.via ?? "microsoft") : [];
+  return req.user ? appsFor(req.user.email, req.user.via ?? "microsoft") : [];
 }
 
 /** The one they are in, from the cookie, narrowed to what they hold. */
@@ -318,7 +324,9 @@ authRouter.post("/auth/app", (req: Request, res: Response) => {
 export function requireApp(app: AppKey) {
   return (req: Request, res: Response, next: NextFunction): void => {
     if (!isAuthConfigured()) { next(); return; }
-    const real = req.viewingAs?.real ?? req.user;
+    // The viewed person, so a view cannot read a product they do not
+    // hold. Writes are refused while viewing regardless.
+    const real = req.user;
     if (real && appsFor(real.email, real.via ?? "microsoft").includes(app)) { next(); return; }
     // A signed-in account reaching for the other product. Ordinary when
     // it is a stale tab; a pattern when it is not, which is why it goes
