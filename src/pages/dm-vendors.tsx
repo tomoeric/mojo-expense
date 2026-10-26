@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  AlertTriangle, Building2, Check, CheckCircle2, Clock, Info, Loader2, Plus,
+  AlertTriangle, Building2, Check, CheckCircle2, Clock, Info, Loader2,
   Search, Trash2, X,
 } from "lucide-react";
 
@@ -65,7 +65,6 @@ export function DmVendorsPage() {
   const [tab, setTab] = useState<Tab>("all");
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState<string | null>(null);
-  const [adding, setAdding] = useState(false);
 
   const list = useQuery({
     queryKey: ["dm-vendors", tab, search],
@@ -90,24 +89,21 @@ export function DmVendorsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-lg font-semibold">
-            <Building2 className="h-4 w-4" />
-            Vendors
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Approved vendors, and the review that approves them.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => setAdding(true)}
-          className="inline-flex items-center gap-2 rounded-md bg-foreground px-3 py-2 text-sm font-semibold text-background"
-        >
-          <Plus className="h-4 w-4" />
-          Submit a vendor
-        </button>
+      {/* No add control on this page, on purpose.
+          Where a new vendor is submitted from has not been decided
+          yet, and a button that is about to move is worse than no
+          button. Everything else works: a vendor already here can be
+          opened, changed and reviewed, and `VendorForm` is still the
+          one place that submits — see its use for proposing changes
+          below, which is where an add would be wired back in. */}
+      <div>
+        <h1 className="flex items-center gap-2 text-lg font-semibold">
+          <Building2 className="h-4 w-4" />
+          Vendors
+        </h1>
+        <p className="text-sm text-muted-foreground">
+          Approved vendors, and the review that approves them.
+        </p>
       </div>
 
       {/* Said once, because it is the rule that shapes everything
@@ -166,7 +162,9 @@ export function DmVendorsPage() {
               <tr><td colSpan={5} className="px-3 py-10 text-center">
                 <span className="block text-sm font-medium">No vendors here</span>
                 <span className="mt-1 block text-xs text-muted-foreground">
-                  Submit one and it goes for review.
+                  {tab === "all"
+                    ? "None have been added yet."
+                    : "None match this view."}
                 </span>
               </td></tr>
             )}
@@ -199,18 +197,6 @@ export function DmVendorsPage() {
           </tbody>
         </table>
       </div>
-
-      {adding && (
-        <VendorForm
-          title="Submit a vendor"
-          initial={BLANK}
-          onClose={() => setAdding(false)}
-          onSaved={() => {
-            setAdding(false);
-            void qc.invalidateQueries({ queryKey: ["dm-vendors"] });
-          }}
-        />
-      )}
 
       {open && (
         <VendorDetail

@@ -384,6 +384,11 @@ the blocks.
   `dm_vendor_revisions` holds every version ever proposed. If an edit wrote
   straight into the vendor there would be, between submitting and approving, a
   vendor on file nobody approved. That is the thing the review exists to prevent.
+- **There is deliberately NO add control on the Vendors page.** Where a new
+  vendor is submitted from has not been decided; the page is a register, and
+  `VendorForm` still submits (it is what proposes a change from a vendor's
+  detail). Wiring an add back in is rendering that same form with `BLANK` and
+  no `vendorId` — do not build a second submit path.
 - A new vendor is a row with EMPTY approved content and one pending revision.
   `status: pending` with blank fields is not a half-written record; it is a
   request. Never "fix" it by writing the proposal into the vendor.
