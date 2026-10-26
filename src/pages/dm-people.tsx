@@ -122,7 +122,7 @@ export function DmPeopleDialog({
       /*
        * "No role yet" means somebody who cannot do anything.
        *
-       * The pinned super administrator has no ROW, so they used to be
+       * The pinned account administrator has no ROW, so they used to be
        * counted here — the one account that holds everything sitting
        * in a warning list of people waiting for access. Their lack of
        * a row is still true and still shown on their line; it is not
@@ -271,7 +271,7 @@ export function DmPeopleDialog({
                   <SourceTag source={p.source} />
                   {p.pinnedSuper && (
                     <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-400">
-                      Super Admin
+                      Account Admin
                     </span>
                   )}
                 </p>
@@ -288,7 +288,7 @@ export function DmPeopleDialog({
 
               <div className="w-44 shrink-0 text-xs">
                 {/* Inherited access is not the absence of a role, which
-                    is how this used to read: the pinned super admin held
+                    is how this used to read: the pinned account admin held
                     no row, so the column said "No role yet" beside the
                     one account that holds everything. */}
                 {p.pinnedSuper ? (
@@ -464,7 +464,7 @@ function AssignRole({
               name="role"
               className="mt-0.5"
               checked={roleKey === r.key}
-              // Only a super admin hands out a role that administers.
+              // Only an account admin hands out a role that administers.
               disabled={r.administers && !iAmSuper}
               onChange={() => setRoleKey(r.key)}
             />
@@ -478,7 +478,7 @@ function AssignRole({
                   : r.pages.length === 0
                     ? "No pages."
                     : `${r.pages.length} page${r.pages.length === 1 ? "" : "s"}.`}
-                {r.administers && !iAmSuper ? " Super administrator only." : ""}
+                {r.administers && !iAmSuper ? " Account Administrator only." : ""}
               </span>
             </span>
           </label>
@@ -616,7 +616,7 @@ function InviteRow({
  * that cannot be undone, so it is last, separated, and red.
  *
  * An action that cannot apply is ABSENT, never greyed: the pinned
- * super administrator is set in configuration and the server refuses
+ * account administrator is set in configuration and the server refuses
  * every one of these for them, so offering a button that always fails
  * only teaches people to distrust buttons.
  */
@@ -721,7 +721,7 @@ function ManageMenu({
 
             {p.pinnedSuper && (
               <p className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
-                Super Admin, pinned in configuration. Their access is not assigned
+                Account Admin, pinned in configuration. Their access is not assigned
                 here and cannot be changed from this app.
               </p>
             )}

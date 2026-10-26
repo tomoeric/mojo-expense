@@ -19,7 +19,7 @@ import { DM_PAGES, DM_PAGE_KEYS, isDmPage, type DmPageKey } from "./pages.js";
  * accidentally grant everything: the default a new person lands on gives
  * nothing away.
  *
- * Super admin is NOT a role. It stays pinned in configuration (see
+ * Account admin is NOT a role. It stays pinned in configuration (see
  * `users.ts`), because a role that could be edited is a role that could
  * be edited to lock the owner out.
  */
@@ -76,10 +76,10 @@ ALTER TABLE dm_roles ADD COLUMN IF NOT EXISTS approves boolean NOT NULL DEFAULT 
 /*
  * Deleting, per role.
  *
- * Deleting was the super administrator's alone, which is right while
+ * Deleting was the account administrator's alone, which is right while
  * there is one person doing it and wrong the moment somebody else has
  * to. These two make it grantable without making it ordinary: off for
- * every role until a super administrator ticks them, separate from
+ * every role until an account administrator ticks them, separate from
  * each other because removing a tag from the pool and striking a
  * membership are different jobs, and never implied by administering.
  *
@@ -196,7 +196,7 @@ const shape = (r: Db): DmRoleDef => ({
   pages: Array.isArray(r.pages) ? (r.pages as unknown[]).filter(isDmPage) : [],
   administers: r.administers,
   approves: r.approves,
-  // A super administrator holds both regardless; these are the roles
+  // An account administrator holds both regardless; these are the roles
   // that have been handed one.
   deletesSignups: r.deletes_signups,
   deletesRfid: r.deletes_rfid,

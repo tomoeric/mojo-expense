@@ -43,7 +43,7 @@ const DEALER = "dealer@dutchmiller.example";
 const PAGE = DM_PAGE_KEYS[0]!;
 const MINE = [BOSS, HAND, DEALER];
 
-/** The pinned super admin, for this run. */
+/** The pinned account admin, for this run. */
 process.env.DM_SUPER_ADMINS = "owner@example.invalid";
 const OWNER = "owner@example.invalid";
 
@@ -68,19 +68,19 @@ try {
   check("…which is the point: there is no empty-table free-for-all",
     (await dmAccessFor("nobody@example.invalid")).role === "user");
   check("the pinned account cannot be written over",
-    (await refused("save super", () => saveDmUser({ email: OWNER, roleKey: ADMIN_ROLE, by: OWNER, byRole: "super" }))).includes("super administrator"));
+    (await refused("save super", () => saveDmUser({ email: OWNER, roleKey: ADMIN_ROLE, by: OWNER, byRole: "super" }))).includes("account administrator"));
   check("…nor removed", (await removeDmUser(OWNER, "super")).ok === false);
 
-  console.log("\n1b. An ordinary admin cannot touch the super admin");
+  console.log("\n1b. An ordinary admin cannot touch the account admin");
   // Not merely hidden in the UI: an admin session that asked directly
   // has to be refused, and the pinned account has to survive it.
-  check("an admin cannot edit the super admin",
+  check("an admin cannot edit the account admin",
     (await refused("edit super", () => saveDmUser({
       email: OWNER, roleKey: DEFAULT_ROLE, by: BOSS, byRole: "admin",
-    }))).includes("super administrator"));
-  check("an admin cannot remove the super admin",
+    }))).includes("account administrator"));
+  check("an admin cannot remove the account admin",
     (await removeDmUser(OWNER, "admin")).ok === false);
-  check("an admin cannot switch the super admin off",
+  check("an admin cannot switch the account admin off",
     (await setDmUserEnabled(OWNER, false, BOSS, "admin")).ok === false);
   check("…and a SUPER admin cannot either — it is configuration, not a row",
     (await setDmUserEnabled(OWNER, false, OWNER, "super")).ok === false);
@@ -89,14 +89,14 @@ try {
 
   console.log("\n2. Only super can make an admin");
   const asAdmin = await refused("promote", () => saveDmUser({ email: BOSS, roleKey: ADMIN_ROLE, by: HAND, byRole: "admin" }));
-  check("an admin cannot promote anybody", asAdmin.includes("super administrator"), asAdmin);
+  check("an admin cannot promote anybody", asAdmin.includes("account administrator"), asAdmin);
   await saveDmUser({ email: BOSS, roleKey: ADMIN_ROLE, by: OWNER, byRole: "super" });
-  check("a super admin can", (await dmAccessFor(BOSS)).role === "admin");
+  check("a account admin can", (await dmAccessFor(BOSS)).role === "admin");
   const demote = await refused("demote", () => saveDmUser({
     email: BOSS, roleKey: DEFAULT_ROLE, by: HAND, byRole: "admin",
   }));
   check("…and an admin cannot change an existing admin either",
-    demote.includes("super administrator"), demote);
+    demote.includes("account administrator"), demote);
 
   console.log("\n3. Pages come from the ROLE, never from the person");
   const writer = await saveRole({
@@ -162,7 +162,7 @@ try {
   check("an admin cannot switch off an admin",
     (await setDmUserEnabled(BOSS, false, HAND, "admin")).ok === false);
   check("…nor remove one", (await removeDmUser(BOSS, "admin")).ok === false);
-  check("a super admin can remove one", (await removeDmUser(BOSS, "super")).ok === true);
+  check("a account admin can remove one", (await removeDmUser(BOSS, "super")).ok === true);
   check("removing somebody who is not there is not an error",
     (await removeDmUser("ghost@example.invalid", "super")).ok === true);
 
@@ -175,7 +175,7 @@ try {
   await saveDmUser({ email: HAND, roleKey: DEFAULT_ROLE, by: OWNER, byRole: "super" });
   check("a general user may not", (await dmAccessFor(HAND)).approves === false);
   // The owner is not locked out of their own app.
-  check("the super admin may", (await dmAccessFor(OWNER)).approves === true);
+  check("the account admin may", (await dmAccessFor(OWNER)).approves === true);
   check("somebody with no account at all may not",
     (await dmAccessFor("nobody@example.invalid")).approves === false);
 

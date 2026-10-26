@@ -55,7 +55,7 @@ type Access = {
   staff: boolean;
   via: "microsoft" | "link";
   allPages: readonly PageDef[];
-  /** Set only while a super admin is looking through somebody else's eyes. */
+  /** Set only while an account admin is looking through somebody else's eyes. */
   viewingAs: { real: string; viewed: string } | null;
   /** Which face of the glass the sticker goes on. Drives the wording. */
   stickerPlacement: "inside" | "outside";
@@ -86,7 +86,10 @@ type Access = {
  * these were tabs still land in the right place.
  */
 const ADMIN_PAGES: { key: string; label: string; superOnly?: boolean }[] = [
-  { key: "account", label: "Account" },
+  // The switch that closes the partner account is the account
+  // administrator's, so the page it lives on is too: an ordinary
+  // administrator should not be shown a control they cannot use.
+  { key: "account", label: "Account", superOnly: true },
   { key: "users", label: "Users & Access" },
   { key: "roles", label: "Roles & Permissions", superOnly: true },
   { key: "security", label: "Security" },
@@ -345,8 +348,8 @@ export function DutchMillerApp({
                   onHistory={(email) => { setHistoryFor(email); go("admin", "audit"); }}
                 />
               )}
-              {route.sub === "account" && (
-                <DmAccountPage canSwitch={access.role === "super"} />
+              {route.sub === "account" && access.role === "super" && (
+                <DmAccountPage canSwitch />
               )}
               {route.sub === "roles" && access.role === "super" && <DmRolesPage />}
               {route.sub === "security" && <DmSecurityPage />}

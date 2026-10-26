@@ -113,7 +113,7 @@ export function DmAccountPage({ canSwitch }: { canSwitch: boolean }) {
           )}
           {!canSwitch && (
             <p className="mt-3 text-xs text-muted-foreground">
-              Only a super administrator can change this.
+              Only an account administrator can change this.
             </p>
           )}
         </div>

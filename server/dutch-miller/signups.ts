@@ -137,7 +137,7 @@ UPDATE dm_member_signups
    SET sticker_confirmed_at = submitted_at, sticker_confirmed_by = submitted_by
  WHERE sticker_state = 'confirmed' AND sticker_confirmed_at IS NULL;
 /*
- * Deleted by a super administrator, with the reason they had to give.
+ * Deleted by an account administrator, with the reason they had to give.
  *
  * A column rather than a DELETE, and the whole point of the feature:
  * the row stays readable, so "what happened to this membership?" has
@@ -606,7 +606,7 @@ export async function createSignup(
     /**
      * Whether a tag kept back for testing may be named here.
      *
-     * The super administrator only, and only on a typed entry: a
+     * The account administrator only, and only on a typed entry: a
      * gate has to be tried with a real sticker on a real windshield,
      * and the number used for that must never reach a paying member.
      * The pool never hands one out, so an import cannot spend one

@@ -33,7 +33,7 @@ type Draft = {
 /**
  * Roles, and what each one can open.
  *
- * Super administrator only. A role IS a grant of access, so an
+ * Account Administrator only. A role IS a grant of access, so an
  * administrator who could write one could write themselves a better one
  * — the two levels would then differ by a label.
  *
@@ -92,7 +92,7 @@ export function DmRolesPage() {
           </h1>
           <p className="text-sm text-muted-foreground">
             What each kind of person can <strong>open</strong>, and what they can{" "}
-            <strong>do</strong>. Super administrator only.
+            <strong>do</strong>. Account Administrator only.
           </p>
         </div>
         <button

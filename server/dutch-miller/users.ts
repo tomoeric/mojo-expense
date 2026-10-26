@@ -13,7 +13,7 @@ import { forgetDevices } from "./devices.js";
  *   admin — invite people, set their page access, revoke a login
  *   user  — only the pages they have been given
  *
- * Super is not a row. It is pinned by configuration (`DM_SUPER_ADMINS`), so
+ * Account admin is not a row. It is pinned by configuration, so
  * it cannot be granted, edited or deleted through the app: an admin cannot
  * promote themselves, and nobody can lock the owner out by deleting a row.
  * The table only ever holds `admin` and `user`.
@@ -25,7 +25,7 @@ import { forgetDevices } from "./devices.js";
  */
 
 /**
- * Who is a super admin, before and regardless of any row.
+ * Who is an account administrator, before and regardless of any row.
  *
  * A default rather than an empty list, so the owner is never locked out of
  * the deploy that introduces this. A secret REPLACES it rather than adding
@@ -35,8 +35,17 @@ const SUPER_DEFAULT = ["eric.s@mojocarwash.com"];
 
 const clean = (email: string) => email.trim().toLowerCase();
 
+/*
+ * Two names for the same secret.
+ *
+ * The role is called Account Administrator now; the secret in the
+ * deployment is still DM_SUPER_ADMINS, and renaming a live secret
+ * from here would lock the owner out between the deploy and somebody
+ * noticing. DM_ACCOUNT_ADMINS is read first, so the secret can be
+ * renamed whenever it suits — and either name works for good.
+ */
 const superList = (): string[] => {
-  const raw = (process.env.DM_SUPER_ADMINS ?? "")
+  const raw = (process.env.DM_ACCOUNT_ADMINS ?? process.env.DM_SUPER_ADMINS ?? "")
     .split(/[,;\s]+/).map(clean).filter(Boolean);
   return raw.length > 0 ? raw : SUPER_DEFAULT;
 };
@@ -69,7 +78,7 @@ export const isSuperEmail = (email: string): boolean => superList().includes(cle
 
 /** For the boot log: how many, never who. */
 export const superListSize = (): number => superList().length;
-/** The pinned super administrators, for the Users dialog. */
+/** The pinned account administrators, for the Users dialog. */
 export const superEmails = (): string[] => [...superList()];
 export const staffDomainList = (): string[] => staffDomains();
 
@@ -231,19 +240,19 @@ export type Access = {
   rfidReadOnly: boolean;
   /** May approve a vendor. Super, or a role granted it. */
   approvesVendors: boolean;
-  /** The named role behind it, for display. Empty for a pinned super admin. */
+  /** The named role behind it, for display. Empty for a pinned account admin. */
   roleKey: string;
   roleName: string;
   pages: DmPageKey[];
   status: DmStatus;
-  /** A super admin with no row — they still have everything. */
+  /** An account admin with no row — they still have everything. */
   pinned: boolean;
 };
 
 /**
  * What this person may do.
  *
- * A super admin needs no row and holds no role. Everybody else needs an
+ * An account admin needs no row and holds no role. Everybody else needs an
  * ACTIVE one: an invited-but-not-yet-set-up account and a disabled one
  * both come back with nothing, so neither can reach a page while it waits
  * or after it is switched off.
@@ -256,7 +265,7 @@ export async function dmAccessFor(email: string): Promise<Access> {
   await ensure();
   if (isSuperEmail(email)) {
     return {
-      role: "super", roleKey: "", roleName: "Super administrator",
+      role: "super", roleKey: "", roleName: "Account Administrator",
       // The owner is not locked out of their own app. Everybody else
       // needs the CSC role, including administrators.
       approves: true,
@@ -346,7 +355,7 @@ export async function checkReviewer(email: string): Promise<ReviewerCheck> {
   if (isSuperEmail(who)) {
     return {
       email: who, ok: true, problems: [],
-      because: "Super administrator — approval is inherited from configuration, "
+      because: "Account Administrator — approval is inherited from configuration, "
         + "not from a role. This is why approvals work with nobody holding CSC.",
     };
   }
@@ -396,7 +405,7 @@ export function assertEmail(email: string): string {
  * Create or update somebody.
  *
  * `byRole` is the role of the person DOING it, because one rule cannot be
- * expressed any other way: only a super admin may make somebody an admin.
+ * expressed any other way: only an account admin may make somebody an admin.
  * An admin who could promote could promote themselves, and the difference
  * between the two levels would be a label.
  */
@@ -413,13 +422,13 @@ export async function saveDmUser(opts: {
   const who = assertEmail(opts.email);
   if (isSuperEmail(who)) {
     throw new Error(
-      "That account is a super administrator, set in configuration rather than here.");
+      "That account is an account administrator, set in configuration rather than here.");
   }
 
   const role = await getRole(opts.roleKey);
   if (!role) throw new Error("No such role.");
 
-  // Only a super admin may hand out a role that administers, or take one
+  // Only an account admin may hand out a role that administers, or take one
   // away. An admin who could do either could promote themselves, and the
   // difference between the two levels would be a label.
   const existing = await getDmUser(who);
@@ -427,8 +436,8 @@ export async function saveDmUser(opts: {
   if ((role.administers || wasAdmin) && opts.byRole !== "super") {
     throw new Error(
       role.administers && !wasAdmin
-        ? "Only a super administrator can give somebody an administrator role."
-        : "Only a super administrator can change an administrator.");
+        ? "Only an account administrator can give somebody an administrator role."
+        : "Only an account administrator can change an administrator.");
   }
 
   const method = opts.authMethod ?? existing?.authMethod ?? "microsoft";
@@ -494,12 +503,12 @@ export async function setDmUserEnabled(
   await ensure();
   const who = clean(email);
   if (isSuperEmail(who)) {
-    return { ok: false, reason: "A super administrator cannot be switched off from here." };
+    return { ok: false, reason: "An account administrator cannot be switched off from here." };
   }
   const row = await getDmUser(who);
   if (!row) return { ok: false, reason: "No such person." };
   if ((await getRole(row.roleKey))?.administers && byRole !== "super") {
-    return { ok: false, reason: "Only a super administrator can switch off an administrator." };
+    return { ok: false, reason: "Only an account administrator can switch off an administrator." };
   }
   const next = enabled ? (row.activatedAt ? "active" : "invited") : "disabled";
   const { rows } = await db().query<Db>(
@@ -537,13 +546,13 @@ export async function removeDmUser(
   if (isSuperEmail(who)) {
     return {
       ok: false,
-      reason: "A super administrator is set in configuration and cannot be removed here.",
+      reason: "An account administrator is set in configuration and cannot be removed here.",
     };
   }
   const row = await getDmUser(who);
   if (!row) return { ok: true };
   if ((await getRole(row.roleKey))?.administers && byRole !== "super") {
-    return { ok: false, reason: "Only a super administrator can remove an administrator." };
+    return { ok: false, reason: "Only an account administrator can remove an administrator." };
   }
   await db().query("DELETE FROM dm_users WHERE email = $1", [who]);
   return { ok: true };

@@ -430,7 +430,7 @@ authRouter.get("/auth/view-as/people", async (req: Request, res: Response) => {
  */
 authRouter.post("/auth/view-as", (req: Request, res: Response) => {
   const real = req.viewingAs?.real ?? req.user;
-  // A Dutch Miller super admin may view as well — same reason, and their
+  // A Dutch Miller account admin may view as well — same reason, and their
   // people's views differ page by page. Pinned by configuration, so no
   // database read. Microsoft door only, like every other authority here.
   const allowed = isAdminUser(real)

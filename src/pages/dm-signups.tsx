@@ -135,7 +135,7 @@ export function DmSignupsPage({
 }: {
   view: "review" | "add";
   onView: (v: "review" | "add") => void;
-  /** Set while a super admin is looking through somebody else's eyes. */
+  /** Set while an account admin is looking through somebody else's eyes. */
   viewingAs?: { real: string; viewed: string } | null;
   /**
    * Which face of the glass the sticker goes on.

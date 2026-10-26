@@ -152,7 +152,7 @@ dutchMillerRouter.get("/me", async (req: Request, res: Response) => {
 /**
  * 403 unless this person may open that page.
  *
- * Judged on the VIEWED person, so a view is faithful: a super admin
+ * Judged on the VIEWED person, so a view is faithful: an account admin
  * looking at somebody's app is refused exactly what that person is
  * refused. Safe because nothing can be written while viewing — the
  * view-as middleware rejects every non-GET before this runs.
@@ -206,7 +206,7 @@ async function canApprove(req: Request): Promise<boolean> {
  * request go through", and the answer must be about whoever is really
  * at the keyboard. These flags answer "what buttons belong on this
  * page", and inside a view the whole point is to see somebody else's
- * app: a super administrator's Delete sitting under a dealer's name
+ * app: an account administrator's Delete sitting under a dealer's name
  * is the view lying about the thing it exists to show.
  *
  * Safe because nothing can be written while viewing — every non-GET
@@ -316,7 +316,7 @@ dutchMillerRouter.get("/users", requireDmAdmin, async (req: Request, res: Respon
  *
  * Three sources, and between them they are the complete answer:
  *
- *   the pinned super administrators (`DM_SUPER_ADMINS`)
+ *   the pinned account administrators (`DM_SUPER_ADMINS`)
  *   the addresses the `DUTCH_MILLER_ALLOWED` secret lets in
  *   anybody with a row — every invited dealer, and every staff account
  *   that has been given a role
@@ -328,13 +328,13 @@ dutchMillerRouter.get("/users", requireDmAdmin, async (req: Request, res: Respon
  * configuration already answers.
  */
 dutchMillerRouter.get("/people", requireDmAdmin, async (req: Request, res: Response) => {
-  // A super administrator is only visible to another one. An ordinary
+  // An account administrator is only visible to another one. An ordinary
   // admin cannot edit, disable or remove the account anyway, so listing
   // it would do nothing except advertise which address holds the keys —
   // and this list is the first thing a compromised admin session reads.
   // The viewed person's answer, so a view shows their list and not
   // the viewer's — an administrator being viewed must not be shown
-  // the super administrator they cannot normally see.
+  // the account administrator they cannot normally see.
   const iAmSuper = (await shownFor(req)).isSuper;
   const users = (await listDmUsers()).filter((u) => iAmSuper || !isSuperEmail(u.email));
   const configured = new Map(users.map((u) => [u.email, u]));
@@ -382,7 +382,7 @@ dutchMillerRouter.get("/people", requireDmAdmin, async (req: Request, res: Respo
  * ------------------------------------------------------------------ */
 
 /**
- * 403 unless this person is the super administrator.
+ * 403 unless this person is the account administrator.
  *
  * `isStaff` as well as the address, because the pin is an address and a
  * door is not: an invited account that somehow reached this address must
@@ -392,8 +392,8 @@ function requireSuperTo(what: string) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const real = req.viewingAs?.real ?? req.user;
     if (isStaff(real) && isSuperEmail(real?.email ?? "")) { next(); return; }
-    denied(req, `super administrator only — ${what}`);
-    res.status(403).json({ error: `Only a super administrator can ${what}.` });
+    denied(req, `account administrator only — ${what}`);
+    res.status(403).json({ error: `Only an account administrator can ${what}.` });
   };
 }
 
@@ -418,9 +418,9 @@ function requireDelete(what: "signups" | "rfid") {
     denied(req, `delete ${what}`);
     res.status(403).json({
       error: what === "signups"
-        ? "Your role cannot delete a member record. A super administrator can "
+        ? "Your role cannot delete a member record. An account administrator can "
           + "grant it under Roles & Permissions."
-        : "Your role cannot remove RFID numbers. A super administrator can "
+        : "Your role cannot remove RFID numbers. An account administrator can "
           + "grant it under Roles & Permissions.",
     });
   };
@@ -442,7 +442,7 @@ dutchMillerRouter.get("/roles", requireDmAdmin, async (_req: Request, res: Respo
     approvalPolicy: {
       roleKey: CSC_ROLE,
       note: "Approving a membership belongs to the built-in CSC role and to "
-        + "nothing else. The pinned super administrator inherits it from "
+        + "nothing else. The pinned account administrator inherits it from "
         + "configuration — which is why approvals work even with nobody "
         + "holding CSC. It is asserted on every boot and cannot be granted "
         + "to another role.",
@@ -453,7 +453,7 @@ dutchMillerRouter.get("/roles", requireDmAdmin, async (_req: Request, res: Respo
   });
 });
 
-// Creating and editing them is the super administrator's alone. A role is
+// Creating and editing them is the account administrator's alone. A role is
 // a grant of access, so an admin who could write one could write themselves
 // a better one.
 dutchMillerRouter.post("/roles", requireSuper, async (req: Request, res: Response) => {
@@ -464,7 +464,7 @@ dutchMillerRouter.post("/roles", requireSuper, async (req: Request, res: Respons
       name: String(body.name ?? ""),
       pages: Array.isArray(body.pages) ? body.pages.filter(isDmPage) : [],
       administers: body.administers === true,
-      // Only a super administrator reaches this route, which is what
+      // Only an account administrator reaches this route, which is what
       // makes these safe to accept: a grant that removes things must
       // not be writable by somebody who could then grant it to
       // themselves.
@@ -1191,7 +1191,7 @@ dutchMillerRouter.post(
 );
 
 /**
- * Remove numbers from the pool. Super administrator only, note required.
+ * Remove numbers from the pool. Account Administrator only, note required.
  *
  * The same shape as deleting a member record, and for the same reason:
  * the row stays, marked, with the reason attached. Unlike holding a tag
@@ -1254,8 +1254,14 @@ dutchMillerRouter.post("/rfid/active", requirePage("rfid-review"), requireRfidWr
  * The partner account, and vendors
  * ------------------------------------------------------------------ */
 
-/** Readable by any administrator; the switch itself is the owner's. */
-dutchMillerRouter.get("/account", requireDmAdmin,
+/**
+ * The account administrator's, to read as well as to change.
+ *
+ * Not merely hidden from the menu: an ordinary administrator asking
+ * directly is refused too, so "who can close the partner account" has
+ * one answer rather than one answer and a loophole.
+ */
+dutchMillerRouter.get("/account", requireSuperTo("see the partner account switch"),
   async (_req: Request, res: Response) => {
     res.json(await getAccountState());
   });
@@ -1353,7 +1359,7 @@ dutchMillerRouter.post("/vendors/:id/decide", requirePage("vendors"),
     if (!(await canApproveVendors(req))) {
       denied(req, "vendor approval");
       res.status(403).json({
-        error: "Your role cannot approve a vendor. A super administrator can "
+        error: "Your role cannot approve a vendor. An account administrator can "
           + "grant it under Roles & Permissions.",
       });
       return;
@@ -1739,7 +1745,7 @@ dutchMillerRouter.post(
     if (!(await canApprove(req))) {
       res.status(403).json({
         error: "Only the CSC role can approve a membership. "
-          + "Ask a super administrator to assign it.",
+          + "Ask an account administrator to assign it.",
       });
       return;
     }
@@ -1840,7 +1846,7 @@ dutchMillerRouter.post(
 );
 
 /**
- * Delete a member record. Super administrator only, and never really.
+ * Delete a member record. Account Administrator only, and never really.
  *
  * "Delete" here means marked deleted and kept: the row stays in the list,
  * struck through, carrying the note whoever removed it had to write. A

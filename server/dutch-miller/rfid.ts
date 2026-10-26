@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS dm_rfid (
   used_for    text
 );
 CREATE INDEX IF NOT EXISTS dm_rfid_status_idx ON dm_rfid (status, number);
-/* Deleted by a super administrator, with the reason they gave. */
+/* Deleted by an account administrator, with the reason they gave. */
 ALTER TABLE dm_rfid ADD COLUMN IF NOT EXISTS deleted_at  timestamptz;
 ALTER TABLE dm_rfid ADD COLUMN IF NOT EXISTS deleted_by  text;
 ALTER TABLE dm_rfid ADD COLUMN IF NOT EXISTS delete_note text;
@@ -52,7 +52,7 @@ ALTER TABLE dm_rfid ADD COLUMN IF NOT EXISTS delete_note text;
  *
  * Two rules follow, both enforced below rather than in the form. It
  * is never handed out by the pool, so no bulk import can spend one;
- * and naming it only works for a super administrator. Off for every
+ * and naming it only works for an account administrator. Off for every
  * existing tag, because a column appearing must not reclassify
  * anything already in the pool.
  */
@@ -74,9 +74,9 @@ export type RfidRow = {
   usedAt: string | null;
   usedBy: string | null;
   usedFor: string | null;
-  /** Kept back for testing. Never auto-assigned; super admin only to issue. */
+  /** Kept back for testing. Never auto-assigned; account admin only to issue. */
   testOnly: boolean;
-  /** Set once a super administrator removed it. The row stays either way. */
+  /** Set once an account administrator removed it. The row stays either way. */
   deletedAt: string | null;
   deletedBy: string | null;
   deleteNote: string | null;

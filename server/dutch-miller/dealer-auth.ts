@@ -236,7 +236,7 @@ dealerAuthRouter.post("/request", async (req: Request, res: Response) => {
   await audit({ action: "login.requested", subject: email, ...from(req) });
 
   const row = await getDmUser(email);
-  // A super admin and any staff account belong at the Microsoft door; so
+  // An account admin and any staff account belong at the Microsoft door; so
   // does an address that was never invited. All three get the same
   // silence — but an address nobody has ever invited is recorded
   // separately, because somebody working through a list of guesses

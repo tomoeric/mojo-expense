@@ -16,7 +16,7 @@ import { DM_PAGE_KEYS, type DmPageKey } from "./pages.js";
  * enforces, with the source of each one named.
  *
  * Approving in particular stays exactly where it was: the built-in CSC
- * role, plus the pinned super administrator, and nothing else. See
+ * role, plus the pinned account administrator, and nothing else. See
  * `roles.ts`, where the catalogue asserts it on every boot.
  */
 
@@ -45,34 +45,34 @@ export const ACTIONS: ActionDef[] = [
   {
     key: "member.approve",
     label: "Approve a membership",
-    source: "The built-in CSC role only, plus the pinned super administrator. "
+    source: "The built-in CSC role only, plus the pinned account administrator. "
       + "Not granted by administering, and not editable on any role.",
   },
   { key: "member.export", label: "Export member records",
     source: "Member Signups — Review Existing" },
   { key: "member.delete", label: "Delete a member record",
-    source: "Granted per role, plus the super administrator" },
+    source: "Granted per role, plus the account administrator" },
   { key: "vendor.submit", label: "Submit a vendor, or a change to one",
     source: "Vendors page access" },
   {
     key: "vendor.approve",
     label: "Approve a vendor",
-    source: "Granted per role, plus the super administrator. Separate from "
+    source: "Granted per role, plus the account administrator. Separate from "
       + "approving a membership: one says a car may be washed, the other "
       + "says a company may be paid.",
   },
   { key: "vendor.delete", label: "Remove a vendor",
-    source: "Super administrator only" },
+    source: "Account Administrator only" },
   { key: "rfid.upload", label: "Upload RFID numbers",
     source: "RFID Inventory page access, unless the role is view-only" },
   { key: "rfid.manage", label: "Hold back or release RFID numbers",
     source: "RFID Inventory page access, unless the role is view-only" },
   { key: "rfid.delete", label: "Remove RFID numbers from the pool",
-    source: "Granted per role, plus the super administrator" },
+    source: "Granted per role, plus the account administrator" },
   { key: "users.manage", label: "Invite people and set their roles",
     source: "Administering. Making somebody an ADMIN is super only." },
   { key: "roles.manage", label: "Create and edit roles",
-    source: "Super administrator only" },
+    source: "Account Administrator only" },
   { key: "notifications.manage", label: "Change notification recipients and reminders",
     source: "Administering" },
   { key: "security.view", label: "Read the security workspace",
@@ -98,7 +98,7 @@ export function actionsFor(a: {
   deletesSignups?: boolean;
   deletesRfid?: boolean;
   rfidReadOnly?: boolean;
-  /** The pinned super administrator. Holds everything by configuration. */
+  /** The pinned account administrator. Holds everything by configuration. */
   pinnedSuper?: boolean;
 }): EffectiveActions {
   const sup = a.pinnedSuper === true;

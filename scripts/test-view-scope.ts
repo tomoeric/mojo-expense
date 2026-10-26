@@ -6,7 +6,7 @@
  * Two rules that pull in opposite directions, and both have to hold:
  *
  *   What is SHOWN follows the viewed person. A view exists to answer
- *   "what can they see?", and a super administrator's Delete sitting
+ *   "what can they see?", and a account administrator's Delete sitting
  *   under a dealer's name is the view lying about the one thing it is
  *   for. This is what went wrong: the buttons were judged on whoever
  *   was really at the keyboard.

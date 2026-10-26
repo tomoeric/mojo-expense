@@ -31,7 +31,7 @@ import { isSuperEmail } from "../dutch-miller/users.js";
 /**
  * Who may look through somebody else's eyes.
  *
- * An Emburse administrator, as before, or a Dutch Miller SUPER admin —
+ * An Emburse administrator, as before, or a Dutch Miller ACCOUNT admin —
  * who needs it for the same reason and for a harder case: a dealer's view
  * depends on pages granted one at a time, and the person on the other end
  * of the phone has no idea which ones they were given.

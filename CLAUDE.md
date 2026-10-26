@@ -85,10 +85,10 @@ the blocks.
   `appsFor(email, via)` regardless of any list. Emburse is behind the
   Microsoft door, permanently.
 - **Super admin is pinned by `DM_SUPER_ADMINS`** (default
-  `eric.s@mojocarwash.com`), never a row. Only a super admin can make
+  `eric.s@mojocarwash.com`), never a row. Only a account admin can make
   somebody an admin, change one, switch one off or remove one — an admin
   who could promote could promote themselves. The old "empty table makes
-  everyone an admin" fallback is GONE; the pinned super admin does that job
+  everyone an admin" fallback is GONE; the pinned account admin does that job
   without leaving the door open.
 - **A LINK IS NEVER SPENT BY A GET.** Mail providers fetch the URLs in
   incoming messages to scan them, so a redeem-on-GET burned invites on
@@ -149,7 +149,7 @@ the blocks.
     statement re-asserts `approves = (key = 'csc')` every time, so a
     row edited by hand cannot hand it to another role. An administrator
     does NOT get it: administering is "who may use the app", which is a
-    different job from "this member may wash". The super admin does,
+    different job from "this member may wash". The account admin does,
     because locking the owner out of their own app is not a security
     model. `canApprove()` in `routes.ts` also requires `isStaff`, so a
     dealer account given the CSC role still cannot approve.
@@ -167,12 +167,12 @@ the blocks.
     edit · view as · switch off · resend · remove.
   - Its list has **no directory lookup and needs no Graph permission**.
     `DUTCH_MILLER_ALLOWED` IS the list of Microsoft accounts that may use
-    the app, so the three sources are the pinned super admins, that
+    the app, so the three sources are the pinned account admins, that
     secret, and anybody with a `dm_users` row. Reading the tenant would
     add hundreds of people who cannot sign in. Don't reintroduce it.
   - Roles and Settings stay routes (`#/roles`, `#/settings`) so the back
     button and a pasted link behave — they are simply not in the rail.
-- **View as, for a super admin.** Reuses the existing `view-as` machinery
+- **View as, for a account admin.** Reuses the existing `view-as` machinery
   (`VIEW_AS_COOKIE`, `viewAsMiddleware`), so the hard part — EVERY non-GET
   is refused while viewing, by allow-list — is already true for Dutch
   Miller routes. `mayView()` admits an Emburse admin or a pinned super
@@ -515,7 +515,7 @@ the blocks.
 - Each product's own guard still decides the rest: `requireApp` refuses the one
   they do not hold, exactly as before. Widening the door grants no room.
 - Signing in is NOT the same as having a Dutch Miller role. Somebody newly let
-  through lands on the shell with no pages until a super admin gives them one
+  through lands on the shell with no pages until a account admin gives them one
   under Users & Access. That is correct, and worth saying out loud when adding
   somebody, because it looks like the fix did not work.
 
@@ -544,8 +544,13 @@ the blocks.
   The split backfilled Add New onto every role that held the old single grant,
   once, behind a marker row in `dm_settings` so an admin who removes it does not
   find it back after a restart.
+- **"Account Administrator" is the name; `role: "super"` is still the stored
+  and wire value**, as are `isSuperEmail`, `requireSuperTo` and `superOnly`.
+  Renaming those buys nothing a reader can see and would break a cached client
+  mid-deploy. `DM_ACCOUNT_ADMINS` is read before `DM_SUPER_ADMINS`, so the
+  secret can be renamed whenever it suits and either name keeps working.
 - **Deleting is grantable per role** (`dm_roles.deletes_signups` /
-  `deletes_rfid`), off by default, set only by a super administrator, and
+  `deletes_rfid`), off by default, set only by a account administrator, and
   **never implied by administering** — that rule has a test and must keep one.
   Both are soft deletes, which is what makes them safe to hand out.
 - **RFID Inventory has a view-only mode** (`dm_roles.rfid_read_only`): the page,
@@ -563,8 +568,8 @@ the blocks.
   derives what a role can DO from the rules the guards apply; it is read-only in
   the UI on purpose. These are not stored per role, so editable checkboxes would
   broaden access the first time somebody saved one.
-- **Approving belongs to the built-in CSC role and the pinned super admin.** The
-  super admin inherits it from configuration — which is why approvals work with
+- **Approving belongs to the built-in CSC role and the pinned account admin.** The
+  account admin inherits it from configuration — which is why approvals work with
   nobody holding CSC. Say that on screen rather than leaving it inferable from the
   code.
 
@@ -580,7 +585,7 @@ the blocks.
   person (a view changes whose data is on screen, never which products you
   hold), so under the viewed person's name it read as a claim about them —
   a dealer's menu offering Emburse. Stop viewing first, then switch.
-- **Deleting is a MARK, never a DELETE — super admin only, note required.**
+- **Deleting is a MARK, never a DELETE — account admin only, note required.**
   Both member records (`deleteSignup`) and RFID numbers (`deleteRfids`) set
   `deleted_at` / `deleted_by` / `delete_note` and keep the row; neither issues
   a `DELETE`. A membership or a tag that simply vanished leaves nobody able to

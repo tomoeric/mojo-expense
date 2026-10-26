@@ -143,7 +143,7 @@ try {
   });
   await audit({
     action: "access.denied", app: "dutch-miller", subject: TAG, ip: IP,
-    path: "GET /api/dutch-miller/roles", detail: "super administrator only",
+    path: "GET /api/dutch-miller/roles", detail: "account administrator only",
   });
   const mine = (await listEvents({ who: TAG, days: 1 })).rows;
   check("the other product's refusal is not here",
