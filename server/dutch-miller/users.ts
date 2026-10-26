@@ -229,6 +229,8 @@ export type Access = {
   deletesRfid: boolean;
   /** Can open RFID Inventory, but may change nothing on it. */
   rfidReadOnly: boolean;
+  /** May approve a vendor. Super, or a role granted it. */
+  approvesVendors: boolean;
   /** The named role behind it, for display. Empty for a pinned super admin. */
   roleKey: string;
   roleName: string;
@@ -259,6 +261,7 @@ export async function dmAccessFor(email: string): Promise<Access> {
       // needs the CSC role, including administrators.
       approves: true,
       deletesSignups: true, deletesRfid: true, rfidReadOnly: false,
+      approvesVendors: true,
       pages: [...DM_PAGE_KEYS], status: "active", pinned: true,
     };
   }
@@ -267,6 +270,7 @@ export async function dmAccessFor(email: string): Promise<Access> {
     role: "user", roleKey: row?.roleKey ?? DEFAULT_ROLE, roleName: "",
     approves: false,
     deletesSignups: false, deletesRfid: false, rfidReadOnly: false,
+    approvesVendors: false,
     pages: [], status: row?.status ?? "invited", pinned: false,
   };
   if (!row || row.status !== "active") return none;
@@ -291,6 +295,7 @@ export async function dmAccessFor(email: string): Promise<Access> {
     // on one — a role deliberately set to look and not touch keeps
     // that even when it also administers.
     rfidReadOnly: def.rfidReadOnly,
+    approvesVendors: def.approvesVendors,
     // Administering means EVERY page, whatever the role's tick-boxes say.
     // The alternative is an administrator who can open Users and Roles but
     // not Member Signups, which nobody means by the word and which the

@@ -22,7 +22,7 @@ import type { Request, Response } from "express";
  */
 
 /** What changed. Clients map these onto the queries they need to redo. */
-export type Topic = "signups" | "rfid" | "users" | "roles" | "settings";
+export type Topic = "signups" | "rfid" | "users" | "roles" | "settings" | "vendors";
 
 type Client = { id: number; res: Response; email: string };
 

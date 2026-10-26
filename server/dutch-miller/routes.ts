@@ -34,10 +34,15 @@ import { ACTIONS, actionsFor } from "./actions.js";
 import { dutchMillerNamed } from "../auth/apps.js";
 import { publicOrigin } from "../origin.js";
 import { listMakes, listModels, modelYears } from "./vehicles.js";
+import {
+  VENDOR_LABEL, approvalBlockers, decideVendor, deleteVendor, getVendor,
+  listVendors, proposeVendor,
+} from "./vendors.js";
 import { emitChange, streamChanges } from "../events.js";
 import {
-  DAY_NAMES, getPlacement, getReminders, getSignupNotify, isPlacement,
-  parseRecipients, setPlacement, setReminders, setSignupNotify,
+  DAY_NAMES, getAccountState, getPlacement, getReminders, getSignupNotify,
+  isPlacement, parseRecipients, setAccountState, setPlacement, setReminders,
+  setSignupNotify,
 } from "./settings.js";
 import { runReminders } from "./reminders.js";
 import { notifyApproved, notifySignup, signupEmail } from "./notify.js";
@@ -61,6 +66,42 @@ import { forgetEpoch } from "../auth/index.js";
  * Dutch Miller needs should be hung off the Emburse routers instead.
  */
 export const dutchMillerRouter: IRouter = Router();
+
+/**
+ * The partner account, open or shut.
+ *
+ * Mounted ahead of every route in this file, so switching it off is
+ * one decision rather than a guard somebody has to remember on each
+ * new endpoint. It refuses the EMAILED-LINK door only: MOJO staff
+ * keep working, because they are the people who would switch it
+ * back on and locking them out to lock out a partner turns a pause
+ * into an outage.
+ *
+ * Judged on the door, never the address — an invited account on a
+ * mojocarwash.com address is still an invited account.
+ *
+ * Reads as well as writes. A dealer left with a working page and
+ * failing buttons has been told nothing; 403 on the shell's first
+ * request is what puts the message on screen.
+ */
+dutchMillerRouter.use(async (req: Request, res: Response, next: NextFunction) => {
+  const via = req.viewingAs?.real.via ?? req.user?.via ?? "microsoft";
+  if (via !== "link") { next(); return; }
+  const state = await getAccountState().catch(() => ({ active: true, reason: "" }));
+  if (state.active) { next(); return; }
+  void audit({
+    action: "access.denied", app: "dutch-miller",
+    subject: req.user?.email ?? "",
+    detail: "partner access is switched off",
+    ...requestMeta(req),
+  });
+  res.status(403).json({
+    error: "Dutch Miller partner access is switched off."
+      + (state.reason ? ` ${state.reason}` : "")
+      + " Contact MOJO if you think this is wrong.",
+    accountOff: true,
+  });
+});
 
 /**
  * The live stream every open page listens to.
@@ -430,6 +471,7 @@ dutchMillerRouter.post("/roles", requireSuper, async (req: Request, res: Respons
       deletesSignups: body.deletesSignups === true,
       deletesRfid: body.deletesRfid === true,
       rfidReadOnly: body.rfidReadOnly === true,
+      approvesVendors: body.approvesVendors === true,
       by: actor(req),
     });
     await audit({
@@ -438,7 +480,8 @@ dutchMillerRouter.post("/roles", requireSuper, async (req: Request, res: Respons
         + `${role.administers ? " · administers" : ""}`
         + `${role.deletesSignups ? " · deletes members" : ""}`
         + `${role.deletesRfid ? " · deletes RFIDs" : ""}`
-        + `${role.rfidReadOnly ? " · RFID view only" : ""}`,
+        + `${role.rfidReadOnly ? " · RFID view only" : ""}`
+        + `${role.approvesVendors ? " · approves vendors" : ""}`,
     });
     emitChange("roles");
     res.json({ role, roles: await listRoles() });
@@ -1206,6 +1249,150 @@ dutchMillerRouter.post("/rfid/active", requirePage("rfid-review"), requireRfidWr
 /* ------------------------------------------------------------------ *
  * Member signups
  * ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ *
+ * The partner account, and vendors
+ * ------------------------------------------------------------------ */
+
+/** Readable by any administrator; the switch itself is the owner's. */
+dutchMillerRouter.get("/account", requireDmAdmin,
+  async (_req: Request, res: Response) => {
+    res.json(await getAccountState());
+  });
+
+dutchMillerRouter.post("/account", requireSuperTo("switch partner access"),
+  async (req: Request, res: Response) => {
+    const b = (req.body ?? {}) as { active?: unknown; reason?: unknown };
+    try {
+      const out = await setAccountState(
+        b.active === true, String(b.reason ?? ""), actor(req));
+      await audit({
+        action: "account.updated", ...who(req),
+        subject: "dutch-miller-partner-access",
+        detail: out.active
+          ? "partner access switched ON"
+          : `partner access switched OFF — ${out.reason}`,
+      });
+      // Every dealer's next request is refused, so tell the pages.
+      emitChange("signups");
+      res.json(out);
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+/** May this person sign a vendor off? Granted per role, plus the owner. */
+async function canApproveVendors(req: Request): Promise<boolean> {
+  const real = req.viewingAs?.real ?? req.user;
+  const a = await dmAccessFor(real?.email ?? "");
+  return a.role === "super" || a.approvesVendors;
+}
+
+dutchMillerRouter.get("/vendors", requirePage("vendors"),
+  async (req: Request, res: Response) => {
+    const status = String(req.query.status ?? "all");
+    const ok = ["all", "pending", "approved", "rejected", "inactive", "awaiting"];
+    res.json({
+      ...(await listVendors({
+        status: ok.includes(status) ? (status as never) : "all",
+        search: String(req.query.search ?? ""),
+      })),
+      // Shown for the viewed person, decided again on the write.
+      canApprove: (await dmAccessFor(req.user?.email ?? "")).approvesVendors
+        || (await dmAccessFor(req.user?.email ?? "")).role === "super",
+      canDelete: (await shownFor(req)).isSuper,
+    });
+  });
+
+dutchMillerRouter.get("/vendors/:id", requirePage("vendors"),
+  async (req: Request, res: Response) => {
+    const v = await getVendor(String(req.params.id ?? ""));
+    if (!v) { res.status(404).json({ error: "No such vendor." }); return; }
+    res.json({
+      vendor: v,
+      // What stops a reviewer approving, as opposed to what stopped
+      // somebody submitting. Reported, never enforced.
+      blockers: approvalBlockers(v.pending?.fields ?? v),
+      labels: VENDOR_LABEL,
+    });
+  });
+
+/**
+ * Propose a vendor, or a change to one.
+ *
+ * The same route for both, because creating and editing go through
+ * identical review — there is deliberately no path that writes a
+ * vendor without one.
+ */
+dutchMillerRouter.post("/vendors", requirePage("vendors"),
+  async (req: Request, res: Response) => {
+    const b = (req.body ?? {}) as { id?: unknown; note?: unknown } & Record<string, unknown>;
+    const out = await proposeVendor({
+      id: typeof b.id === "string" && b.id ? b.id : undefined,
+      raw: b as never,
+      by: actor(req),
+      note: String(b.note ?? ""),
+    });
+    if (!out.ok) {
+      res.status(400).json("errors" in out ? { errors: out.errors } : { error: out.reason });
+      return;
+    }
+    await audit({
+      action: out.created ? "vendor.proposed" : "vendor.changed",
+      resource: out.vendor.id, ...who(req),
+      detail: `${out.vendor.pending?.fields.companyName ?? ""}`
+        + (out.created ? " · new" : ` · ${out.vendor.pending?.changed.join(", ")}`)
+        + (out.superseded ? " · replaced an earlier submission" : ""),
+    });
+    emitChange("vendors");
+    res.json({ vendor: out.vendor, created: out.created, superseded: out.superseded });
+  });
+
+dutchMillerRouter.post("/vendors/:id/decide", requirePage("vendors"),
+  async (req: Request, res: Response) => {
+    if (!(await canApproveVendors(req))) {
+      denied(req, "vendor approval");
+      res.status(403).json({
+        error: "Your role cannot approve a vendor. A super administrator can "
+          + "grant it under Roles & Permissions.",
+      });
+      return;
+    }
+    const b = (req.body ?? {}) as {
+      revisionId?: unknown; approve?: unknown; note?: unknown;
+    };
+    const out = await decideVendor({
+      id: String(req.params.id ?? ""),
+      revisionId: String(b.revisionId ?? ""),
+      approve: b.approve === true,
+      by: actor(req),
+      note: String(b.note ?? ""),
+    });
+    if (!out.ok) { res.status(400).json({ error: out.reason }); return; }
+    await audit({
+      action: b.approve === true ? "vendor.approved" : "vendor.rejected",
+      resource: out.vendor.id, ...who(req),
+      detail: `${out.vendor.companyName}${b.note ? ` · ${String(b.note).slice(0, 200)}` : ""}`,
+    });
+    emitChange("vendors");
+    res.json({ vendor: out.vendor });
+  });
+
+dutchMillerRouter.post("/vendors/:id/delete", requirePage("vendors"),
+  requireSuperTo("remove a vendor"),
+  async (req: Request, res: Response) => {
+    const b = (req.body ?? {}) as { note?: unknown };
+    const out = await deleteVendor({
+      id: String(req.params.id ?? ""), note: String(b.note ?? ""), by: actor(req),
+    });
+    if (!out.ok) { res.status(400).json({ error: out.reason }); return; }
+    await audit({
+      action: "vendor.deleted", resource: String(req.params.id ?? ""), ...who(req),
+      detail: String(b.note ?? "").slice(0, 200),
+    });
+    emitChange("vendors");
+    res.json({ ok: true });
+  });
 
 /* ------------------------------------------------------------------ *
  * Vehicle years, makes and models

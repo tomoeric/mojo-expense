@@ -377,6 +377,42 @@ the blocks.
 - **A deleted RFID never returns to the pool** — not by re-uploading the file that
   brought it in, not through Make active, not through `useRfid`.
 
+## Vendors: approval on creation AND on every change
+
+- **TWO tables, and that is the whole design.** `dm_vendors` holds the APPROVED
+  record — nothing writes its fields except an approval — and
+  `dm_vendor_revisions` holds every version ever proposed. If an edit wrote
+  straight into the vendor there would be, between submitting and approving, a
+  vendor on file nobody approved. That is the thing the review exists to prevent.
+- A new vendor is a row with EMPTY approved content and one pending revision.
+  `status: pending` with blank fields is not a half-written record; it is a
+  request. Never "fix" it by writing the proposal into the vendor.
+- Rejecting an edit leaves an established vendor exactly as it was, still
+  approved. Only a vendor that was never approved becomes `rejected`.
+- **One pending revision per vendor**, enforced by a partial unique index. A
+  second proposal SUPERSEDES the first in the same transaction, so the history
+  says what happened to it; two pending changes approved in turn would apply one
+  over the other with nobody told.
+- `validateVendor` is what stops a SUBMISSION (the contact block).
+  `approvalBlockers` is what a REVIEWER should look at (W-9, insurance, expiry,
+  tax ID) and is reported, never enforced — approving anyway is a decision with
+  their name on it.
+- Approving is its own grant (`dm_roles.approves_vendors`), deliberately not the
+  CSC one: a membership says a car may be washed, a vendor says a company may be
+  paid.
+
+## The partner account switch
+
+- `dm_settings.dealer_account_active` closes Dutch Miller to everybody outside
+  MOJO in one move. Enforced by a `dutchMillerRouter.use` ahead of every route
+  plus a check in `signIn`, so it covers reads as well as writes and needs no
+  guard on each new endpoint.
+- **It shuts the EMAILED-LINK door only.** MOJO staff keep working — they are
+  who would switch it back on, and locking them out to lock out a partner turns
+  a pause into an outage. Judged on `via`, never on the address.
+- Open by default; switching OFF needs a reason, which the dealer is shown.
+  Nothing is deleted: roles, invitations, members and tags are untouched.
+
 ## The member's own contact details
 
 - **`customer_phone` / `customer_email` are the MEMBER's**, not the dealer's —

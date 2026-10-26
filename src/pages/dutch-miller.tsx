@@ -10,7 +10,9 @@ import { DmSignupsPage } from "@/pages/dm-signups";
 import { useLiveUpdates } from "@/lib/live";
 import { DmPeopleDialog } from "@/pages/dm-people";
 import { DmRolesPage } from "@/pages/dm-roles";
+import { DmAccountPage } from "@/pages/dm-account";
 import { DmAuditPage } from "@/pages/dm-audit";
+import { DmVendorsPage } from "@/pages/dm-vendors";
 import { DmSecurityPage } from "@/pages/dm-security";
 import { DmSettingsPage } from "@/pages/dm-settings";
 import type { AppKey, SessionUser } from "@/lib/api";
@@ -84,6 +86,7 @@ type Access = {
  * these were tabs still land in the right place.
  */
 const ADMIN_PAGES: { key: string; label: string; superOnly?: boolean }[] = [
+  { key: "account", label: "Account" },
   { key: "users", label: "Users & Access" },
   { key: "roles", label: "Roles & Permissions", superOnly: true },
   { key: "security", label: "Security" },
@@ -323,6 +326,7 @@ export function DutchMillerApp({
               placement={access.stickerPlacement ?? "inside"}
             />
           )}
+          {access && route.page === "vendors" && <DmVendorsPage />}
           {access && route.page === "rfid-instructions" && (
             <DmRfidInstructionsPage isAdmin={dmAdmin} />
           )}
@@ -340,6 +344,9 @@ export function DutchMillerApp({
                   onViewAs={startViewAs}
                   onHistory={(email) => { setHistoryFor(email); go("admin", "audit"); }}
                 />
+              )}
+              {route.sub === "account" && (
+                <DmAccountPage canSwitch={access.role === "super"} />
               )}
               {route.sub === "roles" && access.role === "super" && <DmRolesPage />}
               {route.sub === "security" && <DmSecurityPage />}

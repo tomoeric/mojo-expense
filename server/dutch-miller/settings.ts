@@ -359,3 +359,62 @@ export async function setPlacement(
   await write(PLACEMENT_KEY, placement, by);
   return getPlacement();
 }
+
+/* ------------------------------------------------------------------ *
+ * The dealer door, open or shut
+ * ------------------------------------------------------------------ */
+
+/**
+ * One switch that closes Dutch Miller to everybody outside MOJO.
+ *
+ * Not the same as disabling people one at a time, which is what
+ * `dm_users.status` is for. This is the whole partner account: the
+ * dealership's agreement ends, or something has to stop right now,
+ * and nobody wants to be clicking through thirty rows while it does.
+ *
+ * It shuts the EMAILED-LINK door only. MOJO staff keep working —
+ * they are the people who would be switching it back on, and locking
+ * them out of their own app to lock out a partner is how a pause
+ * becomes an outage. That is judged on the DOOR somebody came
+ * through, never on their address: the whole point of the second
+ * door is that an address stopped being proof of anything.
+ *
+ * Open by default, and it takes effect on the next request rather
+ * than at the next sign-in — a dealer already signed in is refused
+ * immediately, not in eight hours.
+ */
+const ACCOUNT_KEY = "dealer_account_active";
+
+export type AccountState = {
+  active: boolean;
+  /** Why it was switched off, shown to the dealer who tries. */
+  reason: string;
+  updatedAt: string | null;
+  updatedBy: string | null;
+};
+
+export async function getAccountState(): Promise<AccountState> {
+  const stored = await read<Record<string, unknown> | null>(ACCOUNT_KEY, null);
+  const meta = await db().query<{ updated_at: Date; updated_by: string }>(
+    "SELECT updated_at, updated_by FROM dm_settings WHERE key = $1", [ACCOUNT_KEY]);
+  return {
+    // Absent means open. A setting appearing must not shut a door.
+    active: stored === null ? true : stored.active !== false,
+    reason: String(stored?.reason ?? ""),
+    updatedAt: meta.rows[0]?.updated_at.toISOString() ?? null,
+    updatedBy: meta.rows[0]?.updated_by ?? null,
+  };
+}
+
+export async function setAccountState(
+  active: boolean, reason: string, by: string,
+): Promise<AccountState> {
+  const why = reason.trim();
+  // Switching OFF needs a reason: it is the one that somebody rings
+  // up about, and "no access" with nothing attached is unanswerable.
+  if (!active && why.length < 5) {
+    throw new Error("Say why partner access is being switched off.");
+  }
+  await write(ACCOUNT_KEY, { active, reason: active ? "" : why.slice(0, 500) }, by);
+  return getAccountState();
+}

@@ -34,6 +34,8 @@ export type DmRoleDef = {
   deletesRfid: boolean;
   /** Can open RFID Inventory, but changes nothing on it. */
   rfidReadOnly: boolean;
+  /** May approve a vendor, or send one back. Off unless granted. */
+  approvesVendors: boolean;
   /** May open Users, Settings and the audit trail. */
   administers: boolean;
   /** May mark a member signup approved. Only the built-in CSC role. */
@@ -101,6 +103,15 @@ ALTER TABLE dm_roles ADD COLUMN IF NOT EXISTS deletes_rfid boolean NOT NULL DEFA
  * loses anything.
  */
 ALTER TABLE dm_roles ADD COLUMN IF NOT EXISTS rfid_read_only boolean NOT NULL DEFAULT false;
+/*
+ * Signing a vendor off.
+ *
+ * Its own grant rather than borrowing the CSC one: approving a
+ * membership says a car may be washed, and approving a vendor says
+ * a company may be paid. Different question, different person,
+ * often a different department. Off until granted.
+ */
+ALTER TABLE dm_roles ADD COLUMN IF NOT EXISTS approves_vendors boolean NOT NULL DEFAULT false;
 `;
 
 /*
@@ -175,6 +186,7 @@ type Db = {
   key: string; name: string; pages: unknown; administers: boolean;
   approves: boolean; builtin: boolean; created_at: Date; created_by: string;
   deletes_signups: boolean; deletes_rfid: boolean; rfid_read_only: boolean;
+  approves_vendors: boolean;
   holders?: string;
 };
 
@@ -189,6 +201,7 @@ const shape = (r: Db): DmRoleDef => ({
   deletesSignups: r.deletes_signups,
   deletesRfid: r.deletes_rfid,
   rfidReadOnly: r.rfid_read_only,
+  approvesVendors: r.approves_vendors,
   builtin: r.builtin,
   holders: r.holders === undefined ? undefined : Number(r.holders),
   createdAt: r.created_at.toISOString(),
@@ -199,7 +212,8 @@ export async function listRoles(): Promise<DmRoleDef[]> {
   await ensure();
   const { rows } = await db().query<Db>(
     `SELECT r.key, r.name, r.pages, r.administers, r.approves, r.builtin,
-            r.deletes_signups, r.deletes_rfid, r.rfid_read_only, r.created_at, r.created_by,
+            r.deletes_signups, r.deletes_rfid, r.rfid_read_only, r.approves_vendors,
+            r.created_at, r.created_by,
             (SELECT count(*) FROM dm_users u WHERE u.role_key = r.key) AS holders
        FROM dm_roles r
       ORDER BY r.administers DESC, r.builtin DESC, lower(r.name)`);
@@ -210,7 +224,8 @@ export async function getRole(key: string): Promise<DmRoleDef | null> {
   await ensure();
   const { rows } = await db().query<Db>(
     `SELECT key, name, pages, administers, approves, builtin,
-            deletes_signups, deletes_rfid, rfid_read_only, created_at, created_by
+            deletes_signups, deletes_rfid, rfid_read_only, approves_vendors,
+            created_at, created_by
        FROM dm_roles WHERE key = $1`, [key.trim().toLowerCase()]);
   return rows[0] ? shape(rows[0]) : null;
 }
@@ -231,6 +246,8 @@ export async function saveRole(opts: {
   deletesRfid?: boolean;
   /** Can open RFID Inventory without changing anything on it. */
   rfidReadOnly?: boolean;
+  /** May approve a vendor, or send one back. */
+  approvesVendors?: boolean;
   by: string;
 }): Promise<DmRoleDef> {
   await ensure();
@@ -262,18 +279,20 @@ export async function saveRole(opts: {
   // role and is not something a role editor can hand out.
   await db().query(
     `INSERT INTO dm_roles (key, name, pages, administers, builtin, created_by,
-                           deletes_signups, deletes_rfid, rfid_read_only)
-          VALUES ($1, $2, $3::jsonb, $4, false, $5, $6, $7, $8)
+                           deletes_signups, deletes_rfid, rfid_read_only,
+                           approves_vendors)
+          VALUES ($1, $2, $3::jsonb, $4, false, $5, $6, $7, $8, $9)
      ON CONFLICT (key) DO UPDATE
         SET name = EXCLUDED.name, pages = EXCLUDED.pages,
             deletes_signups = EXCLUDED.deletes_signups,
             deletes_rfid = EXCLUDED.deletes_rfid,
             rfid_read_only = EXCLUDED.rfid_read_only,
+            approves_vendors = EXCLUDED.approves_vendors,
             administers = CASE WHEN dm_roles.builtin THEN dm_roles.administers
                                ELSE EXCLUDED.administers END`,
     [key, name, JSON.stringify(pages), opts.administers, opts.by,
       opts.deletesSignups === true, opts.deletesRfid === true,
-      opts.rfidReadOnly === true]);
+      opts.rfidReadOnly === true, opts.approvesVendors === true]);
   return (await getRole(key))!;
 }
 

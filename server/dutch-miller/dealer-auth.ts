@@ -9,6 +9,7 @@ import {
   CODE_TTL_MINUTES, LOGIN_TTL_MINUTES, issueCode, issueToken, peekToken, redeemToken,
   verifyCode,
 } from "./invites.js";
+import { getAccountState } from "./settings.js";
 import { activateDmUser, getDmUser, isSuperEmail, markInvited } from "./users.js";
 import { DEVICE_COOKIE, TRUST_DAYS, deviceLabel, isTrusted, trustDevice } from "./devices.js";
 
@@ -134,6 +135,10 @@ const deviceSecret = (req: Request): string | undefined =>
   (req.cookies as Record<string, string | undefined> | undefined)?.[DEVICE_COOKIE];
 
 async function signIn(res: Response, email: string): Promise<SessionUser | null> {
+  // The partner account, before the person. Switched off means no
+  // new dealer session at all — refusing at the door rather than
+  // issuing a cookie that every later request turns down.
+  if (!(await getAccountState()).active) return null;
   const row = await getDmUser(email);
   if (!row || row.status !== "active") return null;
   const name = [row.firstName, row.lastName].filter(Boolean).join(" ") || row.email;

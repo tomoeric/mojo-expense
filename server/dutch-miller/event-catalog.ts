@@ -122,6 +122,14 @@ export const EVENT_META = {
   "rfid.held": M("business", "succeeded", "info", "RFID numbers were held back or released"),
   "rfid.deleted": M("business", "succeeded", "medium", "RFID numbers were removed", true),
 
+  /* ---- Vendors, which are approved rather than merely entered ---- */
+  "vendor.proposed": M("business", "attempted", "info", "A vendor was submitted for review"),
+  "vendor.changed": M("business", "attempted", "low",
+    "A change to an approved vendor was submitted for review"),
+  "vendor.approved": M("business", "succeeded", "medium", "A vendor was approved", true),
+  "vendor.rejected": M("business", "blocked", "low", "A vendor submission was sent back"),
+  "vendor.deleted": M("business", "succeeded", "medium", "A vendor was removed", true),
+
   /* ---- Telling people ---- */
   "notify.sent": M("business", "succeeded", "info", "A notification was accepted for delivery"),
   "notify.failed": M("business", "blocked", "low", "A notification could not be sent"),

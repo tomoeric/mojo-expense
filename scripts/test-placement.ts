@@ -15,7 +15,7 @@
  * people are told.
  */
 import {
-  getPlacement, isPlacement, setPlacement,
+  getAccountState, getPlacement, isPlacement, setAccountState, setPlacement,
 } from "../server/dutch-miller/settings.js";
 import { db } from "../server/db.js";
 
@@ -68,7 +68,32 @@ try {
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
     [JSON.stringify("sideways"), BY]);
   check("it reads as inside", (await getPlacement()).placement === "inside");
+  console.log("\n5. The partner account, open or shut");
+  /*
+   * One switch that closes Dutch Miller to everybody outside MOJO.
+   * Open by default, because a setting appearing must not shut a
+   * door — and switching it off needs a reason, since that is the
+   * thing a dealer rings up about.
+   */
+  await db().query("DELETE FROM dm_settings WHERE key = 'dealer_account_active'")
+    .catch(() => {});
+  check("it is open until somebody shuts it", (await getAccountState()).active);
+  const noReason = await refused(() => setAccountState(false, "", BY));
+  check("switching off with no reason is refused",
+    noReason.includes("why partner access"), noReason);
+  check("…and it is still open", (await getAccountState()).active);
+  const shut = await setAccountState(false, "Partner agreement under review.", BY);
+  check("it shuts", shut.active === false);
+  check("…carrying the reason a dealer will see",
+    shut.reason.startsWith("Partner agreement"));
+  check("…and who shut it", shut.updatedBy === BY);
+  const open = await setAccountState(true, "", BY);
+  check("switching back on needs no reason", open.active === true);
+  check("…and clears the old one", open.reason === "");
+
 } finally {
+  await db().query("DELETE FROM dm_settings WHERE key = 'dealer_account_active'")
+    .catch(() => {});
   await db().query("DELETE FROM dm_settings WHERE key = 'sticker_placement'")
     .catch(() => {});
   await db().end().catch(() => {});

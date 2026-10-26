@@ -41,6 +41,11 @@ export const DM_GRANTS = [
     blurb: "Enrol a member, assign a tag, and import a file of them.",
   },
   {
+    key: "vendors",
+    label: "Vendors",
+    blurb: "Approved vendors, and the review that approves them.",
+  },
+  {
     key: "rfid-instructions",
     label: "RFID Instructions",
     blurb: "Where the sticker goes on the vehicle, and how to apply it.",
@@ -67,6 +72,12 @@ export const DM_PAGES = [
       { key: "review", label: "Review Existing", grant: "member-signups" },
       { key: "add", label: "Add New", grant: "member-signups-add" },
     ],
+  },
+  {
+    key: "vendors",
+    label: "Vendors",
+    blurb: "Approved vendors, and the review that approves them.",
+    children: [],
   },
   {
     key: "rfid-instructions",

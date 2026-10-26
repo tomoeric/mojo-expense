@@ -8,6 +8,7 @@ type Role = {
   key: string; name: string; pages: string[];
   administers: boolean; approves: boolean; builtin: boolean; holders?: number;
   deletesSignups: boolean; deletesRfid: boolean; rfidReadOnly: boolean;
+  approvesVendors: boolean;
   createdAt: string | null; createdBy: string | null;
   /** Derived from the rules the guards apply. Never stored, never edited. */
   actions: Record<string, boolean>;
@@ -26,6 +27,7 @@ type Payload = {
 type Draft = {
   key?: string; name: string; pages: string[]; administers: boolean;
   deletesSignups: boolean; deletesRfid: boolean; rfidReadOnly: boolean;
+  approvesVendors: boolean;
 };
 
 /**
@@ -98,6 +100,7 @@ export function DmRolesPage() {
           onClick={() => setDraft({
             name: "", pages: [], administers: false,
             deletesSignups: false, deletesRfid: false, rfidReadOnly: false,
+            approvesVendors: false,
           })}
           className="inline-flex items-center gap-2 rounded-md bg-foreground px-3 py-2 text-sm font-semibold text-background"
         >
@@ -156,6 +159,11 @@ export function DmRolesPage() {
                       deletes RFIDs
                     </span>
                   )}
+                  {r.approvesVendors && (
+                    <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-400">
+                      approves vendors
+                    </span>
+                  )}
                   {r.rfidReadOnly && (
                     <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
                       RFID view only
@@ -186,6 +194,7 @@ export function DmRolesPage() {
                     administers: r.administers,
                     deletesSignups: r.deletesSignups, deletesRfid: r.deletesRfid,
                     rfidReadOnly: r.rfidReadOnly,
+                    approvesVendors: r.approvesVendors,
                   })}
                   className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted"
                 >
@@ -344,6 +353,28 @@ function RoleEditor({
             onChange={(e) => onChange({ ...draft, administers: e.target.checked })}
           />
           Administers — every page, plus Users and Settings
+        </label>
+      )}
+
+      {/* Its own grant rather than borrowing CSC: approving a
+          membership says a car may be washed, approving a vendor
+          says a company may be paid. Different question, often a
+          different department. */}
+      {draft.pages.includes("vendors") && (
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={draft.approvesVendors}
+            onChange={(e) => onChange({ ...draft, approvesVendors: e.target.checked })}
+          />
+          <span>
+            Can approve a vendor
+            <span className="block text-xs text-muted-foreground">
+              Signs off a new vendor and every change to one, or sends it back with
+              a reason. Separate from approving a membership.
+            </span>
+          </span>
         </label>
       )}
 

@@ -23,6 +23,7 @@ import { DM_PAGE_KEYS, type DmPageKey } from "./pages.js";
 export type ActionKey =
   | "member.submit" | "member.import" | "member.review" | "member.approve"
   | "member.export" | "member.delete"
+  | "vendor.submit" | "vendor.approve" | "vendor.delete"
   | "rfid.upload" | "rfid.manage" | "rfid.delete"
   | "users.manage" | "roles.manage" | "notifications.manage"
   | "security.view" | "audit.view";
@@ -51,6 +52,17 @@ export const ACTIONS: ActionDef[] = [
     source: "Member Signups — Review Existing" },
   { key: "member.delete", label: "Delete a member record",
     source: "Granted per role, plus the super administrator" },
+  { key: "vendor.submit", label: "Submit a vendor, or a change to one",
+    source: "Vendors page access" },
+  {
+    key: "vendor.approve",
+    label: "Approve a vendor",
+    source: "Granted per role, plus the super administrator. Separate from "
+      + "approving a membership: one says a car may be washed, the other "
+      + "says a company may be paid.",
+  },
+  { key: "vendor.delete", label: "Remove a vendor",
+    source: "Super administrator only" },
   { key: "rfid.upload", label: "Upload RFID numbers",
     source: "RFID Inventory page access, unless the role is view-only" },
   { key: "rfid.manage", label: "Hold back or release RFID numbers",
@@ -82,6 +94,7 @@ export function actionsFor(a: {
   pages: readonly DmPageKey[];
   administers: boolean;
   approves: boolean;
+  approvesVendors?: boolean;
   deletesSignups?: boolean;
   deletesRfid?: boolean;
   rfidReadOnly?: boolean;
@@ -110,6 +123,9 @@ export function actionsFor(a: {
     "member.export": has("member-signups"),
     // Grantable per role now, and still never implied by administering.
     "member.delete": sup || a.deletesSignups === true,
+    "vendor.submit": has("vendors"),
+    "vendor.approve": sup || a.approvesVendors === true,
+    "vendor.delete": sup,
     // Opening the page and changing it are different things: most
     // people who need RFID Inventory need it to answer a question.
     "rfid.upload": has("rfid-review") && !readOnly,
