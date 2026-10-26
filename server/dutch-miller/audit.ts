@@ -1,4 +1,5 @@
 import { db, ensureSchema } from "../db.js";
+import { DUTCH_MILLER } from "./accounts.js";
 import {
   EVENT_CATEGORIES, SEVERITY_RANK, SIGNIN_ACTIONS, SUSPICIOUS, actionsIn, metaFor,
   type AuditAction, type EventCategory, type Outcome, type Severity,
@@ -111,16 +112,44 @@ CREATE INDEX IF NOT EXISTS dm_audit_ip ON dm_audit (ip, at DESC);
 CREATE INDEX IF NOT EXISTS dm_audit_recent ON dm_audit (at DESC);
 CREATE INDEX IF NOT EXISTS dm_audit_subject ON dm_audit (subject, action, at DESC);
 CREATE INDEX IF NOT EXISTS dm_audit_action ON dm_audit (action, at DESC);
+/*
+ * WHICH PARTNER the event is about, when it is about one.
+ *
+ * EMPTY means platform-wide, and most of this table is: signing in,
+ * being refused at the door, a view starting, somebody's role being
+ * changed. Those belong to the platform rather than to a partner, and
+ * forcing an account onto them would file a failed sign-in under
+ * whichever account the browser happened to have open.
+ *
+ * Business events DO carry one — a member enrolled, a tag removed, a
+ * vendor approved — and that is what keeps one partner's administrator
+ * out of another partner's history.
+ *
+ * Every row written before partner accounts reads as platform-wide,
+ * which is honest: they predate the question. The business events
+ * among them are Dutch Miller's, and the backfill below says so for
+ * the ones whose action makes that unambiguous.
+ */
+ALTER TABLE dm_audit ADD COLUMN IF NOT EXISTS account_id text NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS dm_audit_account ON dm_audit (account_id, at DESC);
+UPDATE dm_audit SET account_id = '${DUTCH_MILLER}'
+ WHERE account_id = '' AND app = 'dutch-miller'
+   AND action LIKE ANY (ARRAY['signup.%', 'rfid.%', 'vendor.%']);
 `;
 
 let ready: Promise<void> | null = null;
 const ensure = (): Promise<void> =>
   (ready ??= ensureSchema().then(async () => { await db().query(SCHEMA); }));
 
+/** The event trail's table, for the modules whose own schema reads it. */
+export const ensureAuditSchema = (): Promise<void> => ensure();
+
 export type AuditEntry = {
   id: string;
   /** Which product. Empty means it concerns both. */
   app: string;
+  /** Which partner account. Empty means platform-wide. */
+  accountId: string;
   /** When the row was written. */
   receivedAt: string;
   /** When it happened. The same thing for events this app records itself. */
@@ -218,6 +247,14 @@ export async function audit(e: {
    * one's security log does not carry it.
    */
   app?: string;
+  /**
+   * Which partner account this concerns. Omitted means platform-wide.
+   *
+   * Set it on anything that happened INSIDE an account — a member, a
+   * tag, a vendor — and leave it off for sign-ins, refusals and user
+   * administration, which belong to the platform.
+   */
+  accountId?: string;
   /** The effective identity. During a view, that is the VIEWED person. */
   actor?: string;
   /** Who was really at the keyboard. Only differs during a view. */
@@ -237,21 +274,21 @@ export async function audit(e: {
     await db().query(
       `INSERT INTO dm_audit
          (actor, actor_real, action, subject, resource, detail, ip, user_agent,
-          path, forwarded, occurred_at, app)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+          path, forwarded, occurred_at, app, account_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
       [(e.actor ?? "").toLowerCase(), (e.actorReal ?? "").toLowerCase(), e.action,
         (e.subject ?? "").toLowerCase(), (e.resource ?? "").slice(0, 200),
         redact(e.detail ?? ""), e.ip ?? "",
         (e.userAgent ?? "").slice(0, 300), safePath(e.path ?? ""),
         (e.forwarded ?? "").slice(0, 300), e.occurredAt ?? null,
-        (e.app ?? "").slice(0, 32)]);
+        (e.app ?? "").slice(0, 32), (e.accountId ?? "").slice(0, 64)]);
   } catch (err) {
     console.error("audit write failed:", err instanceof Error ? err.message : err);
   }
 }
 
 const COLS = `id, at, occurred_at, actor, actor_real, action, subject, resource,
-              detail, ip, user_agent, path, forwarded, app`;
+              detail, ip, user_agent, path, forwarded, app, account_id`;
 
 /**
  * Everything a Dutch Miller reader should see, and nothing else.
@@ -267,6 +304,7 @@ type DbEntry = {
   id: string; at: Date; occurred_at: Date | null; actor: string; actor_real: string;
   action: string; subject: string; resource: string; detail: string; ip: string;
   user_agent: string; path: string; forwarded: string; app: string;
+  account_id: string;
 };
 
 const shapeEntry = (r: DbEntry): AuditEntry => {
@@ -274,6 +312,7 @@ const shapeEntry = (r: DbEntry): AuditEntry => {
   return {
     id: String(r.id),
     app: r.app,
+    accountId: r.account_id,
     receivedAt: r.at.toISOString(),
     at: (r.occurred_at ?? r.at).toISOString(),
     actor: r.actor,
@@ -311,6 +350,18 @@ export type EventQuery = {
   days?: number;
   limit?: number;
   offset?: number;
+  /**
+   * Which partner accounts this reader may see, or null for every one.
+   *
+   * Platform-wide rows are always included: a sign-in belongs to
+   * nobody's account, and a security feed that hid them would be a
+   * security feed with the sign-ins taken out.
+   *
+   * null is "no restriction" rather than "none", which is the risky
+   * default to get wrong — so the callers that have a restriction pass
+   * a list and the ones that do not say so out loud.
+   */
+  accounts?: string[] | null;
 };
 
 /**
@@ -377,6 +428,10 @@ export async function listEvents(q: EventQuery = {}): Promise<{
   args.push(String(days));
   where.push(`at > now() - ($${args.length} || ' days')::interval`);
   where.push(DM_SCOPE);
+  if (q.accounts) {
+    args.push(q.accounts);
+    where.push(`(account_id = '' OR account_id = ANY($${args.length}::text[]))`);
+  }
 
   const clause = `WHERE ${where.join(" AND ")}`;
   const limit = Math.min(Math.max(Number(q.limit) || 200, 1), 2000);
@@ -403,20 +458,23 @@ export async function listAudit(opts: {
   subject?: string;
   resource?: string;
   limit?: number;
+  accounts?: string[] | null;
 } = {}): Promise<AuditEntry[]> {
   const { rows } = await listEvents({
     who: opts.subject, resource: opts.resource,
     limit: opts.limit ?? 200, days: 3650,
+    accounts: opts.accounts ?? null,
   });
   return rows;
 }
 
 /** Kept for the security page's existing feed: blocked security events only. */
 export async function listSecurityLog(opts: {
-  days?: number; limit?: number;
+  days?: number; limit?: number; accounts?: string[] | null;
 } = {}): Promise<AuditEntry[]> {
   const { rows } = await listEvents({
     preset: "suspicious", days: opts.days ?? 30, limit: opts.limit ?? 300,
+    accounts: opts.accounts ?? null,
   });
   return rows;
 }

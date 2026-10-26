@@ -1,4 +1,5 @@
 import { db, ensureSchema } from "../db.js";
+import { DUTCH_MILLER } from "./accounts.js";
 
 /**
  * Dutch Miller settings.
@@ -18,27 +19,78 @@ CREATE TABLE IF NOT EXISTS dm_settings (
   updated_at timestamptz NOT NULL DEFAULT now(),
   updated_by text        NOT NULL DEFAULT ''
 );
+/*
+ * Which partner a setting belongs to, or none.
+ *
+ * SHARED is the empty string, and most settings are shared: who
+ * reviews a new member, the reminder schedule, the email
+ * configuration. Those are managed centrally for the whole platform
+ * and changing one changes it everywhere, which is the point of
+ * running one application rather than several.
+ *
+ * A few are genuinely the account's — where the sticker goes on the
+ * glass is a property of the tags that partner was shipped, not a
+ * platform policy — and those carry an account id.
+ *
+ * The key has to widen with it, or the second account to set a
+ * placement overwrites the first one's. Dropped and replaced by a
+ * unique index rather than a new primary key, because ADD PRIMARY
+ * KEY has no IF NOT EXISTS and this statement runs on every boot.
+ */
+ALTER TABLE dm_settings ADD COLUMN IF NOT EXISTS account_id text NOT NULL DEFAULT '';
+ALTER TABLE dm_settings DROP CONSTRAINT IF EXISTS dm_settings_pkey;
+CREATE UNIQUE INDEX IF NOT EXISTS dm_settings_scope ON dm_settings (account_id, key);
+/*
+ * The two account-scoped settings, moved to the account that set
+ * them. Everything written before partner accounts was Dutch
+ * Miller's. Runs once: nothing matches afterwards.
+ */
+UPDATE dm_settings SET account_id = '${DUTCH_MILLER}'
+ WHERE account_id = '' AND key IN ('sticker_placement', 'dealer_account_active');
 `;
 
 let ready: Promise<void> | null = null;
 const ensure = (): Promise<void> =>
   (ready ??= ensureSchema().then(async () => { await db().query(SCHEMA); }));
 
-async function read<T>(key: string, fallback: T): Promise<T> {
+/**
+ * The scope a setting is read and written in.
+ *
+ * `SHARED` for the platform's own settings and an account id for the
+ * few that belong to one partner. An explicit argument rather than a
+ * default, on the keys that have one, so that adding a setting makes
+ * somebody answer the question instead of inheriting an answer.
+ */
+export const SHARED = "";
+
+async function read<T>(key: string, fallback: T, scope = SHARED): Promise<T> {
   await ensure();
   const { rows } = await db().query<{ value: T }>(
-    "SELECT value FROM dm_settings WHERE key = $1", [key]);
+    "SELECT value FROM dm_settings WHERE key = $1 AND account_id = $2", [key, scope]);
   return rows[0]?.value ?? fallback;
 }
 
-async function write<T>(key: string, value: T, by: string): Promise<void> {
+async function meta(key: string, scope = SHARED): Promise<{
+  updatedAt: string | null; updatedBy: string | null;
+}> {
+  await ensure();
+  const { rows } = await db().query<{ updated_at: Date; updated_by: string }>(
+    "SELECT updated_at, updated_by FROM dm_settings WHERE key = $1 AND account_id = $2",
+    [key, scope]);
+  return {
+    updatedAt: rows[0]?.updated_at.toISOString() ?? null,
+    updatedBy: rows[0]?.updated_by ?? null,
+  };
+}
+
+async function write<T>(key: string, value: T, by: string, scope = SHARED): Promise<void> {
   await ensure();
   await db().query(
-    `INSERT INTO dm_settings (key, value, updated_at, updated_by)
-          VALUES ($1, $2::jsonb, now(), $3)
-     ON CONFLICT (key) DO UPDATE
+    `INSERT INTO dm_settings (key, value, updated_at, updated_by, account_id)
+          VALUES ($1, $2::jsonb, now(), $3, $4)
+     ON CONFLICT (account_id, key) DO UPDATE
         SET value = EXCLUDED.value, updated_at = now(), updated_by = EXCLUDED.updated_by`,
-    [key, JSON.stringify(value), by]);
+    [key, JSON.stringify(value), by, scope]);
 }
 
 /* ------------------------------------------------------------------ *
@@ -341,23 +393,20 @@ export type PlacementSetting = {
   updatedBy: string | null;
 };
 
-export async function getPlacement(): Promise<PlacementSetting> {
-  const stored = await read<unknown>(PLACEMENT_KEY, null);
-  const meta = await db().query<{ updated_at: Date; updated_by: string }>(
-    "SELECT updated_at, updated_by FROM dm_settings WHERE key = $1", [PLACEMENT_KEY]);
+export async function getPlacement(account: string): Promise<PlacementSetting> {
+  const stored = await read<unknown>(PLACEMENT_KEY, null, account);
   return {
     placement: isPlacement(stored) ? stored : "inside",
-    updatedAt: meta.rows[0]?.updated_at.toISOString() ?? null,
-    updatedBy: meta.rows[0]?.updated_by ?? null,
+    ...await meta(PLACEMENT_KEY, account),
   };
 }
 
 export async function setPlacement(
-  placement: Placement, by: string,
+  placement: Placement, by: string, account: string,
 ): Promise<PlacementSetting> {
   if (!isPlacement(placement)) throw new Error("That is not a placement.");
-  await write(PLACEMENT_KEY, placement, by);
-  return getPlacement();
+  await write(PLACEMENT_KEY, placement, by, account);
+  return getPlacement(account);
 }
 
 /* ------------------------------------------------------------------ *
@@ -393,21 +442,18 @@ export type AccountState = {
   updatedBy: string | null;
 };
 
-export async function getAccountState(): Promise<AccountState> {
-  const stored = await read<Record<string, unknown> | null>(ACCOUNT_KEY, null);
-  const meta = await db().query<{ updated_at: Date; updated_by: string }>(
-    "SELECT updated_at, updated_by FROM dm_settings WHERE key = $1", [ACCOUNT_KEY]);
+export async function getAccountState(account: string): Promise<AccountState> {
+  const stored = await read<Record<string, unknown> | null>(ACCOUNT_KEY, null, account);
   return {
     // Absent means open. A setting appearing must not shut a door.
     active: stored === null ? true : stored.active !== false,
     reason: String(stored?.reason ?? ""),
-    updatedAt: meta.rows[0]?.updated_at.toISOString() ?? null,
-    updatedBy: meta.rows[0]?.updated_by ?? null,
+    ...await meta(ACCOUNT_KEY, account),
   };
 }
 
 export async function setAccountState(
-  active: boolean, reason: string, by: string,
+  active: boolean, reason: string, by: string, account: string,
 ): Promise<AccountState> {
   const why = reason.trim();
   // Switching OFF needs a reason: it is the one that somebody rings
@@ -415,6 +461,6 @@ export async function setAccountState(
   if (!active && why.length < 5) {
     throw new Error("Say why partner access is being switched off.");
   }
-  await write(ACCOUNT_KEY, { active, reason: active ? "" : why.slice(0, 500) }, by);
-  return getAccountState();
+  await write(ACCOUNT_KEY, { active, reason: active ? "" : why.slice(0, 500) }, by, account);
+  return getAccountState(account);
 }

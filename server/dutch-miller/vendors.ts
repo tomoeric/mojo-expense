@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { db, ensureSchema } from "../db.js";
+import { DUTCH_MILLER } from "./accounts.js";
 import { STATES, formatPhone, digitsOf } from "./signups.js";
 
 /**
@@ -151,6 +152,17 @@ CREATE INDEX IF NOT EXISTS dm_vendor_revisions_vendor
  */
 CREATE UNIQUE INDEX IF NOT EXISTS dm_vendor_revisions_one_pending
   ON dm_vendor_revisions (vendor_id) WHERE status = 'pending';
+/*
+ * Whose vendor this is. The default migrates what is already here.
+ *
+ * Only the vendor carries it. A revision belongs to its vendor and is
+ * always read through one, so a second copy of the same fact would be
+ * a column waiting to disagree with the row above it.
+ */
+ALTER TABLE dm_vendors ADD COLUMN IF NOT EXISTS account_id text NOT NULL
+  DEFAULT '${DUTCH_MILLER}';
+CREATE INDEX IF NOT EXISTS dm_vendors_account
+  ON dm_vendors (account_id, status, created_at DESC);
 `;
 
 let ready: Promise<void> | null = null;
@@ -329,12 +341,16 @@ const R_COLS = `id, vendor_id, seq, fields, status, submitted_at, submitted_by,
                 submit_note, decided_at, decided_by, decision_note`;
 
 export async function listVendors(opts: {
+  /** Whose register. Required — no read here spans partners. */
+  account: string;
   status?: VendorStatus | "all" | "awaiting";
   search?: string;
-} = {}): Promise<{ vendors: Vendor[]; counts: Record<string, number> }> {
+}): Promise<{ vendors: Vendor[]; counts: Record<string, number> }> {
   await ensure();
   const where: string[] = [];
   const args: unknown[] = [];
+  args.push(opts.account);
+  where.push(`v.account_id = $${args.length}`);
   // Deleted is its own view, like everywhere else here.
   if (opts.status === "inactive") where.push("v.status = 'inactive'");
   else where.push("v.deleted_at IS NULL");
@@ -358,11 +374,16 @@ export async function listVendors(opts: {
       ORDER BY coalesce(v.fields->>'companyName', '') , v.created_at DESC LIMIT 500`,
     args);
   const pend = await db().query<DbRev>(
-    `SELECT ${R_COLS} FROM dm_vendor_revisions WHERE status = 'pending'`);
+    `SELECT r.id, r.vendor_id, r.seq, r.fields, r.status, r.submitted_at,
+            r.submitted_by, r.submit_note, r.decided_at, r.decided_by, r.decision_note
+       FROM dm_vendor_revisions r
+       JOIN dm_vendors v ON v.id = r.vendor_id
+      WHERE r.status = 'pending' AND v.account_id = $1`, [opts.account]);
   const byVendor = new Map(pend.rows.map((r) => [r.vendor_id, r]));
 
   const counts = await db().query<{ status: string; n: string }>(
-    "SELECT status, count(*) AS n FROM dm_vendors WHERE deleted_at IS NULL GROUP BY status");
+    `SELECT status, count(*) AS n FROM dm_vendors
+      WHERE deleted_at IS NULL AND account_id = $1 GROUP BY status`, [opts.account]);
   const out: Record<string, number> = {
     pending: 0, approved: 0, rejected: 0, inactive: 0, awaiting: 0, total: 0,
   };
@@ -373,8 +394,10 @@ export async function listVendors(opts: {
   }
   out.total = total;
   out.awaiting = Number((await db().query<{ n: string }>(
-    `SELECT count(DISTINCT vendor_id) AS n FROM dm_vendor_revisions
-      WHERE status = 'pending'`)).rows[0]?.n ?? 0);
+    `SELECT count(DISTINCT r.vendor_id) AS n FROM dm_vendor_revisions r
+       JOIN dm_vendors v ON v.id = r.vendor_id
+      WHERE r.status = 'pending' AND v.account_id = $1`,
+    [opts.account])).rows[0]?.n ?? 0);
 
   return {
     vendors: rows.map((v) => shape(v, byVendor.get(v.id) ?? null)),
@@ -382,13 +405,16 @@ export async function listVendors(opts: {
   };
 }
 
-export async function getVendor(id: string): Promise<
+export async function getVendor(id: string, account: string): Promise<
   (Vendor & { history: Revision[] }) | null
 > {
   await ensure();
   if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
+  // The account is part of the lookup, not a check after it. Another
+  // partner's vendor is not found, which is the same answer somebody
+  // gets for an ID that was never real.
   const { rows } = await db().query<DbVendor>(
-    `SELECT ${V_COLS} FROM dm_vendors WHERE id = $1`, [id]);
+    `SELECT ${V_COLS} FROM dm_vendors WHERE id = $1 AND account_id = $2`, [id, account]);
   if (!rows[0]) return null;
   const revs = await db().query<DbRev>(
     `SELECT ${R_COLS} FROM dm_vendor_revisions WHERE vendor_id = $1 ORDER BY seq DESC`,
@@ -425,6 +451,7 @@ export type ProposeResult =
  */
 export async function proposeVendor(opts: {
   id?: string;
+  account: string;
   raw: Partial<VendorFields>;
   by: string;
   note?: string;
@@ -441,12 +468,14 @@ export async function proposeVendor(opts: {
     if (id === "") {
       id = randomUUID();
       await client.query(
-        `INSERT INTO dm_vendors (id, status, created_by) VALUES ($1, 'pending', $2)`,
-        [id, opts.by]);
+        `INSERT INTO dm_vendors (id, status, created_by, account_id)
+              VALUES ($1, 'pending', $2, $3)`,
+        [id, opts.by, opts.account]);
       created = true;
     } else {
       const got = await client.query<{ deleted_at: Date | null }>(
-        "SELECT deleted_at FROM dm_vendors WHERE id = $1 FOR UPDATE", [id]);
+        `SELECT deleted_at FROM dm_vendors WHERE id = $1 AND account_id = $2
+          FOR UPDATE`, [id, opts.account]);
       if (got.rows.length === 0) {
         await client.query("ROLLBACK");
         return { ok: false, reason: "No such vendor." };
@@ -474,7 +503,7 @@ export async function proposeVendor(opts: {
         (opts.note ?? "").slice(0, 1000)]);
     await client.query("COMMIT");
 
-    const vendor = await getVendor(id);
+    const vendor = await getVendor(id, opts.account);
     return {
       ok: true, vendor: vendor!, created,
       superseded: (gone.rowCount ?? 0) > 0,
@@ -505,6 +534,7 @@ export type DecideResult =
  */
 export async function decideVendor(opts: {
   id: string;
+  account: string;
   revisionId: string;
   approve: boolean;
   by: string;
@@ -521,8 +551,11 @@ export async function decideVendor(opts: {
     await client.query("BEGIN");
     const rev = await client.query<DbRev>(
       `SELECT ${R_COLS} FROM dm_vendor_revisions
-        WHERE id = $1 AND vendor_id = $2 AND status = 'pending' FOR UPDATE`,
-      [Number(opts.revisionId), opts.id]);
+        WHERE id = $1 AND status = 'pending'
+          AND vendor_id = (SELECT id FROM dm_vendors
+                            WHERE id = $2 AND account_id = $3)
+        FOR UPDATE`,
+      [Number(opts.revisionId), opts.id, opts.account]);
     if (rev.rows.length === 0) {
       await client.query("ROLLBACK");
       return { ok: false, reason: "There is nothing waiting on that vendor." };
@@ -554,7 +587,7 @@ export async function decideVendor(opts: {
           WHERE id = $1 AND approved_at IS NULL`, [opts.id]);
     }
     await client.query("COMMIT");
-    return { ok: true, vendor: (await getVendor(opts.id))! };
+    return { ok: true, vendor: (await getVendor(opts.id, opts.account))! };
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;
@@ -565,7 +598,7 @@ export async function decideVendor(opts: {
 
 /** Soft delete, with a note, like every other removal here. */
 export async function deleteVendor(opts: {
-  id: string; note: string; by: string;
+  id: string; account: string; note: string; by: string;
 }): Promise<{ ok: boolean; reason?: string }> {
   await ensure();
   const note = opts.note.trim();
@@ -573,8 +606,8 @@ export async function deleteVendor(opts: {
   const { rowCount } = await db().query(
     `UPDATE dm_vendors
         SET deleted_at = now(), deleted_by = $2, delete_note = $3, status = 'inactive'
-      WHERE id = $1 AND deleted_at IS NULL`,
-    [opts.id, opts.by, note.slice(0, 500)]);
+      WHERE id = $1 AND account_id = $4 AND deleted_at IS NULL`,
+    [opts.id, opts.by, note.slice(0, 500), opts.account]);
   if ((rowCount ?? 0) === 0) return { ok: false, reason: "No such vendor." };
   // Nothing may be left waiting on a record nobody will look at again.
   await db().query(

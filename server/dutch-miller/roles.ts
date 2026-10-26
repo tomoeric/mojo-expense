@@ -177,8 +177,12 @@ const ensure = (): Promise<void> =>
     if (done && done.rowCount === 0) {
       await db().query(BACKFILL_ADD);
       await db().query(
+        // No conflict target on purpose. The settings table's key
+        // widened to (account_id, key) when partner accounts arrived,
+        // and naming either one breaks on a boot where the other
+        // module's schema has not been applied yet.
         `INSERT INTO dm_settings (key, value, updated_by) VALUES ($1, 'true', 'system')
-         ON CONFLICT (key) DO NOTHING`, [SPLIT_MARK]);
+         ON CONFLICT DO NOTHING`, [SPLIT_MARK]);
     }
   }));
 

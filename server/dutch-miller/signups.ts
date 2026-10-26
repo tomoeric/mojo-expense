@@ -1,7 +1,10 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { db, ensureSchema } from "../db.js";
+import { DUTCH_MILLER } from "./accounts.js";
+import { ensureAuditSchema } from "./audit.js";
 import { env } from "../env.js";
 import { RFID_RE } from "./rfid-parse.js";
+import { ensureRfidSchema } from "./rfid.js";
 
 /**
  * Member signups — a dealer enrols a customer and an RFID tag goes with them.
@@ -175,11 +178,41 @@ CREATE UNIQUE INDEX IF NOT EXISTS dm_member_signups_rfid_live
   ON dm_member_signups (rfid) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS dm_member_signups_recent
   ON dm_member_signups (submitted_at DESC);
+/*
+ * Which partner this membership belongs to.
+ *
+ * The default is what migrates the table: every row that existed
+ * before partner accounts is Dutch Miller's, and a column default
+ * says so for all of them in one statement with no script to run,
+ * nothing to order correctly and nothing that can be done twice.
+ *
+ * NOT part of any unique index here on purpose. An RFID tag is a
+ * physical sticker and there is one of each in the world, so the
+ * live-tag index stays global: two partners must never be able to
+ * issue the same number, and scoping the index per account is
+ * exactly how they would.
+ */
+ALTER TABLE dm_member_signups
+  ADD COLUMN IF NOT EXISTS account_id text NOT NULL DEFAULT '${DUTCH_MILLER}';
+CREATE INDEX IF NOT EXISTS dm_member_signups_account
+  ON dm_member_signups (account_id, submitted_at DESC);
 `;
 
 let ready: Promise<void> | null = null;
+/*
+ * The two tables this one's schema needs before it can be created.
+ *
+ * `rfid` is a foreign key to dm_rfid, and the one-time notified_at
+ * backfill reads dm_audit. On a database that already has them —
+ * every deployment that has ever run — this changes nothing. On an
+ * EMPTY one it is the difference between the app coming up and the
+ * first request failing on whichever module happened to be touched
+ * first, which is exactly what a new environment hits.
+ */
 const ensure = (): Promise<void> =>
-  (ready ??= ensureSchema().then(async () => { await db().query(SCHEMA); }));
+  (ready ??= ensureSchema()
+    .then(() => Promise.all([ensureRfidSchema(), ensureAuditSchema()]))
+    .then(async () => { await db().query(SCHEMA); }));
 
 /**
  * How we know — or do not know — that the sticker is on the glass.
@@ -497,11 +530,13 @@ const COLS = `guid, created_at, display_timezone, dlw_contract_id, deal_number,
 export const RELEASED_MARK = "[tag released]";
 
 export async function listSignups(opts: {
+  /** Whose members these are. Required — there is no "every partner" read. */
+  account: string;
   status?: "all" | "new" | "review" | "complete" | "deleted";
   search?: string;
   limit?: number;
   offset?: number;
-} = {}): Promise<{
+}): Promise<{
   rows: SignupRow[];
   total: number;
   counts: {
@@ -511,6 +546,13 @@ export async function listSignups(opts: {
   await ensure();
   const where: string[] = [];
   const args: unknown[] = [];
+  // The account comes FIRST, before any filter a caller passed, so that
+  // every branch below narrows a set that is already this partner's.
+  // There is no code path here that reads across accounts, which is the
+  // only way to be sure none appears by accident later.
+  args.push(opts.account);
+  where.push(`account_id = $${args.length}`);
+  const scope = `WHERE account_id = $1`;
   // Three states, and they do not overlap: nobody has looked yet,
   // somebody has looked but not finished, finished. Together they are
   // "all", which is why a deleted record is in none of them and in its
@@ -532,7 +574,7 @@ export async function listSignups(opts: {
        OR lower(customer_id) LIKE $${args.length}
        OR lower(rfid) LIKE $${args.length})`);
   }
-  const clause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+  const clause = `WHERE ${where.join(" AND ")}`;
   const limit = Math.min(Math.max(Number(opts.limit) || 100, 1), 500);
   const offset = Math.max(Number(opts.offset) || 0, 0);
 
@@ -549,7 +591,7 @@ export async function listSignups(opts: {
             count(*) FILTER (WHERE deleted_at IS NULL AND completed_at IS NULL
                                AND opened_at IS NOT NULL) AS looked,
             count(deleted_at) AS gone
-       FROM dm_member_signups`);
+       FROM dm_member_signups ${scope}`, [opts.account]);
 
   // `total` is the live set — what the All chip shows — so the three
   // states add up to it. Deleted is counted beside them, not inside.
@@ -564,10 +606,23 @@ export async function listSignups(opts: {
   };
 }
 
-export async function getSignup(guid: string): Promise<SignupRow | null> {
+/**
+ * One member, in one account.
+ *
+ * The account is part of the LOOKUP, not a check afterwards. A GUID is
+ * unguessable but it is also pasted into chats, quoted in emails and
+ * left in old bookmarks, and "find it, then see whether you were
+ * allowed" is the shape that leaks a name and a plate through an error
+ * message. Not found and not yours answer identically because here they
+ * are the same query.
+ */
+export async function getSignup(
+  guid: string, account: string,
+): Promise<SignupRow | null> {
   await ensure();
   const { rows } = await db().query<Db>(
-    `SELECT ${COLS} FROM dm_member_signups WHERE guid = $1`, [guid]);
+    `SELECT ${COLS} FROM dm_member_signups WHERE guid = $1 AND account_id = $2`,
+    [guid, account]);
   return rows[0] ? shape(rows[0]) : null;
 }
 
@@ -602,6 +657,8 @@ export async function createSignup(
    * some will not be. So the row says who, and the pool decides which.
    */
   opts: {
+    /** Whose member this is, and whose pool the tag comes from. */
+    account: string;
     assignAnyRfid?: boolean;
     /**
      * Whether a tag kept back for testing may be named here.
@@ -613,7 +670,7 @@ export async function createSignup(
      * whatever this says.
      */
     mayUseTestTags?: boolean;
-  } = {},
+  },
 ): Promise<CreateResult> {
   await ensure();
   const { clean, errors } = validateSignup(raw, { rfidOptional: opts.assignAnyRfid });
@@ -627,7 +684,7 @@ export async function createSignup(
 
   // A retry of a submission that already landed. Answering from here keeps
   // the claim below from running a second time against a different tag.
-  const existing = await getSignup(clean.guid);
+  const existing = await getSignup(clean.guid, opts.account);
   if (existing) return { ok: true, row: existing, alreadyExisted: true };
 
   const client = await db().connect();
@@ -647,17 +704,18 @@ export async function createSignup(
             SET status = 'used', used_at = now(), used_by = $1, used_for = $2
           WHERE number = (SELECT number FROM dm_rfid
                             WHERE status = 'active' AND deleted_at IS NULL
-                              AND NOT test_only
+                              AND NOT test_only AND account_id = $3
                             ORDER BY number LIMIT 1 FOR UPDATE SKIP LOCKED)
         RETURNING number`,
-        [by, `Member signup ${clean.guid}`])
+        [by, `Member signup ${clean.guid}`, opts.account])
       : await client.query<{ number: string }>(
         `UPDATE dm_rfid
             SET status = 'used', used_at = now(), used_by = $2, used_for = $3
           WHERE number = $1 AND status = 'active' AND deleted_at IS NULL
-            AND (NOT test_only OR $4)
+            AND account_id = $5 AND (NOT test_only OR $4)
         RETURNING number`,
-        [clean.rfid, by, `Member signup ${clean.guid}`, opts.mayUseTestTags === true]);
+        [clean.rfid, by, `Member signup ${clean.guid}`, opts.mayUseTestTags === true,
+          opts.account]);
 
     if (claim.rowCount === 0) {
       await client.query("ROLLBACK");
@@ -693,13 +751,13 @@ export async function createSignup(
          first_name, last_name, customer_phone, customer_email,
          plate_dlw, plate_state, vehicle_make, vehicle_model,
          vehicle_year, vehicle_color, rfid, sticker_attached, sticker_state,
-          sticker_confirmed_at, sticker_confirmed_by, submitted_by)
+          sticker_confirmed_at, sticker_confirmed_by, submitted_by, account_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
                NULLIF($19, ''), NULLIF($20, ''),
                NULLIF($9, ''), NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''),
                NULLIF($13, ''), NULLIF($14, ''), $15, $16, $17,
                CASE WHEN $16 THEN now() ELSE NULL END,
-               CASE WHEN $16 THEN $18 ELSE '' END, $18)
+               CASE WHEN $16 THEN $18 ELSE '' END, $18, $21)
        ON CONFLICT (guid) DO NOTHING
        RETURNING ${COLS}`,
       [clean.guid, clean.createdAt, DISPLAY_TZ,
@@ -707,13 +765,13 @@ export async function createSignup(
         clean.firstName, clean.lastName, clean.plateDlw, clean.plateState,
         clean.vehicleMake, clean.vehicleModel, clean.vehicleYear, clean.vehicleColor,
         clean.rfid, confirmed, confirmed ? "confirmed" : "pending", by,
-        clean.customerPhone, clean.customerEmail]);
+        clean.customerPhone, clean.customerEmail, opts.account]);
 
     if (ins.rowCount === 0) {
       // Two submissions of the SAME entry, overlapping. The other one won
       // and holds the tag; this one's claim must go back.
       await client.query("ROLLBACK");
-      const row = await getSignup(clean.guid);
+      const row = await getSignup(clean.guid, opts.account);
       if (row) return { ok: true, row, alreadyExisted: true };
       return { ok: false, kind: "rfid-taken", reason: "That entry was already submitted." };
     }
@@ -757,6 +815,7 @@ export type DeleteResult =
  */
 export async function deleteSignup(opts: {
   guid: string;
+  account: string;
   note: string;
   by: string;
   releaseTag?: boolean;
@@ -767,7 +826,7 @@ export async function deleteSignup(opts: {
   // only record of why a membership stopped existing.
   if (note.length < 5) return { ok: false, reason: "no-note" };
 
-  const existing = await getSignup(opts.guid);
+  const existing = await getSignup(opts.guid, opts.account);
   if (!existing) return { ok: false, reason: "not-found" };
   if (existing.deletedAt) return { ok: false, reason: "already" };
 
@@ -787,8 +846,8 @@ export async function deleteSignup(opts: {
     const { rows } = await client.query<Db>(
       `UPDATE dm_member_signups
           SET deleted_at = now(), deleted_by = $2, delete_note = $3
-        WHERE guid = $1 AND deleted_at IS NULL
-      RETURNING ${COLS}`, [opts.guid, opts.by, full.slice(0, 500)]);
+        WHERE guid = $1 AND account_id = $4 AND deleted_at IS NULL
+      RETURNING ${COLS}`, [opts.guid, opts.by, full.slice(0, 500), opts.account]);
     if (rows.length === 0) {
       await client.query("ROLLBACK");
       return { ok: false, reason: "already" };
@@ -818,12 +877,14 @@ export async function markNotified(guid: string): Promise<void> {
  * rewriting it on every view would turn a milestone into a last-seen
  * timestamp that tells nobody whether it has been dealt with.
  */
-export async function markOpened(guid: string, by: string): Promise<SignupRow | null> {
+export async function markOpened(
+  guid: string, by: string, account: string,
+): Promise<SignupRow | null> {
   await ensure();
   const { rows } = await db().query<Db>(
     `UPDATE dm_member_signups SET opened_at = now(), opened_by = $2
-      WHERE guid = $1 AND opened_at IS NULL AND deleted_at IS NULL
-    RETURNING ${COLS}`, [guid, by]);
+      WHERE guid = $1 AND account_id = $3 AND opened_at IS NULL AND deleted_at IS NULL
+    RETURNING ${COLS}`, [guid, by, account]);
   return rows[0] ? shape(rows[0]) : null;
 }
 
@@ -858,9 +919,11 @@ export type ConfirmResult =
  * confirming one now records who looked and when, rather than
  * backfilling a claim nobody made.
  */
-export async function confirmSticker(guid: string, by: string): Promise<ConfirmResult> {
+export async function confirmSticker(
+  guid: string, by: string, account: string,
+): Promise<ConfirmResult> {
   await ensure();
-  const existing = await getSignup(guid);
+  const existing = await getSignup(guid, account);
   if (!existing) return { ok: false, reason: "not-found" };
   if (existing.deletedAt) return { ok: false, reason: "deleted" };
   if (existing.customer.stickerState === "confirmed") return { ok: false, reason: "already" };
@@ -868,8 +931,9 @@ export async function confirmSticker(guid: string, by: string): Promise<ConfirmR
     `UPDATE dm_member_signups
         SET sticker_attached = true, sticker_state = 'confirmed',
             sticker_confirmed_at = now(), sticker_confirmed_by = $2
-      WHERE guid = $1 AND deleted_at IS NULL AND sticker_state <> 'confirmed'
-  RETURNING ${COLS}`, [guid, by]);
+      WHERE guid = $1 AND account_id = $3 AND deleted_at IS NULL
+        AND sticker_state <> 'confirmed'
+  RETURNING ${COLS}`, [guid, by, account]);
   if (rows.length === 0) return { ok: false, reason: "already" };
   return { ok: true, row: shape(rows[0]!) };
 }
@@ -881,7 +945,9 @@ export type CompleteResult =
     reason: "not-found" | "not-opened" | "already" | "deleted" | "sticker-unconfirmed";
   };
 
-export async function setComplete(guid: string, by: string): Promise<CompleteResult> {
+export async function setComplete(
+  guid: string, by: string, account: string,
+): Promise<CompleteResult> {
   await ensure();
   /*
    * The sticker must be CONFIRMED, not merely required somewhere.
@@ -897,14 +963,15 @@ export async function setComplete(guid: string, by: string): Promise<CompleteRes
   const { rows } = await db().query<Db>(
     `UPDATE dm_member_signups
         SET completed_at = now(), completed_by = $2
-      WHERE guid = $1 AND completed_at IS NULL AND opened_at IS NOT NULL
+      WHERE guid = $1 AND account_id = $3 AND completed_at IS NULL
+        AND opened_at IS NOT NULL
         AND deleted_at IS NULL AND sticker_state = 'confirmed'
-    RETURNING ${COLS}`, [guid, by]);
+    RETURNING ${COLS}`, [guid, by, account]);
   if (rows[0]) return { ok: true, row: shape(rows[0]) };
 
   // Nothing moved. Say which of them it was, so the page can explain
   // rather than just refuse.
-  const existing = await getSignup(guid);
+  const existing = await getSignup(guid, account);
   if (!existing) return { ok: false, reason: "not-found" };
   if (existing.deletedAt) return { ok: false, reason: "deleted" };
   if (existing.completedAt) return { ok: false, reason: "already" };

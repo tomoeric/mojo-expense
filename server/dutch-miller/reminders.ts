@@ -1,4 +1,5 @@
 import { button, escapeHtml, isMailConfigured, layout, sendMail } from "../mail.js";
+import { listAccounts } from "./accounts.js";
 import { publicOrigin } from "../origin.js";
 import { audit } from "./audit.js";
 import {
@@ -64,7 +65,18 @@ export function isDue(
 const age = (iso: string): number =>
   Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
 
-function digest(rows: SignupRow[], origin: string): { subject: string; html: string } {
+/**
+ * One digest across every partner.
+ *
+ * The reminder settings are shared, so the people on them work across
+ * partners and a separate email per account would land four messages
+ * that each say "three outstanding". Which partner a row belongs to is
+ * on the row instead — but only when there is more than one, because a
+ * column saying Dutch Miller four times over is noise.
+ */
+function digest(
+  rows: (SignupRow & { accountName: string })[], origin: string, partners: number,
+): { subject: string; html: string } {
   const oldest = rows.reduce((m, r) => Math.min(m, new Date(r.submittedAt).getTime()),
     Date.now());
   const days = Math.floor((Date.now() - oldest) / 86_400_000);
@@ -75,7 +87,8 @@ function digest(rows: SignupRow[], origin: string): { subject: string; html: str
       <td style="padding:6px 16px 6px 0;vertical-align:top;font-size:14px">
         <strong>${escapeHtml(`${r.customer.firstName} ${r.customer.lastName}`.trim())}</strong>
         <span style="display:block;color:#71717a;font-size:13px">
-          ${escapeHtml(r.customer.rfid)} · ${escapeHtml(r.dealer.dlwContractId)}</span>
+          ${escapeHtml(r.customer.rfid)} · ${escapeHtml(r.dealer.dlwContractId)}${
+  partners > 1 ? ` · ${escapeHtml(r.accountName)}` : ""}</span>
       </td>
       <td style="padding:6px 0;vertical-align:top;font-size:13px;color:#71717a;white-space:nowrap">
         ${waiting === 0 ? "today" : `${waiting} day${waiting === 1 ? "" : "s"}`}
@@ -117,8 +130,21 @@ export async function runReminders(force = false): Promise<{
   const now = wallClock();
   if (!force && !isDue(r, now)) return { sent: false, reason: "not due", outstanding: 0 };
 
-  const open = await listSignups({ status: "all", limit: 500 });
-  const rows = open.rows.filter((s) => !s.completedAt);
+  /*
+   * Every ACTIVE partner, not one.
+   *
+   * A deactivated account's queue is deliberately left out: nobody can
+   * open those records, so chasing them weekly asks for work that
+   * cannot be done.
+   */
+  const partners = (await listAccounts()).filter((a) => a.status === "active");
+  const rows: (SignupRow & { accountName: string })[] = [];
+  for (const a of partners) {
+    const open = await listSignups({ account: a.id, status: "all", limit: 500 });
+    for (const row of open.rows) {
+      if (!row.completedAt) rows.push({ ...row, accountName: a.name });
+    }
+  }
   if (rows.length === 0) {
     // Recorded even though nothing went out, so the slot is spent and
     // the next minute does not try again.
@@ -138,7 +164,7 @@ export async function runReminders(force = false): Promise<{
   // The reminder is a list, not a record, so everybody gets the same
   // one — the reviewer/notifier distinction is about who acts on a
   // single signup, and this is the standing "these are still open".
-  const { subject, html } = digest(rows, publicOrigin());
+  const { subject, html } = digest(rows, publicOrigin(), partners.length);
   const results = await Promise.allSettled(to.map((r) => sendMail(r.email, subject, html)));
   const failed = results.filter((x) => x.status === "rejected").length;
   if (!force) await noteReminderSent(now.stamp);

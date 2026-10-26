@@ -13,6 +13,7 @@
  * requests for the same tag arriving together.
  */
 import { zipSync, strToU8 } from "fflate";
+import { DUTCH_MILLER } from "../server/dutch-miller/accounts.js";
 import { parseRfidFile, readCell } from "../server/dutch-miller/rfid-parse.js";
 import {
   addRfids, deleteRfids, listRfids, rfidCounts, setRfidActive, useRfid,
@@ -84,7 +85,7 @@ try {
 
   console.log("\n3. Duplicates in the file are identified and removed");
   const first = await addRfids(
-    [mine(1), mine(2), N(1), mine(3)], [], 4, "test@example.invalid");
+    [mine(1), mine(2), N(1), mine(3)], [], 4, "test@example.invalid", DUTCH_MILLER);
   check("each number is stored once", first.added === 3, String(first.added));
   check("the repeat is reported", first.duplicatesInFile.length === 1);
   check("…with how many copies there were",
@@ -93,18 +94,18 @@ try {
   console.log("\n4. A second file that overlaps the pool");
   // Normal, not a mistake — but it must not re-add, and above all must not
   // reset anything.
-  const second = await addRfids([N(1), mine(4)], [], 2, "test@example.invalid");
+  const second = await addRfids([N(1), mine(4)], [], 2, "test@example.invalid", DUTCH_MILLER);
   check("only the new one is added", second.added === 1, String(second.added));
   check("the one already held is reported", second.alreadyHeld.length === 1);
   check("…with the state it is in",
     second.alreadyHeld[0]?.status === "active", JSON.stringify(second.alreadyHeld));
 
   console.log("\n5. Issued once, and only once");
-  const got = await useRfid(N(1), "eric@example.invalid", "Vehicle 42");
+  const got = await useRfid(N(1), "eric@example.invalid", "Vehicle 42", DUTCH_MILLER);
   check("the first claim succeeds", got.ok === true);
   check("…and records who and what for",
     got.ok && got.row.usedBy === "eric@example.invalid" && got.row.usedFor === "Vehicle 42");
-  const again = await useRfid(N(1), "paul@example.invalid", "Vehicle 43");
+  const again = await useRfid(N(1), "paul@example.invalid", "Vehicle 43", DUTCH_MILLER);
   check("the second claim is refused", again.ok === false);
   check("…saying who already has it",
     !again.ok && /already used/i.test(again.reason) && /eric@/.test(again.reason),
@@ -114,32 +115,32 @@ try {
   // The guard is inside the UPDATE, so the database picks a winner. A read
   // followed by a write would let both through.
   const race = await Promise.all([
-    useRfid(N(2), "a@example.invalid", "A"),
-    useRfid(N(2), "b@example.invalid", "B"),
+    useRfid(N(2), "a@example.invalid", "A", DUTCH_MILLER),
+    useRfid(N(2), "b@example.invalid", "B", DUTCH_MILLER),
   ]);
   check("exactly one wins", race.filter((r) => r.ok).length === 1,
     JSON.stringify(race.map((r) => r.ok)));
 
   console.log("\n7. Holding a number back, and putting it in play");
   check("an unused number can be made inactive",
-    (await setRfidActive([N(3)], false)).changed === 1);
-  check("…and active again", (await setRfidActive([N(3)], true)).changed === 1);
+    (await setRfidActive([N(3)], false, DUTCH_MILLER)).changed === 1);
+  check("…and active again", (await setRfidActive([N(3)], true, DUTCH_MILLER)).changed === 1);
   // The rule the whole feature rests on. Reactivating a used tag would put
   // a number already on a vehicle back into the pool.
-  const reactivate = await setRfidActive([N(1)], true);
+  const reactivate = await setRfidActive([N(1)], true, DUTCH_MILLER);
   check("a USED number cannot be made active", reactivate.changed === 0);
   check("…and the refusal is counted, not silent", reactivate.refusedUsed === 1);
-  const stillUsed = await listRfids({ search: N(1), limit: 1 });
+  const stillUsed = await listRfids({ account: DUTCH_MILLER,  search: N(1), limit: 1 });
   check("…so it is still used", stillUsed.rows[0]?.status === "used");
 
   console.log("\n8. Counts and filtering");
-  const counts = await rfidCounts();
+  const counts = await rfidCounts(DUTCH_MILLER);
   check("used is counted apart from active", counts.used >= 2, JSON.stringify(counts));
-  const onlyUsed = await listRfids({ status: "used", limit: 500 });
+  const onlyUsed = await listRfids({ account: DUTCH_MILLER,  status: "used", limit: 500 });
   check("filtering by status returns only those",
     onlyUsed.rows.every((r) => r.status === "used"));
   check("a number not in the pool cannot be issued",
-    !(await useRfid("99999+999999", "x@example.invalid", "")).ok);
+    !(await useRfid("99999+999999", "x@example.invalid", "", DUTCH_MILLER)).ok);
   console.log("\n9. A file is all or nothing");
   // The route refuses the whole file when any cell is an unreadable
   // attempt at a number, so this checks the parser gives it the two
@@ -170,46 +171,46 @@ try {
    */
   console.log("\n10. Removing a number keeps the row");
   const doomed = mine(40);
-  await addRfids([doomed], [], 1, "boss@example.invalid");
-  const noNote = await deleteRfids({ numbers: [doomed], note: "x", by: "boss@example.invalid" });
+  await addRfids([doomed], [], 1, "boss@example.invalid", DUTCH_MILLER);
+  const noNote = await deleteRfids({ account: DUTCH_MILLER,  numbers: [doomed], note: "x", by: "boss@example.invalid" });
   check("a note is required", "error" in noNote);
-  const went = await deleteRfids({
+  const went = await deleteRfids({ account: DUTCH_MILLER, 
     numbers: [doomed], note: "Damaged in the October batch.", by: "boss@example.invalid",
   });
   check("it removes one", !("error" in went) && went.deleted === 1);
-  const marked = (await listRfids({ status: "deleted", search: doomed })).rows
+  const marked = (await listRfids({ account: DUTCH_MILLER,  status: "deleted", search: doomed })).rows
     .find((r) => r.number === doomed);
   check("…and the row is STILL THERE", Boolean(marked));
   check("…with who and why",
     marked?.deletedBy === "boss@example.invalid"
     && (marked?.deleteNote ?? "").startsWith("Damaged"));
   check("removing it twice changes nothing",
-    !("error" in (await deleteRfids({
+    !("error" in (await deleteRfids({ account: DUTCH_MILLER, 
       numbers: [doomed], note: "again, for the record", by: "boss@example.invalid",
     })) ) );
 
   console.log("\n11. A removed number is out of the pool, and stays out");
   check("it is not in the active list",
-    !(await listRfids({ status: "active", search: doomed })).rows
+    !(await listRfids({ account: DUTCH_MILLER,  status: "active", search: doomed })).rows
       .some((r) => r.number === doomed));
-  check("…nor in All", !(await listRfids({ status: "all", search: doomed })).rows
+  check("…nor in All", !(await listRfids({ account: DUTCH_MILLER,  status: "all", search: doomed })).rows
     .some((r) => r.number === doomed));
   check("…and cannot be issued",
-    !(await useRfid(doomed, "x@example.invalid", "")).ok);
+    !(await useRfid(doomed, "x@example.invalid", "", DUTCH_MILLER)).ok);
   check("…saying it was removed",
     /removed from the pool/i.test(
-      ((await useRfid(doomed, "x@example.invalid", "")) as { reason?: string }).reason ?? ""));
+      ((await useRfid(doomed, "x@example.invalid", "", DUTCH_MILLER)) as { reason?: string }).reason ?? ""));
   // The one that would be easy to get wrong: uploading the same file
   // again must not resurrect it.
-  const reupload = await addRfids([doomed], [], 1, "boss@example.invalid");
+  const reupload = await addRfids([doomed], [], 1, "boss@example.invalid", DUTCH_MILLER);
   check("re-uploading the file does not bring it back", reupload.added === 0);
   check("…and says so", reupload.alreadyHeld.some((h) => h.number === doomed && h.deleted));
   check("…it is still deleted",
-    !(await listRfids({ status: "active", search: doomed })).rows
+    !(await listRfids({ account: DUTCH_MILLER,  status: "active", search: doomed })).rows
       .some((r) => r.number === doomed));
   check("holding it back does not revive it either",
-    (await setRfidActive([doomed], true)).changed === 0);
-  const tally = await rfidCounts();
+    (await setRfidActive([doomed], true, DUTCH_MILLER)).changed === 0);
+  const tally = await rfidCounts(DUTCH_MILLER);
   check("deleted numbers are counted apart from the pool", tally.deleted >= 1,
     JSON.stringify(tally));
 

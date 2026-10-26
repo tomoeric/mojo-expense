@@ -19,7 +19,6 @@ export function UserMenu({
   user,
   isAdmin,
   product = "emburse",
-  dmAdmin = false,
   dmDestinations = [],
   onDmGo,
   onManagerQueue,
@@ -34,7 +33,6 @@ export function UserMenu({
    */
   product?: AppKey;
   /** Administers Dutch Miller — a separate question from Emburse's `isAdmin`. */
-  dmAdmin?: boolean;
   /**
    * The administrative pages this person may open, in menu order.
    *
@@ -127,7 +125,12 @@ export function UserMenu({
                 The list comes from the server's answer about this
                 person, so it never offers a door into a 403, and every
                 route behind it still refuses on its own. */}
-            {product === "dutch-miller" && dmAdmin && onDmGo
+            {/* Not gated on administering any more. The list itself
+                is already filtered to what this person holds, and
+                Vendors is granted by role rather than by level — so
+                a second check here would hide it from exactly the
+                people it was granted to. */}
+            {product === "dutch-miller" && onDmGo
               && dmDestinations.map((d) => (
                 <button
                   key={d.key}

@@ -52,6 +52,12 @@ import {
   isMailConfigured, layout, mailAppIsSeparate, mailFrom, mailProblem, sendMail,
 } from "../mail.js";
 import { forgetEpoch } from "../auth/index.js";
+import {
+  DUTCH_MILLER, PLATFORM_NAME, RESERVED_SLUGS, TEMPLATE_VERSION, type Account,
+  accountLine, accountsFor, assignedAccounts, createAccount, forgetAccountAccess,
+  holdersOf, listAccounts, renameAccount, setAccountStatus,
+  setAssignedAccounts, slugFrom, slugProblem,
+} from "./accounts.js";
 
 /**
  * Dutch Miller — the second app on this deployment.
@@ -67,12 +73,106 @@ import { forgetEpoch } from "../auth/index.js";
  */
 export const dutchMillerRouter: IRouter = Router();
 
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace Express {
+    interface Request {
+      /** The partner account this request is acting in, once resolved. */
+      account?: Account;
+      /** Every account the person may open, in the order they are offered. */
+      accountScope?: Account[];
+    }
+  }
+}
+
 /**
- * The partner account, open or shut.
+ * Which partner account this request is in, and may it be.
  *
- * Mounted ahead of every route in this file, so switching it off is
- * one decision rather than a guard somebody has to remember on each
- * new endpoint. It refuses the EMAILED-LINK door only: MOJO staff
+ * ONE middleware ahead of every route in this file, so a route added
+ * later is scoped by being here rather than by somebody remembering.
+ * That is the same reasoning as the app guard above it, and it matters
+ * more: forgetting to check the app shows one product's page to the
+ * other product's user, and forgetting to check the account shows one
+ * partner's members to another partner.
+ *
+ * The account is named by a header the shell sets from the path. A
+ * header rather than a path segment because every one of these routes
+ * is already mounted under /api/dutch-miller and re-rooting them would
+ * break every link, bookmark and emailed URL in existence. It is NOT a
+ * grant: it is read only to choose between accounts the person already
+ * holds, exactly like the app cookie, and one naming an account they do
+ * not hold is refused outright rather than ignored — because unlike the
+ * app cookie, this one is how somebody would go looking.
+ *
+ * Judged on the REAL person. A view shows somebody else's pages; it has
+ * never been a way to reach data the viewer could not reach themselves.
+ */
+dutchMillerRouter.use(async (req: Request, res: Response, next: NextFunction) => {
+  const real = req.viewingAs?.real ?? req.user;
+  const email = real?.email ?? "";
+  const access = await dmAccessFor(email).catch(() => null);
+  const row = await getDmUser(email).catch(() => null);
+  const scope = await accountsFor({
+    email,
+    isAccountAdmin: isSuperEmail(email),
+    allAccounts: row?.allAccounts === true,
+  }).catch(() => [] as Account[]);
+  req.accountScope = scope;
+
+  const asked = String(
+    req.get("x-partner-account") ?? req.query.account ?? "",
+  ).trim().toLowerCase();
+
+  if (asked) {
+    const want = scope.find((a) => a.slug === asked || a.id === asked);
+    if (!want) {
+      // Not "no such account" and not "not yours" — the same answer for
+      // both. Which accounts exist is not this person's business, and an
+      // error that distinguishes them is a way to enumerate partners.
+      denied(req, `account ${asked}`);
+      res.status(403).json({ error: "That partner account is not available to you." });
+      return;
+    }
+    req.account = want;
+  } else {
+    // No account named: the one they hold, or the first of several.
+    // An active one in preference to a dormant one, so somebody with
+    // a deactivated partner and a live one lands in the live one.
+    req.account = scope.find((a) => a.status === "active") ?? scope[0];
+  }
+
+  /*
+   * A deactivated account is closed to everybody but the people who
+   * can reopen it.
+   *
+   * Not the same switch as the partner-access one below, and the
+   * difference is the point. Partner access pauses the emailed-link
+   * door and leaves MOJO working inside the account; deactivation
+   * closes the account itself. Both keep every record.
+   */
+  if (req.account && req.account.status === "inactive" && !isSuperEmail(email)) {
+    void audit({
+      action: "access.denied", app: "dutch-miller", accountId: req.account.id,
+      subject: email, detail: "account is deactivated", ...requestMeta(req),
+    });
+    res.status(403).json({
+      error: `${req.account.name} has been deactivated.`
+        + (req.account.deactivateReason ? ` ${req.account.deactivateReason}` : "")
+        + " Contact MOJO if you think this is wrong.",
+      accountOff: true,
+    });
+    return;
+  }
+
+  void access;
+  next();
+});
+
+/**
+ * The partner account's own door, open or shut.
+ *
+ * Per account now, so pausing one partner's dealers says nothing
+ * about another's. It refuses the EMAILED-LINK door only: MOJO staff
  * keep working, because they are the people who would switch it
  * back on and locking them out to lock out a partner turns a pause
  * into an outage.
@@ -87,21 +187,58 @@ export const dutchMillerRouter: IRouter = Router();
 dutchMillerRouter.use(async (req: Request, res: Response, next: NextFunction) => {
   const via = req.viewingAs?.real.via ?? req.user?.via ?? "microsoft";
   if (via !== "link") { next(); return; }
-  const state = await getAccountState().catch(() => ({ active: true, reason: "" }));
+  const account = req.account;
+  if (!account) { next(); return; }
+  const state = await getAccountState(account.id)
+    .catch(() => ({ active: true, reason: "" }));
   if (state.active) { next(); return; }
   void audit({
-    action: "access.denied", app: "dutch-miller",
+    action: "access.denied", app: "dutch-miller", accountId: account.id,
     subject: req.user?.email ?? "",
     detail: "partner access is switched off",
     ...requestMeta(req),
   });
   res.status(403).json({
-    error: "Dutch Miller partner access is switched off."
+    error: `${account.name} partner access is switched off.`
       + (state.reason ? ` ${state.reason}` : "")
       + " Contact MOJO if you think this is wrong.",
     accountOff: true,
   });
 });
+
+/**
+ * The account this request is in, or a 403 that says why there is none.
+ *
+ * Everything that touches a member, a tag or a vendor goes through
+ * here. Somebody signed in but assigned to no partner is a real and
+ * ordinary state — a new MOJO starter before anybody gives them an
+ * account — and it reads better as "you are not in any partner
+ * account" than as an empty list of members that looks like a bug.
+ */
+/**
+ * Which accounts' history this reader may see, or null for all of them.
+ *
+ * An account administrator reads the whole platform, which is what the
+ * role is. Everybody else reads the partners they hold plus the
+ * platform-wide events — sign-ins, refusals, user changes — which
+ * belong to nobody's account and are the half of a security page that
+ * is actually about security.
+ */
+function historyScope(req: Request): string[] | null {
+  const email = req.viewingAs?.real.email ?? req.user?.email ?? "";
+  if (isSuperEmail(email)) return null;
+  return (req.accountScope ?? []).map((a) => a.id);
+}
+
+function accountOf(req: Request, res: Response): Account | null {
+  if (req.account) return req.account;
+  denied(req, "no partner account");
+  res.status(403).json({
+    error: "You are not assigned to a partner account. Ask an account administrator.",
+    noAccount: true,
+  });
+  return null;
+}
 
 /**
  * The live stream every open page listens to.
@@ -145,7 +282,32 @@ dutchMillerRouter.get("/me", async (req: Request, res: Response) => {
     // Inside the glass or outside it. Served with the rest of the
     // shell's first read so the instructions page and the signup
     // form never render one wording and then swap to the other.
-    stickerPlacement: (await getPlacement()).placement,
+    stickerPlacement: req.account
+      ? (await getPlacement(req.account.id)).placement
+      : "inside",
+    /*
+     * The platform, and the partner inside it.
+     *
+     * Served with the rest of the shell's first read so the header
+     * never renders one partner's name and then swaps. `accounts` is
+     * what the switcher offers and is the REAL person's — a view
+     * changes whose pages are on screen, never which partners the
+     * viewer holds.
+     */
+    platform: PLATFORM_NAME,
+    account: req.account
+      ? {
+        id: req.account.id, slug: req.account.slug, name: req.account.name,
+        affiliation: req.account.affiliation, line: accountLine(req.account),
+        status: req.account.status,
+      }
+      : null,
+    accounts: (req.accountScope ?? []).map((a) => ({
+      id: a.id, slug: a.slug, name: a.name, affiliation: a.affiliation,
+      line: accountLine(a), status: a.status,
+    })),
+    /** Creating and deactivating partners. The pinned list, nobody else. */
+    isAccountAdmin: isSuperEmail(req.viewingAs?.real.email ?? real?.email ?? ""),
   });
 });
 
@@ -268,12 +430,17 @@ const actor = (req: Request): string => req.viewingAs?.real.email ?? req.user?.e
  * than the others, or quietly drop the real actor.
  */
 const who = (req: Request): {
-  app: string; actor: string; actorReal: string; ip: string; userAgent: string;
-  path: string; forwarded: string;
+  app: string; accountId: string; actor: string; actorReal: string; ip: string;
+  userAgent: string; path: string; forwarded: string;
 } => ({
-  // Everything written from this file is Dutch Miller's. The other
-  // product's security log does not carry it, and vice versa.
+  // Everything written from this file is the partner platform's. The
+  // other product's security log does not carry it, and vice versa.
   app: "dutch-miller",
+  // Which partner it happened in, when the request resolved one. Taken
+  // from here rather than passed by each caller, for the same reason
+  // the IP is: a route added later records as much as the others
+  // without anybody remembering to make it.
+  accountId: req.account?.id ?? "",
   actor: req.user?.email ?? "",
   actorReal: req.viewingAs?.real.email ?? req.user?.email ?? "",
   ...requestMeta(req),
@@ -286,13 +453,39 @@ const denied = (req: Request, why: string): void => {
 };
 
 dutchMillerRouter.get("/users", requireDmAdmin, async (req: Request, res: Response) => {
-  const [users, roles] = await Promise.all([listDmUsers(), listRoles()]);
+  const [users, roles, accounts] = await Promise.all([
+    listDmUsers(), listRoles(), listAccounts(),
+  ]);
   const byKey = new Map(roles.map((r) => [r.key, r.name]));
+  /*
+   * Which partners each person holds, in one query rather than one
+   * per row. The list is small, but the shape matters more than the
+   * cost: a per-row read here is a page that gets slower every time
+   * somebody is added, which is the one direction it will only ever go.
+   */
+  const scope = new Map<string, string[]>();
+  for (const u of users) scope.set(u.email, []);
+  for (const a of accounts) {
+    for (const email of await holdersOf(a.id)) {
+      if (scope.has(email)) scope.get(email)!.push(a.id);
+    }
+  }
   res.json({
     // The role NAME is attached here rather than in the row shape: the
     // key is what anything is decided on, and a name read off a stale
     // copy is how a renamed role starts showing two different labels.
-    users: users.map((u) => ({ ...u, roleName: byKey.get(u.roleKey) ?? u.roleKey })),
+    users: users.map((u) => ({
+      ...u,
+      roleName: byKey.get(u.roleKey) ?? u.roleKey,
+      // Every account for somebody marked all-accounts, so the row
+      // reads as what they actually hold rather than as the empty
+      // assignment list underneath the mark.
+      accounts: u.allAccounts ? accounts.map((a) => a.id) : (scope.get(u.email) ?? []),
+    })),
+    accounts: accounts.map((a) => ({
+      id: a.id, slug: a.slug, name: a.name, affiliation: a.affiliation,
+      line: accountLine(a), status: a.status,
+    })),
     roles,
     allPages: DM_PAGES,
     allGrants: DM_GRANTS,
@@ -339,11 +532,27 @@ dutchMillerRouter.get("/people", requireDmAdmin, async (req: Request, res: Respo
   const users = (await listDmUsers()).filter((u) => iAmSuper || !isSuperEmail(u.email));
   const configured = new Map(users.map((u) => [u.email, u]));
 
+  // Which partners each person holds, so the list can say so without
+  // a read per row. Explicit assignments only — somebody marked
+  // all-accounts holds every one of them through the mark.
+  const partners = await listAccounts();
+  const scope = new Map<string, string[]>();
+  for (const a of partners) {
+    for (const email of await holdersOf(a.id)) {
+      scope.set(email, [...(scope.get(email) ?? []), a.id]);
+    }
+  }
+  const holds = (u: (typeof users)[number] | null): string[] =>
+    !u ? [] : u.allAccounts ? partners.map((a) => a.id) : (scope.get(u.email) ?? []);
+
   type Row = {
     email: string; name: string; business: string | null;
     source: "microsoft" | "invited";
     pinnedSuper: boolean;
     user: (typeof users)[number] | null;
+    /** Partner ids this person may open. Every one for a pinned admin. */
+    accounts: string[];
+    allAccounts: boolean;
   };
   const rows = new Map<string, Row>();
   const add = (r: Row) => { if (!rows.has(r.email)) rows.set(r.email, r); };
@@ -355,6 +564,11 @@ dutchMillerRouter.get("/people", requireDmAdmin, async (req: Request, res: Respo
     add({
       email, name: email, business: null, source: "microsoft",
       pinnedSuper: isSuperEmail(email), user: configured.get(email) ?? null,
+      accounts: isSuperEmail(email)
+        ? partners.map((a) => a.id)
+        : holds(configured.get(email) ?? null),
+      allAccounts: isSuperEmail(email)
+        || configured.get(email)?.allAccounts === true,
     });
   }
   for (const u of users) {
@@ -365,11 +579,18 @@ dutchMillerRouter.get("/people", requireDmAdmin, async (req: Request, res: Respo
       source: u.authMethod === "link" ? "invited" : "microsoft",
       pinnedSuper: isSuperEmail(u.email),
       user: u,
+      accounts: isSuperEmail(u.email) ? partners.map((a) => a.id) : holds(u),
+      allAccounts: isSuperEmail(u.email) || u.allAccounts,
     });
   }
 
   res.json({
     people: [...rows.values()].sort((a, b) => a.name.localeCompare(b.name)),
+    accounts: partners.map((a) => ({
+      id: a.id, name: a.name, affiliation: a.affiliation,
+      line: accountLine(a), status: a.status,
+    })),
+    iAmAccountAdmin: iAmSuper,
     roles: await listRoles(),
     mailConfigured: isMailConfigured(),
     mailFrom: mailFrom(),
@@ -609,6 +830,10 @@ dutchMillerRouter.delete("/users/:email", requireDmAdmin, async (req: Request, r
   const email = String(req.params.email ?? "").toLowerCase();
   const out = await removeDmUser(email, await roleOf(req));
   if (!out.ok) { res.status(409).json({ error: out.reason }); return; }
+  // Their partner assignments go with them. A row left behind would
+  // silently re-grant every one of them the day somebody with the
+  // same address is invited back.
+  await forgetAccountAccess(email);
   forgetEpoch(email);
   await audit({ action: "account.removed", subject: email, actor: actor(req) });
   res.json({ users: await listDmUsers() });
@@ -734,7 +959,9 @@ dutchMillerRouter.post("/settings/notifications/sample", requireDmAdmin,
       res.status(400).json({ error: `Email is not configured. ${mailProblem()}` });
       return;
     }
-    const recent = (await listSignups({ limit: 1 })).rows[0];
+    const recent = req.account
+      ? (await listSignups({ account: req.account.id, limit: 1 })).rows[0]
+      : undefined;
     const sample: SignupRow = recent ?? {
       guid: "00000000-0000-4000-8000-000000000000",
       createdAt: new Date().toISOString(),
@@ -816,7 +1043,9 @@ dutchMillerRouter.post("/mail-test", requireDmAdmin, async (req: Request, res: R
 dutchMillerRouter.get("/security", requireDmAdmin, async (req: Request, res: Response) => {
   const days = Number(req.query.days ?? 30);
   const [events, summary] = await Promise.all([
-    listSecurityLog({ days, limit: Number(req.query.limit ?? 300) }),
+    listSecurityLog({
+      days, limit: Number(req.query.limit ?? 300), accounts: historyScope(req),
+    }),
     securitySummary(days),
   ]);
   res.json({ events, ...summary, days, lockout: LOCKOUT });
@@ -890,6 +1119,7 @@ dutchMillerRouter.get("/event-log", requireDmAdmin, async (req: Request, res: Re
       days: Number(q.days ?? 90),
       limit: Number(q.limit ?? 200),
       offset: Number(q.offset ?? 0),
+      accounts: historyScope(req),
     })),
     // So the filter dropdowns are built from the catalogue rather than
     // from a second copy in the UI that can drift from it.
@@ -914,6 +1144,7 @@ dutchMillerRouter.get("/audit", requireDmAdmin, async (req: Request, res: Respon
       subject: String(req.query.subject ?? ""),
       resource: String(req.query.resource ?? ""),
       limit: Number(req.query.limit ?? 200),
+      accounts: historyScope(req),
     }),
   });
 });
@@ -1108,15 +1339,18 @@ dutchMillerRouter.post(
         return;
       }
 
+      const account = accountOf(req, res);
+      if (!account) return;
       const result = await addRfids(
-        parsed.numbers, parsed.rejected, parsed.cells, req.user?.email ?? "");
+        parsed.numbers, parsed.rejected, parsed.cells, req.user?.email ?? "",
+        account.id);
       void audit({
         action: "rfid.uploaded", ...who(req),
         detail: `${result.added} added from ${parsed.numbers.length} readable `
           + `of ${parsed.cells} cells`,
       });
       emitChange("rfid");
-      res.json({ ...result, counts: await rfidCounts() });
+      res.json({ ...result, counts: await rfidCounts(account.id) });
     } catch (err) {
       res.status(400).json({
         error: err instanceof Error ? err.message : String(err),
@@ -1145,16 +1379,19 @@ dutchMillerRouter.get("/rfid/format", requirePage("rfid-review"),
   });
 
 dutchMillerRouter.get("/rfid", requirePage("rfid-review"), async (req: Request, res: Response) => {
+  const account = accountOf(req, res);
+  if (!account) return;
   const status = String(req.query.status ?? "all");
   res.json({
     ...(await listRfids({
+      account: account.id,
       status: status === "active" || status === "inactive" || status === "used"
         || status === "deleted" || status === "test" ? status : "all",
       search: String(req.query.search ?? ""),
       limit: Number(req.query.limit ?? 100),
       offset: Number(req.query.offset ?? 0),
     })),
-    counts: await rfidCounts(),
+    counts: await rfidCounts(account.id),
     // What THIS app's owner can do — the viewed person inside a view.
     // The routes below decide again, on the real person.
     canDelete: (await shownFor(req)).deletesRfid,
@@ -1180,13 +1417,15 @@ dutchMillerRouter.post(
     const body = (req.body ?? {}) as { numbers?: unknown; testOnly?: unknown };
     const numbers = Array.isArray(body.numbers) ? body.numbers.map(String) : [];
     const on = body.testOnly === true;
-    const out = await setRfidTestOnly(numbers, on);
+    const account = accountOf(req, res);
+    if (!account) return;
+    const out = await setRfidTestOnly(numbers, on, account.id);
     await audit({
       action: "rfid.held", ...who(req),
       detail: `${out.changed} ${on ? "kept back for testing" : "released from testing"}`,
     });
     emitChange("rfid");
-    res.json({ ...out, counts: await rfidCounts() });
+    res.json({ ...out, counts: await rfidCounts(account.id) });
   },
 );
 
@@ -1207,8 +1446,10 @@ dutchMillerRouter.post(
   async (req: Request, res: Response) => {
     const body = (req.body ?? {}) as { numbers?: unknown; note?: unknown };
     const numbers = Array.isArray(body.numbers) ? body.numbers.map(String) : [];
+    const account = accountOf(req, res);
+    if (!account) return;
     const out = await deleteRfids({
-      numbers, note: String(body.note ?? ""), by: actor(req),
+      numbers, note: String(body.note ?? ""), by: actor(req), account: account.id,
     });
     if ("error" in out) { res.status(400).json({ error: out.error }); return; }
     await audit({
@@ -1217,7 +1458,7 @@ dutchMillerRouter.post(
       ...who(req),
     });
     emitChange("rfid");
-    res.json({ ...out, counts: await rfidCounts() });
+    res.json({ ...out, counts: await rfidCounts(account.id) });
   },
 );
 
@@ -1225,10 +1466,13 @@ dutchMillerRouter.post(
 dutchMillerRouter.post("/rfid/use", requirePage("rfid-review"), requireRfidWrite,
   async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as { number?: unknown; usedFor?: unknown };
+  const account = accountOf(req, res);
+  if (!account) return;
   const out = await useRfid(
-    String(body.number ?? ""), req.user?.email ?? "", String(body.usedFor ?? ""));
+    String(body.number ?? ""), req.user?.email ?? "", String(body.usedFor ?? ""),
+    account.id);
   if (!out.ok) { res.status(409).json({ error: out.reason }); return; }
-  res.json({ row: out.row, counts: await rfidCounts() });
+  res.json({ row: out.row, counts: await rfidCounts(account.id) });
 });
 
 /** Hold back, or put back in play. Never a used one. */
@@ -1236,19 +1480,225 @@ dutchMillerRouter.post("/rfid/active", requirePage("rfid-review"), requireRfidWr
   async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as { numbers?: unknown; active?: unknown };
   const numbers = Array.isArray(body.numbers) ? body.numbers.map(String) : [];
-  const out = await setRfidActive(numbers, body.active !== false);
+  const account = accountOf(req, res);
+  if (!account) return;
+  const out = await setRfidActive(numbers, body.active !== false, account.id);
   void audit({
     action: "rfid.held", ...who(req),
     detail: `${out.changed} ${body.active !== false ? "released into" : "held back from"} `
       + "the pool",
   });
   emitChange("rfid");
-  res.json({ ...out, counts: await rfidCounts() });
+  res.json({ ...out, counts: await rfidCounts(account.id) });
 });
 
 /* ------------------------------------------------------------------ *
  * Member signups
  * ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ *
+ * Partner accounts
+ * ------------------------------------------------------------------ */
+
+/**
+ * Every partner this person may open.
+ *
+ * The switcher's list, and the account administrator's management
+ * view, from one read — they differ in what is in the list rather
+ * than in what the list is. An administrator holding one partner
+ * gets one row back and no create button; the pinned account
+ * administrator gets every partner including the deactivated ones,
+ * which are the whole reason a management view exists.
+ *
+ * Counts are attached for an account administrator only, because
+ * they are the one person who needs to compare partners and they
+ * cost a query each. Nobody else is shown another partner's size.
+ */
+dutchMillerRouter.get("/accounts", async (req: Request, res: Response) => {
+  const email = req.viewingAs?.real.email ?? req.user?.email ?? "";
+  const isAccountAdmin = isSuperEmail(email);
+  const mine = req.accountScope ?? [];
+  const rows = await Promise.all(mine.map(async (a) => ({
+    id: a.id,
+    slug: a.slug,
+    name: a.name,
+    affiliation: a.affiliation,
+    line: accountLine(a),
+    status: a.status,
+    templateVersion: a.templateVersion,
+    createdAt: a.createdAt,
+    createdBy: a.createdBy,
+    deactivatedAt: a.deactivatedAt,
+    deactivatedBy: a.deactivatedBy,
+    deactivateReason: a.deactivateReason,
+    counts: isAccountAdmin
+      ? {
+        members: (await listSignups({ account: a.id, limit: 1 })).counts.total,
+        tags: (await rfidCounts(a.id)).total,
+        vendors: (await listVendors({ account: a.id, status: "all" })).counts.total,
+      }
+      : null,
+  })));
+  res.json({
+    platform: PLATFORM_NAME,
+    accounts: rows,
+    current: req.account?.id ?? null,
+    isAccountAdmin,
+    templateVersion: TEMPLATE_VERSION,
+    /** So the create form can refuse a reserved path before submitting. */
+    reserved: isAccountAdmin ? RESERVED_SLUGS : [],
+  });
+});
+
+/**
+ * Provision a partner.
+ *
+ * A NAME is the whole requirement; the path is suggested from it and
+ * can be overridden. Nothing else is invented — no reviewers, no
+ * stock, no integrations — because an account that claims a reviewer
+ * it does not have is worse than one that plainly has none.
+ *
+ * Idempotent on the path, so a double-click or a retried request
+ * returns the account that is already there rather than a twin.
+ */
+dutchMillerRouter.post("/accounts", requireSuperTo("create a partner account"),
+  async (req: Request, res: Response) => {
+    const b = (req.body ?? {}) as { name?: unknown; slug?: unknown; affiliation?: unknown };
+    const out = await createAccount({
+      name: String(b.name ?? ""),
+      slug: b.slug === undefined ? undefined : String(b.slug),
+      affiliation: String(b.affiliation ?? ""),
+    }, actor(req));
+    if (!out.ok) { res.status(400).json({ error: out.problem }); return; }
+    if (out.created) {
+      await audit({
+        action: "partner.created", ...who(req), accountId: out.account.id,
+        subject: out.account.slug,
+        detail: `partner account created — ${accountLine(out.account)}`
+          + ` · template v${out.account.templateVersion}`,
+      });
+    }
+    res.json({ account: out.account, created: out.created });
+  });
+
+/** Suggest a path from a name, so the form can show one before saving. */
+dutchMillerRouter.get("/accounts/suggest", requireSuperTo("create a partner account"),
+  (req: Request, res: Response) => {
+    const slug = slugFrom(String(req.query.name ?? ""));
+    res.json({ slug, problem: slug ? slugProblem(slug) : null });
+  });
+
+/** Rename, or set the wash it runs under. The id and the path do not move. */
+dutchMillerRouter.post("/accounts/:id", requireSuperTo("change a partner account"),
+  async (req: Request, res: Response) => {
+    const b = (req.body ?? {}) as { name?: unknown; affiliation?: unknown };
+    const out = await renameAccount(String(req.params.id ?? ""), {
+      name: b.name === undefined ? undefined : String(b.name),
+      affiliation: b.affiliation === undefined ? undefined : String(b.affiliation),
+    }, actor(req));
+    if ("problem" in out) { res.status(400).json({ error: out.problem }); return; }
+    await audit({
+      action: "partner.updated", ...who(req), accountId: out.id, subject: out.slug,
+      detail: `partner account renamed — ${accountLine(out)}`,
+    });
+    res.json({ account: out });
+  });
+
+/**
+ * Deactivate a partner, or bring one back.
+ *
+ * Keeps everything. Records, tags, invitations, roles and history
+ * stay exactly where they are; what stops is operational access,
+ * refused by the middleware above so a deep link or a stale tab
+ * cannot walk past it. Account administrators keep the management
+ * view, which is the point of keeping the account at all.
+ *
+ * NOT the partner-access switch. That one pauses the emailed-link
+ * door and leaves MOJO working inside the account.
+ */
+dutchMillerRouter.post("/accounts/:id/status",
+  requireSuperTo("deactivate a partner account"),
+  async (req: Request, res: Response) => {
+    const b = (req.body ?? {}) as { active?: unknown; reason?: unknown };
+    const want = b.active === true ? "active" : "inactive";
+    const out = await setAccountStatus(
+      String(req.params.id ?? ""), want, actor(req), String(b.reason ?? ""));
+    if ("problem" in out) { res.status(400).json({ error: out.problem }); return; }
+    await audit({
+      action: out.status === "active" ? "partner.reactivated" : "partner.deactivated",
+      ...who(req), accountId: out.id, subject: out.slug,
+      detail: out.status === "active"
+        ? `partner account ${out.name} reactivated`
+        : `partner account ${out.name} DEACTIVATED — ${out.deactivateReason}`,
+    });
+    // Every open page in that account is about to be refused.
+    emitChange("signups");
+    res.json({ account: out });
+  });
+
+/**
+ * Which partners somebody may open.
+ *
+ * The account administrator's alone, and for the same reason roles
+ * are: scope is a grant, so an administrator who could widen it
+ * could widen their own. Whole-list rather than add and remove,
+ * because the form shows every account with a tick beside some of
+ * them and reconciling that into two streams of calls is how a
+ * half-applied change happens.
+ */
+dutchMillerRouter.post("/users/:email/accounts",
+  requireSuperTo("change which partners somebody can open"),
+  async (req: Request, res: Response) => {
+    const b = (req.body ?? {}) as { accounts?: unknown; allAccounts?: unknown };
+    const target = String(req.params.email ?? "").trim().toLowerCase();
+    if (isSuperEmail(target)) {
+      res.status(400).json({
+        error: "An account administrator already holds every partner account.",
+      });
+      return;
+    }
+    const row = await getDmUser(target);
+    if (!row) { res.status(404).json({ error: "No such person." }); return; }
+    const ids = Array.isArray(b.accounts) ? b.accounts.map(String) : [];
+    const all = b.allAccounts === true;
+    try {
+      await saveDmUser({
+        email: target, roleKey: row.roleKey, by: actor(req),
+        byRole: await roleOf(req), allAccounts: all,
+      });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+      return;
+    }
+    const kept = await setAssignedAccounts(target, ids, actor(req));
+    const names = (await listAccounts())
+      .filter((a) => kept.includes(a.id)).map((a) => a.name);
+    await audit({
+      action: "partner.scope", ...who(req), subject: target,
+      detail: all
+        ? "given EVERY partner account, current and future"
+        : `partner accounts set to ${names.length > 0 ? names.join(", ") : "none"}`,
+    });
+    forgetEpoch(target);
+    emitChange("users");
+    res.json({ accounts: kept, allAccounts: all });
+  });
+
+/** Which partners this person currently holds, for the form that sets them. */
+dutchMillerRouter.get("/users/:email/accounts", requireDmAdmin,
+  async (req: Request, res: Response) => {
+    const target = String(req.params.email ?? "").trim().toLowerCase();
+    const row = await getDmUser(target);
+    res.json({
+      assigned: await assignedAccounts(target),
+      allAccounts: isSuperEmail(target) || row?.allAccounts === true,
+      pinned: isSuperEmail(target),
+      accounts: (await listAccounts()).map((a) => ({
+        id: a.id, name: a.name, affiliation: a.affiliation,
+        line: accountLine(a), status: a.status,
+      })),
+    });
+  });
 
 /* ------------------------------------------------------------------ *
  * The partner account, and vendors
@@ -1262,19 +1712,32 @@ dutchMillerRouter.post("/rfid/active", requirePage("rfid-review"), requireRfidWr
  * one answer rather than one answer and a loophole.
  */
 dutchMillerRouter.get("/account", requireSuperTo("see the partner account switch"),
-  async (_req: Request, res: Response) => {
-    res.json(await getAccountState());
+  async (req: Request, res: Response) => {
+    const account = accountOf(req, res);
+    if (!account) return;
+    res.json({
+      ...await getAccountState(account.id),
+      account: {
+        id: account.id, slug: account.slug, name: account.name,
+        affiliation: account.affiliation, status: account.status,
+        deactivatedAt: account.deactivatedAt, deactivatedBy: account.deactivatedBy,
+        deactivateReason: account.deactivateReason,
+        templateVersion: account.templateVersion,
+      },
+    });
   });
 
 dutchMillerRouter.post("/account", requireSuperTo("switch partner access"),
   async (req: Request, res: Response) => {
     const b = (req.body ?? {}) as { active?: unknown; reason?: unknown };
+    const account = accountOf(req, res);
+    if (!account) return;
     try {
       const out = await setAccountState(
-        b.active === true, String(b.reason ?? ""), actor(req));
+        b.active === true, String(b.reason ?? ""), actor(req), account.id);
       await audit({
         action: "account.updated", ...who(req),
-        subject: "dutch-miller-partner-access",
+        subject: `${account.slug}-partner-access`,
         detail: out.active
           ? "partner access switched ON"
           : `partner access switched OFF — ${out.reason}`,
@@ -1296,10 +1759,13 @@ async function canApproveVendors(req: Request): Promise<boolean> {
 
 dutchMillerRouter.get("/vendors", requirePage("vendors"),
   async (req: Request, res: Response) => {
+    const account = accountOf(req, res);
+    if (!account) return;
     const status = String(req.query.status ?? "all");
     const ok = ["all", "pending", "approved", "rejected", "inactive", "awaiting"];
     res.json({
       ...(await listVendors({
+        account: account.id,
         status: ok.includes(status) ? (status as never) : "all",
         search: String(req.query.search ?? ""),
       })),
@@ -1312,7 +1778,9 @@ dutchMillerRouter.get("/vendors", requirePage("vendors"),
 
 dutchMillerRouter.get("/vendors/:id", requirePage("vendors"),
   async (req: Request, res: Response) => {
-    const v = await getVendor(String(req.params.id ?? ""));
+    const account = accountOf(req, res);
+    if (!account) return;
+    const v = await getVendor(String(req.params.id ?? ""), account.id);
     if (!v) { res.status(404).json({ error: "No such vendor." }); return; }
     res.json({
       vendor: v,
@@ -1333,8 +1801,11 @@ dutchMillerRouter.get("/vendors/:id", requirePage("vendors"),
 dutchMillerRouter.post("/vendors", requirePage("vendors"),
   async (req: Request, res: Response) => {
     const b = (req.body ?? {}) as { id?: unknown; note?: unknown } & Record<string, unknown>;
+    const account = accountOf(req, res);
+    if (!account) return;
     const out = await proposeVendor({
       id: typeof b.id === "string" && b.id ? b.id : undefined,
+      account: account.id,
       raw: b as never,
       by: actor(req),
       note: String(b.note ?? ""),
@@ -1367,8 +1838,11 @@ dutchMillerRouter.post("/vendors/:id/decide", requirePage("vendors"),
     const b = (req.body ?? {}) as {
       revisionId?: unknown; approve?: unknown; note?: unknown;
     };
+    const account = accountOf(req, res);
+    if (!account) return;
     const out = await decideVendor({
       id: String(req.params.id ?? ""),
+      account: account.id,
       revisionId: String(b.revisionId ?? ""),
       approve: b.approve === true,
       by: actor(req),
@@ -1388,8 +1862,11 @@ dutchMillerRouter.post("/vendors/:id/delete", requirePage("vendors"),
   requireSuperTo("remove a vendor"),
   async (req: Request, res: Response) => {
     const b = (req.body ?? {}) as { note?: unknown };
+    const account = accountOf(req, res);
+    if (!account) return;
     const out = await deleteVendor({
-      id: String(req.params.id ?? ""), note: String(b.note ?? ""), by: actor(req),
+      id: String(req.params.id ?? ""), account: account.id,
+      note: String(b.note ?? ""), by: actor(req),
     });
     if (!out.ok) { res.status(400).json({ error: out.reason }); return; }
     await audit({
@@ -1454,7 +1931,9 @@ dutchMillerRouter.get(
   requirePage("member-signups-add"),
   async (req: Request, res: Response) => {
     const sup = (await shownFor(req)).isSuper;
-    const { rows } = await listRfids({ status: "active", limit: 500 });
+    const account = accountOf(req, res);
+    if (!account) return;
+    const { rows } = await listRfids({ account: account.id, status: "active", limit: 500 });
     // A test tag is offered to the one person who may issue it, and
     // marked, so it cannot be picked by mistake from a list of
     // ordinary numbers.
@@ -1470,9 +1949,12 @@ dutchMillerRouter.get(
   "/signups",
   requirePage("member-signups"),
   async (req: Request, res: Response) => {
+    const account = accountOf(req, res);
+    if (!account) return;
     const status = String(req.query.status ?? "all");
     res.json({
       ...(await listSignups({
+        account: account.id,
         status: status === "new" || status === "review" || status === "complete"
           || status === "deleted" ? status : "all",
         search: String(req.query.search ?? ""),
@@ -1492,7 +1974,9 @@ dutchMillerRouter.get(
   "/signups/:guid",
   requirePage("member-signups"),
   async (req: Request, res: Response) => {
-    const row = await getSignup(String(req.params.guid ?? ""));
+    const account = accountOf(req, res);
+    if (!account) return;
+    const row = await getSignup(String(req.params.guid ?? ""), account.id);
     if (!row) { res.status(404).json({ error: "No such signup." }); return; }
     res.json({ row, deliveries: await deliveriesFor(row.guid) });
   },
@@ -1523,9 +2007,12 @@ dutchMillerRouter.post(
   "/signups",
   requirePage("member-signups-add"),
   async (req: Request, res: Response) => {
+    const account = accountOf(req, res);
+    if (!account) return;
     const out = await createSignup(
       (req.body ?? {}) as Partial<SignupInput>, req.user?.email ?? "",
       {
+        account: account.id,
         // Judged on the REAL person: naming a test tag is the owner's,
         // and a view must never be a way to borrow that.
         mayUseTestTags: isSuperEmail(
@@ -1584,8 +2071,10 @@ dutchMillerRouter.post(
       res.status(400).json({ error: "No file arrived." });
       return;
     }
+    const account = accountOf(req, res);
+    if (!account) return;
     const parsed = parseBulk(file.toString("utf8"));
-    const pool = await rfidCounts();
+    const pool = await rfidCounts(account.id);
     await audit({
       action: "bulk.uploaded",
       actor: actor(req),
@@ -1616,6 +2105,8 @@ dutchMillerRouter.post(
   requirePage("member-signups-add"),
   async (req: Request, res: Response) => {
     const body = (req.body ?? {}) as { row?: Record<string, unknown>; batch?: unknown };
+    const account = accountOf(req, res);
+    if (!account) return;
     const out = await createSignup(
       {
         ...(body.row ?? {}),
@@ -1627,7 +2118,7 @@ dutchMillerRouter.post(
         stickerAttached: true,
       } as Partial<SignupInput>,
       actor(req),
-      { assignAnyRfid: true },
+      { account: account.id, assignAnyRfid: true },
     );
     if (!out.ok) {
       res.status(out.kind === "validation" ? 400 : 409).json(
@@ -1655,9 +2146,11 @@ dutchMillerRouter.post(
   async (req: Request, res: Response) => {
     const b = (req.body ?? {}) as { guids?: unknown };
     const guids = Array.isArray(b.guids) ? b.guids.map(String).slice(0, 2000) : [];
+    const account = accountOf(req, res);
+    if (!account) return;
     const rows: SignupRow[] = [];
     for (const g of guids) {
-      const row = await getSignup(g);
+      const row = await getSignup(g, account.id);
       if (row) rows.push(row);
     }
     void audit({
@@ -1716,7 +2209,9 @@ dutchMillerRouter.post(
     // same person who could approve it.
     const reader = req.viewingAs?.real.email ?? req.user?.email ?? "";
     if (!(await canApprove(req))) { res.json({ row: null }); return; }
-    const row = await markOpened(String(req.params.guid ?? ""), reader);
+    const account = accountOf(req, res);
+    if (!account) return;
+    const row = await markOpened(String(req.params.guid ?? ""), reader, account.id);
     if (row) {
       void audit({ action: "signup.opened", resource: row.guid, ...who(req) });
       emitChange("signups");
@@ -1749,7 +2244,9 @@ dutchMillerRouter.post(
       });
       return;
     }
-    const out = await setComplete(String(req.params.guid ?? ""), approver);
+    const account = accountOf(req, res);
+    if (!account) return;
+    const out = await setComplete(String(req.params.guid ?? ""), approver, account.id);
     if (!out.ok) {
       res.status(out.reason === "not-found" ? 404 : 409).json({
         error: out.reason === "not-found"
@@ -1790,8 +2287,10 @@ dutchMillerRouter.post(
 dutchMillerRouter.get(
   "/settings/placement",
   requirePage("rfid-instructions"),
-  async (_req: Request, res: Response) => {
-    res.json(await getPlacement());
+  async (req: Request, res: Response) => {
+    const account = accountOf(req, res);
+    if (!account) return;
+    res.json(await getPlacement(account.id));
   },
 );
 
@@ -1802,7 +2301,9 @@ dutchMillerRouter.post("/settings/placement", requireDmAdmin,
       res.status(400).json({ error: "Choose inside or outside." });
       return;
     }
-    const out = await setPlacement(want, actor(req));
+    const account = accountOf(req, res);
+    if (!account) return;
+    const out = await setPlacement(want, actor(req), account.id);
     await audit({
       action: "notify.changed", ...who(req),
       detail: `RFID placement set to ${out.placement} the glass`,
@@ -1826,7 +2327,10 @@ dutchMillerRouter.post(
   "/signups/:guid/sticker",
   requirePage("member-signups"),
   async (req: Request, res: Response) => {
-    const out = await confirmSticker(String(req.params.guid ?? ""), actor(req));
+    const account = accountOf(req, res);
+    if (!account) return;
+    const out = await confirmSticker(
+      String(req.params.guid ?? ""), actor(req), account.id);
     if (!out.ok) {
       res.status(out.reason === "not-found" ? 404 : 409).json({
         error: out.reason === "not-found" ? "No such signup."
@@ -1869,8 +2373,11 @@ dutchMillerRouter.post(
   requireDelete("signups"),
   async (req: Request, res: Response) => {
     const body = (req.body ?? {}) as { note?: unknown; releaseTag?: unknown };
+    const account = accountOf(req, res);
+    if (!account) return;
     const out = await deleteSignup({
       guid: String(req.params.guid ?? ""),
+      account: account.id,
       note: String(body.note ?? ""),
       by: actor(req),
       releaseTag: body.releaseTag === true,

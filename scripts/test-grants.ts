@@ -20,6 +20,7 @@
 import {
   ADMIN_ROLE, CSC_ROLE, DEFAULT_ROLE, getRole, listRoles, saveRole,
 } from "../server/dutch-miller/roles.js";
+import { DUTCH_MILLER } from "../server/dutch-miller/accounts.js";
 import { DM_GRANTS, DM_PAGE_KEYS } from "../server/dutch-miller/pages.js";
 import { actionsFor } from "../server/dutch-miller/actions.js";
 import { dmAccessFor, saveDmUser } from "../server/dutch-miller/users.js";
@@ -128,12 +129,12 @@ try {
       WHERE number = ANY($1::text[])`, [TAGS]).catch(() => {});
   await db().query("DELETE FROM dm_member_signups WHERE rfid = ANY($1::text[])", [TAGS])
     .catch(() => {});
-  await addRfids(TAGS, [], TAGS.length, OWNER);
-  await setRfidTestOnly([TAGS[0]!], true);
+  await addRfids(TAGS, [], TAGS.length, OWNER, DUTCH_MILLER);
+  await setRfidTestOnly([TAGS[0]!], true, DUTCH_MILLER);
 
-  const marked = (await listRfids({ status: "test", search: TAGS[0]! })).rows;
+  const marked = (await listRfids({ account: DUTCH_MILLER,  status: "test", search: TAGS[0]! })).rows;
   check("it shows in the test view", marked.some((r) => r.number === TAGS[0]!));
-  check("…and is counted apart", (await rfidCounts()).testOnly >= 1);
+  check("…and is counted apart", (await rfidCounts(DUTCH_MILLER)).testOnly >= 1);
   // Still in the pool as 'active' — that is the difference from
   // holding one back, and the reason the rules below are needed.
   check("…while still being an active tag",
@@ -141,29 +142,29 @@ try {
 
   // THE RULE: the pool must never hand one out.
   const auto = await createSignup(
-    entry({ rfid: "", firstName: "Auto" }), OWNER, { assignAnyRfid: true });
+    entry({ rfid: "", firstName: "Auto" }), OWNER, { account: DUTCH_MILLER, assignAnyRfid: true });
   check("an import never spends a test tag",
     auto.ok === true && auto.row.customer.rfid !== TAGS[0]!,
     auto.ok ? auto.row.customer.rfid : JSON.stringify(auto));
 
   // Naming one is the owner's alone.
-  const notOwner = await createSignup(entry({ rfid: TAGS[0]! }), DESK);
+  const notOwner = await createSignup(entry({ rfid: TAGS[0]! }), DESK, { account: DUTCH_MILLER });
   check("somebody else naming it is refused", notOwner.ok === false);
   check("…saying why", !notOwner.ok && notOwner.kind === "rfid-taken",
     notOwner.ok ? "accepted" : notOwner.kind);
   const asOwner = await createSignup(
-    entry({ rfid: TAGS[0]!, firstName: "Tester" }), OWNER, { mayUseTestTags: true });
+    entry({ rfid: TAGS[0]!, firstName: "Tester" }), OWNER, { account: DUTCH_MILLER, mayUseTestTags: true });
   check("the owner CAN use it", asOwner.ok === true,
     asOwner.ok ? "" : JSON.stringify(asOwner));
 
   console.log("\n5. Un-marking puts it back in ordinary use");
-  await setRfidTestOnly([TAGS[2]!], true);
-  check("marked", (await listRfids({ status: "test", search: TAGS[2]! })).rows.length === 1);
-  await setRfidTestOnly([TAGS[2]!], false);
+  await setRfidTestOnly([TAGS[2]!], true, DUTCH_MILLER);
+  check("marked", (await listRfids({ account: DUTCH_MILLER,  status: "test", search: TAGS[2]! })).rows.length === 1);
+  await setRfidTestOnly([TAGS[2]!], false, DUTCH_MILLER);
   check("…and released",
-    (await listRfids({ status: "test", search: TAGS[2]! })).rows.length === 0);
+    (await listRfids({ account: DUTCH_MILLER,  status: "test", search: TAGS[2]! })).rows.length === 0);
   check("…back among the available ones",
-    (await listRfids({ status: "active", search: TAGS[2]! })).rows.length === 1);
+    (await listRfids({ account: DUTCH_MILLER,  status: "active", search: TAGS[2]! })).rows.length === 1);
   console.log("\n6. RFID Inventory, to look at and not to touch");
   /*
    * Most people who need this page need it to answer a question —

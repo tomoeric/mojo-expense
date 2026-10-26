@@ -19,6 +19,7 @@ import {
   BLANK_VENDOR, approvalBlockers, changedFields, decideVendor, deleteVendor,
   getVendor, listVendors, proposeVendor, validateVendor,
 } from "../server/dutch-miller/vendors.js";
+import { DUTCH_MILLER } from "../server/dutch-miller/accounts.js";
 import { db } from "../server/db.js";
 
 let failures = 0;
@@ -58,7 +59,7 @@ try {
   check("…and the state lifted", tidy.clean.state === "WV");
 
   console.log("\n2. A new vendor is a request, not a vendor");
-  const made = await proposeVendor({ raw: GOOD, by: DEALER, note: "New supplier." });
+  const made = await proposeVendor({ account: DUTCH_MILLER,  raw: GOOD, by: DEALER, note: "New supplier." });
   check("it is accepted", made.ok === true);
   if (!made.ok) throw new Error("cannot continue");
   const id = made.vendor.id;
@@ -73,7 +74,7 @@ try {
     made.vendor.pending?.fields.companyName === "Tri-State Chemical");
 
   console.log("\n3. Approving is the only thing that writes a vendor");
-  const live = await decideVendor({
+  const live = await decideVendor({ account: DUTCH_MILLER, 
     id, revisionId: made.vendor.pending!.id, approve: true, by: BOSS,
   });
   check("it approves", live.ok === true);
@@ -84,13 +85,13 @@ try {
   check("…with nothing left waiting", live.ok && live.vendor.pending === null);
 
   console.log("\n4. A change waits, and the approved record does not move");
-  const edit = await proposeVendor({
+  const edit = await proposeVendor({ account: DUTCH_MILLER, 
     id, raw: { ...GOOD, phone: "3045559999", paymentTerms: "Net 45" },
     by: DEALER, note: "New number.",
   });
   check("the change is accepted", edit.ok === true);
   // The whole reason for two tables.
-  const during = await getVendor(id);
+  const during = await getVendor(id, DUTCH_MILLER);
   check("THE APPROVED RECORD IS UNCHANGED",
     during?.phone === "(304) 555-0133", during?.phone);
   check("…and still reads as approved", during?.status === "approved");
@@ -101,29 +102,29 @@ try {
     (during?.pending?.changed ?? []).join(", "));
 
   console.log("\n5. Sending one back leaves the vendor alone");
-  const back = await decideVendor({
+  const back = await decideVendor({ account: DUTCH_MILLER, 
     id, revisionId: during!.pending!.id, approve: false, by: BOSS,
     note: "Confirm the number with the supplier first.",
   });
   check("it is sent back", back.ok === true);
-  const after = await getVendor(id);
+  const after = await getVendor(id, DUTCH_MILLER);
   check("the approved phone is the OLD one", after?.phone === "(304) 555-0133");
   check("…and the vendor is still approved", after?.status === "approved");
   check("…with nothing waiting", after?.pending === null);
   // A rejection with no reason produces a second identical submission.
-  const bare = await decideVendor({
+  const bare = await decideVendor({ account: DUTCH_MILLER, 
     id, revisionId: "1", approve: false, by: BOSS,
   });
   check("rejecting with no reason is refused", bare.ok === false);
 
   console.log("\n6. Only one change can be waiting");
-  await proposeVendor({ id, raw: { ...GOOD, city: "Barboursville" }, by: DEALER });
-  const second = await proposeVendor({
+  await proposeVendor({ account: DUTCH_MILLER,  id, raw: { ...GOOD, city: "Barboursville" }, by: DEALER });
+  const second = await proposeVendor({ account: DUTCH_MILLER, 
     id, raw: { ...GOOD, city: "Milton" }, by: DEALER,
   });
   check("a second proposal supersedes the first",
     second.ok === true && second.superseded);
-  const one = await getVendor(id);
+  const one = await getVendor(id, DUTCH_MILLER);
   check("…leaving exactly one waiting",
     (one?.history ?? []).filter((r) => r.status === "pending").length === 1);
   check("…and the superseded one says so",
@@ -145,19 +146,19 @@ try {
       insuranceExpires: "2099-01-01", taxId: "55-1", services: "Chemicals",
     }).length === 0);
   // Reported, never enforced: approving anyway is a decision.
-  const anyway = await decideVendor({
+  const anyway = await decideVendor({ account: DUTCH_MILLER, 
     id, revisionId: one!.pending!.id, approve: true, by: BOSS,
   });
   check("a reviewer can approve despite them", anyway.ok === true);
 
   console.log("\n8. Removing one keeps it");
   check("a note is required",
-    (await deleteVendor({ id, note: "x", by: BOSS })).ok === false);
-  await proposeVendor({ id, raw: { ...GOOD, notes: "pending when removed" }, by: DEALER });
-  check("it removes", (await deleteVendor({
+    (await deleteVendor({ account: DUTCH_MILLER,  id, note: "x", by: BOSS })).ok === false);
+  await proposeVendor({ account: DUTCH_MILLER,  id, raw: { ...GOOD, notes: "pending when removed" }, by: DEALER });
+  check("it removes", (await deleteVendor({ account: DUTCH_MILLER, 
     id, note: "Contract ended 31 December.", by: BOSS,
   })).ok === true);
-  const gone = await getVendor(id);
+  const gone = await getVendor(id, DUTCH_MILLER);
   check("…and the record is still there", Boolean(gone));
   check("…marked, with the reason", (gone?.deleteNote ?? "").startsWith("Contract"));
   // Nothing may be left waiting on a record nobody will look at.
@@ -165,7 +166,7 @@ try {
   check("…while its whole history survives", (gone?.history.length ?? 0) >= 5,
     String(gone?.history.length));
   check("it is out of the live list",
-    !(await listVendors({ status: "all" })).vendors.some((v) => v.id === id));
+    !(await listVendors({ account: DUTCH_MILLER,  status: "all" })).vendors.some((v) => v.id === id));
 
   console.log("\n9. Changed fields are named in words");
   check("a changed field is named",

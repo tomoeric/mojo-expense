@@ -1,7 +1,7 @@
 import { Fragment, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ChevronDown, Eye, Loader2, Mail, Pencil, Power, ScrollText, Search, Send, ShieldCheck,
+  Building2, ChevronDown, Eye, Loader2, Mail, Pencil, Power, ScrollText, Search, Send, ShieldCheck,
   Trash2, UserRound, X,
 } from "lucide-react";
 
@@ -14,10 +14,18 @@ type DmUser = {
   authMethod: "microsoft" | "link"; status: "invited" | "active" | "disabled";
   firstName: string | null; lastName: string | null; business: string | null;
 };
+type PartnerRef = {
+  id: string; name: string; affiliation: string;
+  line: string; status: "active" | "inactive";
+};
 type Person = {
   email: string;
   name: string;
   business: string | null;
+  /** Partner ids this person may open. */
+  accounts: string[];
+  /** Every partner, including ones created later. */
+  allAccounts: boolean;
   /** How they get in: the Microsoft button, or an emailed link. */
   source: "microsoft" | "invited";
   /** Pinned in DM_SUPER_ADMINS: holds everything, and cannot be edited here. */
@@ -66,6 +74,7 @@ export function DmPeopleDialog({
   const [onlyNoRole, setOnlyNoRole] = useState(false);
   const [editing, setEditing] = useState<Person | null>(null);
   const [inviting, setInviting] = useState(false);
+  const [partners, setPartners] = useState<Person | null>(null);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
 
@@ -76,6 +85,8 @@ export function DmPeopleDialog({
       if (!res.ok) throw new Error((await res.json()).error ?? "Could not load.");
       return (await res.json()) as {
         people: Person[]; roles: Role[];
+        accounts: PartnerRef[];
+        iAmAccountAdmin: boolean;
         mailConfigured: boolean; mailFrom: string; mailProblem: string;
       };
     },
@@ -312,11 +323,17 @@ export function DmPeopleDialog({
                 ) : (
                   <span className="text-muted-foreground">No role yet</span>
                 )}
+                {/* Scope, beside the role, because they are two
+                    different questions and the answer to one says
+                    nothing about the other. A CSC in one dealership
+                    and a CSC across seven are the same role. */}
+                <PartnerScope person={p} accounts={data.data?.accounts ?? []} />
               </div>
 
               <ManageMenu
                 person={p}
                 iAmSuper={iAmSuper}
+                onPartners={() => setPartners(p)}
                 busy={act.isPending}
                 mailOff={Boolean(mailOff)}
                 onEdit={() => setEditing(p)}
@@ -357,6 +374,20 @@ export function DmPeopleDialog({
                 onSave={(roleKey, invite) => act.mutate(
                   { url: "/api/dutch-miller/users", body: { email: p.email, roleKey, invite } },
                   { onSuccess: () => setEditing(null) })}
+              />
+            )}
+            {partners?.email === p.email && (
+              <AssignPartners
+                person={p}
+                accounts={data.data?.accounts ?? []}
+                busy={act.isPending}
+                onCancel={() => setPartners(null)}
+                onSave={(ids, all) => act.mutate(
+                  {
+                    url: `/api/dutch-miller/users/${encodeURIComponent(p.email)}/accounts`,
+                    body: { accounts: ids, allAccounts: all },
+                  },
+                  { onSuccess: () => setPartners(null) })}
               />
             )}
               </Fragment>
@@ -622,13 +653,14 @@ function InviteRow({
  */
 function ManageMenu({
   person, iAmSuper, busy, mailOff,
-  onEdit, onViewAs, onHistory, onToggle, onResend, onRemove,
+  onEdit, onPartners, onViewAs, onHistory, onToggle, onResend, onRemove,
 }: {
   person: Person;
   iAmSuper: boolean;
   busy: boolean;
   mailOff: boolean;
   onEdit: () => void;
+  onPartners: () => void;
   onViewAs: () => void;
   onHistory: () => void;
   onToggle: () => void;
@@ -662,6 +694,17 @@ function ManageMenu({
             {!p.pinnedSuper && (
               <Item icon={<Pencil className="h-3.5 w-3.5" />} onClick={pick(onEdit)}>
                 {p.user ? "Change role" : "Give access"}
+              </Item>
+            )}
+            {/* Scope is a grant, so it is the account administrator's
+                alone — an administrator who could widen it could
+                widen their own and walk into every partner. */}
+            {iAmSuper && !p.pinnedSuper && p.user && (
+              <Item
+                icon={<Building2 className="h-3.5 w-3.5" />}
+                onClick={pick(onPartners)}
+              >
+                Partner accounts
               </Item>
             )}
             <Item icon={<ScrollText className="h-3.5 w-3.5" />} onClick={pick(onHistory)}>
@@ -759,5 +802,128 @@ function Item({
         {note && <span className="mt-0.5 block text-[11px] text-muted-foreground">{note}</span>}
       </span>
     </button>
+  );
+}
+
+/**
+ * Which partners somebody holds, on their row.
+ *
+ * A separate line from the role, because they are separate
+ * questions: a CSC in one dealership and a CSC across seven hold the
+ * same role and very different reach, and a column that showed only
+ * one of the two would make them look identical.
+ */
+function PartnerScope({ person, accounts }: { person: Person; accounts: PartnerRef[] }) {
+  if (person.allAccounts) {
+    return (
+      <span className="mt-0.5 block text-[11px] font-semibold text-blue-700 dark:text-blue-400">
+        All partners
+        {person.pinnedSuper && <span className="font-normal text-muted-foreground"> · pinned</span>}
+      </span>
+    );
+  }
+  if (!person.user) return null;
+  const names = accounts.filter((a) => person.accounts.includes(a.id)).map((a) => a.name);
+  return (
+    <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+      {names.length === 0
+        ? "No partner account"
+        : names.length <= 2
+          ? names.join(", ")
+          : `${names.length} partners`}
+    </span>
+  );
+}
+
+/**
+ * Set which partners somebody may open.
+ *
+ * Whole-list rather than add and remove, because that is what the
+ * form shows and reconciling a set of tick-boxes into two streams of
+ * calls is how a half-applied change happens.
+ *
+ * All partners is a MARK, not "tick all seven". The difference shows
+ * the day an eighth is created: a list of seven is silently missing
+ * from it and the mark is not. Offered only for somebody who came
+ * through the Microsoft door — the mark means platform staff, and an
+ * invited account is by definition one partner's own person.
+ */
+function AssignPartners({
+  person, accounts, busy, onCancel, onSave,
+}: {
+  person: Person;
+  accounts: PartnerRef[];
+  busy: boolean;
+  onCancel: () => void;
+  onSave: (ids: string[], all: boolean) => void;
+}) {
+  const [all, setAll] = useState(person.allAccounts);
+  const [picked, setPicked] = useState<string[]>(person.accounts);
+  const invited = person.user?.authMethod === "link";
+
+  return (
+    <div className="mt-2 space-y-3 rounded-lg border border-border bg-muted/30 p-3">
+      <p className="text-xs font-semibold">Which partners can {person.name} open?</p>
+
+      {!invited && (
+        <label className="flex items-start gap-2 text-xs">
+          <input
+            type="checkbox"
+            checked={all}
+            onChange={(e) => setAll(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            <span className="font-semibold">All partners</span>
+            <span className="block text-muted-foreground">
+              Every account on the platform, including ones created later. For MOJO staff
+              who work across partners.
+            </span>
+          </span>
+        </label>
+      )}
+
+      <div className={`space-y-1 ${all ? "pointer-events-none opacity-40" : ""}`}>
+        {accounts.length === 0 && (
+          <p className="text-xs text-muted-foreground">There are no partner accounts.</p>
+        )}
+        {accounts.map((a) => (
+          <label key={a.id} className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={all || picked.includes(a.id)}
+              onChange={(e) => setPicked((v) => (e.target.checked
+                ? [...v, a.id]
+                : v.filter((x) => x !== a.id)))}
+            />
+            <span className="truncate">
+              {a.line}
+              {a.status === "inactive" && (
+                <span className="ml-1 text-amber-700 dark:text-amber-400">· deactivated</span>
+              )}
+            </span>
+          </label>
+        ))}
+      </div>
+
+      <div className="flex gap-2">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => onSave(all ? [] : picked, all)}
+          className="rounded-md bg-foreground px-3 py-1.5 text-xs font-semibold text-background
+                     disabled:opacity-50"
+        >
+          Save
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-md border border-border px-3 py-1.5 text-xs"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
   );
 }

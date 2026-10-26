@@ -144,11 +144,29 @@ UPDATE dm_users SET role_key = CASE WHEN role = 'admin' THEN '${ADMIN_ROLE}'
                                     ELSE '${DEFAULT_ROLE}' END
  WHERE role_key IS NULL;
 CREATE INDEX IF NOT EXISTS dm_users_role ON dm_users (role_key);
+/*
+ * Every partner account, current and future.
+ *
+ * The platform's own people — MOJO staff who work across partners —
+ * rather than a shortcut for "assign them to all seven". The
+ * difference shows the day an eighth partner is created: a list of
+ * seven assignments is silently missing from it, and this mark is
+ * not. Off by default, because the common case is somebody who
+ * belongs to one dealership.
+ *
+ * It is account SCOPE and nothing else. It says which accounts
+ * somebody may open, never what they may do once inside one — that
+ * is still the role, and the two are deliberately separate questions.
+ */
+ALTER TABLE dm_users ADD COLUMN IF NOT EXISTS all_accounts boolean NOT NULL DEFAULT false;
 `;
 
 let ready: Promise<void> | null = null;
 const ensure = (): Promise<void> =>
   (ready ??= ensureSchema().then(async () => { await db().query(SCHEMA); }));
+
+/** The people table, for the modules whose own backfill reads it. */
+export const ensureUsersSchema = (): Promise<void> => ensure();
 
 export type DmUser = {
   email: string;
@@ -166,6 +184,8 @@ export type DmUser = {
   activatedAt: string | null;
   lastSeenAt: string | null;
   sessionEpoch: number;
+  /** Holds every partner account, including ones created later. */
+  allAccounts: boolean;
   /** The named role. Pages come from it; see `roles.ts`. */
   roleKey: string;
   roleName: string;
@@ -182,18 +202,22 @@ type Db = {
   invited_at: Date | null; invited_by: string | null;
   activated_at: Date | null; last_seen_at: Date | null;
   session_epoch: number; role_key: string | null;
+  all_accounts: boolean;
   updated_at: Date; updated_by: string;
 };
 
 const COLS = `email, role, pages, auth_method, status, first_name, last_name,
   business, phone, email_verified_at, invited_at, invited_by, activated_at,
-  last_seen_at, session_epoch, role_key, updated_at, updated_by`;
+  last_seen_at, session_epoch, role_key, all_accounts, updated_at, updated_by`;
 
 const shape = (r: Db): DmUser => ({
   email: r.email,
   // The pinned list wins over whatever the row says.
   role: isSuperEmail(r.email) ? "super" : r.role,
   pages: Array.isArray(r.pages) ? (r.pages as unknown[]).filter(isDmPage) : [],
+  // A pinned account administrator holds every account whatever the
+  // row says, for the same reason they hold every page.
+  allAccounts: isSuperEmail(r.email) || r.all_accounts,
   authMethod: r.auth_method,
   status: r.status,
   firstName: r.first_name,
@@ -417,6 +441,15 @@ export async function saveDmUser(opts: {
   byRole: DmRole;
   authMethod?: AuthMethod;
   status?: DmStatus;
+  /**
+   * Every account, now and later. Account administrators only.
+   *
+   * Scope is a grant like any other, so the rule that an admin cannot
+   * widen their own reach applies: an admin who could tick this could
+   * tick it for themselves and walk into every partner on the platform.
+   * Left undefined means leave it as it is.
+   */
+  allAccounts?: boolean;
 }): Promise<DmUser> {
   await ensure();
   const who = assertEmail(opts.email);
@@ -440,17 +473,37 @@ export async function saveDmUser(opts: {
         : "Only an account administrator can change an administrator.");
   }
 
+  if (opts.allAccounts !== undefined
+      && opts.allAccounts !== (existing?.allAccounts ?? false)
+      && opts.byRole !== "super") {
+    throw new Error(
+      "Only an account administrator can give somebody every partner account.");
+  }
+  /*
+   * An invited account is never an all-accounts account.
+   *
+   * The mark means "platform staff", and somebody who came through
+   * the emailed-link door is by definition a partner's own person.
+   * Refused here rather than hidden in the form, because the form is
+   * not what an API client sees.
+   */
   const method = opts.authMethod ?? existing?.authMethod ?? "microsoft";
+  if (opts.allAccounts === true && method === "link") {
+    throw new Error("An invited partner account cannot hold every partner account.");
+  }
   const status = opts.status ?? existing?.status ?? (method === "link" ? "invited" : "active");
 
   await db().query(
-    `INSERT INTO dm_users (email, role, role_key, pages, auth_method, status, updated_at, updated_by)
-          VALUES ($1, $2, $3, '[]'::jsonb, $4, $5, now(), $6)
+    `INSERT INTO dm_users (email, role, role_key, pages, auth_method, status,
+                           all_accounts, updated_at, updated_by)
+          VALUES ($1, $2, $3, '[]'::jsonb, $4, $5, $7, now(), $6)
      ON CONFLICT (email) DO UPDATE
         SET role = EXCLUDED.role, role_key = EXCLUDED.role_key,
             auth_method = EXCLUDED.auth_method, status = EXCLUDED.status,
+            all_accounts = EXCLUDED.all_accounts,
             updated_at = now(), updated_by = EXCLUDED.updated_by`,
-    [who, role.administers ? "admin" : "user", role.key, method, status, opts.by]);
+    [who, role.administers ? "admin" : "user", role.key, method, status, opts.by,
+      opts.allAccounts ?? existing?.allAccounts ?? false]);
   return (await getDmUser(who))!;
 }
 

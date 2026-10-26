@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { accountsFor } from "./accounts.js";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { env } from "../env.js";
 import { publicOrigin } from "../origin.js";
@@ -135,12 +136,25 @@ const deviceSecret = (req: Request): string | undefined =>
   (req.cookies as Record<string, string | undefined> | undefined)?.[DEVICE_COOKIE];
 
 async function signIn(res: Response, email: string): Promise<SessionUser | null> {
-  // The partner account, before the person. Switched off means no
-  // new dealer session at all — refusing at the door rather than
-  // issuing a cookie that every later request turns down.
-  if (!(await getAccountState()).active) return null;
+  /*
+   * The partner account, before the person.
+   *
+   * Switched off means no new dealer session at all — refusing at the
+   * door rather than issuing a cookie that every later request turns
+   * down. Across accounts now: somebody is refused only when there is
+   * nothing open for them to sign in TO. One partner being paused must
+   * not lock out a dealer who also works for another, and the
+   * per-request guard still shuts the paused one.
+   */
   const row = await getDmUser(email);
   if (!row || row.status !== "active") return null;
+  const mine = await accountsFor({
+    email, isAccountAdmin: false, allAccounts: row.allAccounts,
+  });
+  const open = await Promise.all(
+    mine.filter((a) => a.status === "active")
+      .map(async (a) => (await getAccountState(a.id)).active));
+  if (!open.some(Boolean)) return null;
   const name = [row.firstName, row.lastName].filter(Boolean).join(" ") || row.email;
   const user: SessionUser = {
     id: row.email,

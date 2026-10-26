@@ -16,6 +16,7 @@
  * confidently incorrect.
  */
 import { BULK_COLUMNS, parseBulk, splitCsvLine, templateCsv } from "../server/dutch-miller/bulk.js";
+import { DUTCH_MILLER } from "../server/dutch-miller/accounts.js";
 import { createSignup, getSignup, newHandle } from "../server/dutch-miller/signups.js";
 import { addRfids } from "../server/dutch-miller/rfid.js";
 import { db } from "../server/db.js";
@@ -134,14 +135,14 @@ try {
       WHERE number = ANY($1::text[])`, [TAGS]).catch(() => {});
   await db().query(
     "DELETE FROM dm_member_signups WHERE rfid = ANY($1::text[])", [TAGS]).catch(() => {});
-  await addRfids(TAGS, [], TAGS.length, "bulk-test@example.invalid");
+  await addRfids(TAGS, [], TAGS.length, "bulk-test@example.invalid", DUTCH_MILLER);
   const row = {
     dlwContractId: "0041", firstName: "Dana", lastName: "Reyes", stickerAttached: true,
   };
   const h1 = newHandle();
   GUIDS.push(h1.guid);
   const first = await createSignup({ ...row, ...h1, rfid: "" }, "bulk@example.invalid",
-    { assignAnyRfid: true });
+    { account: DUTCH_MILLER, assignAnyRfid: true });
   check("it saves without naming a tag", first.ok === true,
     first.ok ? "" : JSON.stringify(first));
   check("…and a tag was assigned", first.ok && TAGS.includes(first.row.customer.rfid),
@@ -153,7 +154,7 @@ try {
   const h2 = newHandle();
   GUIDS.push(h2.guid);
   const second = await createSignup({ ...row, ...h2, rfid: "" }, "bulk@example.invalid",
-    { assignAnyRfid: true });
+    { account: DUTCH_MILLER, assignAnyRfid: true });
   check("the next row takes a DIFFERENT tag",
     second.ok && first.ok && second.row.customer.rfid !== first.row.customer.rfid,
     second.ok && first.ok ? `${first.row.customer.rfid} vs ${second.row.customer.rfid}` : "");
@@ -164,7 +165,7 @@ try {
   const pair = await Promise.all([newHandle(), newHandle()].map((h) => {
     GUIDS.push(h.guid);
     return createSignup({ ...row, ...h, rfid: "" }, "bulk@example.invalid",
-      { assignAnyRfid: true });
+      { account: DUTCH_MILLER, assignAnyRfid: true });
   }));
   const got = pair.filter((r) => r.ok);
   check("one succeeds on the last tag", got.length >= 1, JSON.stringify(
@@ -188,12 +189,12 @@ try {
   GUIDS.push(h5.guid);
   await db().query("UPDATE dm_rfid SET status = 'inactive' WHERE status = 'active'");
   const none = await createSignup({ ...row, ...h5, rfid: "" }, "bulk@example.invalid",
-    { assignAnyRfid: true });
+    { account: DUTCH_MILLER, assignAnyRfid: true });
   check("is refused rather than silently skipped", !none.ok);
   check("…saying what to do about it",
     !none.ok && none.kind === "rfid-taken" && /no active RFID/i.test(none.reason),
     none.ok ? "" : none.kind);
-  check("…and no member was created", (await getSignup(h5.guid)) === null);
+  check("…and no member was created", (await getSignup(h5.guid, DUTCH_MILLER)) === null);
 } finally {
   await db().query("DELETE FROM dm_member_signups WHERE guid = ANY($1::uuid[])", [GUIDS])
     .catch(() => {});

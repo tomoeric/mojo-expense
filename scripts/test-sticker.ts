@@ -16,6 +16,7 @@
 import {
   confirmSticker, createSignup, getSignup, markOpened, newHandle, setComplete,
 } from "../server/dutch-miller/signups.js";
+import { DUTCH_MILLER } from "../server/dutch-miller/accounts.js";
 import { addRfids } from "../server/dutch-miller/rfid.js";
 import { db } from "../server/db.js";
 
@@ -49,13 +50,13 @@ try {
       WHERE number = ANY($1::text[])`, [TAGS]).catch(() => {});
   await db().query("DELETE FROM dm_member_signups WHERE rfid = ANY($1::text[])", [TAGS])
     .catch(() => {});
-  await addRfids(TAGS, [], TAGS.length, ME);
+  await addRfids(TAGS, [], TAGS.length, ME, DUTCH_MILLER);
 
   console.log("1. A typed signup confirms at submission");
   const typed = entry({ rfid: TAGS[0]! });
-  const made = await createSignup(typed, ME);
+  const made = await createSignup(typed, ME, { account: DUTCH_MILLER });
   check("it saves", made.ok === true);
-  const row = await getSignup(typed.guid);
+  const row = await getSignup(typed.guid, DUTCH_MILLER);
   check("the state is confirmed", row?.customer.stickerState === "confirmed");
   check("…with who said so", row?.customer.stickerConfirmedBy === ME);
   check("…and when", Boolean(row?.customer.stickerConfirmedAt));
@@ -67,9 +68,9 @@ try {
    * number would land on which car.
    */
   const imported = entry({ rfid: "", firstName: "Sam" });
-  const bulk = await createSignup(imported, ME, { assignAnyRfid: true });
+  const bulk = await createSignup(imported, ME, { account: DUTCH_MILLER, assignAnyRfid: true });
   check("it saves", bulk.ok === true, bulk.ok ? "" : JSON.stringify(bulk));
-  const bulkRow = await getSignup(imported.guid);
+  const bulkRow = await getSignup(imported.guid, DUTCH_MILLER);
   check("…with a tag allocated", (bulkRow?.customer.rfid ?? "").length > 0);
   check("…and the sticker PENDING, not confirmed",
     bulkRow?.customer.stickerState === "pending",
@@ -80,44 +81,44 @@ try {
     bulkRow?.customer.stickerConfirmedAt === null);
 
   console.log("\n3. Approval waits for a real confirmation");
-  await markOpened(imported.guid, CSC);
-  const early = await setComplete(imported.guid, CSC);
+  await markOpened(imported.guid, CSC, DUTCH_MILLER);
+  const early = await setComplete(imported.guid, CSC, DUTCH_MILLER);
   check("completing is refused", early.ok === false);
   check("…saying why", !early.ok && early.reason === "sticker-unconfirmed",
     early.ok ? "approved" : early.reason);
-  const done = await confirmSticker(imported.guid, "dealer@dutchmiller.example");
+  const done = await confirmSticker(imported.guid, "dealer@dutchmiller.example", DUTCH_MILLER);
   check("confirming works", done.ok === true);
-  const confirmed = await getSignup(imported.guid);
+  const confirmed = await getSignup(imported.guid, DUTCH_MILLER);
   check("…and records who", confirmed?.customer.stickerConfirmedBy === "dealer@dutchmiller.example");
   check("…and when", Boolean(confirmed?.customer.stickerConfirmedAt));
   check("confirming twice is refused",
-    (await confirmSticker(imported.guid, ME)).ok === false);
-  const now = await setComplete(imported.guid, CSC);
+    (await confirmSticker(imported.guid, ME, DUTCH_MILLER)).ok === false);
+  const now = await setComplete(imported.guid, CSC, DUTCH_MILLER);
   check("NOW it can be approved", now.ok === true);
 
   console.log("\n4. A legacy record is not a missing sticker");
   // Exactly the row the brief found: completed, reading "Not confirmed",
   // written before the column existed.
   const legacy = entry({ rfid: TAGS[2]!, firstName: "Old" });
-  await createSignup(legacy, ME);
+  await createSignup(legacy, ME, { account: DUTCH_MILLER });
   await db().query(
     `UPDATE dm_member_signups
         SET sticker_attached = false, sticker_state = 'legacy',
             sticker_confirmed_at = NULL, sticker_confirmed_by = NULL
       WHERE guid = $1`, [legacy.guid]);
-  const old = await getSignup(legacy.guid);
+  const old = await getSignup(legacy.guid, DUTCH_MILLER);
   check("it reads as legacy, not as unconfirmed", old?.customer.stickerState === "legacy");
   // Not rewritten to true. A confirmation nobody gave is not ours to invent.
   check("…and was NOT backfilled to confirmed",
     old?.customer.stickerAttached === false);
-  await markOpened(legacy.guid, CSC);
-  const blocked = await setComplete(legacy.guid, CSC);
+  await markOpened(legacy.guid, CSC, DUTCH_MILLER);
+  const blocked = await setComplete(legacy.guid, CSC, DUTCH_MILLER);
   check("approving it still needs somebody to look",
     !blocked.ok && blocked.reason === "sticker-unconfirmed",
     blocked.ok ? "approved" : blocked.reason);
-  await confirmSticker(legacy.guid, CSC);
+  await confirmSticker(legacy.guid, CSC, DUTCH_MILLER);
   check("…and once they have, it approves",
-    (await setComplete(legacy.guid, CSC)).ok === true);
+    (await setComplete(legacy.guid, CSC, DUTCH_MILLER)).ok === true);
 } finally {
   await db().query("DELETE FROM dm_member_signups WHERE guid = ANY($1::uuid[])", [GUIDS])
     .catch(() => {});

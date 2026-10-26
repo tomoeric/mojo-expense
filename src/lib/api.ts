@@ -131,9 +131,20 @@ export type SessionUser = { id: string; email: string; name: string; exp: number
 /** The products that share this deployment. */
 export const APPS = ["emburse", "dutch-miller"] as const;
 export type AppKey = (typeof APPS)[number];
+/**
+ * What each product is CALLED.
+ *
+ * The key stays `dutch-miller` — it is the wire value, the cookie
+ * value and the route prefix, and renaming it would break a cached
+ * client mid-deploy for nothing a reader can see. The LABEL moved,
+ * because the product stopped being one dealership's app: Dutch
+ * Miller is now one partner account inside MOJO Partners, and a
+ * switcher offering "Dutch Miller" while the header says MOJO
+ * Partners reads as two different places.
+ */
 export const APP_LABEL: Record<AppKey, string> = {
   emburse: "Emburse",
-  "dutch-miller": "Dutch Miller",
+  "dutch-miller": "MOJO Partners",
 };
 
 export type AuthResponse = {

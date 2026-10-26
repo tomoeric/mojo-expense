@@ -1,4 +1,5 @@
 import { db, ensureSchema } from "../db.js";
+import { DUTCH_MILLER } from "./accounts.js";
 import { RFID_RE } from "./rfid-parse.js";
 
 /**
@@ -57,11 +58,32 @@ ALTER TABLE dm_rfid ADD COLUMN IF NOT EXISTS delete_note text;
  * anything already in the pool.
  */
 ALTER TABLE dm_rfid ADD COLUMN IF NOT EXISTS test_only boolean NOT NULL DEFAULT false;
+/*
+ * Which partner's pool this tag belongs to.
+ *
+ * The default migrates the table: every number that existed before
+ * partner accounts is Dutch Miller's stock.
+ *
+ * The PRIMARY KEY stays the number alone, GLOBALLY, and that is the
+ * important part. A tag is a physical sticker with a number printed on
+ * it and there is exactly one of each in the world — the gate readers
+ * do not know about accounts. Keying per account would let two partners
+ * hold the same number, and the second car through the wash would be
+ * billed to the first one's membership. So a number belongs to one
+ * account, and an upload of a number another partner already holds adds
+ * nothing and says so.
+ */
+ALTER TABLE dm_rfid ADD COLUMN IF NOT EXISTS account_id text NOT NULL
+  DEFAULT '${DUTCH_MILLER}';
+CREATE INDEX IF NOT EXISTS dm_rfid_account ON dm_rfid (account_id, status, number);
 `;
 
 let ready: Promise<void> | null = null;
 const ensure = (): Promise<void> =>
   (ready ??= ensureSchema().then(async () => { await db().query(SCHEMA); }));
+
+/** The RFID pool's table, for the modules whose own schema needs it. */
+export const ensureRfidSchema = (): Promise<void> => ensure();
 
 export type RfidStatus = "active" | "inactive" | "used";
 
@@ -89,7 +111,11 @@ export type UploadResult = {
   /** Repeats WITHIN the file. Counted once each; the first copy was kept. */
   duplicatesInFile: { number: string; copies: number }[];
   /** Already in the pool before this file. Not added again. */
-  alreadyHeld: { number: string; status: RfidStatus; deleted: boolean }[];
+  alreadyHeld: {
+    number: string; status: RfidStatus; deleted: boolean;
+    /** Held by a DIFFERENT partner. Not added, and not named. */
+    otherAccount: boolean;
+  }[];
   /** Cells that looked like an attempt and were not a number. */
   rejected: { raw: string; problem: string }[];
   /** Cells examined, so "it imported nothing" can be told from "wrong column". */
@@ -112,6 +138,7 @@ export async function addRfids(
   rejected: { raw: string; problem: string }[],
   cells: number,
   by: string,
+  account: string,
 ): Promise<UploadResult> {
   await ensure();
   const batch = `${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "")}-${Math.random().toString(36).slice(2, 6)}`;
@@ -132,20 +159,32 @@ export async function addRfids(
   // A deleted number counts as held, and deliberately does NOT come back:
   // re-uploading the same file must not undo somebody's decision to remove
   // a tag. It is reported so the difference is visible.
-  const held = await db().query<{ number: string; status: RfidStatus; deleted_at: Date | null }>(
-    "SELECT number, status, deleted_at FROM dm_rfid WHERE number = ANY($1::text[])", [unique]);
+  const held = await db().query<{
+    number: string; status: RfidStatus; deleted_at: Date | null; account_id: string;
+  }>(
+    `SELECT number, status, deleted_at, account_id
+       FROM dm_rfid WHERE number = ANY($1::text[])`, [unique]);
+  /*
+   * A number another partner already holds is reported, never taken.
+   *
+   * Without the flag it reads as "already held" and the person goes
+   * looking for it in a list it is not in. Which partner holds it is
+   * deliberately NOT said: that a number is spoken for is this
+   * uploader's business, and whose stock it is in is not.
+   */
   const alreadyHeld = held.rows.map((r) => ({
     number: r.number, status: r.status, deleted: r.deleted_at !== null,
+    otherAccount: r.account_id !== account,
   }));
 
   // ON CONFLICT DO NOTHING as well as the check above: between the two
   // statements another upload can land, and the unique index is the only
   // thing that is actually authoritative about it.
   const { rowCount } = await db().query(
-    `INSERT INTO dm_rfid (number, added_by, batch)
-          SELECT n, $2, $3 FROM unnest($1::text[]) AS n
+    `INSERT INTO dm_rfid (number, added_by, batch, account_id)
+          SELECT n, $2, $3, $4 FROM unnest($1::text[]) AS n
      ON CONFLICT (number) DO NOTHING`,
-    [unique, by, batch]);
+    [unique, by, batch, account]);
 
   return { batch, added: rowCount ?? 0, duplicatesInFile, alreadyHeld, rejected, cells };
 }
@@ -162,10 +201,11 @@ export type RfidCounts = {
  * figure here is read as "how many tags do we have", and a removed tag is
  * not one of them.
  */
-export async function rfidCounts(): Promise<RfidCounts> {
+export async function rfidCounts(account: string): Promise<RfidCounts> {
   await ensure();
   const { rows } = await db().query<{ status: RfidStatus; n: string }>(
-    "SELECT status, count(*) AS n FROM dm_rfid WHERE deleted_at IS NULL GROUP BY status");
+    `SELECT status, count(*) AS n FROM dm_rfid
+      WHERE deleted_at IS NULL AND account_id = $1 GROUP BY status`, [account]);
   const out: RfidCounts = {
     active: 0, inactive: 0, used: 0, deleted: 0, testOnly: 0, total: 0,
   };
@@ -174,25 +214,31 @@ export async function rfidCounts(): Promise<RfidCounts> {
     out.total += Number(r.n);
   }
   out.deleted = Number((await db().query<{ n: string }>(
-    "SELECT count(*) AS n FROM dm_rfid WHERE deleted_at IS NOT NULL")).rows[0]?.n ?? 0);
+    `SELECT count(*) AS n FROM dm_rfid
+      WHERE deleted_at IS NOT NULL AND account_id = $1`, [account])).rows[0]?.n ?? 0);
   // Counted alongside, not apart: a test tag is a real tag in the
   // pool, just one only the owner may issue.
   out.testOnly = Number((await db().query<{ n: string }>(
     `SELECT count(*) AS n FROM dm_rfid
-      WHERE test_only AND deleted_at IS NULL`)).rows[0]?.n ?? 0);
+      WHERE test_only AND deleted_at IS NULL AND account_id = $1`,
+    [account])).rows[0]?.n ?? 0);
   return out;
 }
 
 export async function listRfids(opts: {
+  /** Whose pool. Required — no view here reads across partners. */
+  account: string;
   /** `deleted` and `test` are their own views; the rest exclude deleted. */
   status?: RfidStatus | "all" | "deleted" | "test";
   search?: string;
   limit?: number;
   offset?: number;
-} = {}): Promise<{ rows: RfidRow[]; total: number }> {
+}): Promise<{ rows: RfidRow[]; total: number }> {
   await ensure();
   const where: string[] = [];
   const args: unknown[] = [];
+  args.push(opts.account);
+  where.push(`account_id = $${args.length}`);
   if (opts.status === "deleted") {
     where.push("deleted_at IS NOT NULL");
   } else if (opts.status === "test") {
@@ -258,14 +304,15 @@ export async function useRfid(
   number: string,
   by: string,
   usedFor: string,
+  account: string,
 ): Promise<{ ok: true; row: RfidRow } | { ok: false; reason: string }> {
   await ensure();
   if (!RFID_RE.test(number)) return { ok: false, reason: "Not an RFID number." };
 
   const { rows } = await db().query<{ status: RfidStatus }>(
     `UPDATE dm_rfid SET status = 'used', used_at = now(), used_by = $2, used_for = $3
-      WHERE number = $1 AND status <> 'used' AND deleted_at IS NULL
-      RETURNING status`, [number, by, usedFor.slice(0, 500)]);
+      WHERE number = $1 AND account_id = $4 AND status <> 'used' AND deleted_at IS NULL
+      RETURNING status`, [number, by, usedFor.slice(0, 500), account]);
 
   if (rows.length === 0) {
     const held = await db().query<{
@@ -273,9 +320,12 @@ export async function useRfid(
       deleted_at: Date | null; delete_note: string | null;
     }>(
       `SELECT status, used_at, used_by, deleted_at, delete_note
-         FROM dm_rfid WHERE number = $1`, [number]);
+         FROM dm_rfid WHERE number = $1 AND account_id = $2`, [number, account]);
     const row = held.rows[0];
-    if (!row) return { ok: false, reason: "That number is not in the pool." };
+    // A number in ANOTHER partner's stock reads the same as one that
+    // does not exist, on purpose. "It is in somebody else's pool" is a
+    // fact about a partner this person has no business knowing about.
+    if (!row) return { ok: false, reason: "That number is not in this account's pool." };
     if (row.deleted_at) {
       return {
         ok: false,
@@ -289,7 +339,7 @@ export async function useRfid(
         `${row.used_at ? ` on ${row.used_at.toISOString().slice(0, 10)}` : ""}.`,
     };
   }
-  const one = await listRfids({ search: number, limit: 1 });
+  const one = await listRfids({ account, search: number, limit: 1 });
   return { ok: true, row: one.rows[0]! };
 }
 
@@ -312,20 +362,22 @@ export async function useRfid(
 export async function setRfidTestOnly(
   numbers: string[],
   testOnly: boolean,
+  account: string,
 ): Promise<{ changed: number }> {
   await ensure();
   const wanted = numbers.filter((n) => RFID_RE.test(n));
   if (wanted.length === 0) return { changed: 0 };
   const { rowCount } = await db().query(
     `UPDATE dm_rfid SET test_only = $2
-      WHERE number = ANY($1::text[]) AND deleted_at IS NULL`,
-    [wanted, testOnly]);
+      WHERE number = ANY($1::text[]) AND deleted_at IS NULL AND account_id = $3`,
+    [wanted, testOnly, account]);
   return { changed: rowCount ?? 0 };
 }
 
 export async function setRfidActive(
   numbers: string[],
   active: boolean,
+  account: string,
 ): Promise<{ changed: number; refusedUsed: number }> {
   await ensure();
   const wanted = numbers.filter((n) => RFID_RE.test(n));
@@ -333,13 +385,15 @@ export async function setRfidActive(
 
   const { rowCount } = await db().query(
     `UPDATE dm_rfid SET status = $2
-      WHERE number = ANY($1::text[]) AND status <> 'used' AND deleted_at IS NULL`,
-    [wanted, active ? "active" : "inactive"]);
+      WHERE number = ANY($1::text[]) AND status <> 'used' AND deleted_at IS NULL
+        AND account_id = $3`,
+    [wanted, active ? "active" : "inactive", account]);
 
   const used = Number((await db().query<{ n: string }>(
     `SELECT count(*) AS n FROM dm_rfid
-      WHERE number = ANY($1::text[]) AND status = 'used' AND deleted_at IS NULL`,
-    [wanted])).rows[0]?.n ?? 0);
+      WHERE number = ANY($1::text[]) AND status = 'used' AND deleted_at IS NULL
+        AND account_id = $2`,
+    [wanted, account])).rows[0]?.n ?? 0);
 
   return { changed: rowCount ?? 0, refusedUsed: used };
 }
@@ -370,6 +424,7 @@ export async function deleteRfids(opts: {
   numbers: string[];
   note: string;
   by: string;
+  account: string;
 }): Promise<RfidDeleteResult | { error: string }> {
   await ensure();
   const note = opts.note.trim();
@@ -380,13 +435,14 @@ export async function deleteRfids(opts: {
   if (wanted.length === 0) return { error: "No RFID numbers to remove." };
 
   const held = await db().query<{ number: string; deleted_at: Date | null }>(
-    "SELECT number, deleted_at FROM dm_rfid WHERE number = ANY($1::text[])", [wanted]);
+    `SELECT number, deleted_at FROM dm_rfid
+      WHERE number = ANY($1::text[]) AND account_id = $2`, [wanted, opts.account]);
   const known = new Map(held.rows.map((r) => [r.number, r.deleted_at]));
 
   const { rowCount } = await db().query(
     `UPDATE dm_rfid SET deleted_at = now(), deleted_by = $2, delete_note = $3
-      WHERE number = ANY($1::text[]) AND deleted_at IS NULL`,
-    [wanted, opts.by, note.slice(0, 500)]);
+      WHERE number = ANY($1::text[]) AND deleted_at IS NULL AND account_id = $4`,
+    [wanted, opts.by, note.slice(0, 500), opts.account]);
 
   return {
     deleted: rowCount ?? 0,

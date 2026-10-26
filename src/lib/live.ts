@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { slugInPath } from "./partner";
 import { useQueryClient } from "@tanstack/react-query";
 
 /**
@@ -32,7 +33,18 @@ export function useLiveUpdates(enabled: boolean): void {
   useEffect(() => {
     if (!enabled || typeof EventSource === "undefined") return;
 
-    const source = new EventSource("/api/dutch-miller/events");
+    /*
+     * The partner account goes in the QUERY STRING here, not a header.
+     *
+     * EventSource cannot set one — that is the whole API — and the
+     * server reads either. A stream opened without it would attach to
+     * whichever account the person happens to hold first, so an
+     * administrator watching one partner would be woken by another's
+     * changes and would silently miss their own.
+     */
+    const slug = slugInPath();
+    const source = new EventSource(
+      `/api/dutch-miller/events${slug ? `?account=${encodeURIComponent(slug)}` : ""}`);
 
     source.addEventListener("change", (e) => {
       let topic = "";

@@ -18,6 +18,7 @@ import {
   createSignup, deleteSignup, getSignup, listSignups, markNotified, markOpened,
   newHandle, setComplete, validateSignup,
 } from "../server/dutch-miller/signups.js";
+import { DUTCH_MILLER } from "../server/dutch-miller/accounts.js";
 import { isStaff } from "../server/dutch-miller/users.js";
 import type { SessionUser } from "../server/auth/session.js";
 import { addRfids, listRfids } from "../server/dutch-miller/rfid.js";
@@ -61,7 +62,7 @@ try {
       WHERE number = ANY($1::text[])`, [TAGS]).catch(() => {});
   await db().query(
     "DELETE FROM dm_member_signups WHERE rfid = ANY($1::text[])", [TAGS]).catch(() => {});
-  await addRfids(TAGS, [], TAGS.length, ME);
+  await addRfids(TAGS, [], TAGS.length, ME, DUTCH_MILLER);
 
   console.log("1. Validation, field by field");
   const empty = validateSignup({});
@@ -127,19 +128,19 @@ try {
 
   console.log("\n2. The generated values are the server's");
   const forged = await createSignup(
-    { ...entry(), guid: "11111111-1111-4111-8111-111111111111", token: "made-up" }, ME);
+    { ...entry(), guid: "11111111-1111-4111-8111-111111111111", token: "made-up" }, ME, { account: DUTCH_MILLER });
   check("a GUID the server never minted is refused",
     forged.ok === false && forged.kind === "bad-handle",
     forged.ok ? "accepted" : forged.kind);
   const moved = entry();
   const tampered = await createSignup(
-    { ...moved, createdAt: new Date(0).toISOString() }, ME);
+    { ...moved, createdAt: new Date(0).toISOString() }, ME, { account: DUTCH_MILLER });
   check("a creation time changed in flight is refused",
     tampered.ok === false && tampered.kind === "bad-handle");
 
   console.log("\n3. One signup, one tag");
   const one = entry({ rfid: TAGS[0]! });
-  const made = await createSignup(one, ME);
+  const made = await createSignup(one, ME, { account: DUTCH_MILLER });
   check("it saves", made.ok === true, made.ok ? "" : JSON.stringify(made));
   if (!made.ok) throw new Error("cannot continue");
   check("the tag is now used", (await db().query<{ status: string }>(
@@ -151,7 +152,7 @@ try {
   check("…and NOT marked complete", made.row.completedAt === null);
 
   console.log("\n4. The same entry submitted twice");
-  const again = await createSignup(one, ME);
+  const again = await createSignup(one, ME, { account: DUTCH_MILLER });
   check("the second attempt succeeds", again.ok === true);
   check("…reporting that it was already there",
     again.ok === true && again.alreadyExisted === true);
@@ -165,7 +166,7 @@ try {
   check("…and exactly one tag used", stillOne.rows[0]?.n === "1", stillOne.rows[0]?.n);
 
   console.log("\n5. A tag that is gone");
-  const taken = await createSignup(entry({ rfid: TAGS[0]! }), ME);
+  const taken = await createSignup(entry({ rfid: TAGS[0]! }), ME, { account: DUTCH_MILLER });
   check("a used tag cannot be assigned again",
     taken.ok === false && taken.kind === "rfid-taken",
     taken.ok ? "accepted" : taken.kind);
@@ -178,7 +179,7 @@ try {
 
   console.log("\n6. Two entries racing for one tag");
   const racers = [entry({ rfid: TAGS[1]! }), entry({ rfid: TAGS[1]! })];
-  const raced = await Promise.all(racers.map((r) => createSignup(r, ME)));
+  const raced = await Promise.all(racers.map((r) => createSignup(r, ME, { account: DUTCH_MILLER })));
   check("exactly one wins", raced.filter((r) => r.ok).length === 1,
     JSON.stringify(raced.map((r) => (r.ok ? "ok" : r.kind))));
   check("…and the loser is told why",
@@ -189,7 +190,7 @@ try {
 
   console.log("\n7. A tag held back is not available either");
   await db().query("UPDATE dm_rfid SET status = 'inactive' WHERE number = $1", [TAGS[2]]);
-  const held = await createSignup(entry({ rfid: TAGS[2]! }), ME);
+  const held = await createSignup(entry({ rfid: TAGS[2]! }), ME, { account: DUTCH_MILLER });
   check("a held-back tag is refused", held.ok === false && held.kind === "rfid-taken");
   check("…and stays held back, not used", (await db().query<{ status: string }>(
     "SELECT status FROM dm_rfid WHERE number = $1", [TAGS[2]])).rows[0]?.status === "inactive");
@@ -214,12 +215,12 @@ try {
   // Completing is ORDERED: it means a person read this one, so it is
   // refused until somebody has opened it. Marking a list off without
   // reading it is the one thing the mark must not allow.
-  const early = await setComplete(one.guid, "eric.s@mojocarwash.com");
+  const early = await setComplete(one.guid, "eric.s@mojocarwash.com", DUTCH_MILLER);
   check("cannot complete before anybody has opened it",
     !early.ok && early.reason === "not-opened", early.ok ? "allowed" : early.reason);
 
-  await markOpened(one.guid, "eric.s@mojocarwash.com");
-  const done = await setComplete(one.guid, "eric.s@mojocarwash.com");
+  await markOpened(one.guid, "eric.s@mojocarwash.com", DUTCH_MILLER);
+  const done = await setComplete(one.guid, "eric.s@mojocarwash.com", DUTCH_MILLER);
   check("…and can once it has been opened", done.ok === true);
   check("marking complete records who",
     done.ok && done.row.completedBy === "eric.s@mojocarwash.com");
@@ -227,54 +228,54 @@ try {
 
   // One way. A dealer told their member can wash must not be told
   // otherwise, and a tracker that runs backwards is not a tracker.
-  const again2 = await setComplete(one.guid, "someone@mojocarwash.com");
+  const again2 = await setComplete(one.guid, "someone@mojocarwash.com", DUTCH_MILLER);
   check("completing is final", !again2.ok && again2.reason === "already",
     again2.ok ? "allowed" : again2.reason);
   check("…and the first completer stands",
-    (await getSignup(one.guid))!.completedBy === "eric.s@mojocarwash.com");
+    (await getSignup(one.guid, DUTCH_MILLER))!.completedBy === "eric.s@mojocarwash.com");
   check("a signup that does not exist says so",
-    !(await setComplete("00000000-0000-4000-8000-000000000000", "x")).ok);
+    !(await setComplete("00000000-0000-4000-8000-000000000000", "x", DUTCH_MILLER)).ok);
 
   console.log("\n9. The four steps");
   await markNotified(one.guid);
-  check("the notification lights the second", Boolean((await getSignup(one.guid))!.notifiedAt));
-  check("opening lit the third", Boolean((await getSignup(one.guid))!.openedAt));
+  check("the notification lights the second", Boolean((await getSignup(one.guid, DUTCH_MILLER))!.notifiedAt));
+  check("opening lit the third", Boolean((await getSignup(one.guid, DUTCH_MILLER))!.openedAt));
   check("…and recorded who looked",
-    (await getSignup(one.guid))!.openedBy === "eric.s@mojocarwash.com");
+    (await getSignup(one.guid, DUTCH_MILLER))!.openedBy === "eric.s@mojocarwash.com");
   // A milestone, not a last-seen: rewriting it on every view would stop
   // it answering "has anybody dealt with this".
   check("opening again does not move it",
-    (await markOpened(one.guid, "someone.else@mojocarwash.com")) === null);
+    (await markOpened(one.guid, "someone.else@mojocarwash.com", DUTCH_MILLER)) === null);
   check("…and the first viewer stands",
-    (await getSignup(one.guid))!.openedBy === "eric.s@mojocarwash.com");
-  const allFour = (await getSignup(one.guid))!;
+    (await getSignup(one.guid, DUTCH_MILLER))!.openedBy === "eric.s@mojocarwash.com");
+  const allFour = (await getSignup(one.guid, DUTCH_MILLER))!;
   check("all four are lit",
     Boolean(allFour.submittedAt && allFour.notifiedAt && allFour.openedAt && allFour.completedAt));
 
   console.log("\n10. Reading back");
-  const got = await getSignup(one.guid);
+  const got = await getSignup(one.guid, DUTCH_MILLER);
   check("the member's own contact details come back",
     got?.customer.phone === "(304) 555-0133"
       && got?.customer.email === "dana@example.com",
     `${got?.customer.phone} / ${got?.customer.email}`);
   check("the three buckets come back grouped",
     got?.dealer.dealNumber === "00712" && got?.customer.vehicleMake === "Ford");
-  const listed = await listSignups({ search: "reyes" });
+  const listed = await listSignups({ account: DUTCH_MILLER,  search: "reyes" });
   check("search finds it by name", listed.rows.some((r) => r.guid === one.guid));
-  const byTag = await listSignups({ search: TAGS[0]! });
+  const byTag = await listSignups({ account: DUTCH_MILLER,  search: TAGS[0]! });
   check("…and by tag", byTag.rows.some((r) => r.guid === one.guid));
   // The three states must not overlap, or the counts on the chips add
   // up to more than the number of signups and nobody trusts any of them.
-  const seen = await listSignups({ status: "review" });
+  const seen = await listSignups({ account: DUTCH_MILLER,  status: "review" });
   check("under review means opened and not finished",
     seen.rows.every((r) => r.openedAt !== null && r.completedAt === null));
-  const fresh2 = await listSignups({ status: "new" });
+  const fresh2 = await listSignups({ account: DUTCH_MILLER,  status: "new" });
   check("awaiting means nobody has looked",
     fresh2.rows.every((r) => r.openedAt === null && r.completedAt === null));
-  const done2 = await listSignups({ status: "complete" });
+  const done2 = await listSignups({ account: DUTCH_MILLER,  status: "complete" });
   check("completed means finished",
     done2.rows.every((r) => r.completedAt !== null));
-  const all = await listSignups({ status: "all" });
+  const all = await listSignups({ account: DUTCH_MILLER,  status: "all" });
   check("…and the three add up to the whole",
     all.counts.new + all.counts.review + all.counts.complete === all.counts.total,
     JSON.stringify(all.counts));
@@ -290,55 +291,55 @@ try {
    */
   console.log("\n11. Deleting keeps the record");
   const doomed = entry({ rfid: TAGS[3]! });
-  const madeDoomed = await createSignup(doomed, ME);
+  const madeDoomed = await createSignup(doomed, ME, { account: DUTCH_MILLER });
   check("there is something to delete", madeDoomed.ok === true);
   check("a note is required",
-    (await deleteSignup({ guid: doomed.guid, note: "x", by: ME })).ok === false);
+    (await deleteSignup({ account: DUTCH_MILLER,  guid: doomed.guid, note: "x", by: ME })).ok === false);
   check("…and the record is untouched by the refusal",
-    (await getSignup(doomed.guid))!.deletedAt === null);
-  const gone = await deleteSignup({
+    (await getSignup(doomed.guid, DUTCH_MILLER))!.deletedAt === null);
+  const gone = await deleteSignup({ account: DUTCH_MILLER, 
     guid: doomed.guid, note: "Duplicate of the entry submitted the same morning.", by: ME,
   });
   check("it deletes", gone.ok === true);
-  const after = await getSignup(doomed.guid);
+  const after = await getSignup(doomed.guid, DUTCH_MILLER);
   check("…and the row is STILL THERE", after !== null);
   check("…marked", Boolean(after?.deletedAt));
   check("…by whom", after?.deletedBy === ME);
   check("…with the reason", (after?.deleteNote ?? "").startsWith("Duplicate"));
   check("…and every field it had", after?.customer.vehicleMake === "Ford");
   check("deleting twice is refused",
-    (await deleteSignup({ guid: doomed.guid, note: "again, for the record", by: ME })).ok === false);
+    (await deleteSignup({ account: DUTCH_MILLER,  guid: doomed.guid, note: "again, for the record", by: ME })).ok === false);
 
   // The tag is the part that cannot be guessed at. Left alone by
   // default: a member who drove off with the sticker on the windscreen
   // must never have that number handed to somebody else.
-  const stillUsed = await listRfids({ status: "used", search: TAGS[3]! });
+  const stillUsed = await listRfids({ account: DUTCH_MILLER,  status: "used", search: TAGS[3]! });
   check("the tag stays issued unless asked otherwise",
     stillUsed.rows.some((r) => r.number === TAGS[3]!));
   check("…and the deletion says so", after?.tagReleased === false);
 
   const released = entry({ rfid: TAGS[4]! });
-  await createSignup(released, ME);
-  const back = await deleteSignup({
+  await createSignup(released, ME, { account: DUTCH_MILLER });
+  const back = await deleteSignup({ account: DUTCH_MILLER, 
     guid: released.guid, note: "Entered against the wrong customer.", by: ME,
     releaseTag: true,
   });
   check("asked to, it puts the tag back", back.ok === true && back.tagReleased);
-  const pool = await listRfids({ status: "active", search: TAGS[4]! });
+  const pool = await listRfids({ account: DUTCH_MILLER,  status: "active", search: TAGS[4]! });
   check("…and the number is available again",
     pool.rows.some((r) => r.number === TAGS[4]!));
-  check("…which the record records", (await getSignup(released.guid))!.tagReleased);
+  check("…which the record records", (await getSignup(released.guid, DUTCH_MILLER))!.tagReleased);
 
   console.log("\n12. A deleted record is out of the way");
-  const live = await listSignups({ status: "all" });
+  const live = await listSignups({ account: DUTCH_MILLER,  status: "all" });
   check("it is not in the live list",
     !live.rows.some((r) => r.guid === doomed.guid));
   check("…nor in any of the three states",
-    !(await listSignups({ status: "new" })).rows.some((r) => r.guid === doomed.guid)
-    && !(await listSignups({ status: "review" })).rows.some((r) => r.guid === doomed.guid)
-    && !(await listSignups({ status: "complete" })).rows.some((r) => r.guid === doomed.guid));
+    !(await listSignups({ account: DUTCH_MILLER,  status: "new" })).rows.some((r) => r.guid === doomed.guid)
+    && !(await listSignups({ account: DUTCH_MILLER,  status: "review" })).rows.some((r) => r.guid === doomed.guid)
+    && !(await listSignups({ account: DUTCH_MILLER,  status: "complete" })).rows.some((r) => r.guid === doomed.guid));
   check("…but it IS in the deleted one",
-    (await listSignups({ status: "deleted" })).rows.some((r) => r.guid === doomed.guid));
+    (await listSignups({ account: DUTCH_MILLER,  status: "deleted" })).rows.some((r) => r.guid === doomed.guid));
   check("…and the chips still add up",
     live.counts.new + live.counts.review + live.counts.complete === live.counts.total,
     JSON.stringify(live.counts));
@@ -349,8 +350,8 @@ try {
   // sitting in somebody's inbox still approves a membership that was
   // deleted this morning.
   check("a deleted record cannot be opened",
-    (await markOpened(doomed.guid, "csc@mojocarwash.com")) === null);
-  const late = await setComplete(doomed.guid, "csc@mojocarwash.com");
+    (await markOpened(doomed.guid, "csc@mojocarwash.com", DUTCH_MILLER)) === null);
+  const late = await setComplete(doomed.guid, "csc@mojocarwash.com", DUTCH_MILLER);
   check("…nor approved", late.ok === false && late.reason === "deleted",
     late.ok ? "approved" : late.reason);
 
@@ -358,7 +359,7 @@ try {
   // deleted one still on the books. The partial unique index is what
   // allows that; a plain one would refuse the second signup forever.
   const reused = entry({ rfid: TAGS[4]!, firstName: "Sam" });
-  const reissued = await createSignup(reused, ME);
+  const reissued = await createSignup(reused, ME, { account: DUTCH_MILLER });
   check("a released tag can be issued to somebody else", reissued.ok === true,
     reissued.ok ? "" : JSON.stringify(reissued));
 } finally {

@@ -99,6 +99,21 @@ export const EVENT_META = {
   "role.saved": M("access", "succeeded", "medium", "A role's permissions changed", true),
   "role.removed": M("access", "succeeded", "medium", "A role was deleted", true),
 
+  /* ---- Partner accounts ----
+   *
+   * Deliberately NOT the account.* family above, which has always
+   * meant a person's account. A platform with partners in it and a
+   * log that calls both of them "account" is a log nobody can search.
+   */
+  "partner.created": M("access", "succeeded", "medium", "A partner account was created", true),
+  "partner.updated": M("access", "succeeded", "low", "A partner account was changed", true),
+  "partner.deactivated": M("access", "succeeded", "high",
+    "A partner account was deactivated", true),
+  "partner.reactivated": M("access", "succeeded", "medium",
+    "A partner account was brought back", true),
+  "partner.scope": M("access", "succeeded", "medium",
+    "Which partner accounts somebody can open was changed", true),
+
   /* ---- Looking through somebody else's eyes ---- */
   "viewas.started": M("access", "succeeded", "medium",
     "An administrator started viewing the app as somebody else", true),

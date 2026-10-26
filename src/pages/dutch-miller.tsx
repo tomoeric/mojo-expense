@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Building2, ChevronRight, Crown, SlidersHorizontal, Users } from "lucide-react";
+import {
+  Building2, ChevronRight, Crown, Layers, Mail, Settings2, ShieldCheck,
+  SlidersHorizontal, Users,
+} from "lucide-react";
 import { AppSwitcher } from "@/components/app-switcher";
 import { DmStopViewing } from "@/components/dm-stop-viewing";
 import { UserMenu } from "@/components/user-menu";
@@ -15,6 +18,10 @@ import { DmAuditPage } from "@/pages/dm-audit";
 import { DmVendorsPage } from "@/pages/dm-vendors";
 import { DmSecurityPage } from "@/pages/dm-security";
 import { DmSettingsPage } from "@/pages/dm-settings";
+import {
+  DmAccountSettingsPage, DmPartnersPage, DmTemplatePage,
+} from "@/pages/dm-partners";
+import { openAccount, slugInPath } from "@/lib/partner";
 import type { AppKey, SessionUser } from "@/lib/api";
 
 /**
@@ -59,6 +66,19 @@ type Access = {
   viewingAs: { real: string; viewed: string } | null;
   /** Which face of the glass the sticker goes on. Drives the wording. */
   stickerPlacement: "inside" | "outside";
+  /** The platform's own name, above the partner's. */
+  platform: string;
+  /** The partner this request resolved to, or none. */
+  account: PartnerRef | null;
+  /** Every partner the REAL person may open, for the switcher. */
+  accounts: PartnerRef[];
+  /** Creating and deactivating partners. The pinned list, nobody else. */
+  isAccountAdmin: boolean;
+};
+
+type PartnerRef = {
+  id: string; slug: string; name: string; affiliation: string;
+  line: string; status: "active" | "inactive";
 };
 
 /**
@@ -85,7 +105,16 @@ type Access = {
  * a refresh and a pasted link all behave, and links bookmarked when
  * these were tabs still land in the right place.
  */
-const ADMIN_PAGES: { key: string; label: string; superOnly?: boolean }[] = [
+const ADMIN_PAGES: { key: string; label: string; superOnly?: boolean; grant?: string }[] = [
+  /*
+   * Vendors, which used to be in the rail.
+   *
+   * It moved here rather than away: the rail is the work a dealership
+   * comes to do, and approving a company to be paid is not that job.
+   * Gated on the GRANT rather than on administering, so the people
+   * who had it still have it and nobody else gained it.
+   */
+  { key: "vendors", label: "Vendors", grant: "vendors" },
   // The switch that closes the partner account is the account
   // administrator's, so the page it lives on is too: an ordinary
   // administrator should not be shown a control they cannot use.
@@ -103,8 +132,27 @@ const ADMIN_PAGES: { key: string; label: string; superOnly?: boolean }[] = [
  * Filtered here AND enforced on every route behind them: this decides
  * what the menu offers, never what the server allows.
  */
-const adminFor = (role: "super" | "admin" | "user") =>
-  ADMIN_PAGES.filter((p) => !p.superOnly || role === "super");
+const adminFor = (
+  role: "super" | "admin" | "user", holds: (grant: string) => boolean,
+) => ADMIN_PAGES.filter((p) => (p.grant ? holds(p.grant) : true))
+  .filter((p) => !p.superOnly || role === "super");
+
+/**
+ * The platform's own sections, outside any partner.
+ *
+ * Reached at the root rather than inside an account, because that is
+ * what they are about: which partners exist, who may open them, and
+ * the configuration that is the same in all of them.
+ */
+const PLATFORM_PAGES: { key: string; label: string; icon: React.ReactNode }[] = [
+  { key: "partners", label: "Partner Accounts", icon: <Building2 className="h-4 w-4" /> },
+  { key: "template", label: "Shared Template", icon: <Layers className="h-4 w-4" /> },
+  { key: "users", label: "Users & Access", icon: <Users className="h-4 w-4" /> },
+  { key: "roles", label: "Roles & Permissions", icon: <Crown className="h-4 w-4" /> },
+  { key: "settings", label: "Account Settings", icon: <Settings2 className="h-4 w-4" /> },
+  { key: "security", label: "Security", icon: <ShieldCheck className="h-4 w-4" /> },
+  { key: "email", label: "Email & Notifications", icon: <Mail className="h-4 w-4" /> },
+];
 
 /** One routable page holding all of them, so `#/admin/<key>` works. */
 const MENU_PAGES: PageDef[] = [{
@@ -182,6 +230,27 @@ export function DutchMillerApp({
   const access = me.data;
   const dmAdmin = access?.role === "admin" || access?.role === "super";
   /*
+   * The PATH says which partner, and nothing else does.
+   *
+   * `/dutchmiller` is Dutch Miller; `/` is the platform, outside any
+   * partner. A remembered selection would be shared between tabs, so
+   * somebody comparing two partners would have both reading the same
+   * one — and would not find out until they acted on it.
+   */
+  const slug = slugInPath();
+  /*
+   * Vendors used to be a rail page at #/vendors. It is now reached
+   * from the account menu, so an old link or bookmark lands on the
+   * first rail page with no explanation. Rewritten rather than
+   * redirected server-side: the address is a hash, so the server
+   * never sees it.
+   */
+  useEffect(() => {
+    if (window.location.hash.replace(/^#\/?/, "").split("/")[0] === "vendors") {
+      window.location.hash = "/admin/vendors";
+    }
+  }, []);
+  /*
    * The rail, filtered one SUB-PAGE at a time.
    *
    * A group appears when any of its pages is held, and shows only the
@@ -190,16 +259,64 @@ export function DutchMillerApp({
    * a heading whose first item refuses them.
    */
   const held = (grant: string) => dmAdmin || (access?.pages ?? []).includes(grant);
+  /*
+   * One account and no slug: open it rather than offer it.
+   *
+   * Somebody who works for one dealership should land in that
+   * dealership, not on a list with one row. An account administrator
+   * is the exception — the list IS their page.
+   */
+  const only = !slug && access && !access.isAccountAdmin && access.accounts.length === 1
+    ? access.accounts[0]!.slug
+    : "";
+  /*
+   * A link from before partner accounts existed.
+   *
+   * Every emailed review link and every bookmark looks like
+   * `/#/member-signups/review` — no slug, a page in the hash. Landing
+   * them on the platform list would drop the page they asked for, so
+   * a hash naming a PARTNER page resolves to the account this request
+   * already resolved to, carrying the hash with it. Only a page the
+   * shell knows counts; a platform hash like #/partners is left alone.
+   */
+  const legacy = !slug && access?.account && !only
+    ? (() => {
+      const first = window.location.hash.replace(/^#\/?/, "").split("/")[0] ?? "";
+      const partnerPage = first === "admin" || first === "vendors"
+        || access.allPages.some((pg) => pg.key === first);
+      return partnerPage ? access.account!.slug : "";
+    })()
+    : "";
+  useEffect(() => {
+    if (only) openAccount(only, window.location.hash);
+    else if (legacy) openAccount(legacy, window.location.hash);
+  }, [only, legacy]);
+
+  /*
+   * The tab's own name.
+   *
+   * One index.html serves both products, so its static title has to
+   * be the deployment's — which left this app's tabs reading "MOJO
+   * Expense" next to a header that says something else. Set from the
+   * shell instead, where the product and the partner are both known.
+   */
+  const tab = access?.account && slug
+    ? `${access.account.name} · ${access.platform}`
+    : (access?.platform ?? "MOJO Partners");
+  useEffect(() => { document.title = tab; }, [tab]);
   const rail: PageDef[] = (access?.allPages ?? [])
     .map((p) => (p.children.length === 0
       ? p
       : { ...p, children: p.children.filter((c) => held(c.grant ?? p.key)) }))
     .filter((p) => (p.children.length === 0 ? held(p.key) : p.children.length > 0));
   // The menu pages are routable without being in the rail.
-  const admin = adminFor(access?.role ?? "user");
+  const admin = adminFor(access?.role ?? "user", held);
+  // Routable without being in the rail. Present whenever this person
+  // has anything under the account menu at all — Vendors is granted
+  // by role, so an ordinary user can have one entry and no others.
   const [route, go] = useRoute([
     ...rail,
-    ...(dmAdmin ? [{ ...MENU_PAGES[0]!, children: admin }] : []),
+    ...(admin.length > 0 ? [{ ...MENU_PAGES[0]!, children: admin }] : []),
   ]);
   const [users, setUsers] = useState(false);
   // Audit History, filtered to one account. Set by the history icon on
@@ -220,41 +337,102 @@ export function DutchMillerApp({
     }).then(() => { window.location.href = "/"; });
   };
 
-  return (
-    <div className="min-h-screen">
-      <header className="border-b border-border bg-black text-white">
-        <div className="mx-auto flex max-w-[1800px] items-center justify-between gap-4 px-5 py-3">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="min-w-0">
-              <p className="truncate text-sm font-semibold">Dutch Miller</p>
-              <p className="truncate text-xs text-white/60">
-                Mammoth Holdings — SUDS Car Wash
-              </p>
-            </div>
+  /*
+   * The header, which both shells share.
+   *
+   * MOJO Partners is the platform and is always what the header says
+   * it is. The partner's own line sits under it, and is simply absent
+   * outside an account — never a blank line, never a leftover name
+   * from the last one, and never an invented affiliation for a
+   * partner whose wash nobody has filled in.
+   */
+  const header = (
+    <header className="border-b border-border bg-black text-white">
+      <div className="mx-auto flex max-w-[1800px] items-center justify-between gap-4 px-5 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <button
+            type="button"
+            onClick={() => { window.location.href = "/"; }}
+            className="min-w-0 text-left"
+            title={access && access.accounts.length > 1
+              ? "Every partner you can open" : "MOJO Partners"}
+          >
+            <p className="truncate text-sm font-semibold">
+              {access?.platform ?? "MOJO Partners"}
+            </p>
+            {slug && access?.account && (
+              <p className="truncate text-xs text-white/60">{access.account.line}</p>
+            )}
+          </button>
+          {/* Only for somebody who holds more than one. One partner
+              and a switcher offering it is a control that does
+              nothing but take up the space beside their own name. */}
+          {access && access.accounts.length > 1 && (
+            <select
+              value={slug}
+              onChange={(e) => openAccount(e.target.value)}
+              aria-label="Partner account"
+              className="rounded-md border border-white/20 bg-white/10 px-2 py-1 text-xs
+                         text-white"
+            >
+              {!slug && <option value="">All partners</option>}
+              {/* A deactivated partner is still listed and still
+                  labelled. Somebody attached to it should be able to
+                  find out why it went dark, which is what opening it
+                  now tells them. */}
+              {access.accounts.map((a) => (
+                <option key={a.id} value={a.slug} className="text-black">
+                  {a.name}{a.status === "inactive" ? " (deactivated)" : ""}
+                </option>
+              ))}
+            </select>
+          )}
             {/* Navigation, so it sits beside the product name rather than
                 under somebody's photograph. */}
-            <AppSwitcher
-              apps={apps}
-              app="dutch-miller"
-              onSwitch={onSwitchApp}
-              viewingAs={Boolean(access?.viewingAs)}
-            />
-          </div>
-          <div className="flex items-center gap-3">
-            <DmStopViewing viewingAs={access?.viewingAs ?? null} />
-            {user && (
-              <UserMenu
-                user={user}
-                isAdmin={isAdmin}
-                product="dutch-miller"
-                dmAdmin={dmAdmin}
-                dmDestinations={admin}
-                onDmGo={(key) => { setHistoryFor(""); go("admin", key); }}
-              />
-            )}
-          </div>
+          <AppSwitcher
+            apps={apps}
+            app="dutch-miller"
+            onSwitch={onSwitchApp}
+            viewingAs={Boolean(access?.viewingAs)}
+          />
         </div>
-      </header>
+        <div className="flex items-center gap-3">
+          <DmStopViewing viewingAs={access?.viewingAs ?? null} />
+          {user && (
+            <UserMenu
+              user={user}
+              isAdmin={isAdmin}
+              product="dutch-miller"
+              dmDestinations={admin}
+              onDmGo={(key) => { setHistoryFor(""); go("admin", key); }}
+            />
+          )}
+        </div>
+      </div>
+    </header>
+  );
+
+  /*
+   * Outside a partner: the platform.
+   *
+   * An account administrator lands here on purpose — which partners
+   * exist and who may open them is their job. Everybody else only
+   * reaches it by holding more than one, in which case it is the
+   * list they came for.
+   */
+  if (!slug && access && !only && !legacy) {
+    return (
+      <PlatformShell
+        header={header}
+        access={access}
+        onViewAs={startViewAs}
+      />
+    );
+  }
+
+  return (
+    <div className="min-h-screen">
+      {header}
 
       {/* Impossible to miss, and the way out is in it. Everything below is
           somebody else's app: their rail, their pages, their refusals. The
@@ -329,16 +507,16 @@ export function DutchMillerApp({
               placement={access.stickerPlacement ?? "inside"}
             />
           )}
-          {access && route.page === "vendors" && <DmVendorsPage />}
+
           {access && route.page === "rfid-instructions" && (
             <DmRfidInstructionsPage isAdmin={dmAdmin} />
           )}
           {access && route.page === "rfid-review" && <DmRfidPage />}
           {/* Straight to the page. No heading above it, no tab row —
               each destination carries its own single title. */}
-          {access && route.page === "admin" && dmAdmin && (
+          {access && route.page === "admin" && (
             <>
-              {route.sub === "users" && (
+              {route.sub === "users" && dmAdmin && (
                 <DmPeopleDialog
                   embedded
                   me={access.email}
@@ -348,13 +526,14 @@ export function DutchMillerApp({
                   onHistory={(email) => { setHistoryFor(email); go("admin", "audit"); }}
                 />
               )}
+              {route.sub === "vendors" && held("vendors") && <DmVendorsPage />}
               {route.sub === "account" && access.role === "super" && (
                 <DmAccountPage canSwitch />
               )}
               {route.sub === "roles" && access.role === "super" && <DmRolesPage />}
-              {route.sub === "security" && <DmSecurityPage />}
-              {route.sub === "email" && <DmSettingsPage />}
-              {route.sub === "audit" && <DmAuditPage subject={historyFor} />}
+              {route.sub === "security" && dmAdmin && <DmSecurityPage />}
+              {route.sub === "email" && dmAdmin && <DmSettingsPage />}
+              {route.sub === "audit" && dmAdmin && <DmAuditPage subject={historyFor} />}
             </>
           )}
         </div>
@@ -373,6 +552,117 @@ export function DutchMillerApp({
           }}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * The platform, outside any partner account.
+ *
+ * Its own shell rather than the partner one with the pages swapped,
+ * because the two answer different questions and share only the
+ * header. Here there is no member list and no RFID stock — there is
+ * no partner whose they would be — and a rail that offered them
+ * would be offering pages that cannot load.
+ *
+ * Users & Access, Roles & Permissions, Security and Email &
+ * Notifications are the SAME pages as inside an account, because
+ * they are the same configuration: one set of people, one set of
+ * roles, one security record, one set of recipients, shared across
+ * every partner. Opening them from here rather than from inside one
+ * account is the honest place for them.
+ */
+function PlatformShell({
+  header, access, onViewAs,
+}: {
+  header: React.ReactNode;
+  access: Access;
+  onViewAs: (email: string) => void;
+}) {
+  const read = (): string => {
+    const first = window.location.hash.replace(/^#\/?/, "").split("?")[0]!.split("/")[0] ?? "";
+    return PLATFORM_PAGES.some((p) => p.key === first) ? first : "partners";
+  };
+  const [page, setPage] = useState(read);
+  useEffect(() => {
+    const on = () => setPage(read());
+    window.addEventListener("hashchange", on);
+    return () => window.removeEventListener("hashchange", on);
+  }, []);
+  const go = (key: string) => { window.location.hash = `/${key}`; setPage(key); };
+
+  /*
+   * An ordinary administrator holding several partners gets the list
+   * and nothing else. The other six sections change configuration
+   * that reaches every partner on the platform, which is the account
+   * administrator's — and the routes behind them refuse anybody else
+   * regardless, so this decides the menu rather than the access.
+   */
+  const sections = access.isAccountAdmin
+    ? PLATFORM_PAGES
+    : PLATFORM_PAGES.filter((p) => p.key === "partners");
+  const here = sections.some((p) => p.key === page) ? page : "partners";
+
+  return (
+    <div className="min-h-screen">
+      {header}
+
+      {access.viewingAs && (
+        <div className="border-b border-amber-500/40 bg-amber-500/15 px-5 py-1.5 text-center
+                        text-xs text-amber-900 dark:text-amber-200">
+          Viewing as <strong>{access.viewingAs.viewed}</strong> — read-only until you go
+          back to {access.viewingAs.real}.
+        </div>
+      )}
+
+      <div className="mx-auto flex max-w-[1600px] gap-6 px-5 py-6">
+        <nav aria-label="Platform" className="hidden w-56 shrink-0 space-y-0.5 md:block">
+          {sections.map((p) => (
+            <button
+              key={p.key}
+              type="button"
+              onClick={() => go(p.key)}
+              className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm
+                          transition-colors ${here === p.key
+                ? "bg-muted font-semibold"
+                : "text-muted-foreground hover:bg-muted/60"}`}
+            >
+              {p.icon}
+              <span className="flex-1 truncate">{p.label}</span>
+            </button>
+          ))}
+        </nav>
+
+        <div className="min-w-0 flex-1">
+          <select
+            value={here}
+            onChange={(e) => go(e.target.value)}
+            className="mb-4 w-full rounded-md border border-border bg-background px-2.5 py-2
+                       text-sm md:hidden"
+          >
+            {sections.map((p) => (
+              <option key={p.key} value={p.key}>{p.label}</option>
+            ))}
+          </select>
+
+          {here === "partners" && <DmPartnersPage />}
+          {here === "template" && <DmTemplatePage />}
+          {here === "users" && (
+            <DmPeopleDialog
+              embedded
+              me={access.email}
+              iAmSuper={access.isAccountAdmin}
+              onClose={() => undefined}
+              onViewAs={onViewAs}
+              onHistory={() => undefined}
+            />
+          )}
+          {here === "roles" && <DmRolesPage />}
+          {here === "settings" && <DmAccountSettingsPage />}
+          {here === "security" && <DmSecurityPage />}
+          {here === "email" && <DmSettingsPage />}
+        </div>
+      </div>
     </div>
   );
 }

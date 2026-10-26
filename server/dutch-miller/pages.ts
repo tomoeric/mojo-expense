@@ -73,12 +73,21 @@ export const DM_PAGES = [
       { key: "add", label: "Add New", grant: "member-signups-add" },
     ],
   },
-  {
-    key: "vendors",
-    label: "Vendors",
-    blurb: "Approved vendors, and the review that approves them.",
-    children: [],
-  },
+  /*
+   * Vendors is deliberately NOT in the partner rail.
+   *
+   * The rail is the work a dealership comes here to do: enrol a
+   * member, find a tag, read the instructions. Approving a company to
+   * be paid is not that job, and on a platform where most partners
+   * will never have a vendor it is a heading that is empty for nearly
+   * everybody who can see it.
+   *
+   * It is not removed. The grant is still in DM_GRANTS above, every
+   * route still enforces it, every record is where it was, and the
+   * page is reached from the account menu by anybody holding it —
+   * the same place Users, Roles and Settings live, for the same
+   * reason.
+   */
   {
     key: "rfid-instructions",
     label: "RFID Instructions",

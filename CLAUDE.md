@@ -156,6 +156,10 @@ the blocks.
   - **Only a SUPER admin writes roles** (`requireSuper`) or hands out one
     that administers. A role is a grant, so an admin who could write one
     could write themselves a better one.
+- **The account menu is no longer gated on administering.** Its list is already
+  filtered to what the person holds, and Vendors is granted by role rather than
+  by level — a second check in `UserMenu` hid it from exactly the people it had
+  been granted to.
 - **Users, Roles and Settings live under the USER ICON, never in the rail.**
   The rail is for the pages people come here to do work in; these
   administer the app, and putting them in the same column makes an
@@ -389,6 +393,8 @@ the blocks.
   `VendorForm` still submits (it is what proposes a change from a vendor's
   detail). Wiring an add back in is rendering that same form with `BLANK` and
   no `vendorId` — do not build a second submit path.
+- **Vendors is reached from the account menu, not the rail** — see the platform
+  section below. The grant, the routes and the records are unchanged.
 - A new vendor is a row with EMPTY approved content and one pending revision.
   `status: pending` with blank fields is not a half-written record; it is a
   request. Never "fix" it by writing the proposal into the vendor.
@@ -406,17 +412,167 @@ the blocks.
   CSC one: a membership says a car may be washed, a vendor says a company may be
   paid.
 
-## The partner account switch
+## MOJO Partners: one application, many partners
 
-- `dm_settings.dealer_account_active` closes Dutch Miller to everybody outside
-  MOJO in one move. Enforced by a `dutchMillerRouter.use` ahead of every route
-  plus a check in `signIn`, so it covers reads as well as writes and needs no
-  guard on each new endpoint.
-- **It shuts the EMAILED-LINK door only.** MOJO staff keep working — they are
-  who would switch it back on, and locking them out to lock out a partner turns
-  a pause into an outage. Judged on `via`, never on the address.
-- Open by default; switching OFF needs a reason, which the dealer is shown.
-  Nothing is deleted: roles, invitations, members and tags are untouched.
+Dutch Miller was built as the only tenant there would ever be. It is now the
+FIRST ACCOUNT on a platform, and every rule below exists so that a second one
+cannot see its data.
+
+- **`server/dutch-miller/accounts.ts` is the spine.** `dm_accounts` holds one row
+  per partner: an immutable `id`, a unique `slug` (routing), a name, an
+  affiliation, a status and the template version it was provisioned at.
+- **The ID is the only ownership key.** A slug is a URL and a name is a label;
+  both get changed by somebody who does not realise what hangs off them, which
+  is exactly why neither may ever decide who reads what. Renaming an account
+  moves no records, and there is a test that says so.
+- **Dutch Miller's id is the CONSTANT `acct_dutchmiller`.** That is what made the
+  migration a column default — `ADD COLUMN account_id text NOT NULL DEFAULT
+  'acct_dutchmiller'` backfills every pre-existing row in one statement, with no
+  script to run, no ordering to get right and nothing that can happen twice. A
+  generated id would have needed all three. Never change it.
+- **Scoped: `dm_member_signups`, `dm_rfid`, `dm_vendors`, `dm_settings`,
+  `dm_audit`.** Shared: `dm_users`, `dm_roles`, `dm_investigations`,
+  `dm_mail_sends`, the notification and reminder settings. That split is the
+  brief's: users, roles, security and email are platform-wide and managed
+  centrally; members, tags, vendors and sticker placement are the account's.
+- **An RFID number stays a GLOBAL primary key.** A sticker is a physical thing
+  with one number printed on it and the gate readers have never heard of
+  accounts. Keying per account would let two partners hold the same number and
+  bill the second car to the first one's membership. An upload of a number
+  another partner holds adds nothing, reports it, and does NOT name who has it.
+- **The account is part of every lookup, not a check after it.**
+  `getSignup(guid, account)`, `getVendor(id, account)`. Another partner's record
+  answers exactly as an id that never existed does — a GUID gets pasted into
+  chats and left in bookmarks, and "find it, then see whether you were allowed"
+  is the shape that leaks a name and a plate through an error message.
+- **`dm_settings` is keyed on (account_id, key)**, with `''` meaning shared. The
+  primary key was dropped and replaced by a unique index because `ADD PRIMARY
+  KEY` has no `IF NOT EXISTS` and the statement runs on every boot. An
+  `ON CONFLICT` on that table must name `(account_id, key)` or no target at all.
+- **`dm_audit.account_id` is `''` for platform-wide events** — sign-ins,
+  refusals, user administration — and set for business events. A scoped
+  administrator reads their own partners plus the platform-wide rows
+  (`historyScope` in `routes.ts`); an account administrator reads everything.
+  Partner lifecycle has its own `partner.*` actions, deliberately NOT the
+  `account.*` family, which has always meant a person's account.
+
+### Which partner a request is in
+
+- **ONE middleware ahead of every route in `routes.ts`**, same reasoning as the
+  app guard above it: a route added later is scoped by being there rather than
+  by somebody remembering. Forgetting the app guard shows one product to the
+  other product's user; forgetting this shows one partner's members to another
+  partner.
+- **The browser says which account on the `X-Partner-Account` header**, set from
+  the PATH by a `fetch` wrapper in `src/lib/partner.ts`. A header, not a
+  re-rooted URL, because every route is already under `/api/dutch-miller` and
+  moving them would break every emailed link in existence. The SSE stream takes
+  `?account=` instead, because `EventSource` cannot set a header.
+- **The path is the only source of truth, deliberately not a cookie.** A
+  remembered selection is shared between tabs, so somebody comparing two
+  partners would have both tabs reading the same one and would not find out
+  until they acted on it.
+- **A header naming an account they do not hold is REFUSED, not ignored.** The
+  app cookie is ignored because it is a preference; this one is how somebody
+  would go looking. Not-found and not-yours answer identically, so the error
+  cannot be used to enumerate partners.
+- **Patching `window.fetch` is heavy, and is the point.** There are some eighty
+  calls to these routes; a header that has to be remembered at each would be
+  missing from the one added next month — and would not fail loudly, it would
+  read the wrong partner's data.
+
+### Account Administrator and Admin
+
+- **Account Administrator = the pinned list** (`DM_ACCOUNT_ADMINS`, falling back
+  to `DM_SUPER_ADMINS`). Holds every account including ones created later,
+  creates and deactivates them, and sets who may open what.
+- **Admin = `administers`, within assigned accounts only.** `dm_account_access`
+  holds explicit assignments; `dm_users.all_accounts` is the mark for MOJO staff
+  who work across partners. The mark is NOT "tick all seven": the difference
+  shows the day an eighth is created, when a list of seven is silently missing
+  from it. An invited (link-door) account can never hold it.
+- **Scope is a grant, so widening it is the account administrator's alone.** An
+  admin cannot create a partner, deactivate one, give themselves every partner,
+  or assign themselves another. Tested over HTTP, not just in the model.
+- **Account scope and business permissions are separate questions.** Holding an
+  account says nothing about what you may do in it; that is still the role.
+
+### Two switches, and they are not the same
+
+- **`dm_accounts.status`** — the ACCOUNT, deactivated. Blocks everybody but an
+  account administrator, both doors, enforced in the middleware so a deep link
+  or a stale tab cannot walk past it. Needs a reason. Keeps every record.
+- **`dm_settings.dealer_account_active`, per account** — the partner's own door,
+  paused. Shuts the EMAILED-LINK door only; MOJO staff keep working, because
+  they are who would switch it back on and locking them out to lock out a
+  partner turns a pause into an outage. Judged on `via`, never on the address.
+  Open by default; switching OFF needs a reason, which the dealer is shown.
+- Keeping both is deliberate: pausing a dealer's logins while MOJO clears a
+  backlog is an ordinary week, and shutting the partner down is not.
+- **A deactivated account stays in `accountsFor`.** Membership and permission to
+  work are different questions — dropping it from the list would tell the dealer
+  whose partner went dark that it is "not available to you", when what they need
+  to read is that it was deactivated and why.
+
+### Provisioning
+
+- **A NAME is the whole requirement.** The path is suggested from it, the
+  affiliation is optional, and nothing else is invented. An account that claims
+  a reviewer it does not have is worse than one that plainly has none.
+- **Idempotent on the slug.** A double-click or a retried request returns the
+  account already there, flagged `created: false`, rather than minting a twin.
+- **`RESERVED_SLUGS` is wider than the paths in use.** Reserving a word nobody
+  wanted costs nothing; releasing one that is already in somebody's emailed URL
+  costs a broken link.
+- **Provisioning never copies.** Shared code, current defaults, empty data.
+  Copying Dutch Miller's reviewers, tags or members is how one partner's details
+  end up on another partner's screen.
+- **`TEMPLATE_VERSION` is a RECORD, never a selector.** Every account is always
+  rendered by the deployed code. The moment that number chooses behaviour it has
+  become a fork, which is what this whole module exists to prevent.
+
+### Routing and the shell
+
+- **`/<slug>` is the account; `/` is the platform.** The page stays in the hash,
+  so every existing `#/member-signups/review` link still works — a legacy link
+  with no slug resolves to the person's first account, which for everybody today
+  is Dutch Miller. The server already serves `index.html` for any path.
+- **The header is MOJO Partners, with the partner's line under it** — "Dutch
+  Miller — SUDS Car Wash", or the name alone when no affiliation is set. Never a
+  dangling separator, never an invented wash.
+- **One account and no slug: open it, do not offer it.** Somebody who works for
+  one dealership lands in that dealership. An account administrator is the
+  exception, because the list IS their page.
+- **`PlatformShell` in `dutch-miller.tsx` is its own shell**, not the partner one
+  with the pages swapped. Outside an account there is no partner whose members
+  they would be, so a rail offering them would offer pages that cannot load.
+  Users, Roles, Security and Email are the SAME pages there as inside an
+  account, because they are the same shared configuration.
+- **Vendors left the partner rail** (`DM_PAGES`), kept its grant
+  (`DM_GRANTS`), its routes and its records, and is reached from the account
+  menu like Users and Roles. The rail is the work a dealership comes to do;
+  approving a company to be paid is not that job, and on a platform where most
+  partners will never have a vendor it is an empty heading for nearly everybody.
+  `#/vendors` is rewritten to `#/admin/vendors` in the shell, because a hash
+  never reaches the server.
+
+### Schema ordering, which only an empty database shows
+
+`signups.ts` has a foreign key to `dm_rfid` and a backfill that reads
+`dm_audit`; `accounts.ts` carries people over from `dm_users`. Each awaits the
+others' `ensure*Schema()` now. On any database that has ever run this changes
+nothing — and on an EMPTY one it is the difference between the app coming up and
+the first request failing on whichever module happened to be touched first,
+which is exactly what a new environment hits.
+
+### What is NOT built
+
+Stated here so nobody reports it as done. The brief's **editable buckets** — a
+catalogue of blocks in the template, chosen, reordered, resized and hidden per
+account and per page, with an editor for composing new ones out of named
+fields — is specified and not implemented. No account has a layout of its own;
+every page is the same page everywhere. The Shared Template screen says so
+rather than showing controls that do nothing.
 
 ## The member's own contact details
 
@@ -613,8 +769,11 @@ the blocks.
   - Every delete writes `signup.deleted` / `rfid.deleted` to the audit trail
     with the note and the request's IP.
 - Tests: `scripts/test-rfid.ts`, `scripts/test-dm-users.ts`,
-  `scripts/test-signups.ts` (all need
-  `DATABASE_URL`). The users test SKIPS against a non-empty `dm_users` rather
+  `scripts/test-signups.ts`, `scripts/test-accounts.ts` (partner isolation in
+  the model) and `scripts/test-isolation.ts` (the same, over HTTP, against a
+  real server with a real session cookie — the only level at which a route
+  collision or a mis-ordered middleware shows, and the level at which both have
+  already bitten) — all need `DATABASE_URL`. The users test SKIPS against a non-empty `dm_users` rather
   than deleting somebody's configuration.
 
 ## Approving and denying
