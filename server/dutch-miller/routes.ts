@@ -33,6 +33,7 @@ import { CSC_ROLE, DEFAULT_ROLE, listRoles, removeRole, saveRole } from "./roles
 import { ACTIONS, actionsFor } from "./actions.js";
 import { dutchMillerNamed } from "../auth/apps.js";
 import { publicOrigin } from "../origin.js";
+import { listMakes, listModels, modelYears } from "./vehicles.js";
 import { emitChange, streamChanges } from "../events.js";
 import {
   DAY_NAMES, getPlacement, getReminders, getSignupNotify, isPlacement,
@@ -1199,6 +1200,39 @@ dutchMillerRouter.post("/rfid/active", requirePage("rfid-review"), requireRfidWr
 /* ------------------------------------------------------------------ *
  * Member signups
  * ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ *
+ * Vehicle years, makes and models
+ * ------------------------------------------------------------------ */
+
+/**
+ * The lists behind the three vehicle fields.
+ *
+ * Fetched server-side rather than from the browser, for two reasons:
+ * the answers are cached once for everybody instead of once per
+ * person, and a dealer's browser never talks to a third party on this
+ * app's behalf.
+ *
+ * Years need no source at all — they are arithmetic — so they come
+ * back even when the catalogue cannot be reached.
+ */
+dutchMillerRouter.get(
+  "/vehicles",
+  requirePage("member-signups-add"),
+  async (_req: Request, res: Response) => {
+    const makes = await listMakes();
+    res.json({ years: modelYears(), ...makes });
+  },
+);
+
+dutchMillerRouter.get(
+  "/vehicles/models",
+  requirePage("member-signups-add"),
+  async (req: Request, res: Response) => {
+    res.json(await listModels(
+      String(req.query.make ?? ""), String(req.query.year ?? "")));
+  },
+);
 
 /** A blank entry's generated values, minted and signed by the server. */
 dutchMillerRouter.post(

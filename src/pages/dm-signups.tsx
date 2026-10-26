@@ -1131,6 +1131,7 @@ function AddNew({
   // Bumped by Cancel and by a successful submission: a fresh entry gets a
   // fresh GUID and a fresh creation time, never the previous one's.
   const [entry, setEntry] = useState(0);
+  const vehicles = useVehicleLists(form.vehicleMake, form.vehicleYear);
   const [bulk, setBulk] = useState(false);
 
   const handle = useQuery({
@@ -1273,10 +1274,49 @@ function AddNew({
       <Bucket title="Customer" note="User input">
         {CUSTOMER_FIELDS.map((f) => (
           <Fragment key={f.key}>
+            {/* Year, make and model come from NHTSA's vehicle
+                catalogue. Suggestions, never a gate — see
+                `SuggestField`. */}
+            {f.key === "vehicleYear" ? (
+              <YearField
+                value={form.vehicleYear}
+                years={vehicles.years}
+                error={errors.vehicleYear}
+                onChange={(v) => set("vehicleYear", v)}
+              />
+            ) : f.key === "vehicleMake" ? (
+              <SuggestField
+                id="f-make"
+                label="Vehicle Make"
+                value={form.vehicleMake}
+                options={vehicles.makes}
+                placeholder="Honda"
+                error={errors.vehicleMake}
+                onChange={(v) => set("vehicleMake", v)}
+              />
+            ) : f.key === "vehicleModel" ? (
+              <SuggestField
+                id="f-model"
+                label="Vehicle Model"
+                value={form.vehicleModel}
+                options={vehicles.models}
+                placeholder="Accord"
+                error={errors.vehicleModel}
+                hint={form.vehicleMake && form.vehicleYear
+                  ? (vehicles.modelsLoading
+                    ? "Looking up models…"
+                    : vehicles.models.length === 0
+                      ? "No models listed for that make and year — type it in."
+                      : undefined)
+                  : "Pick a year and make for suggestions, or just type it."}
+                onChange={(v) => set("vehicleModel", v)}
+              />
+            ) : (
             <Field
               label={f.label} required={f.required} error={errors[f.key]}
               value={form[f.key]} placeholder={f.placeholder} onChange={(v) => set(f.key, v)}
             />
+            )}
             {f.key === "plateDlw" && (
               <StateField
                 value={form.plateState}
@@ -1391,6 +1431,7 @@ function Verify({
 }) {
   const [dealerOk, setDealerOk] = useState(false);
   const [customerOk, setCustomerOk] = useState(false);
+  const vehicles = useVehicleLists(form.vehicleMake, form.vehicleYear);
   const tz = handle.displayTimezone;
 
   // A correction after verifying unverifies THAT bucket and only that one:
@@ -1443,11 +1484,47 @@ function Verify({
         <Bucket title="Customer" note="User input">
           {CUSTOMER_FIELDS.map((f) => (
             <Fragment key={f.key}>
+            {/* Year, make and model come from NHTSA's vehicle
+                catalogue. Suggestions, never a gate — see
+                `SuggestField`. */}
+            {f.key === "vehicleYear" ? (
+              <YearField
+                value={form.vehicleYear}
+                years={vehicles.years}
+                onChange={(v) => editCustomer("vehicleYear", v)}
+              />
+            ) : f.key === "vehicleMake" ? (
+              <SuggestField
+                id="v-make"
+                label="Vehicle Make"
+                value={form.vehicleMake}
+                options={vehicles.makes}
+                placeholder="Honda"
+                onChange={(v) => editCustomer("vehicleMake", v)}
+              />
+            ) : f.key === "vehicleModel" ? (
+              <SuggestField
+                id="v-model"
+                label="Vehicle Model"
+                value={form.vehicleModel}
+                options={vehicles.models}
+                placeholder="Accord"
+                hint={form.vehicleMake && form.vehicleYear
+                  ? (vehicles.modelsLoading
+                    ? "Looking up models…"
+                    : vehicles.models.length === 0
+                      ? "No models listed for that make and year — type it in."
+                      : undefined)
+                  : "Pick a year and make for suggestions, or just type it."}
+                onChange={(v) => editCustomer("vehicleModel", v)}
+              />
+            ) : (
               <Field
                 label={f.label} required={f.required}
                 value={form[f.key]} placeholder={f.placeholder}
                 onChange={(v) => editCustomer(f.key, v)}
               />
+              )}
               {f.key === "plateDlw" && (
                 <StateField
                   value={form.plateState}
@@ -1677,6 +1754,125 @@ function StickerConfirm({
         </span>
       </label>
       {error && <p role="alert" className="mt-1 text-xs text-red-600">{error}</p>}
+    </div>
+  );
+}
+
+/**
+ * The year, make and model lists.
+ *
+ * One request for years and makes, a second for models once a make
+ * and year are both known — which is the only time a model list
+ * means anything. Both are cached by the server, so this is cheap
+ * and the same for everybody.
+ */
+function useVehicleLists(make: string, year: string) {
+  const base = useQuery({
+    queryKey: ["dm-vehicles"],
+    queryFn: async () => {
+      const res = await fetch("/api/dutch-miller/vehicles");
+      if (!res.ok) throw new Error("Could not load.");
+      return (await res.json()) as { years: string[]; makes: string[]; source: string };
+    },
+    staleTime: 60 * 60_000,
+  });
+  const models = useQuery({
+    enabled: make.trim() !== "" && /^(19|20)\d{2}$/.test(year.trim()),
+    queryKey: ["dm-vehicle-models", make.trim().toLowerCase(), year.trim()],
+    queryFn: async () => {
+      const q = new URLSearchParams({ make: make.trim(), year: year.trim() });
+      const res = await fetch(`/api/dutch-miller/vehicles/models?${q}`);
+      if (!res.ok) throw new Error("Could not load.");
+      return (await res.json()) as { models: string[]; source: string };
+    },
+    staleTime: 60 * 60_000,
+  });
+  return {
+    years: base.data?.years ?? [],
+    makes: base.data?.makes ?? [],
+    models: models.data?.models ?? [],
+    modelsLoading: models.isFetching,
+  };
+}
+
+/** Model year, picked rather than typed. Nothing has to be fetched for it. */
+function YearField({
+  value, years, error, onChange,
+}: {
+  value: string; years: string[]; error?: string; onChange: (v: string) => void;
+}) {
+  return (
+    <div>
+      <label htmlFor="f-year" className="mb-1 block text-xs text-muted-foreground">
+        Vehicle Year
+      </label>
+      <select
+        id="f-year"
+        value={value}
+        aria-invalid={Boolean(error)}
+        onChange={(e) => onChange(e.target.value)}
+        className={`w-full rounded-md border bg-background px-2.5 py-2 text-sm ${
+          error ? "border-red-500" : "border-border"
+        }`}
+      >
+        <option value="">—</option>
+        {/* A year already on the record that is older than the list
+            keeps its place, rather than being silently blanked by a
+            dropdown that has never heard of it. */}
+        {value !== "" && !years.includes(value) && <option value={value}>{value}</option>}
+        {years.map((y) => <option key={y} value={y}>{y}</option>)}
+      </select>
+      {error && <p role="alert" className="mt-1 text-xs text-red-600">{error}</p>}
+    </div>
+  );
+}
+
+/**
+ * A field with suggestions that still accepts anything.
+ *
+ * A combo box rather than a dropdown, deliberately. The catalogue is
+ * the US government's and it is still not everything: a kit car, a
+ * fleet body, a rebadge or next spring's model must not be
+ * unenterable because a list has not caught up. The suggestions stop
+ * one dealership writing Chevy, Chevrolet, CHEVY and chev for the
+ * same marque; they are not an enumeration.
+ */
+function SuggestField({
+  id, label, value, options, placeholder, hint, error, disabled, onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  options: string[];
+  placeholder?: string;
+  hint?: string;
+  error?: string;
+  disabled?: boolean;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div>
+      <label htmlFor={id} className="mb-1 block text-xs text-muted-foreground">
+        {label}
+      </label>
+      <input
+        id={id}
+        list={`${id}-list`}
+        value={value}
+        placeholder={placeholder}
+        disabled={disabled}
+        autoComplete="off"
+        aria-invalid={Boolean(error)}
+        onChange={(e) => onChange(e.target.value)}
+        className={`w-full rounded-md border bg-background px-2.5 py-2 text-sm disabled:opacity-60 ${
+          error ? "border-red-500" : "border-border"
+        }`}
+      />
+      <datalist id={`${id}-list`}>
+        {options.map((o) => <option key={o} value={o} />)}
+      </datalist>
+      {error && <p role="alert" className="mt-1 text-xs text-red-600">{error}</p>}
+      {!error && hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
     </div>
   );
 }

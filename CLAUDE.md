@@ -377,6 +377,24 @@ the blocks.
 - **A deleted RFID never returns to the pool** — not by re-uploading the file that
   brought it in, not through Make active, not through `useRfid`.
 
+## Vehicle year, make and model
+
+- **Year is arithmetic**, not a lookup: next year down to 1981 (the first
+  17-character VIN). It works with no network, ever.
+- **Make and model come from NHTSA vPIC** (`vpic.nhtsa.dot.gov`, free, no key),
+  fetched SERVER-side and cached in `dm_vehicle_lookup` for 30 days — a form
+  field must not wait on somebody else's website or stop working when it stops.
+- **Three softnesses that must stay.** A seed list of makes is bundled so the
+  field works behind a firewall; the catalogue adds to it and never replaces it.
+  A stale cached list is served when a fetch fails — last year's models beat
+  none. And a failed lookup returns empty rather than throwing.
+- **Nothing is refused for being off the list.** These are `datalist`
+  suggestions on a combo box, not an enumeration: a kit car, a fleet body or
+  next spring's model must stay enterable, and every historical record is free
+  text. Never turn these into strict selects.
+- vPIC is **blocked by the dev container's proxy**, so the offline paths are
+  what the tests exercise. Verify the live path on the deployment.
+
 ## Sticker placement: inside or outside the glass
 
 - **ONE stored value** (`dm_settings.sticker_placement`, default `inside`) drives
