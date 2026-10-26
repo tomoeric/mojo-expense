@@ -262,9 +262,52 @@ try {
   check("…nor the base layout every partner starts on", forgeBase.status === 403,
     String(forgeBase.status));
 
+  console.log("\n8. Navigation and registration are the account's own");
+  const nav = await call("GET", "/api/dutch-miller/nav/options", SCOPED,
+    { slug: probeSlug });
+  check("the picker answers for their account", nav.status === 200, String(nav.status));
+  check("…naming it",
+    (nav.body.account as { id: string }).id === probeId);
+
+  const added = await call("POST", "/api/dutch-miller/nav", SCOPED,
+    { slug: probeSlug, body: { pageKey: "vendors", parentKey: null } });
+  check("they can add a page to their own rail", added.status === 200,
+    JSON.stringify(added.body).slice(0, 140));
+  const navTwice = await call("POST", "/api/dutch-miller/nav", SCOPED,
+    { slug: probeSlug, body: { pageKey: "vendors", parentKey: "rfid-review" } });
+  check("…but not a second time, even under another parent", navTwice.status === 400,
+    String(navTwice.status));
+  const ghost = await call("POST", "/api/dutch-miller/nav", SCOPED,
+    { slug: probeSlug, body: { pageKey: "invoices", parentKey: null } });
+  check("…and not a page nobody shipped", ghost.status === 400, String(ghost.status));
+
+  // The one that matters: one account's rail is its own.
+  const dmNav = await call("GET", "/api/dutch-miller/me", OWNER, { slug: "dutchmiller" });
+  const dmKeys = (dmNav.body.rail as { key: string; children: { key: string }[] }[])
+    .flatMap((i) => [i.key, ...i.children.map((c) => c.key)]);
+  check("DUTCH MILLER'S RAIL IS UNTOUCHED", !dmKeys.includes("vendors"), dmKeys.join(","));
+  check("…and still carries Account Registration",
+    dmKeys.includes("account-registration"), dmKeys.join(","));
+
+  const theirBiz = await call("GET", "/api/dutch-miller/business", SCOPED,
+    { slug: probeSlug });
+  check("their registration answers", theirBiz.status === 200, String(theirBiz.status));
+  check("…as an empty draft, not another partner's record",
+    (theirBiz.body.record as { status: string; fields: Record<string, string> }).status
+      === "draft"
+    && (theirBiz.body.record as { fields: Record<string, string> }).fields.legalName === "");
+  const reachBiz = await call("GET", "/api/dutch-miller/business", SCOPED,
+    { slug: "dutchmiller" });
+  check("reaching the other partner's registration is refused", reachBiz.status === 403,
+    String(reachBiz.status));
+
 } finally {
   if (probeId) {
     await db().query("DELETE FROM dm_account_layout WHERE account_id = $1", [probeId])
+      .catch(() => undefined);
+    await db().query("DELETE FROM dm_account_nav WHERE account_id = $1", [probeId])
+      .catch(() => undefined);
+    await db().query("DELETE FROM dm_business WHERE account_id = $1", [probeId])
       .catch(() => undefined);
   }
   if (probeId) {

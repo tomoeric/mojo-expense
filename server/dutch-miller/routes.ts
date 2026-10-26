@@ -46,12 +46,23 @@ import {
 } from "./settings.js";
 import { runReminders } from "./reminders.js";
 import { notifyApproved, notifySignup, signupEmail } from "./notify.js";
-import { RETRY, deliveriesFor } from "./delivery.js";
+import { RETRY, deliveriesFor, sendOnce } from "./delivery.js";
 import { inviteUser } from "./dealer-auth.js";
 import {
-  isMailConfigured, layout, mailAppIsSeparate, mailFrom, mailProblem, sendMail,
+  button, escapeHtml, isMailConfigured, layout, mailAppIsSeparate, mailFrom,
+  mailProblem, sendMail,
 } from "../mail.js";
 import { forgetEpoch } from "../auth/index.js";
+import {
+  NAV_PAGES, addNav, navFor, navOptions, removeNav,
+} from "./nav.js";
+import {
+  AGREEMENT, BUSINESS_FIELDS, BUSINESS_TYPES, DOCUMENT_TYPES, MAX_DOCUMENT_BYTES,
+  acceptAgreement, blockers, completeVerification, currentDocument, decideBusiness,
+  decideDocument, documentBytes, getBusiness, requestDocument, saveBusiness,
+  startVerification, submitBusiness, uploadDocument, type BusinessFields,
+  type DocumentState,
+} from "./business.js";
 import {
   BLOCK_PAGES, HEIGHTS, PAGE_LABEL, WIDTHS, archiveBlock, essentialOn, isBlockPage,
   accountsArranging, itemsOn, layoutFor, listBlocks, resetLayout, saveBaseLayout,
@@ -291,6 +302,15 @@ dutchMillerRouter.get("/me", async (req: Request, res: Response) => {
     stickerPlacement: req.account
       ? (await getPlacement(req.account.id)).placement
       : "inside",
+    /*
+     * The rail this ACCOUNT shows, not a list fixed in code.
+     *
+     * Shared base plus whatever this partner has added, resolved on
+     * the server so the shell cannot offer a page the guards would
+     * refuse. `allPages` stays beside it for the role editor, which
+     * is about grants rather than about navigation.
+     */
+    rail: req.account ? await navFor(req.account.id) : [],
     /*
      * The platform, and the partner inside it.
      *
@@ -1508,6 +1528,370 @@ dutchMillerRouter.post("/rfid/active", requirePage("rfid-review"), requireRfidWr
  * ------------------------------------------------------------------ */
 
 /* ------------------------------------------------------------------ *
+ * The account's own navigation
+ * ------------------------------------------------------------------ */
+
+/**
+ * What this account could still put on its rail, and where.
+ *
+ * Only pages that exist in the template AND are not already on this
+ * account's navigation. Both halves matter: the first is why there
+ * is no "create a page" here, and the second is why a page cannot be
+ * added twice under two different parents.
+ */
+dutchMillerRouter.get("/nav/options", requireDmAdmin,
+  async (req: Request, res: Response) => {
+    const account = accountOf(req, res);
+    if (!account) return;
+    const { pages, parents } = await navOptions(account.id);
+    res.json({
+      pages, parents,
+      rail: await navFor(account.id),
+      account: { id: account.id, name: account.name, slug: account.slug },
+      /** Every page the template holds, so the empty state can say why. */
+      catalogue: NAV_PAGES.length,
+    });
+  });
+
+/**
+ * Add a page to this account's rail.
+ *
+ * Administering THIS account is enough — it is their own navigation
+ * and nothing here reaches another partner. Every refusal the picker
+ * makes is made again here, because a picker is defeated by a second
+ * tab, a stale page and a retried request, and the result would be
+ * one page twice in one rail.
+ */
+dutchMillerRouter.post("/nav", requireDmAdmin, async (req: Request, res: Response) => {
+  const account = accountOf(req, res);
+  if (!account) return;
+  const b = (req.body ?? {}) as { pageKey?: unknown; parentKey?: unknown; label?: unknown };
+  const out = await addNav({
+    accountId: account.id,
+    pageKey: String(b.pageKey ?? ""),
+    parentKey: b.parentKey === null || b.parentKey === undefined || b.parentKey === ""
+      ? null : String(b.parentKey),
+    label: String(b.label ?? ""),
+    by: actor(req),
+  });
+  if (!out.ok) { res.status(400).json({ error: out.problem }); return; }
+  await audit({
+    action: "nav.added", ...who(req), resource: String(b.pageKey ?? ""),
+    detail: `${String(b.pageKey ?? "")} added as a `
+      + `${b.parentKey ? `sub button under ${String(b.parentKey)}` : "main button"}`,
+  });
+  emitChange("settings");
+  res.json({ rail: out.rail });
+});
+
+/** Take an added button back off. The shared base is not removable here. */
+dutchMillerRouter.post("/nav/remove", requireDmAdmin,
+  async (req: Request, res: Response) => {
+    const account = accountOf(req, res);
+    if (!account) return;
+    const b = (req.body ?? {}) as { pageKey?: unknown };
+    const out = await removeNav(account.id, String(b.pageKey ?? ""));
+    if (!out.ok) { res.status(400).json({ error: out.problem }); return; }
+    await audit({
+      action: "nav.removed", ...who(req), resource: String(b.pageKey ?? ""),
+      detail: `${String(b.pageKey ?? "")} taken off the rail`,
+    });
+    emitChange("settings");
+    res.json({ rail: out.rail });
+  });
+
+/* ------------------------------------------------------------------ *
+ * Account Registration
+ * ------------------------------------------------------------------ */
+
+/**
+ * May this person decide a registration?
+ *
+ * MOJO's door and an administrator, deliberately not the partner's
+ * own administrator: a dealership approving its own registration is
+ * the one thing the review exists to prevent.
+ */
+async function canReviewBusiness(req: Request): Promise<boolean> {
+  const real = req.viewingAs?.real ?? req.user;
+  if (!isStaff(real)) return false;
+  return canAdminister(await dmAccessFor(real?.email ?? ""));
+}
+
+dutchMillerRouter.get("/business", requirePage("account-registration"),
+  async (req: Request, res: Response) => {
+    const account = accountOf(req, res);
+    if (!account) return;
+    const record = await getBusiness(account.id);
+    res.json({
+      record,
+      document: await currentDocument(account.id),
+      blockers: blockers(record),
+      fields: BUSINESS_FIELDS,
+      types: BUSINESS_TYPES,
+      agreement: AGREEMENT,
+      maxBytes: MAX_DOCUMENT_BYTES,
+      documentTypes: DOCUMENT_TYPES,
+      account: { id: account.id, name: account.name, line: accountLine(account) },
+      /* Shown for the viewed person; decided again on every write. */
+      canReview: await canReviewBusiness(req),
+    });
+  });
+
+dutchMillerRouter.post("/business", requirePage("account-registration"),
+  async (req: Request, res: Response) => {
+    const account = accountOf(req, res);
+    if (!account) return;
+    const out = await saveBusiness(
+      account.id, (req.body ?? {}) as Partial<BusinessFields>, actor(req));
+    if (!out.ok) { res.status(400).json({ errors: out.errors }); return; }
+    await audit({
+      action: "business.saved", ...who(req), resource: account.id,
+      detail: `draft saved — ${out.record.fields.legalName || "no legal name yet"}`,
+    });
+    emitChange("settings");
+    res.json({ record: out.record, blockers: blockers(out.record) });
+  });
+
+/**
+ * Send the verification link to the business email.
+ *
+ * Through the shared mail configuration, with this partner's name on
+ * the message — the reviewers and the infrastructure are platform-wide,
+ * so a message that did not say whose it was would be unplaceable.
+ */
+dutchMillerRouter.post("/business/verify", requirePage("account-registration"),
+  async (req: Request, res: Response) => {
+    const account = accountOf(req, res);
+    if (!account) return;
+    const started = await startVerification(account.id, actor(req));
+    if (!started.ok) { res.status(400).json({ error: started.problem }); return; }
+    if (!isMailConfigured()) {
+      res.status(400).json({ error: `Email is not configured. ${mailProblem()}` });
+      return;
+    }
+    const link = `${publicOrigin(req)}/${account.slug}#/account-registration`
+      + `?verify=${encodeURIComponent(started.token)}`;
+    const sent = await sendOnce({
+      resource: `${account.id}:${started.email}:${started.record.pendingSentAt ?? ""}`,
+      kind: "business-verify",
+      email: started.email,
+      subject: `Verify this address for ${account.name} — MOJO Partners`,
+      html: layout(
+        "Verify your business email",
+        `<p style="margin:0 0 16px;font-size:15px">
+           Confirm that this address belongs to
+           <strong>${escapeHtml(account.name)}</strong>. The link is good for three days,
+           and asking for another one replaces it.</p>
+         <div style="margin:22px 0 0">${button(link, "Verify this address")}</div>
+         <p style="margin:18px 0 0;font-size:13px;color:#71717a">
+           If you were not expecting this, nothing has happened and you can ignore it.</p>`,
+        `Sent because somebody entered this address on ${escapeHtml(account.name)}'s `
+          + "Account Registration page.",
+      ),
+    });
+    await audit({
+      action: sent.state === "sent" ? "business.verify.sent" : "business.verify.failed",
+      ...who(req), resource: account.id, subject: started.email,
+      detail: sent.state === "sent"
+        ? "verification link sent"
+        : `could not send: ${sent.error}`,
+    });
+    if (sent.state !== "sent") { res.status(502).json({ error: sent.error }); return; }
+    emitChange("settings");
+    res.json({ record: started.record, sentTo: started.email });
+  });
+
+/**
+ * Spend a verification link.
+ *
+ * Open to anybody who can open the page, because whoever clicks it
+ * is reading the inbox the link was sent to — that is the proof. The
+ * token is single-use and the account comes from the token, never
+ * from the request, so a link cannot verify somebody else's address.
+ */
+dutchMillerRouter.post("/business/verify/complete",
+  requirePage("account-registration"),
+  async (req: Request, res: Response) => {
+    const b = (req.body ?? {}) as { token?: unknown };
+    const out = await completeVerification(String(b.token ?? ""));
+    if (!out.ok) { res.status(400).json({ error: out.problem }); return; }
+    await audit({
+      action: "business.verified", ...who(req), accountId: out.accountId,
+      resource: out.accountId, subject: out.email,
+      detail: "business email verified",
+    });
+    emitChange("settings");
+    res.json({ ok: true, email: out.email });
+  });
+
+dutchMillerRouter.post("/business/agreement", requirePage("account-registration"),
+  async (req: Request, res: Response) => {
+    const account = accountOf(req, res);
+    if (!account) return;
+    const b = (req.body ?? {}) as { version?: unknown };
+    const out = await acceptAgreement(account.id, actor(req), String(b.version ?? ""));
+    if (!out.ok) { res.status(400).json({ error: out.problem }); return; }
+    await audit({
+      action: "business.agreement", ...who(req), resource: account.id,
+      detail: `${AGREEMENT.title} ${AGREEMENT.version} accepted`,
+    });
+    emitChange("settings");
+    res.json({ record: out.record, blockers: blockers(out.record) });
+  });
+
+dutchMillerRouter.post("/business/submit", requirePage("account-registration"),
+  async (req: Request, res: Response) => {
+    const account = accountOf(req, res);
+    if (!account) return;
+    const out = await submitBusiness(account.id, actor(req));
+    if (!out.ok) {
+      // 400 with the draft intact. Everything that is missing, at
+      // once, rather than one thing per attempt.
+      res.status(400).json({ blockers: out.blockers, errors: out.errors });
+      return;
+    }
+    await audit({
+      action: "business.submitted", ...who(req), resource: account.id,
+      detail: `${out.record.fields.legalName} submitted for review`,
+    });
+    emitChange("settings");
+    res.json({ record: out.record, blockers: [] });
+  });
+
+dutchMillerRouter.post("/business/decide", requirePage("account-registration"),
+  async (req: Request, res: Response) => {
+    const account = accountOf(req, res);
+    if (!account) return;
+    if (!(await canReviewBusiness(req))) {
+      denied(req, "registration review");
+      res.status(403).json({
+        error: "Only MOJO can approve a registration or ask for corrections.",
+      });
+      return;
+    }
+    const b = (req.body ?? {}) as { approve?: unknown; note?: unknown };
+    const out = await decideBusiness({
+      accountId: account.id, approve: b.approve === true,
+      note: String(b.note ?? ""), by: actor(req),
+    });
+    if (!out.ok) { res.status(400).json({ error: out.problem }); return; }
+    await audit({
+      action: b.approve === true ? "business.approved" : "business.returned",
+      ...who(req), resource: account.id,
+      detail: b.approve === true
+        ? `${out.record.fields.legalName} approved`
+        : `sent back — ${out.record.decisionNote.slice(0, 200)}`,
+    });
+    emitChange("settings");
+    res.json({ record: out.record, blockers: blockers(out.record) });
+  });
+
+/** Ask this partner for proof of business, or stop asking. MOJO's. */
+dutchMillerRouter.post("/business/document/request",
+  requirePage("account-registration"),
+  async (req: Request, res: Response) => {
+    const account = accountOf(req, res);
+    if (!account) return;
+    if (!(await canReviewBusiness(req))) {
+      denied(req, "requesting a document");
+      res.status(403).json({ error: "Only MOJO can ask for proof of business." });
+      return;
+    }
+    const b = (req.body ?? {}) as { wanted?: unknown; note?: unknown };
+    const record = await requestDocument(
+      account.id, b.wanted !== false, String(b.note ?? ""), actor(req));
+    await audit({
+      action: "business.document", ...who(req), resource: account.id,
+      detail: b.wanted !== false
+        ? "proof of business requested"
+        : "the request for proof of business was withdrawn",
+    });
+    emitChange("settings");
+    res.json({ record, blockers: blockers(record) });
+  });
+
+/** The reviewer's verdict on the document, kept apart from the submission's. */
+dutchMillerRouter.post("/business/document/decide",
+  requirePage("account-registration"),
+  async (req: Request, res: Response) => {
+    const account = accountOf(req, res);
+    if (!account) return;
+    if (!(await canReviewBusiness(req))) {
+      denied(req, "deciding a document");
+      res.status(403).json({ error: "Only MOJO can decide a document." });
+      return;
+    }
+    const b = (req.body ?? {}) as { state?: unknown; note?: unknown };
+    const want = String(b.state ?? "");
+    const ok: DocumentState[] = ["under-review", "approved", "needs-correction"];
+    if (!(ok as string[]).includes(want)) {
+      res.status(400).json({ error: "That is not a document decision." });
+      return;
+    }
+    const record = await decideDocument(
+      account.id, want as DocumentState, String(b.note ?? ""), actor(req));
+    await audit({
+      action: "business.document", ...who(req), resource: account.id,
+      detail: `document ${want}${b.note ? ` — ${String(b.note).slice(0, 200)}` : ""}`,
+    });
+    emitChange("settings");
+    res.json({ record, blockers: blockers(record) });
+  });
+
+dutchMillerRouter.post(
+  "/business/document",
+  requirePage("account-registration"),
+  express.raw({ type: () => true, limit: "9mb" }),
+  async (req: Request, res: Response) => {
+    const account = accountOf(req, res);
+    if (!account) return;
+    const bytes = req.body as Buffer;
+    if (!Buffer.isBuffer(bytes)) { res.status(400).json({ error: "No file arrived." }); return; }
+    const out = await uploadDocument({
+      accountId: account.id,
+      filename: String(req.get("x-filename") ?? "document"),
+      contentType: String(req.get("content-type") ?? "").split(";")[0]!.trim(),
+      bytes,
+      by: actor(req),
+    });
+    if (!out.ok) { res.status(400).json({ error: out.problem }); return; }
+    await audit({
+      action: "business.document", ...who(req), resource: account.id,
+      detail: "proof of business uploaded",
+    });
+    emitChange("settings");
+    res.json({
+      record: out.record, document: await currentDocument(account.id),
+      blockers: blockers(out.record),
+    });
+  },
+);
+
+/**
+ * The document itself.
+ *
+ * The account is part of the lookup, so another partner's id answers
+ * exactly as an id that never existed. That rule matters more here
+ * than anywhere else in this application: the file is somebody's
+ * business licence.
+ */
+dutchMillerRouter.get("/business/document/:id", requirePage("account-registration"),
+  async (req: Request, res: Response) => {
+    const account = accountOf(req, res);
+    if (!account) return;
+    const got = await documentBytes(account.id, String(req.params.id ?? ""));
+    if (!got) { res.status(404).json({ error: "No such document." }); return; }
+    void audit({
+      action: "business.document", ...who(req), resource: account.id,
+      detail: `document opened — ${got.filename}`,
+    });
+    res.setHeader("content-type", got.contentType);
+    res.setHeader("content-disposition",
+      `inline; filename="${got.filename.replace(/[^\w.-]+/g, "_")}"`);
+    res.send(got.bytes);
+  });
+
+/* ------------------------------------------------------------------ *
  * The shared template, and each account's arrangement of it
  * ------------------------------------------------------------------ */
 
@@ -1533,7 +1917,8 @@ dutchMillerRouter.get("/blocks/:page", async (req: Request, res: Response) => {
   // already read, or cannot.
   const grant: DmPageKey = page === "member-signups-add" ? "member-signups-add"
     : page === "member-signups-review" ? "member-signups"
-      : page === "rfid-instructions" ? "rfid-instructions" : "rfid-review";
+      : page === "rfid-instructions" ? "rfid-instructions"
+        : page === "account-registration" ? "account-registration" : "rfid-review";
   const access = await dmAccessFor(req.user?.email ?? "");
   if (!canAdminister(access) && !access.pages.includes(grant)) {
     denied(req, `page ${grant}`);

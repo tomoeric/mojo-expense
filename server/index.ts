@@ -35,6 +35,9 @@ app.use((req, res, next) =>
   req.path === "/api/import"
   || req.path === "/api/dutch-miller/rfid/upload"
   || req.path === "/api/dutch-miller/signups/bulk/check"
+  // Proof of business: a PDF or a photograph, which is not JSON and
+  // which the raw parser downstream needs untouched.
+  || req.path === "/api/dutch-miller/business/document"
     ? next()
     : express.json({ limit: "1mb" })(req, res, next),
 );

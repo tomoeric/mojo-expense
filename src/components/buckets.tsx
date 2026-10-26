@@ -35,7 +35,7 @@ import {
 
 export type BlockPage =
   | "member-signups-review" | "member-signups-add"
-  | "rfid-instructions" | "rfid-review";
+  | "rfid-instructions" | "rfid-review" | "account-registration";
 
 export type RegisteredItem = {
   key: string;

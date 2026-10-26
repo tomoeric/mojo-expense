@@ -19,6 +19,8 @@ import { DmVendorsPage } from "@/pages/dm-vendors";
 import { DmSecurityPage } from "@/pages/dm-security";
 import { DmSettingsPage } from "@/pages/dm-settings";
 import { DmAccountSettingsPage, DmPartnersPage } from "@/pages/dm-partners";
+import { DmRegistrationPage } from "@/pages/dm-registration";
+import { AddPage } from "@/components/add-page";
 import { DmTemplatePage } from "@/pages/dm-template";
 import { openAccount, slugInPath } from "@/lib/partner";
 import type { AppKey, SessionUser } from "@/lib/api";
@@ -37,6 +39,19 @@ import type { AppKey, SessionUser } from "@/lib/api";
  * the 403 behind each route is what makes that a rule rather than a
  * decoration.
  */
+
+/**
+ * One entry on the account's rail, as the server resolved it.
+ *
+ * `route` is the hash route, which has not changed and must not:
+ * every bookmark and every emailed link is one of these. Where the
+ * BUTTON sits is the account's; where the page lives is not.
+ */
+type RailChild = {
+  key: string; label: string; blurb: string; grant: string; route: string;
+  added: boolean;
+};
+type RailItem = RailChild & { children: RailChild[]; group: boolean };
 
 type PageDef = {
   key: string;
@@ -73,6 +88,8 @@ type Access = {
   accounts: PartnerRef[];
   /** Creating and deactivating partners. The pinned list, nobody else. */
   isAccountAdmin: boolean;
+  /** This ACCOUNT's rail: the shared base plus whatever it has added. */
+  rail: RailItem[];
 };
 
 type PartnerRef = {
@@ -104,16 +121,17 @@ type PartnerRef = {
  * a refresh and a pasted link all behave, and links bookmarked when
  * these were tabs still land in the right place.
  */
+/*
+ * Vendors is NOT here any more.
+ *
+ * It spent one release in this menu, which was the wrong place for a
+ * second reason: the menu is where the app is administered, and
+ * approving a company to be paid is work. It is a page in the shared
+ * catalogue now — not on the base rail, addable by any account that
+ * genuinely has vendors — and every record, route and audit line is
+ * exactly where it was.
+ */
 const ADMIN_PAGES: { key: string; label: string; superOnly?: boolean; grant?: string }[] = [
-  /*
-   * Vendors, which used to be in the rail.
-   *
-   * It moved here rather than away: the rail is the work a dealership
-   * comes to do, and approving a company to be paid is not that job.
-   * Gated on the GRANT rather than on administering, so the people
-   * who had it still have it and nobody else gained it.
-   */
-  { key: "vendors", label: "Vendors", grant: "vendors" },
   // The switch that closes the partner account is the account
   // administrator's, so the page it lives on is too: an ordinary
   // administrator should not be shown a control they cannot use.
@@ -153,12 +171,6 @@ const PLATFORM_PAGES: { key: string; label: string; icon: React.ReactNode }[] = 
   { key: "email", label: "Email & Notifications", icon: <Mail className="h-4 w-4" /> },
 ];
 
-/** One routable page holding all of them, so `#/admin/<key>` works. */
-const MENU_PAGES: PageDef[] = [{
-  key: "admin", label: "Administration", blurb: "",
-  children: ADMIN_PAGES.map((p) => ({ key: p.key, label: p.label })),
-}];
-
 /**
  * `#/<page>` or `#/<page>/<sub-page>`.
  *
@@ -166,25 +178,24 @@ const MENU_PAGES: PageDef[] = [{
  * so the rail's dropdown items are real links: back, forward and a pasted
  * URL all land where they say they will.
  */
-type Route = { page: string; sub: string };
+function useRoute(routes: readonly string[]): [string, (route: string) => void] {
+  const keys = routes.join(",");
 
-function useRoute(pages: readonly PageDef[]): [Route, (page: string, sub?: string) => void] {
-  const keys = pages.map((p) => `${p.key}:${p.children.map((c) => c.key).join("|")}`).join(",");
-
-  const read = (): Route => {
-    const [first = "", second = ""] = window.location.hash
-      .replace(/^#\/?/, "").split("?")[0]!.split("/");
-    const page = pages.find((p) => p.key === first) ?? pages[0];
-    if (!page) return { page: "", sub: "" };
-    const sub = page.children.some((c) => c.key === second)
-      ? second
-      : (page.children[0]?.key ?? "");
-    return { page: page.key, sub };
+  const read = (): string => {
+    const parts = window.location.hash.replace(/^#\/?/, "").split("?")[0]!.split("/");
+    const two = parts.slice(0, 2).join("/");
+    const one = parts[0] ?? "";
+    // The longer match first: `member-signups/add` and
+    // `member-signups/review` are different pages, and matching the
+    // prefix would always land on whichever came first.
+    if (routes.includes(two)) return two;
+    if (routes.includes(one)) return one;
+    return routes[0] ?? "";
   };
 
   const [route, set] = useState(read);
 
-  // `pages` is empty until the server answers, so re-read once it lands: a
+  // `routes` is empty until the server answers, so re-read once it lands: a
   // pasted link to a real page would otherwise be rewritten to the first one
   // purely because the answer had not come back yet.
   useEffect(() => {
@@ -194,12 +205,7 @@ function useRoute(pages: readonly PageDef[]): [Route, (page: string, sub?: strin
     return () => window.removeEventListener("hashchange", on);
   }, [keys]);
 
-  return [route, (page, sub) => {
-    const target = pages.find((p) => p.key === page);
-    const use = sub ?? target?.children[0]?.key ?? "";
-    window.location.hash = use ? `/${page}/${use}` : `/${page}`;
-    set({ page, sub: use });
-  }];
+  return [route, (next) => { window.location.hash = `/${next}`; set(next); }];
 }
 
 export function DutchMillerApp({
@@ -303,20 +309,36 @@ export function DutchMillerApp({
     ? `${access.account.name} · ${access.platform}`
     : (access?.platform ?? "MOJO Partners");
   useEffect(() => { document.title = tab; }, [tab]);
-  const rail: PageDef[] = (access?.allPages ?? [])
-    .map((p) => (p.children.length === 0
-      ? p
-      : { ...p, children: p.children.filter((c) => held(c.grant ?? p.key)) }))
-    .filter((p) => (p.children.length === 0 ? held(p.key) : p.children.length > 0));
+  /*
+   * The rail, from the SERVER, filtered one entry at a time.
+   *
+   * The server resolves which buttons this account shows; the grants
+   * decide which of them this person may open. A heading whose every
+   * child is refused disappears rather than leading nowhere.
+   */
+  const rail: RailItem[] = (access?.rail ?? [])
+    .map((item) => ({ ...item, children: item.children.filter((c) => held(c.grant)) }))
+    .filter((item) => (item.group
+      ? item.children.length > 0
+      : held(item.grant) || item.children.length > 0));
   // The menu pages are routable without being in the rail.
   const admin = adminFor(access?.role ?? "user", held);
-  // Routable without being in the rail. Present whenever this person
-  // has anything under the account menu at all — Vendors is granted
-  // by role, so an ordinary user can have one entry and no others.
-  const [route, go] = useRoute([
-    ...rail,
-    ...(admin.length > 0 ? [{ ...MENU_PAGES[0]!, children: admin }] : []),
-  ]);
+  /*
+   * Every route this person can reach, flat.
+   *
+   * Driven by routes rather than by the rail's shape, because the
+   * two are now different questions: where a button SITS is the
+   * account's arrangement, and where a page LIVES has not moved and
+   * must not — every bookmark and emailed link is one of these.
+   */
+  const routes: string[] = [
+    ...rail.flatMap((i) => [
+      ...(i.group || !held(i.grant) ? [] : [i.route]),
+      ...i.children.map((c) => c.route),
+    ]),
+    ...admin.map((a) => `admin/${a.key}`),
+  ];
+  const [route, go] = useRoute(routes);
   const [users, setUsers] = useState(false);
   // Audit History, filtered to one account. Set by the history icon on
   // a person's row, cleared the moment another tab is picked.
@@ -403,7 +425,7 @@ export function DutchMillerApp({
               isAdmin={isAdmin}
               product="dutch-miller"
               dmDestinations={admin}
-              onDmGo={(key) => { setHistoryFor(""); go("admin", key); }}
+              onDmGo={(key) => { setHistoryFor(""); go(`admin/${key}`); }}
             />
           )}
         </div>
@@ -446,38 +468,36 @@ export function DutchMillerApp({
       )}
 
       <div className="mx-auto flex max-w-[1600px] gap-6 px-5 py-6">
-        <nav aria-label="Dutch Miller" className="hidden w-56 shrink-0 space-y-0.5 md:block">
+        <nav aria-label="Navigation" className="hidden w-56 shrink-0 space-y-0.5 md:block">
           {rail.map((p) => (
-            <RailItem
-              key={p.key}
-              page={p}
-              route={route}
-              icon={null}
-              onGo={go}
-            />
+            <RailButton key={p.key} item={p} route={route} onGo={go} />
           ))}
+          {/* Adding a page is the account's own navigation, so the
+              control lives under it rather than in a settings screen
+              somewhere else. Administrators only; the route decides
+              again. */}
+          {dmAdmin && access && <AddPage />}
         </nav>
 
         <div className="min-w-0 flex-1">
           {/* The same destinations as the rail, for a phone. */}
           {rail.length > 0 && (
             <select
-              value={`${route.page}/${route.sub}`}
-              onChange={(e) => {
-                const [page = "", sub = ""] = e.target.value.split("/");
-                go(page, sub);
-              }}
+              value={route}
+              onChange={(e) => go(e.target.value)}
+              aria-label="Navigation"
               className="mb-4 w-full rounded-md border border-border bg-background px-2.5 py-2 text-sm md:hidden"
             >
-              {rail.map((p) => (
-                p.children.length === 0
-                  ? <option key={p.key} value={`${p.key}/`}>{p.label}</option>
-                  : p.children.map((c) => (
-                      <option key={`${p.key}/${c.key}`} value={`${p.key}/${c.key}`}>
-                        {p.label} › {c.label}
-                      </option>
-                    ))
-              ))}
+              {rail.flatMap((p) => [
+                ...(p.group ? [] : [
+                  <option key={p.key} value={p.route}>{p.label}</option>,
+                ]),
+                ...p.children.map((c) => (
+                  <option key={`${p.key}/${c.key}`} value={c.route}>
+                    {p.label} › {c.label}
+                  </option>
+                )),
+              ])}
             </select>
           )}
 
@@ -489,50 +509,55 @@ export function DutchMillerApp({
           {/* The two halves are granted separately now, so a link into
               the one somebody does not hold must say so rather than
               render a page whose every request is refused. */}
-          {access && route.page === "member-signups"
-            && !held(route.sub === "add" ? "member-signups-add" : "member-signups") && (
+          {/* The two halves are granted separately, so a link into the
+              one somebody does not hold must say so rather than render
+              a page whose every request is refused. */}
+          {access && route.startsWith("member-signups/")
+            && !held(route.endsWith("/add") ? "member-signups-add" : "member-signups") && (
             <p className="rounded-lg border border-border bg-card px-4 py-3 text-sm">
               You do not have access to{" "}
-              <strong>{route.sub === "add" ? "Add New" : "Review Existing"}</strong>.
+              <strong>{route.endsWith("/add") ? "Add New" : "Review Existing"}</strong>.
               Member Signups is granted in two parts; ask an administrator for this one.
             </p>
           )}
-          {access && route.page === "member-signups"
-            && held(route.sub === "add" ? "member-signups-add" : "member-signups") && (
+          {access && route.startsWith("member-signups/")
+            && held(route.endsWith("/add") ? "member-signups-add" : "member-signups") && (
             <DmSignupsPage
-              view={route.sub === "add" ? "add" : "review"}
-              onView={(v) => go("member-signups", v)}
+              view={route.endsWith("/add") ? "add" : "review"}
+              onView={(v) => go(`member-signups/${v}`)}
               viewingAs={access.viewingAs}
               placement={access.stickerPlacement ?? "inside"}
             />
           )}
 
-          {access && route.page === "rfid-instructions" && (
+          {access && route === "account-registration" && held("account-registration")
+            && <DmRegistrationPage />}
+          {access && route === "vendors" && held("vendors") && <DmVendorsPage />}
+          {access && route === "rfid-instructions" && (
             <DmRfidInstructionsPage isAdmin={dmAdmin} />
           )}
-          {access && route.page === "rfid-review" && <DmRfidPage />}
+          {access && route === "rfid-review" && <DmRfidPage />}
           {/* Straight to the page. No heading above it, no tab row —
               each destination carries its own single title. */}
-          {access && route.page === "admin" && (
+          {access && route.startsWith("admin/") && (
             <>
-              {route.sub === "users" && dmAdmin && (
+              {route === "admin/users" && dmAdmin && (
                 <DmPeopleDialog
                   embedded
                   me={access.email}
                   iAmSuper={access.role === "super"}
                   onClose={() => undefined}
                   onViewAs={startViewAs}
-                  onHistory={(email) => { setHistoryFor(email); go("admin", "audit"); }}
+                  onHistory={(email) => { setHistoryFor(email); go("admin/audit"); }}
                 />
               )}
-              {route.sub === "vendors" && held("vendors") && <DmVendorsPage />}
-              {route.sub === "account" && access.role === "super" && (
+              {route === "admin/account" && access.role === "super" && (
                 <DmAccountPage canSwitch />
               )}
-              {route.sub === "roles" && access.role === "super" && <DmRolesPage />}
-              {route.sub === "security" && dmAdmin && <DmSecurityPage />}
-              {route.sub === "email" && dmAdmin && <DmSettingsPage />}
-              {route.sub === "audit" && dmAdmin && <DmAuditPage subject={historyFor} />}
+              {route === "admin/roles" && access.role === "super" && <DmRolesPage />}
+              {route === "admin/security" && dmAdmin && <DmSecurityPage />}
+              {route === "admin/email" && dmAdmin && <DmSettingsPage />}
+              {route === "admin/audit" && dmAdmin && <DmAuditPage subject={historyFor} />}
             </>
           )}
         </div>
@@ -547,7 +572,7 @@ export function DutchMillerApp({
           onHistory={(email) => {
             setUsers(false);
             setHistoryFor(email);
-            go("admin", "audit");
+            go("admin/audit");
           }}
         />
       )}
@@ -674,35 +699,41 @@ function PlatformShell({
  * expands, because a heading that only toggles is a dead end for anybody
  * who clicked it meaning to go there.
  */
-function RailItem({
-  page, route, icon, onGo,
+function RailButton({
+  item, route, onGo,
 }: {
-  page: PageDef;
-  route: Route;
-  icon: React.ReactNode;
-  onGo: (page: string, sub?: string) => void;
+  item: RailItem;
+  route: string;
+  onGo: (route: string) => void;
 }) {
-  const here = route.page === page.key;
+  const mine = [item.route, ...item.children.map((c) => c.route)].filter(Boolean);
+  const here = mine.includes(route);
   const [open, setOpen] = useState(here);
   useEffect(() => { if (here) setOpen(true); }, [here]);
-  const expandable = page.children.length > 0;
+  const expandable = item.children.length > 0;
 
   return (
     <div>
       <button
         type="button"
-        title={page.blurb}
+        title={item.blurb}
         aria-expanded={expandable ? open : undefined}
         onClick={() => {
-          if (here && expandable) setOpen((v) => !v);
-          else { setOpen(true); onGo(page.key); }
+          // A heading has nowhere of its own to go, so it only
+          // expands. A page that has children both navigates AND
+          // expands, because a button that only toggles is a dead end
+          // for anybody who clicked it meaning to go there.
+          if (item.group) { setOpen((v) => !v); return; }
+          if (route === item.route && expandable) setOpen((v) => !v);
+          else { setOpen(true); onGo(item.route); }
         }}
         className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors ${
-          here ? "bg-muted font-semibold" : "text-muted-foreground hover:bg-muted/60"
+          route === item.route || (item.group && here)
+            ? "bg-muted font-semibold"
+            : "text-muted-foreground hover:bg-muted/60"
         }`}
       >
-        {icon}
-        <span className="flex-1 truncate">{page.label}</span>
+        <span className="flex-1 truncate">{item.label}</span>
         {expandable && (
           <ChevronRight
             className={`h-3.5 w-3.5 shrink-0 transition-transform ${open ? "rotate-90" : ""}`}
@@ -711,13 +742,14 @@ function RailItem({
       </button>
       {expandable && open && (
         <div className="mt-0.5 space-y-0.5 border-l border-border pb-1 pl-3 ml-4">
-          {page.children.map((c) => (
+          {item.children.map((c) => (
             <button
               key={c.key}
               type="button"
-              onClick={() => onGo(page.key, c.key)}
+              title={c.blurb}
+              onClick={() => onGo(c.route)}
               className={`block w-full rounded-md px-2.5 py-1.5 text-left text-sm transition-colors ${
-                here && route.sub === c.key
+                route === c.route
                   ? "bg-muted/70 font-semibold"
                   : "text-muted-foreground hover:bg-muted/50"
               }`}

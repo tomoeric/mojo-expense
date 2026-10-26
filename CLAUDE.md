@@ -617,6 +617,94 @@ RFID Inventory.
 - `scripts/test-blocks.ts` covers the model; `test-isolation.ts` covers the
   routes, including that an administrator cannot touch the shared template.
 
+### The rail is a catalogue, arranged per account
+
+`server/dutch-miller/nav.ts`. Same split as the buckets: a PAGE is code and
+lives in the template; which pages an account shows, and whether each sits at
+the top of the rail or under something else, is the account's.
+
+- **The catalogue is code, deliberately.** A page is a route, a guard and a
+  component, so "create a page" from an account editor could only ever mean a
+  blank one — and a blank page in a dealership's rail is worse than no page.
+  An account adds a page that already exists; a page that does not exist is
+  added by shipping it. The picker says so rather than offering to invent one.
+- **One instance per account, enforced by the PRIMARY KEY** on
+  `dm_account_nav (account_id, page_key)`. The picker only offers what is
+  unused, and that is a convenience: a second tab, a stale page and a retried
+  request all walk past a picker. Adding the same page twice, under a different
+  parent, or under a different name are all refused — the LABEL is a display
+  name and the KEY is what decides duplicates. Two concurrent adds produce one
+  winner and the loser is told, never a success that added nothing.
+- **`dm_template_nav` is the shared base, resolved at read time.** An account
+  with no additions follows a change to it; an account's own additions survive
+  one. Account Registration is in the base, which is what puts it on Dutch
+  Miller's rail and on every account provisioned after, with no per-account
+  migration.
+- **A base entry is not an account's to remove.** A dealership without Member
+  Signups is not a layout choice, it is an outage with no way back from inside
+  the app. Only what the account added comes off.
+- **Routes did not move.** `member-signups/review`, `rfid-review`, `vendors` —
+  every one is in somebody's bookmarks and in sent email. The rail decides
+  where a BUTTON sits; `useRoute` in the shell matches route strings, longest
+  first, and is driven by routes rather than by the rail's shape because the
+  two are now different questions.
+- **Vendors left the user menu and the base rail, and stayed in the
+  catalogue.** It spent one release in the account menu, which was wrong for a
+  second reason: that menu is where the app is administered and approving a
+  company to be paid is work. Records, routes, reviews and audit history are
+  untouched, and a partner that genuinely has vendors adds the button back.
+
+### Account Registration
+
+`server/dutch-miller/business.ts`, one row per partner in `dm_business`. The
+page is shared; the record never is.
+
+- **Opening it writes nothing and sends nothing.** An account with no record
+  gets a usable empty draft — not a row, not an invented example. Reading a
+  form and starting a process are different things.
+- **A draft saves half-finished; a SUBMISSION is what validates.** Malformed
+  values are refused either way, because catching a mistyped address at the
+  keyboard beats finding out when the verification link bounces.
+- **A failed submission keeps the draft** and lists everything missing at once.
+  A submission that threw the form away is how somebody stops trying.
+- **The verification belongs to the ADDRESS that was proved.** Changing the
+  business email keeps the old verified address on the record and blocks the
+  submission on the mismatch. Carrying it over would mean a registration
+  approved on a check nobody did — the subtlest failure in this whole feature,
+  and the one with its own test.
+- **The agreement is recorded by VERSION**, not as a boolean. Accepting a
+  version that is not the current one is refused, and a moved-on agreement is
+  not an agreement anybody made.
+- **Proof of business only when MOJO asks**, per account, off by default. An
+  upload control that is always there invites paperwork nobody wanted and then
+  has to store it. One live document; a replacement supersedes. The bytes live
+  in Postgres, not on a disk the deployment rebuilds, and `documentBytes` takes
+  the account id so another partner's id answers exactly as one that never
+  existed — that rule matters more here than anywhere else, because the file is
+  somebody's business licence.
+- **Approving is a judgement, not a grant.** It records that MOJO accepts the
+  business details and gives nobody a single extra page. Access is still Users
+  & Access. Said on the panel, because "approved" is exactly the word somebody
+  reads as "and now they can do more".
+- **Naming a primary contact creates no login.** Said on the page, for the same
+  reason.
+- **The verification link is spent by a POST**, never by the GET that loaded
+  the page — mail providers fetch URLs in incoming messages to scan them, which
+  is the lesson the dealer invitations learned the hard way within a day of
+  shipping. Single use, hashed, replaced when resent.
+- **No tax IDs, bank details or card numbers**, deliberately. None is needed to
+  say a dealership is who it says it is, and a field that exists gets filled in.
+- Its buckets are in the same system as every other page, so an account can
+  rearrange them; the required fields are registered essential and so cannot be
+  hidden or unticked.
+- `scripts/test-nav.ts` and `scripts/test-registration.ts`, plus HTTP coverage
+  in `test-isolation.ts` for one account's rail and registration not reaching
+  another's.
+- **The grant is new, so only administrators hold it** until an account
+  administrator ticks `account-registration` on a role. There is no backfill:
+  a predecessor grant would be a guess, and inventing access is worse than
+  somebody having to grant it.
+
 ### Shared administration says so on the page
 
 Users & Access and Email & Notifications are platform-wide and now read that
@@ -830,7 +918,9 @@ broken link.
 - Tests: `scripts/test-rfid.ts`, `scripts/test-dm-users.ts`,
   `scripts/test-signups.ts`, `scripts/test-accounts.ts` (partner isolation in
   the model), `scripts/test-blocks.ts` (the template and the per-account
-  layouts) and `scripts/test-isolation.ts` (isolation over HTTP, against a
+  layouts), `scripts/test-nav.ts` (the rail catalogue and the one-instance
+  rule), `scripts/test-registration.ts` (the business record and its review)
+  and `scripts/test-isolation.ts` (isolation over HTTP, against a
   real server with a real session cookie — the only level at which a route
   collision or a mis-ordered middleware shows, and the level at which both have
   already bitten) — all need `DATABASE_URL`. The users test SKIPS against a non-empty `dm_users` rather

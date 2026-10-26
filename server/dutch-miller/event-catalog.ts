@@ -130,6 +130,34 @@ export const EVENT_META = {
     "A partner arranged one of its own pages"),
   "layout.reset": M("business", "succeeded", "info",
     "A partner put a page back to the shared layout"),
+  "nav.added": M("business", "succeeded", "low",
+    "A page was added to a partner's navigation"),
+  "nav.removed": M("business", "succeeded", "low",
+    "A page was taken off a partner's navigation"),
+
+  /* ---- Account Registration ----
+   *
+   * Business events, about ONE partner, so they carry an account id
+   * and stay out of another partner's history. The decision and the
+   * agreement acceptance are the two anybody goes looking for later.
+   */
+  "business.saved": M("business", "succeeded", "info", "A registration draft was saved"),
+  "business.verify.sent": M("business", "succeeded", "info",
+    "A business email verification link was sent"),
+  "business.verify.failed": M("business", "blocked", "low",
+    "A business email verification link could not be sent"),
+  "business.verified": M("business", "succeeded", "low",
+    "A business email was verified", true),
+  "business.agreement": M("business", "succeeded", "medium",
+    "The partner agreement was accepted", true),
+  "business.submitted": M("business", "succeeded", "low",
+    "A registration was submitted for review"),
+  "business.approved": M("business", "succeeded", "medium",
+    "A registration was approved", true),
+  "business.returned": M("business", "succeeded", "low",
+    "A registration was sent back for corrections"),
+  "business.document": M("business", "succeeded", "low",
+    "A proof-of-business document was requested, uploaded, opened or decided", true),
 
   /* ---- Looking through somebody else's eyes ---- */
   "viewas.started": M("access", "succeeded", "medium",

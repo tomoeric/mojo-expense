@@ -39,6 +39,7 @@ export const BLOCK_PAGES = [
   "member-signups-add",
   "rfid-instructions",
   "rfid-review",
+  "account-registration",
 ] as const;
 export type BlockPage = (typeof BLOCK_PAGES)[number];
 export const isBlockPage = (v: unknown): v is BlockPage =>
@@ -49,6 +50,7 @@ export const PAGE_LABEL: Record<BlockPage, string> = {
   "member-signups-add": "Member Signups — Add New",
   "rfid-instructions": "RFID Instructions",
   "rfid-review": "RFID Inventory",
+  "account-registration": "Account Registration",
 };
 
 /**
@@ -188,6 +190,45 @@ const ITEM: Record<BlockPage, RegisteredItem[]> = {
     {
       key: "table", label: "The numbers", kind: "data", essential: true,
       note: "The page itself.",
+    },
+  ],
+  "account-registration": [
+    {
+      key: "legalName", label: "Legal business name", kind: "input", essential: true,
+      note: "Required at submission. The server refuses one without it.",
+    },
+    { key: "dba", label: "Doing business as (DBA)", kind: "input" },
+    { key: "businessType", label: "Business type", kind: "input", essential: true },
+    { key: "website", label: "Website", kind: "input" },
+    { key: "address1", label: "Street address", kind: "input", essential: true },
+    { key: "city", label: "City", kind: "input", essential: true },
+    { key: "state", label: "State", kind: "input", essential: true },
+    { key: "postalCode", label: "ZIP code", kind: "input", essential: true },
+    { key: "businessPhone", label: "Business phone", kind: "input", essential: true },
+    {
+      key: "businessEmail", label: "Business email", kind: "input", essential: true,
+      note: "Also the address the verification link goes to.",
+    },
+    { key: "contactName", label: "Full name", kind: "input", essential: true },
+    { key: "contactTitle", label: "Job title", kind: "input" },
+    { key: "contactEmail", label: "Work email", kind: "input", essential: true },
+    { key: "contactPhone", label: "Phone", kind: "input", essential: true },
+    {
+      key: "emailVerification", label: "Business email verification", kind: "control",
+      essential: true,
+      note: "A submission is refused until the address on the form is the one proved.",
+    },
+    {
+      key: "proofOfBusiness", label: "Proof of business", kind: "control",
+      note: "Only ever shown when MOJO has asked this account for one.",
+    },
+    {
+      key: "agreement", label: "Partner agreement", kind: "control", essential: true,
+      note: "The version accepted is recorded. A submission is refused without it.",
+    },
+    {
+      key: "contactNote", label: "What a contact is not", kind: "content",
+      note: "That naming somebody here does not create a login.",
     },
   ],
 };
@@ -381,6 +422,22 @@ const SEEDS: Seed[] = [
   {
     id: "blk_inv_table", page: "rfid-review", name: "Numbers",
     items: ["table"], columns: 1, width: 6, height: "auto", position: 30,
+  },
+  {
+    id: "blk_reg_business", page: "account-registration", name: "Business Information",
+    items: ["legalName", "dba", "businessType", "website", "address1", "city",
+      "state", "postalCode", "businessPhone", "businessEmail"],
+    columns: 2, width: 6, height: "auto", position: 10,
+  },
+  {
+    id: "blk_reg_contact", page: "account-registration", name: "Primary Contact",
+    items: ["contactName", "contactTitle", "contactEmail", "contactPhone", "contactNote"],
+    columns: 2, width: 6, height: "auto", position: 20,
+  },
+  {
+    id: "blk_reg_verify", page: "account-registration", name: "Verification & Agreement",
+    items: ["emailVerification", "proofOfBusiness", "agreement"],
+    columns: 1, width: 6, height: "auto", position: 30,
   },
 ];
 

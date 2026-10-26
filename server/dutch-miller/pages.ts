@@ -55,6 +55,18 @@ export const DM_GRANTS = [
     label: "RFID Inventory",
     blurb: "Every tag: available, assigned, held back and removed.",
   },
+  {
+    /*
+     * The partner's own business record.
+     *
+     * Its own grant rather than an administrator's page: the people
+     * who fill it in are the dealership's, and the people who review
+     * it are MOJO's, and neither of those is "administers the app".
+     */
+    key: "account-registration",
+    label: "Account Registration",
+    blurb: "The partner's business details, verification and agreement.",
+  },
 ] as const;
 
 export type DmPageKey = (typeof DM_GRANTS)[number]["key"];
