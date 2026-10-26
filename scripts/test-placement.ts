@@ -1,0 +1,78 @@
+/**
+ * Which face of the glass, and the one place it is stored.
+ *
+ *   pnpm exec tsx scripts/test-placement.ts
+ *
+ * The failure worth preventing is not a crash. It is the instructions
+ * page saying one thing and the confirmation a dealer ticks saying
+ * the other — which is what happens the moment this becomes two
+ * pieces of copy instead of one stored value. Somebody is standing at
+ * a vehicle with a sticker and an adhesive that only works on one
+ * side of the glass.
+ *
+ * Default INSIDE, because every tag issued so far went on under that
+ * instruction and a setting appearing must not quietly rewrite what
+ * people are told.
+ */
+import {
+  getPlacement, isPlacement, setPlacement,
+} from "../server/dutch-miller/settings.js";
+import { db } from "../server/db.js";
+
+let failures = 0;
+const check = (what: string, ok: boolean, detail = "") => {
+  if (!ok) failures++;
+  console.log(`  ${ok ? "ok  " : "FAIL"} ${what}${detail ? ` — ${detail}` : ""}`);
+};
+const refused = async (fn: () => Promise<unknown>): Promise<string> => {
+  try { await fn(); return ""; } catch (e) { return (e as Error).message; }
+};
+
+const BY = "boss@example.invalid";
+
+try {
+  await db().query("DELETE FROM dm_settings WHERE key = 'sticker_placement'")
+    .catch(() => {});
+
+  console.log("1. Inside until somebody says otherwise");
+  const fresh = await getPlacement();
+  check("the default is inside", fresh.placement === "inside", fresh.placement);
+  check("…and nothing claims to have set it", fresh.updatedAt === null);
+
+  console.log("\n2. Switching it");
+  const out = await setPlacement("outside", BY);
+  check("it takes", out.placement === "outside");
+  check("…recording who", out.updatedBy === BY);
+  check("…and when", Boolean(out.updatedAt));
+  check("…and it reads back", (await getPlacement()).placement === "outside");
+  const back = await setPlacement("inside", BY);
+  check("and back again", back.placement === "inside");
+
+  console.log("\n3. Only the two real answers");
+  check("inside is one", isPlacement("inside"));
+  check("outside is the other", isPlacement("outside"));
+  check("anything else is not", !isPlacement("windscreen"));
+  check("…nor is a blank", !isPlacement(""));
+  const bad = await refused(() => setPlacement("bonnet" as never, BY));
+  check("saving nonsense is refused", bad.includes("not a placement"), bad);
+  // A refused save must leave the real answer standing, or a typo in a
+  // request silently rewrites what everybody is told to do.
+  check("…and the setting is untouched", (await getPlacement()).placement === "inside");
+
+  console.log("\n4. A corrupt stored value falls back rather than breaking");
+  // Somebody editing the row by hand, or a rollback from a version
+  // that knew a third value. The page must still render something
+  // true rather than an empty instruction.
+  await db().query(
+    `INSERT INTO dm_settings (key, value, updated_by) VALUES ('sticker_placement', $1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+    [JSON.stringify("sideways"), BY]);
+  check("it reads as inside", (await getPlacement()).placement === "inside");
+} finally {
+  await db().query("DELETE FROM dm_settings WHERE key = 'sticker_placement'")
+    .catch(() => {});
+  await db().end().catch(() => {});
+}
+
+console.log(failures === 0 ? "\nPASS" : `\n${failures} FAILED`);
+process.exit(failures === 0 ? 0 : 1);

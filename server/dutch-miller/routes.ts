@@ -35,8 +35,8 @@ import { dutchMillerNamed } from "../auth/apps.js";
 import { publicOrigin } from "../origin.js";
 import { emitChange, streamChanges } from "../events.js";
 import {
-  DAY_NAMES, getReminders, getSignupNotify, parseRecipients, setReminders,
-  setSignupNotify,
+  DAY_NAMES, getPlacement, getReminders, getSignupNotify, isPlacement,
+  parseRecipients, setPlacement, setReminders, setSignupNotify,
 } from "./settings.js";
 import { runReminders } from "./reminders.js";
 import { notifyApproved, notifySignup, signupEmail } from "./notify.js";
@@ -99,6 +99,10 @@ dutchMillerRouter.get("/me", async (req: Request, res: Response) => {
       : isStaff(real),
     via: req.viewingAs ? (row?.authMethod ?? "link") : (real?.via ?? "microsoft"),
     viewingAs: req.viewingAs ? { real: req.viewingAs.real.email, viewed: email } : null,
+    // Inside the glass or outside it. Served with the rest of the
+    // shell's first read so the instructions page and the signup
+    // form never render one wording and then swap to the other.
+    stickerPlacement: (await getPlacement()).placement,
   });
 });
 
@@ -1385,6 +1389,41 @@ dutchMillerRouter.post(
     res.json({ row: out.row });
   },
 );
+
+/**
+ * Where the sticker goes: inside the glass, or outside it.
+ *
+ * Readable by anybody who can open the instructions, because the page
+ * IS this setting. Writable by an administrator only — it rewrites
+ * what everybody is told to do at the vehicle, and getting it wrong
+ * means tags applied with the wrong adhesive on the wrong face.
+ */
+dutchMillerRouter.get(
+  "/settings/placement",
+  requirePage("rfid-instructions"),
+  async (_req: Request, res: Response) => {
+    res.json(await getPlacement());
+  },
+);
+
+dutchMillerRouter.post("/settings/placement", requireDmAdmin,
+  async (req: Request, res: Response) => {
+    const want = (req.body as { placement?: unknown } | undefined)?.placement;
+    if (!isPlacement(want)) {
+      res.status(400).json({ error: "Choose inside or outside." });
+      return;
+    }
+    const out = await setPlacement(want, actor(req));
+    await audit({
+      action: "notify.changed", ...who(req),
+      detail: `RFID placement set to ${out.placement} the glass`,
+    });
+    // The instructions page, the signup form's confirmation and the
+    // member records' wording all read this. Push it rather than wait
+    // for somebody to reload the one they happen to be looking at.
+    emitChange("signups");
+    res.json(out);
+  });
 
 /**
  * Somebody has checked that the sticker is on this vehicle.

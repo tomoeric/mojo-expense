@@ -288,3 +288,54 @@ export async function noteReminderSent(stamp: string): Promise<void> {
     lastSentAt: stamp,
   }, "scheduler");
 }
+
+/* ------------------------------------------------------------------ *
+ * Where the sticker goes
+ * ------------------------------------------------------------------ */
+
+/**
+ * Inside the glass, or outside it.
+ *
+ * A property of the TAGS, not of a preference: an adhesive meant for
+ * the inside fails on the outside and the reverse, so this follows
+ * whichever stock MOJO is issuing. It changes three things that must
+ * never disagree with each other — the instructions somebody reads at
+ * the vehicle, the wording of the confirmation they tick, and the
+ * caption on the diagram — which is why it is one stored value rather
+ * than three pieces of copy to keep in step by hand.
+ *
+ * Default INSIDE, because that is what every tag issued so far was
+ * applied under and a setting appearing must not silently rewrite the
+ * instructions under somebody holding a sticker.
+ */
+export const PLACEMENTS = ["inside", "outside"] as const;
+export type Placement = (typeof PLACEMENTS)[number];
+export const isPlacement = (v: unknown): v is Placement =>
+  typeof v === "string" && (PLACEMENTS as readonly string[]).includes(v);
+
+const PLACEMENT_KEY = "sticker_placement";
+
+export type PlacementSetting = {
+  placement: Placement;
+  updatedAt: string | null;
+  updatedBy: string | null;
+};
+
+export async function getPlacement(): Promise<PlacementSetting> {
+  const stored = await read<unknown>(PLACEMENT_KEY, null);
+  const meta = await db().query<{ updated_at: Date; updated_by: string }>(
+    "SELECT updated_at, updated_by FROM dm_settings WHERE key = $1", [PLACEMENT_KEY]);
+  return {
+    placement: isPlacement(stored) ? stored : "inside",
+    updatedAt: meta.rows[0]?.updated_at.toISOString() ?? null,
+    updatedBy: meta.rows[0]?.updated_by ?? null,
+  };
+}
+
+export async function setPlacement(
+  placement: Placement, by: string,
+): Promise<PlacementSetting> {
+  if (!isPlacement(placement)) throw new Error("That is not a placement.");
+  await write(PLACEMENT_KEY, placement, by);
+  return getPlacement();
+}

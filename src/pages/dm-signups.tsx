@@ -5,6 +5,7 @@ import {
   Download, ExternalLink, Eye, FileSpreadsheet, Loader2, Lock, Send, Trash2, X,
 } from "lucide-react";
 import { DmBulkDialog } from "@/pages/dm-bulk";
+import { placementLine, type Placement } from "@/pages/dm-rfid-instructions";
 
 /**
  * Member Signups — enrol a member, and hand them an RFID tag.
@@ -127,11 +128,21 @@ export function DmSignupsPage({
   view,
   onView,
   viewingAs,
+  placement = "inside",
 }: {
   view: "review" | "add";
   onView: (v: "review" | "add") => void;
   /** Set while a super admin is looking through somebody else's eyes. */
   viewingAs?: { real: string; viewed: string } | null;
+  /**
+   * Which face of the glass the sticker goes on.
+   *
+   * Drives the wording of the confirmation somebody ticks. It comes
+   * from the same stored setting as RFID Instructions, so the two can
+   * never tell a dealer different things — which they would within a
+   * month if this were copy in two places.
+   */
+  placement?: Placement;
 }) {
   const [justSaved, setJustSaved] = useState<SignupRow | null>(null);
 
@@ -157,6 +168,7 @@ export function DmSignupsPage({
         : viewingAs
           ? <NotWhileViewing viewed={viewingAs.viewed} onBack={() => onView("review")} />
           : <AddNew
+            placement={placement}
             onCancel={() => { setJustSaved(null); onView("review"); }}
             onSaved={(row) => { setJustSaved(row); onView("review"); }}
           />}
@@ -1105,10 +1117,11 @@ function DeleteSignup({
  * ------------------------------------------------------------------ */
 
 function AddNew({
-  onCancel, onSaved,
+  onCancel, onSaved, placement,
 }: {
   onCancel: () => void;
   onSaved: (row: SignupRow) => void;
+  placement: Placement;
 }) {
   const qc = useQueryClient();
   const [form, setForm] = useState<Form>(BLANK);
@@ -1281,6 +1294,7 @@ function AddNew({
           onChange={(v) => set("rfid", v)}
         />
         <StickerConfirm
+          placement={placement}
           checked={form.stickerAttached}
           error={errors.stickerAttached}
           onChange={(v) => set("stickerAttached", v)}
@@ -1337,6 +1351,7 @@ function AddNew({
           options={options.data?.options ?? []}
           busy={submit.isPending}
           conflict={conflict}
+          placement={placement}
           onChange={set}
           onCancelEntry={() => {
             setVerifying(false);
@@ -1358,13 +1373,15 @@ function AddNew({
  * ------------------------------------------------------------------ */
 
 function Verify({
-  form, handle, options, busy, conflict, onChange, onCancelEntry, onConfirm,
+  form, handle, options, busy, conflict, placement,
+  onChange, onCancelEntry, onConfirm,
 }: {
   form: Form;
   handle: Handle;
   options: string[];
   busy: boolean;
   conflict: string;
+  placement: Placement;
   onChange: (k: keyof Form, v: string | boolean) => void;
   onCancelEntry: () => void;
   onConfirm: () => void;
@@ -1443,6 +1460,7 @@ function Verify({
             onChange={(v) => editCustomer("rfid", v)}
           />
           <StickerConfirm
+            placement={placement}
             checked={form.stickerAttached}
             onChange={(v) => editCustomer("stickerAttached", v)}
           />
@@ -1587,8 +1605,13 @@ function RfidField({
  * different conversation from one applied in the wrong place.
  */
 function StickerConfirm({
-  checked, error, onChange,
-}: { checked: boolean; error?: string; onChange: (v: boolean) => void }) {
+  checked, error, placement, onChange,
+}: {
+  checked: boolean;
+  error?: string;
+  placement: Placement;
+  onChange: (v: boolean) => void;
+}) {
   return (
     <div className="sm:col-span-2 lg:col-span-3">
       <label
@@ -1604,8 +1627,10 @@ function StickerConfirm({
           onChange={(e) => onChange(e.target.checked)}
         />
         <span className="text-sm">
-          The RFID sticker has been physically attached to the front windshield,
-          bottom-left on the driver's side.
+          {/* One sentence, from the same setting the instructions page
+              reads. Two copies of this would disagree within a month,
+              and the person it misleads is holding the sticker. */}
+          {placementLine(placement)}
           <span className="text-red-500"> *</span>
           <span className="mt-0.5 block text-xs text-muted-foreground">
             Applied inside the glass, flat and square, not obstructing the driver's view.{" "}

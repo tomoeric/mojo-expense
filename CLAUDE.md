@@ -377,6 +377,23 @@ the blocks.
 - **A deleted RFID never returns to the pool** — not by re-uploading the file that
   brought it in, not through Make active, not through `useRfid`.
 
+## Sticker placement: inside or outside the glass
+
+- **ONE stored value** (`dm_settings.sticker_placement`, default `inside`) drives
+  the RFID Instructions page, the diagram caption, and the wording of the
+  confirmation a dealer ticks on a new signup. It is a property of the TAGS —
+  an adhesive meant for the inside fails on the outside — not a preference.
+- **Never make this copy in two places.** The two would disagree within a month,
+  and the person it misleads is standing at a vehicle holding the sticker. Both
+  variants live in `PLACEMENT` in `dm-rfid-instructions.tsx`; the one-line
+  confirmation comes from `placementLine()` in the same file.
+- Served on `/me` so the form and the page never render one wording then swap.
+  Admin writes only; readable by anybody who can open the instructions.
+- **A missing diagram shows a gap, never the other variant's photograph** — that
+  picture shows the opposite of what the page is asking for. Drop an image at
+  `public/rfid-sticker-placement-outside.webp` and it appears; nothing else
+  needs changing.
+
 ## Email delivery
 
 - **`sendOnce` (delivery.ts), not `sendMail`, for anything a person waits on.**

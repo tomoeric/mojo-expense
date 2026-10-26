@@ -49,6 +49,8 @@ type Access = {
   allPages: readonly PageDef[];
   /** Set only while a super admin is looking through somebody else's eyes. */
   viewingAs: { real: string; viewed: string } | null;
+  /** Which face of the glass the sticker goes on. Drives the wording. */
+  stickerPlacement: "inside" | "outside";
 };
 
 /**
@@ -288,9 +290,12 @@ export function DutchMillerApp({
               view={route.sub === "add" ? "add" : "review"}
               onView={(v) => go("member-signups", v)}
               viewingAs={access.viewingAs}
+              placement={access.stickerPlacement ?? "inside"}
             />
           )}
-          {access && route.page === "rfid-instructions" && <DmRfidInstructionsPage />}
+          {access && route.page === "rfid-instructions" && (
+            <DmRfidInstructionsPage isAdmin={dmAdmin} />
+          )}
           {access && route.page === "rfid-review" && <DmRfidPage />}
           {/* Straight to the page. No heading above it, no tab row —
               each destination carries its own single title. */}
