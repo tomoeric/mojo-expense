@@ -38,6 +38,101 @@ Neither block is optional; a reply that ends without both is incomplete. If a
 step beyond restart is needed (re-run the import, change a secret), say so after
 the blocks.
 
+## Before any change is called done
+
+Seven steps. Not a style guide — every one of them is here because
+skipping it shipped something broken, and the note under each says which.
+
+**1. `pnpm run typecheck` and `pnpm run build`, both clean.**
+Typecheck runs `scripts/check-sql-templates.mjs` first, which refuses a
+backtick inside a SQL template literal — that has broken the build three
+times and the error always lands dozens of lines from the cause.
+
+**2. Run every affected suite against a real database, and say which in the
+reply, with the count.** Not "tests pass": `25 suites pass` and the names of
+the new ones. The suites need Postgres:
+
+```bash
+su postgres -s /bin/bash -c "/usr/lib/postgresql/16/bin/pg_ctl \
+  -D /var/lib/postgresql/mojotest \
+  -o '-p 5599 -k /tmp -c listen_addresses=127.0.0.1' -l /tmp/pg.log start"
+
+export DATABASE_URL="postgres://postgres@127.0.0.1:5599/mojo"
+export SESSION_SECRET="test-secret-at-least-32-characters-long"
+pnpm exec tsx scripts/test-<name>.ts
+```
+
+A change to the Dutch Miller side means at least: `accounts`, `blocks`, `nav`,
+`registration`, `isolation`, `signups`, `rfid`, `vendors`, `bulk`, `grants`,
+`placement`, `sticker`, `dm-users`, `roles`, `notify`, `delivery`, `reminders`,
+`vehicles`, `dealer-auth`, `view-scope`, `viewas-log`, `permissions`,
+`app-access`, `events`, `two-reviewers`.
+
+**3. A new suite for any rule that could fail QUIETLY.** The test to write is
+not the happy path — it is the one where the application keeps working and the
+data is wrong: one partner reading another's records, a tag issued twice, a
+hidden field skipping a validation, a template that is secretly a snapshot.
+If the failure would show as a red screen, a test adds little; if it would
+show as a plausible-looking page, it is the whole job.
+
+**4. Boot the server and exercise the routes.** A typecheck cannot see a route
+collision — `GET /events` was silently shadowed by a second route at the same
+path, and only a real request found it. Anything touching routes, middleware
+or permissions gets an HTTP pass; `scripts/test-isolation.ts` is the pattern,
+assembling the same middleware stack as `index.ts` and speaking to it over a
+socket with a real signed session cookie.
+
+**5. A browser pass over every changed page.** Playwright is installed and
+needs no options. Load the page with a forged session cookie, assert it
+renders what it should, and assert **zero console errors** — a React crash
+below the fold is invisible to every other check here. Click the controls that
+were added; "it compiles" is not "the button works".
+
+**6. Two things that only an EMPTY database shows.** Run the suites once
+against a fresh database, because the live one has every table already and
+hides both: a column or index that was never written (the signup soft-delete
+shipped with the TypeScript referencing `deleted_at` and no `ALTER` for it),
+and a module whose schema needs another module's table first (`signups` needs
+`dm_rfid` and `dm_audit`; `accounts` needs `dm_users`). Harmless on this
+deployment, fatal on the first boot of a new one.
+
+```bash
+psql -h /tmp -p 5599 -U postgres -d postgres -c "CREATE DATABASE mojofresh"
+DATABASE_URL="postgres://postgres@127.0.0.1:5599/mojofresh" pnpm exec tsx scripts/test-accounts.ts
+```
+
+**7. Update `CLAUDE.md` in the SAME commit, and say in the reply what was NOT
+done.** Both halves matter. A rule that lives only in a commit message is a
+rule the next change breaks. And a summary that lists what works and stays
+quiet about what does not is how three reviews in a row had to come back and
+find the same gap — name the thing that is not built, the check that could not
+be run here, and the verification that is still the user's to do on the
+deployment.
+
+### What counts as evidence
+
+- **"It compiles" is not evidence.** Neither is "the page renders" for
+  anything with a rule behind it.
+- **Report the actual output.** If a suite fails, say so with what it said.
+  If a step was skipped, say which and why.
+- **Never claim a check that was not run.** vPIC is blocked by this
+  container's proxy, so the vehicle lookups are only ever exercised on their
+  offline paths here — that gets said every time rather than rounded up to
+  "vehicles pass".
+- **Clean up after a test.** A suite that leaves rows behind makes the next
+  run lie. Every one here has a `finally` that removes what it made and
+  nothing it did not.
+
+### Two standing rules that are not negotiable
+
+- **Isolation is re-checked whenever data or routes change.** One partner must
+  never read another's members, tags, vendors, documents, layout or
+  navigation, and an id from the wrong account must answer exactly as an id
+  that never existed.
+- **Hiding is never a control.** Removing a button, a field or a page from the
+  interface changes presentation only. Whatever it protected is enforced on
+  the server, or it is not enforced.
+
 ## Two apps on one deployment
 
 - **Emburse and Dutch Miller share this VM, this sign-in and this origin, and
