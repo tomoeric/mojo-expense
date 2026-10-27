@@ -297,6 +297,34 @@ export async function queueDecision(input: {
       "Whoever it belongs to sees it in their own queue." };
   }
 
+  /*
+   * AND NOT IN A PERSONAL EMBURSE ACCOUNT.
+   *
+   * A decision is applied by signing in with the decider's
+   * PRIMARY connection and working that account's Needs Review.
+   * An expense in their own second tenant is not in that list, so
+   * the attempt would either fail after a minute of browsing with
+   * a matching error that reads like broken selectors — or, on a
+   * tenant where the same merchant and amount recur, find a
+   * DIFFERENT expense and approve that one.
+   *
+   * Refused here rather than in the queue, because this is the
+   * one place every approval and denial passes through: a click,
+   * the automation's sweep, and anything that posts a dedupe key.
+   * Approving is not what a personal tab is for in any case —
+   * you submit your own expenses, you do not approve them.
+   */
+  const { rows: laneRows } = await db().query<{ lane: string }>(
+    "SELECT lane FROM expenses WHERE dedupe_key = $1", [input.dedupeKey]);
+  const lane = (laneRows[0]?.lane ?? "").trim();
+  if (lane) {
+    return { ok: false, error:
+      "That expense is in a personal Emburse account, not the manager queue. A decision is "
+      + "applied under the primary connection, which is a different tenant — so it would "
+      + "either not be found or would land on the wrong expense. Submit it in Emburse "
+      + "instead." };
+  }
+
   try {
     const { rows } = await db().query<Row>(
       `INSERT INTO expense_decisions (dedupe_key, decision, reason, decided_by, target, automatic)

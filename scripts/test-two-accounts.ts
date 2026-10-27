@@ -33,6 +33,7 @@ import { dedupeKey } from "../server/import/key.js";
 import { ensureDecisionsSchema } from "../server/emburse/decisions.js";
 import { ensureReceiptItems } from "../server/emburse/receipt-items.js";
 import { MANAGER_LANE, laneTag } from "../server/emburse/connections.js";
+import { queueDecision } from "../server/emburse/decisions.js";
 
 const ERIC = "eric.s@test.invalid";
 const MOJO = "personal-mojo";
@@ -164,7 +165,49 @@ try {
   check("the Mammoth queue shows only its own", await shown(MAMMOTH) === 1);
   check("asking for everything shows all three", await shown(null) === 3);
 
+  console.log("\n7. A write never lands in the wrong tenant");
+  /*
+   * Two ways an edit reaches Emburse: an approval, and a category
+   * correction. Both sign in and work ONE account's list. An
+   * expense in a personal tenant is simply not in the primary
+   * connection's Needs Review — so the attempt would either fail
+   * after a minute of browsing with an error that reads like
+   * broken selectors, or, on a tenant where the same merchant
+   * and amount recur, find a DIFFERENT expense and action that
+   * one. The second is the reason this is refused rather than
+   * merely likely to fail.
+   */
+  await clean();
+  await add(key("mgr", 1), ERIC, "");
+  await add(key("mojo", 1), ERIC, MOJO);
+
+  const onManager = await queueDecision({
+    dedupeKey: key("mgr", 1), decision: "approve", reason: "fine",
+    decidedBy: ERIC,
+    target: { employee: "Someone", merchant: "MERCHANT", amount: 10, date: "2026-09-24" },
+  });
+  check("a manager-queue expense can still be decided", onManager.ok === true,
+    onManager.ok ? "" : onManager.error);
+
+  const onPersonal = await queueDecision({
+    dedupeKey: key("mojo", 1), decision: "approve", reason: "fine",
+    decidedBy: ERIC,
+    target: { employee: "Someone", merchant: "MERCHANT", amount: 10, date: "2026-09-24" },
+  });
+  check("A PERSONAL EXPENSE CANNOT BE DECIDED FROM HERE", onPersonal.ok === false,
+    onPersonal.ok ? "it was queued" : "");
+  check("…and the reason says which tenant it is in",
+    !onPersonal.ok && onPersonal.error.includes("personal Emburse account"),
+    onPersonal.ok ? "" : onPersonal.error);
+  check("…and says what to do instead",
+    !onPersonal.ok && onPersonal.error.includes("Submit it in Emburse"),
+    onPersonal.ok ? "" : onPersonal.error);
+
+  await db().query("DELETE FROM expense_decisions WHERE dedupe_key LIKE $1", [`${TAG}%`]);
+
 } finally {
+  await db().query("DELETE FROM expense_decisions WHERE dedupe_key LIKE $1", [`${TAG}%`])
+    .catch(() => undefined);
   await clean().catch(() => undefined);
   client.release();
   await pool.end();

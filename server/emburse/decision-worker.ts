@@ -1,6 +1,8 @@
 import { isDbConfigured } from "../db.js";
 import { readSettings } from "../import/settings.js";
 import { credentialForUser } from "./credentials.js";
+import { credentialForLaneOf, laneTag } from "./connections.js";
+import { db as database } from "../db.js";
 import { correctCategory, runDecisions, type BatchItem, type Target } from "./decide.js";
 import { applyCorrection, pendingCorrections, settleCorrection } from "./corrections.js";
 import { db } from "../db.js";
@@ -323,13 +325,35 @@ async function runCorrections(): Promise<void> {
   const settings = await readSettings();
   for (const c of waiting) {
     try {
-      const login = await credentialForUser(c.requestedBy);
+      /*
+       * WHICH EMBURSE ACCOUNT the expense is in.
+       *
+       * A correction is applied by signing in and editing the
+       * expense, and an expense in a personal tenant is simply
+       * not there under the primary connection. Before accounts
+       * existed this could only be the primary one; now it can
+       * be either, and using the wrong one would either fail
+       * with "not in the queue" or — far worse on a tenant where
+       * the same merchant and amount recur — find a DIFFERENT
+       * expense and change that one's category.
+       */
+      const { rows: laneRows } = await database().query<{ lane: string }>(
+        "SELECT lane FROM expenses WHERE dedupe_key = $1", [c.dedupeKey]);
+      const lane = laneTag(laneRows[0]?.lane ?? "");
+      const login = lane
+        ? await credentialForLaneOf(c.requestedBy, lane).then(
+          (r) => (r.ok ? { userId: "", email: r.email, password: r.password } : null))
+        : await credentialForUser(c.requestedBy);
       if (!login) {
         await settleCorrection(c.id, {
           ok: false,
-          error:
-            `${c.requestedBy} has no Emburse login stored, and a category change is recorded ` +
-            `against whoever made it. Add one under “Your Emburse login”, then ask again.`,
+          error: lane
+            ? `This expense is in ${c.requestedBy}'s ${lane} Emburse account, and no login `
+              + "is stored for it. A category change is applied by signing in to the "
+              + "account the expense is in — no other login will be used in its place, "
+              + "because that would edit a different tenant."
+            : `${c.requestedBy} has no Emburse login stored, and a category change is recorded `
+              + "against whoever made it. Add one under “Your Emburse login”, then ask again.",
         });
         continue;
       }

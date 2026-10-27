@@ -2527,6 +2527,28 @@ queue.
   scanning past.
 - `scripts/test-rule-scope.ts`.
 
+## A write never lands in the wrong tenant
+
+Two paths reach Emburse with an edit, and both work ONE account's list:
+
+- **A decision** (`queueDecision`) signs in with the decider's PRIMARY
+  connection. An expense in their own second tenant is not in that Needs
+  Review, so the attempt would either fail after a minute of browsing with an
+  error that reads like broken selectors — or, on a tenant where the same
+  merchant and amount recur, find a DIFFERENT expense and approve that one.
+  **Refused** in `queueDecision`, which is the single place every approval
+  passes through: a click, the automation's sweep, and anything that posts a
+  dedupe key. Approving is not what a personal tab is for in any case; you
+  submit your own expenses.
+- **A category correction** (`decision-worker.ts`) now reads the expense's
+  lane and signs in with THAT account's connection, refusing with a sentence
+  when none is stored. Before accounts existed this could only be the primary
+  one.
+- The second case is the reason both are refusals rather than "likely to
+  fail": a silent wrong-expense edit in a finance system is not recoverable
+  by retrying.
+- Section 7 of `scripts/test-two-accounts.ts`.
+
 ## Receipts that arrive as email
 
 `server/emburse/receipt-mail.ts`, page under the user menu.
@@ -2562,11 +2584,16 @@ queue.
   exported from `mail.ts`. One token cache, not two.
 - `scripts/test-receipt-mail.ts` (reading and scoring, against real message
   text) and `test-receipt-mail-ui.ts`.
-- **NOT BUILT YET, and waiting on the owner:** attaching a chosen receipt to
-  Emburse, and writing field changes back. The brief says to ask before
-  enabling either — which fields may be written, and whether a strong match
-  applies automatically — so the page stops at "chosen" and says attaching is
-  a separate step.
+- **The owner's decisions, taken 2026-10-27 — do not change these without
+  asking again.** Writable on a matched receipt: **the receipt image, Note/
+  description, and Category**, and nothing else. **Always ask** — even a
+  strong match waits for a click; nothing reaches Emburse unattended. **Never
+  submit** — matching and field updates never submit, approve or deny.
+- **STILL TO BUILD:** the attach step itself and the Note write-back, against
+  those decisions. Category write-back already exists as
+  `category_corrections` and is now tenant-correct. The flow stops at
+  "chosen" until then, and the page says attaching is a separate step rather
+  than implying it happened.
 
 ## Testing your own Emburse connection
 
