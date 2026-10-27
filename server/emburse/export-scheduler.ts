@@ -991,6 +991,17 @@ function shiftClock(hhmm: string, minutes: number): string {
  */
 export const MANAGER_GRID = "/transactions/team";
 
+/**
+ * The grid a PERSONAL tab reads: the person's own expenses.
+ *
+ * A personal tab that reads /transactions/team is reading the
+ * approver's queue, which is the opposite of what the tab is. It
+ * defaulted there because the shared default is the team grid and
+ * a lane with nothing stored inherited it — so the first personal
+ * tab anybody set up pulled other people's expenses.
+ */
+export const PERSONAL_GRID = "/transactions";
+
 export function gridPathFor(
   source: string | undefined,
   list: { path: string } | undefined,
@@ -1112,13 +1123,32 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
       enabled: (r?.enabled ?? true)
         && (lane.kind === "manager" || lane.connection !== null),
       shared: !set,
-      gridPath: r?.grid_path ?? null,
+      /*
+       * A PERSONAL TAB READS THE PERSON'S OWN EXPENSES.
+       *
+       * Null means "inherit", and what it inherited was the
+       * shared default — the team grid — so a personal tab
+       * arrived pointing at the approver's queue. The lane
+       * already knows what it is; it should not need telling.
+       */
+      gridPath: r?.grid_path ?? (lane.kind === "personal" ? PERSONAL_GRID : null),
       gridSection: r?.grid_section ?? null,
       gridQuery: r?.grid_query ?? null,
       sections: Array.isArray(r?.sections)
         ? (r!.sections as unknown[]).filter((x): x is string => typeof x === "string")
         : null,
-      receiptsOnly: r?.receipts_only ?? null,
+      /*
+       * AND IT DOES NOT FILTER OUT THE EXPENSES MISSING A RECEIPT.
+       *
+       * "Receipts: true" is right for the manager queue, where an
+       * expense with no receipt is not yet worth reviewing. On a
+       * personal tab it is exactly backwards: the expenses that
+       * need a receipt FOUND are the ones with none attached, and
+       * filtering them out means the mailbox search has nothing
+       * to match against. Inheriting the shared default did that
+       * silently.
+       */
+      receiptsOnly: r?.receipts_only ?? (lane.kind === "personal" ? false : null),
       sources: Array.isArray(r?.sources)
         ? (r!.sources as unknown[]).filter((x): x is string => typeof x === "string")
         : null,

@@ -413,6 +413,17 @@ function ReviewerPanel({
         </div>
         <p className="mt-1 text-xs text-muted-foreground">
           {TABS.find((t) => t.path === path)?.why ?? path}
+          {/* A personal tab on the manager grid is reading the
+              approver's queue, which is the opposite of what the
+              tab is. Said here rather than silently corrected,
+              because somebody may have set it deliberately. */}
+          {row.laneKind === "personal" && path === "/transactions/team" && (
+            <span className="mt-1 block text-amber-700 dark:text-amber-400">
+              This is a personal tab, and it is pointed at the approver&rsquo;s queue.
+              Personal queue is almost certainly what you want here — it is{" "}
+              {row.laneLoginEmail || "this account"}&rsquo;s own expenses.
+            </span>
+          )}
         </p>
 
         <div className="mt-3 divide-y divide-border overflow-hidden rounded-xl border border-border">
@@ -514,6 +525,19 @@ function ReviewerPanel({
                 ? "On — the export is filtered to Receipts: true, so every expense it brings in has an image to read."
                 : "Off — the export is not filtered to Receipts: true. Expenses with no image come in too, and the receipt-vs-claim check has nothing to read for them."}
             </span>
+            {/* On a personal tab the filter is backwards. The
+                expenses that need a receipt FOUND are the ones
+                with none attached, so leaving it on removes
+                exactly the rows the mailbox search exists to
+                serve. Off by default here; said out loud if
+                somebody turns it on. */}
+            {row.laneKind === "personal" && receipts && (
+              <span className="mt-1 block text-xs text-amber-700 dark:text-amber-400">
+                On a personal tab this removes the expenses you are looking for. Receipt
+                matching works on the ones with <strong>no</strong> image attached yet —
+                with this on, they never arrive.
+              </span>
+            )}
           </span>
         </label>
 

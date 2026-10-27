@@ -2549,6 +2549,28 @@ Two paths reach Emburse with an edit, and both work ONE account's list:
   by retrying.
 - Section 7 of `scripts/test-two-accounts.ts`.
 
+## What a personal tab defaults to, and why it matters
+
+Two defaults were inherited from the shared settings and both were wrong for
+a personal tab. Neither failed loudly; they just meant the tab read the wrong
+list and then filtered out the only rows worth having.
+
+- **`PERSONAL_GRID` (`/transactions`), not the team grid.** Null means
+  "inherit", and the shared default is `/transactions/team` — so the first
+  personal tab anybody set up was reading the APPROVER'S queue, which is the
+  opposite of what a personal tab is. The lane already knows what it is; it
+  should not need telling. The manager tab still inherits, exactly as before.
+- **`receiptsOnly` defaults to FALSE on a personal tab.** "Receipts: true" is
+  right for the manager queue, where an expense with no receipt is not yet
+  worth reviewing, and **exactly backwards** on a personal one: the expenses
+  that need a receipt FOUND are the ones with none attached, so the filter
+  removes precisely the rows the mailbox search exists to serve. The tab
+  would import fine and have nothing to match.
+- **Both are said on the page, not silently corrected**, when somebody sets
+  them the other way: a personal tab on the team grid, and the receipt filter
+  on, each get a line saying what it will do. Somebody may mean it.
+- Section 2 of `scripts/test-lanes.ts`.
+
 ## Receipts that arrive as email
 
 `server/emburse/receipt-mail.ts`, page under the user menu.

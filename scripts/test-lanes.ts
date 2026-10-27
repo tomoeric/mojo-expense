@@ -61,6 +61,7 @@ try {
   let mine = (await reviewerImports()).filter((r) => r.userEmail.toLowerCase() === APP);
   check("all three tabs are offered", mine.length === 3,
     mine.map((r) => r.laneLabel).join(" · "));
+  const got = (lane: string) => mine.find((r) => r.lane === lane)!;
   const mgr = mine.find((r) => r.lane === MANAGER_LANE)!;
   const mojo = mine.find((r) => r.lane === MOJO_LANE)!;
   const mam = mine.find((r) => r.lane === MAM_LANE)!;
@@ -73,27 +74,58 @@ try {
     mojo.enabled === false);
   check("the manager tab is on", mgr.enabled === true);
 
-  console.log("\n2. A setting on one tab does not land on another");
+  console.log("\n2. A personal tab starts pointed at the right place");
+  /*
+   * Both of these defaulted the wrong way, and both are silent.
+   *
+   * The grid: null means "inherit", and the shared default is
+   * the TEAM grid — so a personal tab arrived reading the
+   * approver's queue, which is the opposite of what it is.
+   *
+   * The receipt filter: "Receipts: true" is right for the
+   * manager queue, where an expense with no receipt is not yet
+   * worth reviewing, and exactly backwards on a personal tab —
+   * the expenses that need a receipt FOUND are the ones with
+   * none attached, so the filter removes precisely the rows the
+   * mailbox search exists to serve.
+   */
+  check("a personal tab reads the person's own expenses",
+    got(MOJO_LANE).gridPath === "/transactions", String(got(MOJO_LANE).gridPath));
+  check("…and so does the other one",
+    got(MAM_LANE).gridPath === "/transactions", String(got(MAM_LANE).gridPath));
+  check("THE MANAGER TAB STILL INHERITS, as it always did",
+    got(MANAGER_LANE).gridPath === null, String(got(MANAGER_LANE).gridPath));
+  check("a personal tab does NOT filter out receiptless expenses",
+    got(MOJO_LANE).receiptsOnly === false, String(got(MOJO_LANE).receiptsOnly));
+  check("…and the manager tab still inherits that too",
+    got(MANAGER_LANE).receiptsOnly === null, String(got(MANAGER_LANE).receiptsOnly));
+
+  console.log("\n3. A setting on one tab does not land on another");
   await setReviewerImport(APP, { lane: MOJO_LANE, gridQuery: "?reviewer=mojo" }, "test");
   await setReviewerImport(APP, { lane: MAM_LANE, receiptsOnly: true }, "test");
   await setReviewerImport(APP, { gridPath: "/transactions/team" }, "test");
   mine = (await reviewerImports()).filter((r) => r.userEmail.toLowerCase() === APP);
-  const got = (lane: string) => mine.find((r) => r.lane === lane)!;
   check("the MOJO tab kept its filter", got(MOJO_LANE).gridQuery === "?reviewer=mojo");
+  // Its own default, not the Mammoth tab's explicit `true`. The
+  // assertion is about not taking the other tab's value, so it
+  // tests that rather than a literal that moved when the
+  // personal default did.
   check("…and did NOT get the Mammoth tab's receipt filter",
-    got(MOJO_LANE).receiptsOnly === null, String(got(MOJO_LANE).receiptsOnly));
+    got(MOJO_LANE).receiptsOnly === false, String(got(MOJO_LANE).receiptsOnly));
   check("the Mammoth tab kept its receipt filter", got(MAM_LANE).receiptsOnly === true);
   check("…and did NOT get the MOJO tab's filter", got(MAM_LANE).gridQuery === null);
   check("THE MANAGER TAB KEPT ITS OWN GRID",
     got(MANAGER_LANE).gridPath === "/transactions/team");
   check("…and neither personal tab took it",
-    got(MOJO_LANE).gridPath === null && got(MAM_LANE).gridPath === null);
+    got(MOJO_LANE).gridPath !== "/transactions/team"
+    && got(MAM_LANE).gridPath !== "/transactions/team",
+    `${got(MOJO_LANE).gridPath} / ${got(MAM_LANE).gridPath}`);
 
-  console.log("\n3. Each tab has its own schedule slot");
+  console.log("\n4. Each tab has its own schedule slot");
   const slots = mine.map((r) => r.staggeredBy);
   check("no two tabs share one", new Set(slots).size === slots.length, slots.join(", "));
 
-  console.log("\n4. A personal tab signs in as ITS OWN Emburse account");
+  console.log("\n5. A personal tab signs in as ITS OWN Emburse account");
   const added = await addConnection({
     userId: ID, userEmail: APP, loginEmail: APP, password: "mojo-password", label: "MOJO",
   });
@@ -110,7 +142,7 @@ try {
     (await reviewerImports()).find(
       (r) => r.userEmail.toLowerCase() === APP && r.lane === MOJO_LANE)?.enabled === true);
 
-  console.log("\n5. One tab's attempts are not another's");
+  console.log("\n6. One tab's attempts are not another's");
   const schedule = {
     timezone: "America/Chicago", firstRun: "02:00", retryHours: 4,
     attemptsPerDay: 1, graceMinutes: 90, allDay: false,
@@ -131,7 +163,7 @@ try {
   const stillMgr = await nextDue(schedule, new Date(), APP, "", "");
   check("…and so does the manager tab", stillMgr.attempt === 1, stillMgr.reason);
 
-  console.log("\n6. Each tab's history is its own");
+  console.log("\n7. Each tab's history is its own");
   const all = await recentRuns(20, APP);
   const justMojo = await recentRuns(20, APP, MOJO_LANE);
   const justMam = await recentRuns(20, APP, MAM_LANE);
@@ -140,14 +172,14 @@ try {
   check("…and the unfiltered list still has it", all.length >= 1);
   check("…tagged with the tab it belongs to", justMojo[0]?.lane === MOJO_LANE);
 
-  console.log("\n7. A tab nobody has is refused rather than quietly created");
+  console.log("\n8. A tab nobody has is refused rather than quietly created");
   const theirs = await lanesFor(APP);
   check("there are exactly three", theirs.length === 3);
   const bogus = await credentialForLaneOf(APP, "personal-invented");
   check("an invented tab has no credential", bogus.ok === false,
     bogus.ok ? "" : bogus.problem);
 
-  console.log("\n8. Somebody with one Emburse account still has one tab");
+  console.log("\n9. Somebody with one Emburse account still has one tab");
   await saveCredential("test-lanes-solo", "solo@mojocarwash.com", "solo@example.com", "x");
   const solo = (await reviewerImports())
     .filter((r) => r.userEmail.toLowerCase() === "solo@mojocarwash.com");
