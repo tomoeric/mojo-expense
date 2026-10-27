@@ -7,6 +7,8 @@ type ActionDef = { key: string; label: string; source: string };
 type Role = {
   key: string; name: string; pages: string[];
   administers: boolean; approves: boolean; builtin: boolean; holders?: number;
+  /** Empty for a shared template role; an account id for one partner's own. */
+  accountId: string;
   deletesSignups: boolean; deletesRfid: boolean; rfidReadOnly: boolean;
   approvesVendors: boolean;
   createdAt: string | null; createdBy: string | null;
@@ -22,12 +24,19 @@ type Payload = {
   allActions: ActionDef[];
   approvalPolicy: { roleKey: string; note: string };
   superAdmin: { actions: Record<string, boolean> };
+  /** Writing a SHARED role reaches every partner, so it is the platform's. */
+  canWriteShared: boolean;
+  /** The account in view, when there is one. Its own roles are editable here. */
+  myAccount: string;
+  accountName: string;
 };
 
 type Draft = {
   key?: string; name: string; pages: string[]; administers: boolean;
   deletesSignups: boolean; deletesRfid: boolean; rfidReadOnly: boolean;
   approvesVendors: boolean;
+  /** Empty for a shared template role; an account id for one partner's own. */
+  accountId: string;
 };
 
 /**
@@ -80,6 +89,19 @@ export function DmRolesPage() {
   // grouping is a layout detail. Member Signups is one heading over
   // two grants, and the editor has to offer both.
   const pages = data.data?.allGrants ?? data.data?.allPages ?? [];
+  const canWriteShared = data.data?.canWriteShared === true;
+  const myAccount = data.data?.myAccount ?? "";
+  const accountName = data.data?.accountName ?? "this account";
+  /*
+   * What this person may write, per role.
+   *
+   * A shared role reaches every partner, so only the platform's
+   * account administrator writes one. An account's own administrator
+   * writes their own account's roles. Said per row rather than once
+   * at the top, because both kinds are in the same list.
+   */
+  const mayWrite = (r: Role) =>
+    (r.accountId === "" ? canWriteShared : r.accountId === myAccount);
   const allActions = data.data?.allActions ?? [];
 
   return (
@@ -92,10 +114,15 @@ export function DmRolesPage() {
           </h1>
           <p className="text-sm text-muted-foreground">
             What each kind of person can <strong>open</strong>, and what they can{" "}
-            <strong>do</strong>. These are <strong>shared template</strong> roles: they
-            exist in every partner account and a change here changes them all. An
-            account can add roles of its own on top, under Users &amp; Access.
-            Account Administrator only.
+            <strong>do</strong>.{" "}
+            {canWriteShared
+              ? "Shared template roles exist in every partner account and a change to "
+                + "one changes them all. A partner's own roles apply to that partner "
+                + "alone."
+              : `Shared template roles come from MOJO and are read-only here. Roles you `
+                + `add belong to ${accountName} and apply nowhere else — pages and the `
+                + `RFID view-only setting, since a grant that widens reach stays with an `
+                + `account administrator.`}
           </p>
         </div>
         <button
@@ -104,6 +131,11 @@ export function DmRolesPage() {
             name: "", pages: [], administers: false,
             deletesSignups: false, deletesRfid: false, rfidReadOnly: false,
             approvesVendors: false,
+            // A new role belongs to whoever is making it: shared for
+            // the platform, this partner's for an account's own
+            // administrator. Decided again on the server from who is
+            // asking, never from this.
+            accountId: canWriteShared ? "" : myAccount,
           })}
           className="inline-flex items-center gap-2 rounded-md bg-foreground px-3 py-2 text-sm font-semibold text-background"
         >
@@ -119,6 +151,8 @@ export function DmRolesPage() {
           draft={draft}
           pages={pages}
           busy={act.isPending}
+          canWriteShared={canWriteShared}
+          accountName={accountName}
           onChange={setDraft}
           onCancel={() => { setDraft(null); setError(""); }}
           onSave={() => act.mutate({ url: "/api/dutch-miller/roles", body: draft })}
@@ -133,6 +167,14 @@ export function DmRolesPage() {
               <div className="min-w-0">
                 <p className="flex items-center gap-2 text-sm font-semibold">
                   {r.name}
+                  {/* Whose role this is, first, because it decides
+                      what changing it would reach. */}
+                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                    r.accountId === ""
+                      ? "bg-violet-500/15 text-violet-700 dark:text-violet-300"
+                      : "bg-amber-500/15 text-amber-800 dark:text-amber-300"}`}>
+                    {r.accountId === "" ? "shared template" : `${accountName} only`}
+                  </span>
                   {r.builtin && (
                     <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
                       built in
@@ -190,24 +232,36 @@ export function DmRolesPage() {
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setDraft({
-                    key: r.key, name: r.name, pages: [...r.pages],
-                    administers: r.administers,
-                    deletesSignups: r.deletesSignups, deletesRfid: r.deletesRfid,
-                    rfidReadOnly: r.rfidReadOnly,
-                    approvesVendors: r.approvesVendors,
-                  })}
-                  className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted"
-                >
-                  Edit
-                </button>
+                {/* A role somebody cannot write shows no Edit rather
+                    than one that refuses: a button that always fails
+                    teaches people to ignore buttons. */}
+                {mayWrite(r) ? (
+                  <button
+                    type="button"
+                    onClick={() => setDraft({
+                      key: r.key, name: r.name, pages: [...r.pages],
+                      administers: r.administers,
+                      deletesSignups: r.deletesSignups, deletesRfid: r.deletesRfid,
+                      rfidReadOnly: r.rfidReadOnly,
+                      approvesVendors: r.approvesVendors,
+                      accountId: r.accountId,
+                    })}
+                    className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted"
+                  >
+                    Edit
+                  </button>
+                ) : (
+                  <span className="text-xs text-muted-foreground">
+                    {r.accountId === ""
+                      ? "Shared — an account administrator changes it"
+                      : "Another partner's"}
+                  </span>
+                )}
                 {/* Built-in roles and roles somebody holds are not offered a
                     delete button: the server refuses both, and moving people
                     automatically would be a silent change to what several of
                     them can see. */}
-                {!r.builtin && r.holders === 0 && (
+                {!r.builtin && r.holders === 0 && mayWrite(r) && (
                   <button
                     type="button"
                     disabled={act.isPending}
@@ -293,17 +347,31 @@ export function DmRolesPage() {
 }
 
 function RoleEditor({
-  draft, pages, busy, onChange, onSave, onCancel,
+  draft, pages, busy, canWriteShared, accountName, onChange, onSave, onCancel,
 }: {
   draft: Draft;
   pages: readonly PageDef[];
   busy: boolean;
+  /** The platform's account administrator. Everybody else writes their own. */
+  canWriteShared: boolean;
+  accountName: string;
   onChange: (d: Draft) => void;
   onSave: () => void;
   onCancel: () => void;
 }) {
   const builtin = draft.key === "administrator" || draft.key === "general-user"
     || draft.key === "csc";
+  /*
+   * The grants that WIDEN reach are the platform's.
+   *
+   * Administering, deleting and signing vendors off are not offered
+   * to an account's own administrator — the rule this codebase has
+   * had since roles existed is that somebody who can hand out a
+   * grant can hand it to themselves, and that does not stop being
+   * true inside a partner. The server refuses them too; this is
+   * what stops a tick-box appearing that would only be rejected.
+   */
+  const widening = canWriteShared;
   return (
     <div className="space-y-3 rounded-lg border border-border bg-card p-4">
       <div>
@@ -348,7 +416,7 @@ function RoleEditor({
         </div>
       </div>
 
-      {!builtin && (
+      {!builtin && widening && (
         <label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"
@@ -359,11 +427,20 @@ function RoleEditor({
         </label>
       )}
 
+      {!widening && (
+        <p className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+          This role belongs to <strong>{accountName}</strong> and applies nowhere else.
+          Administering, deleting records and approving vendors are granted by a MOJO
+          account administrator — somebody who can hand out a grant can hand it to
+          themselves, which is why those stay outside the account.
+        </p>
+      )}
+
       {/* Its own grant rather than borrowing CSC: approving a
           membership says a car may be washed, approving a vendor
           says a company may be paid. Different question, often a
           different department. */}
-      {draft.pages.includes("vendors") && (
+      {draft.pages.includes("vendors") && widening && (
         <label className="flex items-start gap-2 text-sm">
           <input
             type="checkbox"
@@ -406,6 +483,7 @@ function RoleEditor({
           soft deletes — the record stays, struck through, with the
           note whoever removed it had to write — which is what makes
           them safe to grant rather than keep to one person. */}
+      {widening && (
       <div>
         <p className="mb-1 text-xs text-muted-foreground">Can delete</p>
         <div className="space-y-1.5">
@@ -441,6 +519,7 @@ function RoleEditor({
           </label>
         </div>
       </div>
+      )}
 
       <div className="flex items-center gap-2 border-t border-border pt-3">
         <button

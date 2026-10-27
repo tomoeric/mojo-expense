@@ -27,6 +27,8 @@ import { DM_PAGES, DM_PAGE_KEYS, isDmPage, type DmPageKey } from "./pages.js";
 export type DmRoleDef = {
   key: string;
   name: string;
+  /** Empty for a shared template role; an account id for an account's own. */
+  accountId: string;
   pages: DmPageKey[];
   /** May delete a member record, with a note. Off unless granted. */
   deletesSignups: boolean;
@@ -112,6 +114,25 @@ ALTER TABLE dm_roles ADD COLUMN IF NOT EXISTS rfid_read_only boolean NOT NULL DE
  * often a different department. Off until granted.
  */
 ALTER TABLE dm_roles ADD COLUMN IF NOT EXISTS approves_vendors boolean NOT NULL DEFAULT false;
+/*
+ * Whose role this is.
+ *
+ * EMPTY means the shared template's: it exists in every partner
+ * account, a change to it changes them all, and only a platform
+ * account administrator writes one. Every role that existed before
+ * this column is one of those, which is what the default says.
+ *
+ * An account id means the role belongs to that partner alone. A
+ * dealership knows what its own jobs are called and should not have
+ * to ask MOJO to add "Service Writer" — but the role it adds is
+ * ITS role, invisible and inapplicable everywhere else.
+ *
+ * Enforced in dmAccessFor as well as here: a role carried into
+ * another account grants nothing there, so an account-local role
+ * cannot become a way into a partner somebody was never given.
+ */
+ALTER TABLE dm_roles ADD COLUMN IF NOT EXISTS account_id text NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS dm_roles_account ON dm_roles (account_id);
 `;
 
 /*
@@ -191,12 +212,14 @@ type Db = {
   approves: boolean; builtin: boolean; created_at: Date; created_by: string;
   deletes_signups: boolean; deletes_rfid: boolean; rfid_read_only: boolean;
   approves_vendors: boolean;
+  account_id: string;
   holders?: string;
 };
 
 const shape = (r: Db): DmRoleDef => ({
   key: r.key,
   name: r.name,
+  accountId: r.account_id ?? "",
   pages: Array.isArray(r.pages) ? (r.pages as unknown[]).filter(isDmPage) : [],
   administers: r.administers,
   approves: r.approves,
@@ -212,15 +235,31 @@ const shape = (r: Db): DmRoleDef => ({
   createdBy: r.created_by,
 });
 
-export async function listRoles(): Promise<DmRoleDef[]> {
+/**
+ * The roles in play.
+ *
+ * With an account: the shared template's roles plus that account's
+ * own. Without one: every role there is, which is what the platform's
+ * own Roles page shows.
+ *
+ * Never one account's roles inside another — that is the whole point
+ * of the column, and filtering it here is what keeps a role picker
+ * from offering somebody else's job titles.
+ */
+export async function listRoles(accountId?: string): Promise<DmRoleDef[]> {
   await ensure();
+  const where = accountId === undefined
+    ? ""
+    : "WHERE r.account_id = '' OR r.account_id = $1";
   const { rows } = await db().query<Db>(
     `SELECT r.key, r.name, r.pages, r.administers, r.approves, r.builtin,
             r.deletes_signups, r.deletes_rfid, r.rfid_read_only, r.approves_vendors,
-            r.created_at, r.created_by,
+            r.account_id, r.created_at, r.created_by,
             (SELECT count(*) FROM dm_users u WHERE u.role_key = r.key) AS holders
        FROM dm_roles r
-      ORDER BY r.administers DESC, r.builtin DESC, lower(r.name)`);
+      ${where}
+      ORDER BY r.account_id, r.administers DESC, r.builtin DESC, lower(r.name)`,
+    accountId === undefined ? [] : [accountId]);
   return rows.map(shape);
 }
 
@@ -229,7 +268,7 @@ export async function getRole(key: string): Promise<DmRoleDef | null> {
   const { rows } = await db().query<Db>(
     `SELECT key, name, pages, administers, approves, builtin,
             deletes_signups, deletes_rfid, rfid_read_only, approves_vendors,
-            created_at, created_by
+            account_id, created_at, created_by
        FROM dm_roles WHERE key = $1`, [key.trim().toLowerCase()]);
   return rows[0] ? shape(rows[0]) : null;
 }
@@ -239,12 +278,29 @@ export function slug(name: string): string {
   return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
+export type RoleScope =
+  /** A platform account administrator. May write anything. */
+  | { kind: "platform" }
+  /**
+   * An administrator of ONE account, writing that account's own roles.
+   *
+   * Pages and the read-only modifier, and nothing that widens reach.
+   * Administering, approving, deleting and signing vendors off all
+   * stay with the platform — the rule this codebase has had since
+   * roles existed is that somebody who can hand out a grant can hand
+   * it to themselves, and an account's own administrator minting an
+   * administrator is that rule with a partner's name on it.
+   */
+  | { kind: "account"; accountId: string };
+
 export async function saveRole(opts: {
   /** Omitted creates one; given edits that role in place, holders intact. */
   key?: string;
   name: string;
   pages: DmPageKey[];
   administers: boolean;
+  /** Who is writing it, which decides what they may write. */
+  scope?: RoleScope;
   /** Grantable, and off unless ticked. Both are soft deletes. */
   deletesSignups?: boolean;
   deletesRfid?: boolean;
@@ -261,6 +317,30 @@ export async function saveRole(opts: {
 
   const pages = [...new Set(opts.pages.filter(isDmPage))];
   const existing = opts.key ? await getRole(opts.key) : null;
+  const scope: RoleScope = opts.scope ?? { kind: "platform" };
+  const owner = scope.kind === "account" ? scope.accountId : (existing?.accountId ?? "");
+
+  if (scope.kind === "account") {
+    // Their own account's roles, and only those. A shared role is the
+    // template's and reaches every partner.
+    if (existing && existing.accountId !== scope.accountId) {
+      throw new Error(
+        existing.accountId === ""
+          ? "That is a shared template role. Only an account administrator can change it."
+          : "That role belongs to another partner account.");
+    }
+    if (opts.administers) {
+      throw new Error(
+        "An account's own role cannot administer. Ask an account administrator — "
+        + "somebody who can hand out administering can hand it to themselves.");
+    }
+    if (opts.deletesSignups === true || opts.deletesRfid === true
+        || opts.approvesVendors === true) {
+      throw new Error(
+        "Deleting records and approving vendors are granted by an account "
+        + "administrator, not from inside an account.");
+    }
+  }
 
   if (opts.key && !existing) throw new Error("No such role.");
   if (existing?.builtin) {
@@ -272,8 +352,17 @@ export async function saveRole(opts: {
     }
   }
 
-  const key = existing?.key ?? slug(name);
-  if (key === "") throw new Error("That name has no letters or numbers in it.");
+  /*
+   * An account's role keys are prefixed with the account.
+   *
+   * Keys are global — `dm_users.role_key` points straight at one — so
+   * two partners both calling a role "Service Writer" would otherwise
+   * collide, and the second would silently edit the first's. The
+   * prefix is invisible in the interface and makes that impossible.
+   */
+  const base = slug(name);
+  if (base === "") throw new Error("That name has no letters or numbers in it.");
+  const key = existing?.key ?? (owner === "" ? base : `${owner}__${base}`);
   if (!existing) {
     const clash = await getRole(key);
     if (clash) throw new Error(`There is already a role called ${clash.name}.`);
@@ -284,8 +373,8 @@ export async function saveRole(opts: {
   await db().query(
     `INSERT INTO dm_roles (key, name, pages, administers, builtin, created_by,
                            deletes_signups, deletes_rfid, rfid_read_only,
-                           approves_vendors)
-          VALUES ($1, $2, $3::jsonb, $4, false, $5, $6, $7, $8, $9)
+                           approves_vendors, account_id)
+          VALUES ($1, $2, $3::jsonb, $4, false, $5, $6, $7, $8, $9, $10)
      ON CONFLICT (key) DO UPDATE
         SET name = EXCLUDED.name, pages = EXCLUDED.pages,
             deletes_signups = EXCLUDED.deletes_signups,
@@ -296,7 +385,7 @@ export async function saveRole(opts: {
                                ELSE EXCLUDED.administers END`,
     [key, name, JSON.stringify(pages), opts.administers, opts.by,
       opts.deletesSignups === true, opts.deletesRfid === true,
-      opts.rfidReadOnly === true, opts.approvesVendors === true]);
+      opts.rfidReadOnly === true, opts.approvesVendors === true, owner]);
   return (await getRole(key))!;
 }
 
@@ -307,11 +396,21 @@ export async function saveRole(opts: {
  * would be a silent change to what several people can see, decided by
  * whoever happened to press delete.
  */
-export async function removeRole(key: string): Promise<{ ok: boolean; reason?: string }> {
+export async function removeRole(
+  key: string, scope: RoleScope = { kind: "platform" },
+): Promise<{ ok: boolean; reason?: string }> {
   await ensure();
   const role = await getRole(key);
   if (!role) return { ok: true };
   if (role.builtin) return { ok: false, reason: "A built-in role cannot be removed." };
+  if (scope.kind === "account" && role.accountId !== scope.accountId) {
+    return {
+      ok: false,
+      reason: role.accountId === ""
+        ? "That is a shared template role, used by every partner."
+        : "That role belongs to another partner account.",
+    };
+  }
   const { rows } = await db().query<{ n: string }>(
     "SELECT count(*) AS n FROM dm_users WHERE role_key = $1", [role.key]);
   const held = Number(rows[0]?.n ?? 0);

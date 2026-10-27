@@ -818,6 +818,44 @@ page is shared; the record never is.
   a predecessor grant would be a guess, and inventing access is worse than
   somebody having to grant it.
 
+### An account's own roles, and the people it invites
+
+The shared template owns the BASE roles; an account adds its own on top. Both
+are true at once and neither weakens the other.
+
+- **`dm_roles.account_id`** — empty is a shared template role, present in every
+  partner, writable only by a platform account administrator. An account id is
+  one partner's own, invisible and inapplicable everywhere else.
+- **Keys are prefixed with the account** (`acct_x__service-writer`). Keys are
+  global because `dm_users.role_key` points straight at one, so two partners
+  both calling a role "Service Writer" would collide and the second would
+  silently edit the first's. The prefix is invisible in the interface.
+- **An account's own role grants PAGES and `rfid_read_only`, nothing more.**
+  Administering, deleting and approving vendors stay with the platform. The
+  rule this codebase has had since roles existed — somebody who can hand out a
+  grant can hand it to themselves — does not stop being true inside a partner.
+  `rfid_read_only` is allowed because it RESTRICTS rather than grants.
+- **`dmAccessFor(email, accountId)`.** An account-local role carried into
+  another account grants nothing there, as if the person held no role at all.
+  Without it, somebody assigned to two partners would take one partner's job
+  title and its pages into the other. Every guard in `routes.ts` passes
+  `req.account?.id`; the platform's own screens pass nothing, which means "not
+  in an account".
+- **Inviting from inside an account assigns that account**, added to what the
+  person already holds rather than replacing it, so re-inviting somebody who
+  works for two partners does not take the other away. Without it an invitee
+  lands with a role and no partner to use it in, and the step that fixes that
+  is the one that gets forgotten.
+- **A role has to apply HERE to be handed out.** `/users` refuses a role that
+  is neither shared nor this account's — it would give somebody a job title
+  that grants nothing, which reads as a broken account.
+- Roles & Permissions is no longer account-administrator-only: an account's
+  administrator opens it to manage their own. What they may WRITE is decided
+  on the page and again on the route, and the widening grants are not even
+  rendered for them — a tick-box that would only be rejected is worse than
+  none.
+- `scripts/test-account-roles.ts`, plus HTTP coverage in `test-isolation.ts`.
+
 ### Shared administration says so on the page
 
 All five sections say it now — Users & Access, Roles & Permissions, Account

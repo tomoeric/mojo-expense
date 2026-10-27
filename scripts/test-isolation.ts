@@ -301,8 +301,84 @@ try {
   check("reaching the other partner's registration is refused", reachBiz.status === 403,
     String(reachBiz.status));
 
+  console.log("\n9. An account's own roles, and the people it invites");
+  const roleList = await call("GET", "/api/dutch-miller/roles", SCOPED,
+    { slug: probeSlug });
+  check("an account's administrator can open Roles", roleList.status === 200,
+    String(roleList.status));
+  check("…and is told they cannot write the shared ones",
+    roleList.body.canWriteShared === false);
+  check("…while the account in view is named",
+    roleList.body.myAccount === probeId);
+
+  const ownRole = await call("POST", "/api/dutch-miller/roles", SCOPED,
+    { slug: probeSlug, body: { name: "Front Desk", pages: ["member-signups-add"] } });
+  check("they can add a role for their own account", ownRole.status === 200,
+    JSON.stringify(ownRole.body).slice(0, 140));
+  const roleKey = (ownRole.body.role as { key: string } | undefined)?.key ?? "";
+  const widen = await call("POST", "/api/dutch-miller/roles", SCOPED,
+    { slug: probeSlug, body: { name: "Shadow Admin", pages: [], administers: true } });
+  check("…but not one that administers", widen.status === 400, String(widen.status));
+  const deleter = await call("POST", "/api/dutch-miller/roles", SCOPED,
+    {
+      slug: probeSlug,
+      body: { name: "Shadow Deleter", pages: ["rfid-review"], deletesRfid: true },
+    });
+  check("…nor one that deletes", deleter.status === 400, String(deleter.status));
+
+  // The role must not be visible — or usable — in another partner.
+  const dmRoles = await call("GET", "/api/dutch-miller/roles", OWNER,
+    { slug: "dutchmiller" });
+  check("THEIR ROLE IS NOT OFFERED IN DUTCH MILLER",
+    !(dmRoles.body.roles as { key: string }[]).some((r) => r.key === roleKey),
+    roleKey);
+
+  /*
+   * A staff address, added rather than invited. The invite path ends
+   * in a Graph send that this harness has no credentials for; what is
+   * being tested is the ASSIGNMENT, which both paths share.
+   */
+  const invited = await call("POST", "/api/dutch-miller/users", SCOPED,
+    {
+      slug: probeSlug,
+      body: { email: "front.desk@mojocarwash.com", roleKey, invite: false },
+    });
+  check("they can add somebody with that role", invited.status === 200,
+    JSON.stringify(invited.body).slice(0, 140));
+  const theirScope = await call("GET",
+    "/api/dutch-miller/users/front.desk%40mojocarwash.com/accounts", SCOPED,
+    { slug: probeSlug });
+  check("…and that person is assigned this account automatically",
+    (theirScope.body.assigned as string[]).includes(probeId),
+    JSON.stringify(theirScope.body.assigned));
+  check("…and no other", (theirScope.body.assigned as string[]).length === 1);
+
+  // An outside address still has to be invited, and an invite with no
+  // mail configured is refused rather than leaving somebody stranded.
+  const outside = await call("POST", "/api/dutch-miller/users", SCOPED,
+    {
+      slug: probeSlug,
+      body: { email: "walkin@probemotors.example", roleKey, invite: false },
+    });
+  check("an outside address cannot be added without an invitation",
+    outside.status === 400, String(outside.status));
+
+  const wrongRole = await call("POST", "/api/dutch-miller/users", OWNER,
+    {
+      slug: "dutchmiller",
+      body: { email: "someone.else@mojocarwash.com", roleKey },
+    });
+  check("a role from another partner cannot be handed out here",
+    wrongRole.status === 400, String(wrongRole.status));
+
 } finally {
+  await db().query("DELETE FROM dm_users WHERE email = $1",
+    ["front.desk@mojocarwash.com"]).catch(() => undefined);
+  await db().query("DELETE FROM dm_account_access WHERE email = $1",
+    ["front.desk@mojocarwash.com"]).catch(() => undefined);
   if (probeId) {
+    await db().query("DELETE FROM dm_roles WHERE account_id = $1", [probeId])
+      .catch(() => undefined);
     await db().query("DELETE FROM dm_account_layout WHERE account_id = $1", [probeId])
       .catch(() => undefined);
     await db().query("DELETE FROM dm_account_nav WHERE account_id = $1", [probeId])

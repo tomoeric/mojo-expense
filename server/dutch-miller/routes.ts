@@ -280,7 +280,7 @@ dutchMillerRouter.get("/me", async (req: Request, res: Response) => {
   // or the view shows the viewer's own app with somebody else's name on it.
   const real = req.viewingAs?.real ?? req.user;
   const email = req.user?.email ?? "";
-  const access = await dmAccessFor(email);
+  const access = await dmAccessFor(email, req.account?.id);
   const row = req.viewingAs ? await getDmUser(email) : null;
   res.json({
     ...access,
@@ -347,7 +347,7 @@ dutchMillerRouter.get("/me", async (req: Request, res: Response) => {
  */
 function requirePage(page: DmPageKey) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    const access = await dmAccessFor(req.user?.email ?? "");
+    const access = await dmAccessFor(req.user?.email ?? "", req.account?.id);
     if (canAdminister(access) || access.pages.includes(page)) { next(); return; }
     denied(req, `page ${page}`);
     res.status(403).json({ error: "You do not have access to that page." });
@@ -366,7 +366,7 @@ function requirePage(page: DmPageKey) {
  */
 async function requireDmAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
   const email = req.user?.email ?? "";
-  if (canAdminister(await dmAccessFor(email))) { next(); return; }
+  if (canAdminister(await dmAccessFor(email, req.account?.id))) { next(); return; }
   denied(req, "administrator only");
   res.status(403).json({ error: "Only a Dutch Miller administrator can do that." });
 }
@@ -383,7 +383,7 @@ async function requireDmAdmin(req: Request, res: Response, next: NextFunction): 
 async function canApprove(req: Request): Promise<boolean> {
   const real = req.viewingAs?.real ?? req.user;
   if (!isStaff(real)) return false;
-  return (await dmAccessFor(real?.email ?? "")).approves;
+  return (await dmAccessFor(real?.email ?? "", req.account?.id)).approves;
 }
 
 /**
@@ -406,7 +406,7 @@ const shownFor = async (req: Request): Promise<{
   isSuper: boolean; rfidReadOnly: boolean;
 }> => {
   const email = req.user?.email ?? "";
-  const a = await dmAccessFor(email);
+  const a = await dmAccessFor(email, req.account?.id);
   const isSuper = a.role === "super";
   return {
     deletesSignups: a.deletesSignups,
@@ -432,7 +432,7 @@ async function requireRfidWrite(
   req: Request, res: Response, next: NextFunction,
 ): Promise<void> {
   const real = req.viewingAs?.real ?? req.user;
-  const a = await dmAccessFor(real?.email ?? "");
+  const a = await dmAccessFor(real?.email ?? "", req.account?.id);
   if (a.role === "super" || !a.rfidReadOnly) { next(); return; }
   denied(req, "rfid read-only role");
   res.status(403).json({
@@ -443,7 +443,7 @@ async function requireRfidWrite(
 
 /** The role this app is being shown as — the viewed person inside a view. */
 const roleOf = async (req: Request): Promise<DmRole> =>
-  (await dmAccessFor(req.user?.email ?? "")).role;
+  (await dmAccessFor(req.user?.email ?? "", req.account?.id)).role;
 
 const actor = (req: Request): string => req.viewingAs?.real.email ?? req.user?.email ?? "";
 
@@ -480,7 +480,7 @@ const denied = (req: Request, why: string): void => {
 
 dutchMillerRouter.get("/users", requireDmAdmin, async (req: Request, res: Response) => {
   const [users, roles, accounts] = await Promise.all([
-    listDmUsers(), listRoles(), listAccounts(),
+    listDmUsers(), listRoles(req.account?.id), listAccounts(),
   ]);
   const byKey = new Map(roles.map((r) => [r.key, r.name]));
   /*
@@ -617,7 +617,12 @@ dutchMillerRouter.get("/people", requireDmAdmin, async (req: Request, res: Respo
       line: accountLine(a), status: a.status,
     })),
     iAmAccountAdmin: iAmSuper,
-    roles: await listRoles(),
+    // Only roles that apply in this account: the shared template's
+    // and this partner's own. Another partner's role would grant
+    // nothing here, which reads as a broken account rather than a
+    // role from somewhere else.
+    roles: await listRoles(req.account?.id),
+    accountName: req.account?.name ?? "",
     mailConfigured: isMailConfigured(),
     mailFrom: mailFrom(),
     mailProblem: mailProblem(),
@@ -656,7 +661,7 @@ const requireSuper = requireSuperTo("change roles");
 function requireDelete(what: "signups" | "rfid") {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const real = req.viewingAs?.real ?? req.user;
-    const access = await dmAccessFor(real?.email ?? "");
+    const access = await dmAccessFor(real?.email ?? "", req.account?.id);
     const may = what === "signups"
       ? access.deletesSignups
       // A view-only role does not delete, whatever else it was given.
@@ -674,10 +679,32 @@ function requireDelete(what: "signups" | "rfid") {
 }
 
 // Readable by any administrator — assigning one means seeing the list.
-dutchMillerRouter.get("/roles", requireDmAdmin, async (_req: Request, res: Response) => {
-  const roles = await listRoles();
+/**
+ * Which roles are in play here.
+ *
+ * Inside an account: the shared template's roles plus that account's
+ * own. On the platform's own Roles page, where there is no account
+ * in view, every role there is — so an account administrator can see
+ * what partners have defined for themselves.
+ */
+dutchMillerRouter.get("/roles", requireDmAdmin, async (req: Request, res: Response) => {
+  const mine = req.account?.id;
+  const roles = await listRoles(mine);
+  const platform = isSuperEmail(req.viewingAs?.real.email ?? req.user?.email ?? "");
   res.json({
     roles: roles.map((r) => ({ ...r, actions: actionsFor(r) })),
+    /*
+     * Who may write what, said once rather than inferred per row.
+     *
+     * A shared role reaches every partner, so writing one is the
+     * platform's. An account's own administrator writes their own
+     * account's roles — pages and the read-only modifier, never a
+     * grant that widens reach.
+     */
+    canWriteShared: platform,
+    myAccount: mine ?? "",
+    accountName: req.account?.name ?? "",
+    accountGrants: ["pages", "rfidReadOnly"],
     allPages: DM_PAGES,
     allGrants: DM_GRANTS,
     // Page access and action permissions are different questions, and a
@@ -703,18 +730,43 @@ dutchMillerRouter.get("/roles", requireDmAdmin, async (_req: Request, res: Respo
 // Creating and editing them is the account administrator's alone. A role is
 // a grant of access, so an admin who could write one could write themselves
 // a better one.
-dutchMillerRouter.post("/roles", requireSuper, async (req: Request, res: Response) => {
+/**
+ * Write a role.
+ *
+ * TWO SCOPES through one route. A platform account administrator
+ * writes shared template roles, which reach every partner. An
+ * account's own administrator writes that account's roles, which
+ * reach nobody else — pages and the read-only modifier only, because
+ * somebody who can hand out a grant can hand it to themselves, and
+ * that rule does not stop being true inside a partner.
+ *
+ * Which scope applies is decided HERE from who is asking, never from
+ * the request body.
+ */
+dutchMillerRouter.post("/roles", requireDmAdmin, async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as Record<string, unknown>;
+  const platform = isSuperEmail(req.viewingAs?.real.email ?? req.user?.email ?? "");
+  const account = req.account?.id;
+  if (!platform && !account) {
+    denied(req, "no partner account for a role");
+    res.status(403).json({
+      error: "Open a partner account to add a role to it.",
+    });
+    return;
+  }
+  const scope = platform
+    ? { kind: "platform" as const }
+    : { kind: "account" as const, accountId: account! };
   try {
     const role = await saveRole({
       key: typeof body.key === "string" && body.key ? body.key : undefined,
       name: String(body.name ?? ""),
       pages: Array.isArray(body.pages) ? body.pages.filter(isDmPage) : [],
       administers: body.administers === true,
-      // Only an account administrator reaches this route, which is what
-      // makes these safe to accept: a grant that removes things must
-      // not be writable by somebody who could then grant it to
-      // themselves.
+      scope,
+      // Accepted from the body and then refused by `saveRole` for an
+      // account scope, rather than quietly dropped: an administrator
+      // who ticked a box they may not tick should be told so.
       deletesSignups: body.deletesSignups === true,
       deletesRfid: body.deletesRfid === true,
       rfidReadOnly: body.rfidReadOnly === true,
@@ -724,6 +776,7 @@ dutchMillerRouter.post("/roles", requireSuper, async (req: Request, res: Respons
     await audit({
       action: "role.saved", subject: role.key, resource: role.key, ...who(req),
       detail: `${role.name} · ${role.pages.length} page${role.pages.length === 1 ? "" : "s"}`
+        + `${role.accountId ? ` · ${req.account?.name ?? role.accountId} only` : " · shared"}`
         + `${role.administers ? " · administers" : ""}`
         + `${role.deletesSignups ? " · deletes members" : ""}`
         + `${role.deletesRfid ? " · deletes RFIDs" : ""}`
@@ -731,18 +784,23 @@ dutchMillerRouter.post("/roles", requireSuper, async (req: Request, res: Respons
         + `${role.approvesVendors ? " · approves vendors" : ""}`,
     });
     emitChange("roles");
-    res.json({ role, roles: await listRoles() });
+    res.json({ role, roles: await listRoles(req.account?.id) });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
 
-dutchMillerRouter.delete("/roles/:key", requireSuper, async (req: Request, res: Response) => {
+dutchMillerRouter.delete("/roles/:key", requireDmAdmin,
+  async (req: Request, res: Response) => {
   const key = String(req.params.key ?? "");
-  const out = await removeRole(key);
+  const platform = isSuperEmail(req.viewingAs?.real.email ?? req.user?.email ?? "");
+  const scope = platform
+    ? { kind: "platform" as const }
+    : { kind: "account" as const, accountId: req.account?.id ?? "" };
+  const out = await removeRole(key, scope);
   if (!out.ok) { res.status(409).json({ error: out.reason }); return; }
   await audit({ action: "role.removed", subject: key, actor: actor(req) });
-  res.json({ roles: await listRoles() });
+  res.json({ roles: await listRoles(req.account?.id) });
 });
 
 /**
@@ -778,16 +836,56 @@ dutchMillerRouter.post("/users", requireDmAdmin, async (req: Request, res: Respo
       return;
     }
 
+    /*
+     * The role has to be one that applies HERE.
+     *
+     * Shared template roles apply everywhere; an account's own role
+     * applies in that account alone. Handing somebody another
+     * partner's role would give them a job title that grants nothing
+     * — a person with access and no pages, and nothing on screen
+     * saying why.
+     */
+    const wanted = String(body.roleKey ?? DEFAULT_ROLE);
+    const here = await listRoles(req.account?.id);
+    if (!here.some((r) => r.key === wanted)) {
+      res.status(400).json({
+        error: "That role is not available in this partner account.",
+      });
+      return;
+    }
+
     const user = await saveDmUser({
       email,
-      roleKey: String(body.roleKey ?? DEFAULT_ROLE),
+      roleKey: wanted,
       by,
       byRole: await roleOf(req),
       ...(invite ? { authMethod: "link" as const, status: "invited" as const } : {}),
     });
+
+    /*
+     * Somebody invited from inside an account belongs to that account.
+     *
+     * Without this an invited dealer lands with a role and no partner
+     * to use it in, and an account administrator has to go and assign
+     * them separately — which is a step that gets forgotten, and the
+     * person who finds out is the invitee staring at an empty app.
+     *
+     * Added to what they already hold rather than replacing it, so
+     * re-inviting somebody who works for two partners does not take
+     * the other one away.
+     */
+    const account = req.account;
+    if (account && !user.allAccounts) {
+      const held = await assignedAccounts(email);
+      if (!held.includes(account.id)) {
+        await setAssignedAccounts(email, [...held, account.id], by);
+      }
+    }
+
     await audit({
-      action: "account.updated", subject: email, actor: by,
-      detail: `${user.roleKey}${invite ? " · invited" : ""}`,
+      action: "account.updated", subject: email, actor: by, accountId: account?.id ?? "",
+      detail: `${user.roleKey}${invite ? " · invited" : ""}`
+        + `${account ? ` · ${account.name}` : ""}`,
     });
 
     if (invite) {
@@ -1614,7 +1712,7 @@ dutchMillerRouter.post("/nav/remove", requireDmAdmin,
 async function canReviewBusiness(req: Request): Promise<boolean> {
   const real = req.viewingAs?.real ?? req.user;
   if (!isStaff(real)) return false;
-  return canAdminister(await dmAccessFor(real?.email ?? ""));
+  return canAdminister(await dmAccessFor(real?.email ?? "", req.account?.id));
 }
 
 dutchMillerRouter.get("/business", requirePage("account-registration"),
@@ -1919,7 +2017,7 @@ dutchMillerRouter.get("/blocks/:page", async (req: Request, res: Response) => {
     : page === "member-signups-review" ? "member-signups"
       : page === "rfid-instructions" ? "rfid-instructions"
         : page === "account-registration" ? "account-registration" : "rfid-review";
-  const access = await dmAccessFor(req.user?.email ?? "");
+  const access = await dmAccessFor(req.user?.email ?? "", account.id);
   if (!canAdminister(access) && !access.pages.includes(grant)) {
     denied(req, `page ${grant}`);
     res.status(403).json({ error: "You do not have access to that page." });
@@ -1939,7 +2037,7 @@ dutchMillerRouter.get("/blocks/:page", async (req: Request, res: Response) => {
     /* Arranging an account's own page is administering that account.
        It is shown here and decided again on the write. */
     canArrange: canAdminister(await dmAccessFor(
-      req.viewingAs?.real.email ?? req.user?.email ?? "")),
+      req.viewingAs?.real.email ?? req.user?.email ?? "", account.id)),
     /*
      * Promoting is the platform's, not the partner's. The whole
      * point is that it reaches other accounts, so it cannot be an
@@ -2378,7 +2476,7 @@ dutchMillerRouter.post("/account", requireSuperTo("switch partner access"),
 /** May this person sign a vendor off? Granted per role, plus the owner. */
 async function canApproveVendors(req: Request): Promise<boolean> {
   const real = req.viewingAs?.real ?? req.user;
-  const a = await dmAccessFor(real?.email ?? "");
+  const a = await dmAccessFor(real?.email ?? "", req.account?.id);
   return a.role === "super" || a.approvesVendors;
 }
 
@@ -2395,8 +2493,8 @@ dutchMillerRouter.get("/vendors", requirePage("vendors"),
         search: String(req.query.search ?? ""),
       })),
       // Shown for the viewed person, decided again on the write.
-      canApprove: (await dmAccessFor(req.user?.email ?? "")).approvesVendors
-        || (await dmAccessFor(req.user?.email ?? "")).role === "super",
+      canApprove: (await dmAccessFor(req.user?.email ?? "", account.id)).approvesVendors
+        || (await dmAccessFor(req.user?.email ?? "", account.id)).role === "super",
       canDelete: (await shownFor(req)).isSuper,
     });
   });

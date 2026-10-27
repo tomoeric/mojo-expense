@@ -137,7 +137,16 @@ const ADMIN_PAGES: { key: string; label: string; superOnly?: boolean; grant?: st
   // administrator should not be shown a control they cannot use.
   { key: "account", label: "Account", superOnly: true },
   { key: "users", label: "Users & Access" },
-  { key: "roles", label: "Roles & Permissions", superOnly: true },
+  /*
+   * No longer account-administrator-only.
+   *
+   * An account's own administrator opens it to add roles for their
+   * own partner. What they can WRITE is decided on the page and
+   * again on the route: shared template roles are read-only to them,
+   * and their own roles carry pages and the read-only modifier
+   * rather than anything that widens reach.
+   */
+  { key: "roles", label: "Roles & Permissions" },
   { key: "security", label: "Security" },
   { key: "email", label: "Email & Notifications" },
   { key: "audit", label: "Audit History" },
@@ -554,7 +563,7 @@ export function DutchMillerApp({
               {route === "admin/account" && access.role === "super" && (
                 <DmAccountPage canSwitch />
               )}
-              {route === "admin/roles" && access.role === "super" && <DmRolesPage />}
+              {route === "admin/roles" && dmAdmin && <DmRolesPage />}
               {route === "admin/security" && dmAdmin && <DmSecurityPage />}
               {route === "admin/email" && dmAdmin && <DmSettingsPage />}
               {route === "admin/audit" && dmAdmin && <DmAuditPage subject={historyFor} />}

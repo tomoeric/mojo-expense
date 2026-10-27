@@ -285,7 +285,19 @@ export type Access = {
  * point of roles — "what can a service writer see?" has one answer, in
  * one place, rather than thirty rows to compare.
  */
-export async function dmAccessFor(email: string): Promise<Access> {
+export async function dmAccessFor(
+  email: string,
+  /**
+   * Which account the request is in, when it is in one.
+   *
+   * An account's OWN role grants nothing anywhere else. Without this
+   * a dealership could define a role, have somebody assigned to two
+   * partners hold it, and that person would carry a job title — and
+   * its pages — into a partner that never agreed to it. Omitted means
+   * "not in an account", which is how the platform's own screens ask.
+   */
+  accountId?: string,
+): Promise<Access> {
   await ensure();
   if (isSuperEmail(email)) {
     return {
@@ -313,6 +325,11 @@ export async function dmAccessFor(email: string): Promise<Access> {
   // the belt to that brace.
   const def = await getRole(row.roleKey);
   if (!def) return none;
+  // An account's own role, carried into another account. Grants
+  // nothing there, exactly as if they held no role at all.
+  if (def.accountId !== "" && accountId !== undefined && def.accountId !== accountId) {
+    return none;
+  }
 
   return {
     role: def.administers ? "admin" : "user",
