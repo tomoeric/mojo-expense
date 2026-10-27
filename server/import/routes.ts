@@ -11,7 +11,8 @@ import { DEFAULT_SELECTORS, SELECTOR_HELP, STEP_SELECTORS, envLogin } from "../e
 import { claimUnclaimed, credentialStatus, deleteCredential, hasCredential, listCredentials, saveCredential,
          scopeFor, unclaimedExpenses } from "../emburse/credentials.js";
 import {
-  addConnection, labelConnection, linkedLanes, listConnections, removeConnection,
+  MANAGER_LANE, addConnection, labelConnection, lanesFor, linkedLanes, listConnections,
+  removeConnection,
 } from "../emburse/connections.js";
 import { MANAGER_GRID, attemptExport, gridPathFor, isStopping, nextDue, recentRuns,
          reviewerImports, runScreenshot, setReviewerImport, stopRun }
@@ -242,12 +243,30 @@ importRouter.post("/reviewer-imports", requireAuth, requireAdmin, async (req: Re
     email?: unknown; enabled?: unknown; gridPath?: unknown; gridSection?: unknown;
     autoApprove?: unknown; autoApprovePerRun?: unknown; schedule?: unknown;
     gridQuery?: unknown; runAs?: unknown; sections?: unknown; receiptsOnly?: unknown;
-    sources?: unknown;
+    sources?: unknown; lane?: unknown;
   };
   const email = String(body.email ?? "").trim();
   if (!email) {
     res.status(400).json({ error: "Name the reviewer." });
     return;
+  }
+  /*
+   * WHICH TAB. Defaults to the manager one, which is what every
+   * caller meant before tabs existed and what every stored row is.
+   *
+   * Checked against the person's own tabs rather than taken as
+   * given: a request naming a tab somebody does not have would
+   * create a configuration that nothing ever runs and nothing ever
+   * shows — a setting that silently does nothing is worse to
+   * diagnose than one that is refused.
+   */
+  const wantLane = String(body.lane ?? "").trim() || MANAGER_LANE;
+  if (wantLane !== MANAGER_LANE) {
+    const theirs = await lanesFor(email).catch(() => []);
+    if (!theirs.some((l) => l.key === wantLane)) {
+      res.status(400).json({ error: `${email} has no tab called “${wantLane}”.` });
+      return;
+    }
   }
   // Only what was sent. Three screens write to this one row — the schedule,
   // the import list and the approval switch — and a save that wrote every
@@ -260,6 +279,7 @@ importRouter.post("/reviewer-imports", requireAuth, requireAdmin, async (req: Re
   try {
     const sc = body.schedule as Record<string, unknown> | null | undefined;
     await setReviewerImport(email, {
+      lane: wantLane,
       ...sent("enabled", () => body.enabled !== false),
       ...sent("schedule", () => sc === null ? null : {
         timezone: typeof sc?.timezone === "string" ? sc.timezone.slice(0, 64) : undefined,
@@ -507,6 +527,27 @@ importRouter.post("/export-run", requireAuth, requireAdmin, async (req: Request,
      * Only a configured source. It chooses a list, not a URL; a request
      * that could name the path is a request that could read any queue.
      */
+    /*
+     * WHICH TAB, for a manual run.
+     *
+     * Each personal tab's Run button has to read ITS OWN Emburse
+     * account. Without this the button could only ever run the
+     * manager connection, so a personal tab could be configured,
+     * scheduled and tested and never once read the account it is
+     * for — and every step would come back green.
+     *
+     * Checked against that person's own tabs, never taken as
+     * given.
+     */
+    const wantLane = String((req.body as { lane?: unknown })?.lane ?? "").trim();
+    if (wantLane && wantLane !== MANAGER_LANE) {
+      const theirs = await lanesFor(reviewer || real).catch(() => []);
+      if (!theirs.some((l) => l.key === wantLane)) {
+        res.status(400).json({ error: `There is no tab called “${wantLane}”.` });
+        return;
+      }
+    }
+
     const wantSource = String((req.body as { source?: unknown })?.source ?? "").trim();
     if (wantSource) {
       const known = (await readSettings()).sources.some((x) => x.key === wantSource);
@@ -526,6 +567,7 @@ importRouter.post("/export-run", requireAuth, requireAdmin, async (req: Request,
         { dryRun, onStarted: resolve, startedBy: real,
           ...(reviewer ? { reviewer } : {}),
           ...(wantSource ? { source: wantSource } : {}),
+          ...(wantLane ? { lane: wantLane } : {}),
           // Only a test run may be pointed at a list by the request, and
           // only for itself. attemptExport enforces that too.
           ...(dryRun ? { probe: {
@@ -589,10 +631,16 @@ importRouter.get("/export-runs", requireAuth, async (req: Request, res: Response
       ?? (named || undefined)
       ?? ((req.user?.email && await hasCredential(req.user.email).catch(() => false))
             ? req.user.email : undefined);
-    const recent = await recentRuns(20, mine);
+    // One tab's history, when the page asks for it. Three tabs'
+    // runs in one list, with nothing saying which account each
+    // read, is the same unreadable mixture two reviewers' runs
+    // used to be.
+    const askedLane = String((req.query as { lane?: string }).lane ?? "").trim();
+    const recent = await recentRuns(20, mine, askedLane || undefined);
     res.json({
       configured: (await listCredentials()).length > 0 || envLogin() !== null,
-      due: await nextDue(schedule, new Date(), mine ?? ""),
+      due: await nextDue(schedule, new Date(), mine ?? "", "",
+        askedLane === MANAGER_LANE ? "" : askedLane),
       runs: recent,
       // Who this page is about, so it can say so rather than leaving somebody
       // to work it out from the rows.

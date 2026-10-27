@@ -44,6 +44,18 @@ type Reviewer = {
   schedule: Schedule;
   runAs: string | null;
   staggeredBy: number;
+  /**
+   * WHICH TAB this is: the manager queue, or one personal Emburse
+   * account. A person has one of these per tab and they share
+   * nothing — the whole point of the row below the names.
+   */
+  lane: string;
+  laneLabel: string;
+  laneKind: "manager" | "personal";
+  /** The Emburse login this tab signs in as. Empty on the manager tab. */
+  laneLoginEmail: string;
+  connected: boolean;
+  connectionProblem: string;
 };
 
 /** Zones the export schedule is plausibly set in. */
@@ -52,9 +64,19 @@ const ZONES = [
 ];
 
 /** The two lists an approver reads, by the path Emburse uses for each. */
+/*
+ * WHICH EMBURSE GRID this import opens.
+ *
+ * Called a "queue" rather than a "tab" since Export settings grew
+ * tabs of its own: a page on which "Manager tab" meant both "the
+ * tab you are reading" and "the grid it opens" had two different
+ * controls with one name, which is ambiguous to anybody reading
+ * the page rather than looking at it, and outright broken for a
+ * screen reader.
+ */
 const TABS = [
-  { path: "/transactions/team", label: "Manager", why: "Expenses waiting on them to approve." },
-  { path: "/transactions", label: "Personal", why: "Their own expenses, which they submit rather than approve." },
+  { path: "/transactions/team", label: "Manager queue", why: "Expenses waiting on them to approve." },
+  { path: "/transactions", label: "Personal queue", why: "Their own expenses, which they submit rather than approve." },
 ];
 
 /**
@@ -78,6 +100,7 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
   const viewingAs = auth.data?.viewingAs?.viewed ?? null;
   const qc = useQueryClient();
   const [forWhom, setForWhom] = useState<string | null>(null);
+  const [forLane, setForLane] = useState<string | null>(null);
   const [error, setError] = useState("");
 
   const settings = useQuery({
@@ -114,7 +137,23 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
   // Yours, not whoever sorts first. Opening on somebody else's tab is how a
   // setting gets changed for the wrong person by somebody who never looked.
   const want = (forWhom ?? viewingAs ?? auth.data?.user?.email ?? "").toLowerCase();
-  const current = rows.find((r) => r.userEmail.toLowerCase() === want) ?? rows[0] ?? null;
+  /** One entry per person for the top row, in their stored order. */
+  const whoever: string[] = [];
+  for (const r of rows) {
+    if (!whoever.some((e) => e.toLowerCase() === r.userEmail.toLowerCase())) {
+      whoever.push(r.userEmail);
+    }
+  }
+  const person = whoever.find((e) => e.toLowerCase() === want) ?? whoever[0] ?? "";
+  /*
+   * Their tabs. The manager queue and each personal Emburse
+   * account are separate imports with separate everything, so the
+   * second row is not decoration — selecting one is selecting
+   * which Emburse account the panel below configures and runs.
+   */
+  const theirLanes = rows.filter(
+    (r) => r.userEmail.toLowerCase() === person.toLowerCase());
+  const current = theirLanes.find((r) => r.lane === forLane) ?? theirLanes[0] ?? null;
 
   async function post(body: Record<string, unknown>) {
     setError("");
@@ -151,18 +190,46 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
           Nothing on this page is shared between two tabs. */}
       {rows.length > 0 && (
         <div className="flex flex-wrap gap-1 border-b border-border">
-          {rows.map((r) => (
+          {whoever.map((e) => (
             <button
-              key={r.userEmail}
+              key={e}
               type="button"
-              onClick={() => setForWhom(r.userEmail)}
+              onClick={() => { setForWhom(e); setForLane(null); }}
               className={`-mb-px rounded-t-lg border-b-2 px-3 py-1.5 text-sm font-semibold ${
-                r.userEmail === current?.userEmail
+                e.toLowerCase() === person.toLowerCase()
                   ? "border-foreground text-foreground"
                   : "border-transparent text-muted-foreground hover:text-foreground"
               }`}
             >
-              {r.userEmail}
+              {e}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Their tabs. Shown whenever there is more than one, because
+          a person with a single Emburse account has nothing to
+          choose and a row of one button is noise. */}
+      {theirLanes.length > 1 && (
+        <div className="flex flex-wrap gap-1">
+          {theirLanes.map((r) => (
+            <button
+              key={r.lane}
+              type="button"
+              onClick={() => setForLane(r.lane)}
+              title={r.laneLoginEmail
+                ? `Signs in as ${r.laneLoginEmail}`
+                : "The manager queue, read with the primary Emburse login"}
+              className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+                r.lane === current?.lane
+                  ? "border-foreground bg-foreground text-background"
+                  : "border-border text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {r.laneLabel}
+              {!r.connected && (
+                <span className="ml-1.5 text-amber-600 dark:text-amber-400">•</span>
+              )}
             </button>
           ))}
         </div>
@@ -183,9 +250,35 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
 
       {error && <p className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm">{error}</p>}
 
+      {/* Which Emburse account this tab is, and what is wrong when
+          something is. A tab configured against an account that is
+          not stored can only fail, and saying so here is cheaper
+          than a run that explains it twenty minutes later. */}
+      {current && current.laneKind === "personal" && (
+        <p className={`rounded-lg border p-3 text-sm ${current.connected
+          ? "border-border bg-muted/40"
+          : "border-amber-500/40 bg-amber-500/10"}`}
+        >
+          {current.connected ? (
+            <>
+              <strong>{current.laneLabel}</strong> signs in as{" "}
+              <span className="font-mono text-xs">{current.laneLoginEmail}</span>. Its
+              settings, schedule, history and imports are its own — nothing here touches
+              the manager queue or the other personal account.
+            </>
+          ) : (
+            <>
+              <strong>{current.laneLabel} has no Emburse account linked</strong>, so it is
+              switched off rather than failing every twenty minutes.{" "}
+              {current.connectionProblem}
+            </>
+          )}
+        </p>
+      )}
+
       {current && (
         <ReviewerPanel
-          key={current.userEmail}
+          key={`${current.userEmail}:${current.lane}`}
           row={current}
           isAdmin={isAdmin}
           everyone={rows.map((r) => r.userEmail)}
@@ -197,7 +290,13 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
           help={settings.data?.selectorHelp ?? {}}
           stepSelectors={settings.data?.stepSelectors ?? {}}
           defaults={settings.data?.defaultSelectors ?? {}}
-          onPost={(body) => void post({ email: current.userEmail, ...body })}
+          /* The tab, on every write. Without it a change made while
+             reading one tab would land on another — which is the
+             exact fault the per-person tabs were added to fix, one
+             level further along. */
+          onPost={(body) => void post({
+            email: current.userEmail, lane: current.lane, ...body,
+          })}
         />
       )}
 
@@ -308,7 +407,7 @@ function ReviewerPanel({
                 path === t.path ? "bg-background shadow-sm" : "text-muted-foreground"
               }`}
             >
-              {t.label} tab
+              {t.label}
             </button>
           ))}
         </div>
@@ -443,6 +542,7 @@ function ReviewerPanel({
         <ExportRunner
           isAdmin={isAdmin}
           reviewer={row.userEmail}
+          lane={row.lane}
           lists={lists.filter((l) => mineLists.includes(l.key))}
           selectors={selectors}
           help={help}

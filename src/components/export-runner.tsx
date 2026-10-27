@@ -102,6 +102,7 @@ type Run = {
 export function ExportRunner({
   isAdmin,
   reviewer,
+  lane,
   lists,
   selectors,
   help,
@@ -120,6 +121,15 @@ export function ExportRunner({
    * about a page nobody should have to learn.
    */
   reviewer: string | null;
+  /**
+   * WHICH TAB, so Test run and Run now read THIS Emburse account.
+   *
+   * Without it the buttons could only ever reach the manager
+   * connection, so a personal tab could be configured, scheduled
+   * and tested and never once read the account it is for — with
+   * every step coming back green while it read the wrong tenant.
+   */
+  lane?: string;
   /**
    * The Emburse lists this reviewer imports.
    *
@@ -148,10 +158,16 @@ export function ExportRunner({
   const [codeError, setCodeError] = useState("");
 
   const q = useQuery({
-    queryKey: ["export-runs", reviewer ?? ""],
+    queryKey: ["export-runs", reviewer ?? "", lane ?? ""],
     queryFn: async () => {
+      // This tab's history. Three tabs' runs in one list, with
+      // nothing saying which account each read, is the same
+      // unreadable mixture two reviewers' runs used to be.
+      const qs = new URLSearchParams();
+      if (reviewer) qs.set("reviewer", reviewer);
+      if (lane) qs.set("lane", lane);
       const res = await fetch(
-        `/api/export-runs${reviewer ? `?reviewer=${encodeURIComponent(reviewer)}` : ""}`);
+        `/api/export-runs${qs.toString() ? `?${qs.toString()}` : ""}`);
       const body = await readJson<{
         error?: string;
         configured: boolean;
@@ -227,6 +243,7 @@ export function ExportRunner({
         body: JSON.stringify({
           ...(reviewer ? { reviewer } : {}),
           ...(onList ? { source: onList } : {}),
+          ...(lane ? { lane } : {}),
         }),
       });
       const body = await readJson<{ error?: string; id?: number }>(res);

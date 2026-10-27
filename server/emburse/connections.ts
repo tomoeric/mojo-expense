@@ -181,6 +181,23 @@ export async function listConnections(userId: string): Promise<Connection[]> {
   return rows.map(shape);
 }
 
+/**
+ * The same, by the address somebody signs into THIS APP with.
+ *
+ * The scheduler knows a reviewer by email and never sees a user
+ * id, so it needs this. Identical rows, identical ordering — the
+ * two functions differ only in which column they are given.
+ */
+export async function connectionsOf(userEmail: string): Promise<Connection[]> {
+  await ensure();
+  const { rows } = await db().query<DbConn>(
+    `SELECT ${C_COLS} FROM emburse_credentials
+      WHERE lower(user_email) = lower($1)
+      ORDER BY (account_key = $2) DESC, label, login_email`,
+    [userEmail, PRIMARY]);
+  return rows.map(shape);
+}
+
 export async function getConnection(
   userId: string, accountKey: string,
 ): Promise<Connection | null> {
@@ -355,8 +372,19 @@ export async function linkedLanes(
   const [lanes, conns] = await Promise.all([
     lanesFor(userEmail), listConnections(userId),
   ]);
-  const primary = conns.find((c) => c.isPrimary) ?? null;
+  return link(lanes, conns);
+}
 
+/** The same, for a caller that knows the person only by email. */
+export async function linkedLanesOf(userEmail: string): Promise<LinkedLane[]> {
+  const [lanes, conns] = await Promise.all([
+    lanesFor(userEmail), connectionsOf(userEmail),
+  ]);
+  return link(lanes, conns);
+}
+
+function link(lanes: Lane[], conns: Connection[]): LinkedLane[] {
+  const primary = conns.find((c) => c.isPrimary) ?? null;
   return lanes.map((lane) => {
     if (lane.kind === "manager") {
       return {
@@ -396,9 +424,27 @@ export async function credentialForLane(
   | { ok: true; lane: LinkedLane; email: string; password: string; accountKey: string }
   | { ok: false; problem: string }
 > {
-  const lanes = await linkedLanes(userId, userEmail);
+  return laneCredential(await linkedLanes(userId, userEmail), userEmail, laneKey);
+}
+
+/** The same, for the scheduler, which knows a reviewer only by email. */
+export async function credentialForLaneOf(
+  userEmail: string, laneKey: string,
+): Promise<
+  | { ok: true; lane: LinkedLane; email: string; password: string; accountKey: string }
+  | { ok: false; problem: string }
+> {
+  return laneCredential(await linkedLanesOf(userEmail), userEmail, laneKey);
+}
+
+async function laneCredential(
+  lanes: LinkedLane[], userEmail: string, laneKey: string,
+): Promise<
+  | { ok: true; lane: LinkedLane; email: string; password: string; accountKey: string }
+  | { ok: false; problem: string }
+> {
   const lane = lanes.find((l) => l.key === laneKey);
-  if (!lane) return { ok: false, problem: "No such tab." };
+  if (!lane) return { ok: false, problem: `No tab called “${laneKey}”.` };
   if (!lane.connection) {
     return { ok: false, problem: lane.problem || "That tab has no Emburse account linked." };
   }

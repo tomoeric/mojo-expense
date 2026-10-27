@@ -100,8 +100,9 @@ were added; "it compiles" is not "the button works".
 **5a. A change on the Emburse side means at least**: `credentials`,
 `connections`, `decisions`, `import-as`, `unclaimed`, `run-as`,
 `reviewer-schedules`, `manager-queue`, `view-as-brian`, `two-reviewers`,
-`corrections`, `decision-trace`, `auto-approve`, `rules`, `bulk-approve`. For
-a change to "Your Emburse login", also `test-accounts-ui.ts` after a build.
+`corrections`, `decision-trace`, `auto-approve`, `rules`, `bulk-approve`,
+`lanes`. For a change to "Your Emburse login" or Export settings, also
+`test-accounts-ui.ts` and `test-lanes-ui.ts` after a build.
 
 **6. Two things that only an EMPTY database shows.** Run the suites once
 against a fresh database, because the live one has every table already and
@@ -2417,6 +2418,47 @@ answer, with no migration step.
   there. Fixed while making the test name its account. If a status on that
   page ever looks stale again, check that call first.
 - `scripts/test-connections.ts`.
+
+## Three tabs for one person: the manager queue and two personal accounts
+
+`reviewer_imports` was keyed on the person, which was true until somebody had
+a second Emburse account with its own stages, lists, receipt filter,
+schedule and history. Widened in place: `lane text NOT NULL DEFAULT
+'manager'`, primary key `(user_email, lane)`.
+
+- **Every existing row becomes the MANAGER tab.** Deliberately the
+  conservative reading — the manager queue is the thing the brief says must
+  not move, and calling an existing row "personal" on the strength of its
+  grid path would be guessing about live data.
+- **`reviewerImports()` returns one row per (person, tab)**, built from
+  `linkedLanesOf()`. A person with one Emburse account still gets exactly one
+  tab, so nothing changes for them.
+- **A personal tab signs in as ITS OWN Emburse account**, via
+  `credentialForLaneOf` in `attemptExport`. Not the primary one and not the
+  other personal one: Needs Review is per account, so reading the wrong
+  tenant's list files one company's expenses under the other with every step
+  green. The manager tab is untouched — still `credentialForUser`, still the
+  primary connection — and the run-as guard is skipped for personal tabs
+  because their login is decided by the tab, not by `runAs`.
+- **A personal tab with nothing linked is OFF.** Leaving it on means a run
+  every twenty minutes that can only fail, filling a half-configured tab with
+  failures that read like a broken import rather than a missing password.
+- **Attempts, slots and history are per tab.** `todaysAttempts` and `nextDue`
+  take a lane; `export_runs.lane` records it; each tab gets its own stagger
+  slot. Three tabs sharing a day's budget means the first one read spends it
+  and the other two never update — the two-reviewers fault, one level along.
+  The manager tab passes the EMPTY lane, which is what every run recorded so
+  far carries, so its counts are unchanged.
+- **Every write names its tab.** `setReviewerImport` takes `lane`; the route
+  checks it against that person's own tabs rather than taking it as given, so
+  a request naming a tab somebody does not have is refused instead of
+  creating a configuration nothing runs and nothing shows.
+- **The in-panel grid selector was renamed "Manager queue" / "Personal
+  queue".** It said "Manager tab", and so did the new tab above it — one page,
+  two different controls, one name. Ambiguous to read and broken for a screen
+  reader; the smoke test found it as a strict-mode violation, the same way the
+  two Cancel buttons were found.
+- `scripts/test-lanes.ts` and `scripts/test-lanes-ui.ts`.
 
 ## Testing your own Emburse connection
 

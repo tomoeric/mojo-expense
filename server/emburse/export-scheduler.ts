@@ -4,6 +4,9 @@ import { readSettings, type Schedule } from "../import/settings.js";
 import { envLogin, runAutoExport, type ExportRun, type Selectors } from "./auto-export.js";
 import { waitForCode } from "./challenge.js";
 import { credentialForExport, credentialForUser, noteResult } from "./credentials.js";
+import {
+  MANAGER_LANE, credentialForLaneOf, linkedLanesOf, type LinkedLane,
+} from "./connections.js";
 
 /**
  * Run the export on the configured schedule.
@@ -168,6 +171,35 @@ ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS receipts_only boolean;
 -- Null means the lists enabled in the defaults, which is how every existing
 -- deployment already behaves.
 ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS sources jsonb;
+
+-- WHICH TAB this configuration is.
+--
+-- One person can now have more than one Emburse account, and each
+-- one is a separate import with its own stages, lists, receipt
+-- filter, schedule and history. The row was keyed on the person, so
+-- a second account had nowhere to put any of that.
+--
+-- Widened with a DEFAULT, so every row that already exists becomes
+-- the MANAGER tab and keeps working untouched. That is deliberately
+-- the conservative reading: the manager queue is the thing the brief
+-- says must not move, and calling an existing row "personal" on the
+-- strength of its grid path would be guessing about live data.
+ALTER TABLE reviewer_imports ADD COLUMN IF NOT EXISTS lane text NOT NULL DEFAULT 'manager';
+
+DO $do$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'reviewer_imports_user_lane_pk'
+  ) THEN
+    ALTER TABLE reviewer_imports DROP CONSTRAINT IF EXISTS reviewer_imports_pkey;
+    ALTER TABLE reviewer_imports
+      ADD CONSTRAINT reviewer_imports_user_lane_pk PRIMARY KEY (user_email, lane);
+  END IF;
+END $do$;
+
+-- Which tab a run belongs to, so each tab's history is its own.
+ALTER TABLE export_runs ADD COLUMN IF NOT EXISTS lane text NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS export_runs_lane_idx
+  ON export_runs (reviewer, lane, local_date, id DESC);
 `;
 
 let ready: Promise<void> | null = null;
@@ -191,6 +223,8 @@ export const ensureSchedulerSchema = (): Promise<void> => ensure();
 
 export type RunRow = {
   id: number;
+  /** Which tab this run belongs to. Blank on runs made before tabs. */
+  lane?: string;
   startedAt: string;
   finishedAt: string | null;
   localDate: string;
@@ -242,13 +276,19 @@ function offset(date: Date, tz: string): number {
 
 /** Attempts already made today, and whether any of them worked. */
 async function todaysAttempts(
-  day: string, reviewer = "", source = "",
+  day: string, reviewer = "", source = "", lane = "",
 ): Promise<{ count: number; succeeded: boolean }> {
   const { rows } = await db().query<{ count: string; succeeded: boolean }>(
+    // Counted per TAB as well as per reviewer and per list. Eric's
+    // manager queue, his MOJO account and his Mammoth account are
+    // three different Needs Review lists; sharing a day's attempts
+    // means the first one read spends the others' budget and they
+    // never update.
     `SELECT count(*)::text AS count, coalesce(bool_or(ok), false) AS succeeded
        FROM export_runs
-      WHERE local_date = $1 AND trigger = 'scheduled' AND reviewer = $2 AND source = $3`,
-    [day, reviewer, source],
+      WHERE local_date = $1 AND trigger = 'scheduled' AND reviewer = $2
+        AND source = $3 AND lane = $4`,
+    [day, reviewer, source, lane],
   );
   return { count: Number(rows[0]?.count ?? 0), succeeded: rows[0]?.succeeded ?? false };
 }
@@ -266,9 +306,11 @@ export async function nextDue(
   reviewer = "",
   /** And which list. Transactions and Reimbursements each have their own. */
   source = "",
+  /** And which tab. The manager queue and each personal account are separate. */
+  lane = "",
 ): Promise<{ due: boolean; attempt: number; reason: string }> {
   const day = localDate(schedule, now);
-  const { count, succeeded } = await todaysAttempts(day, reviewer, source);
+  const { count, succeeded } = await todaysAttempts(day, reviewer, source, lane);
 
   // Only when the slots are RETRIES does a success close the day. On an
   // all-day schedule they are not retries, they are the times the import
@@ -293,7 +335,9 @@ export async function nextDue(
   return { due: true, attempt: count + 1, reason: `attempt ${count + 1} is due` };
 }
 
-export async function recentRuns(limit = 20, reviewer?: string): Promise<RunRow[]> {
+export async function recentRuns(
+  limit = 20, reviewer?: string, lane?: string,
+): Promise<RunRow[]> {
   await ensure();
   // Whose runs, when somebody is named. An admin looking at the app as Brian
   // was shown everybody's: his view carried Eric's successful 320-item pull
@@ -305,11 +349,15 @@ export async function recentRuns(limit = 20, reviewer?: string): Promise<RunRow[
   const { rows } = await db().query(
     `SELECT id, started_at, finished_at, local_date, attempt, trigger, ok, steps,
             item_line, error, import_id, (screenshot IS NOT NULL) AS has_screenshot,
-            reviewer, source
+            reviewer, source, lane
        FROM export_runs
-      WHERE $2::text IS NULL OR lower(reviewer) = $2
+      WHERE ($2::text IS NULL OR lower(reviewer) = $2)
+        AND ($3::text IS NULL OR lane = $3)
       ORDER BY id DESC LIMIT $1`,
-    [limit, reviewer === undefined ? null : who],
+    // Each tab's history is its own. Three tabs' runs in one list,
+    // with nothing saying which account each read, is the same
+    // unreadable mixture two reviewers' runs used to be.
+    [limit, reviewer === undefined ? null : who, lane === undefined ? null : lane],
   );
   return rows.map((r) => ({
     id: Number(r.id),
@@ -326,6 +374,7 @@ export async function recentRuns(limit = 20, reviewer?: string): Promise<RunRow[
     hasScreenshot: Boolean(r.has_screenshot),
     reviewer: (r.reviewer as string) ?? "",
     source: (r.source as string) ?? "",
+    lane: (r.lane as string) ?? "",
   }));
 }
 
@@ -419,19 +468,32 @@ export async function attemptExport(
      * unchanged once it is pointed at the right path.
      */
     source?: string;
+    /**
+     * WHICH TAB is running: the manager queue, or one personal
+     * Emburse account.
+     *
+     * It decides the login, so it is not cosmetic. A personal tab
+     * signs in as ITS OWN Emburse account — not the primary one,
+     * and not the other personal one — because Needs Review is per
+     * account and reading the wrong tenant's list would file one
+     * company's expenses under the other.
+     */
+    lane?: string;
   } = {},
 ): Promise<{ id: number; run: ExportRun; importId: number | null }> {
   await ensure();
   const settings = await readSettings();
   const day = localDate(settings.schedule);
 
+  const lane = (opts.lane ?? "").trim();
   const { rows } = await db().query<{ id: string; attempt: number }>(
-    `INSERT INTO export_runs (local_date, attempt, trigger, reviewer, source)
+    `INSERT INTO export_runs (local_date, attempt, trigger, reviewer, source, lane)
      VALUES ($1, (SELECT count(*) + 1 FROM export_runs
-                   WHERE local_date = $1 AND trigger = $2 AND reviewer = $3 AND source = $4),
-             $2, $3, $4)
+                   WHERE local_date = $1 AND trigger = $2 AND reviewer = $3
+                     AND source = $4 AND lane = $5),
+             $2, $3, $4, $5)
      RETURNING id, attempt`,
-    [day, trigger, opts.reviewer ?? "", opts.source ?? ""],
+    [day, trigger, opts.reviewer ?? "", opts.source ?? "", lane],
   );
   const id = Number(rows[0]!.id);
   opts.onStarted?.(id);
@@ -466,9 +528,29 @@ export async function attemptExport(
      */
     const mineForLogin = opts.reviewer
       ? (await reviewerImports().catch(() => []))
-          .find((r) => r.userEmail.toLowerCase() === opts.reviewer!.toLowerCase())
+          .find((r) => r.userEmail.toLowerCase() === opts.reviewer!.toLowerCase()
+            && r.lane === (lane || MANAGER_LANE))
       : undefined;
     const signsIn = mineForLogin?.runAs?.trim() || opts.reviewer;
+
+    /*
+     * A PERSONAL TAB SIGNS IN AS ITS OWN EMBURSE ACCOUNT.
+     *
+     * Not the primary one, and not the other personal one. Needs
+     * Review is per account, so reading the wrong tenant's list
+     * would file one company's expenses under the other — and
+     * every step of the run would come back green while it
+     * happened. `credentialForLaneOf` refuses rather than
+     * substituting, and the refusal names the address the tab
+     * wants, which is the one thing somebody can act on.
+     *
+     * The manager tab is untouched: it is `credentialForUser`,
+     * exactly as before, pinned to the primary connection.
+     */
+    const forLane = opts.reviewer && lane && lane !== MANAGER_LANE
+      ? await credentialForLaneOf(opts.reviewer, lane)
+      : null;
+    if (forLane && !forLane.ok) throw new Error(forLane.problem);
 
     /*
      * Somebody else's login AND no filter is the one combination that
@@ -484,7 +566,8 @@ export async function attemptExport(
      * read after the queue has already changed hands, and this one is
      * recoverable only by working out which rows were never his.
      */
-    if (opts.reviewer && signsIn && signsIn.toLowerCase() !== opts.reviewer.toLowerCase()
+    if (!forLane && opts.reviewer && signsIn
+        && signsIn.toLowerCase() !== opts.reviewer.toLowerCase()
         && !mineForLogin?.gridQuery) {
       throw new Error(
         `${opts.reviewer}'s import is set to sign in as ${signsIn}, with no filter to pick ` +
@@ -493,8 +576,16 @@ export async function attemptExport(
         `${opts.reviewer}, or paste a URL from Emburse with Current Reviewer set to them.`);
     }
 
-    const login = opts.reviewer
-      ? await credentialForUser(signsIn!).then((c) =>
+    const login = forLane?.ok
+      ? {
+        userId: "",
+        email: forLane.email,
+        password: forLane.password,
+        userEmail: opts.reviewer!,
+        chosen: `${forLane.lane.label}, signed in as ${forLane.email}`,
+      }
+      : opts.reviewer
+        ? await credentialForUser(signsIn!).then((c) =>
           c ? {
             ...c,
             // The QUEUE's owner, not the login's. This is what the import
@@ -505,7 +596,7 @@ export async function attemptExport(
               ? `the import for ${opts.reviewer}`
               : `${opts.reviewer}'s queue, read with ${signsIn}'s login`,
           } : null)
-      : (await credentialForExport()) ?? envLogin();
+        : (await credentialForExport()) ?? envLogin();
     if (opts.reviewer && !login) {
       throw new Error(
         `${signsIn} has no Emburse login stored, so ${opts.reviewer}'s queue cannot be read. ` +
@@ -772,6 +863,21 @@ export async function closeOrphanedRuns(): Promise<number> {
 
 export type ReviewerImport = {
   userEmail: string;
+  /**
+   * WHICH TAB this is: the manager queue, or one personal Emburse
+   * account. A person has one row per tab and they share nothing —
+   * changing one must not change another, which is the whole
+   * reason the table is keyed on the pair.
+   */
+  lane: string;
+  laneLabel: string;
+  laneKind: "manager" | "personal";
+  /** The Emburse login this tab must sign in as. Empty on the manager tab. */
+  laneLoginEmail: string;
+  /** Whether a stored Emburse account actually signs in as that address. */
+  connected: boolean;
+  /** Why not, when not. A sentence, because a blank teaches nobody. */
+  connectionProblem: string;
   enabled: boolean;
   /** The reviewer's own times, or the shared schedule where they set none. */
   schedule: Schedule;
@@ -905,7 +1011,10 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
     return true;
   });
   if (people.length === 0) {
-    return [{ userEmail: "", enabled: true, schedule: shared, shared: true,
+    return [{ userEmail: "", lane: MANAGER_LANE, laneLabel: "Manager tab",
+              laneKind: "manager", laneLoginEmail: "", connected: false,
+              connectionProblem: "No Emburse login is stored.",
+              enabled: true, schedule: shared, shared: true,
               staggeredBy: 0, gridPath: null, gridSection: null, gridQuery: null,
               sections: null, receiptsOnly: null, sources: null, runAs: null,
               managerEnabled: true, autoApprove: false,
@@ -919,9 +1028,14 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
     manager_enabled: boolean | null;
     auto_approve: boolean | null; auto_approve_per_run: number | null;
     grid_query: string | null; run_as: string | null; sections: unknown;
-    receipts_only: boolean | null; sources: unknown;
+    receipts_only: boolean | null; sources: unknown; lane: string;
   }>("SELECT * FROM reviewer_imports");
-  const own = new Map(rows.map((r) => [r.user_email.toLowerCase(), r]));
+  // Keyed on the PAIR now. One person's manager tab and their two
+  // personal tabs are three independent configurations, and reading
+  // them back under one key is how a change to one would appear on
+  // another.
+  const own = new Map(rows.map(
+    (r) => [`${r.user_email.toLowerCase()}\u0000${r.lane || MANAGER_LANE}`, r]));
 
   /*
    * Sorted, so the stagger below is the same on every tick.
@@ -933,8 +1047,25 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
   const ordered = [...people].sort((a, b) =>
     a.userEmail.toLowerCase() < b.userEmail.toLowerCase() ? -1 : 1);
 
-  return ordered.map((p, i) => {
-    const r = own.get(p.userEmail.toLowerCase());
+  /*
+   * Every tab of every person, flattened, so each one gets its own
+   * stagger slot. Two tabs of the SAME person cannot share import
+   * times any more than two people can: one browser runs them one
+   * at a time, so the second waits out the first and can lose its
+   * window entirely.
+   */
+  const slots: { userEmail: string; lane: LinkedLane }[] = [];
+  for (const p of ordered) {
+    const lanes = await linkedLanesOf(p.userEmail).catch(() => []);
+    const use = lanes.length > 0
+      ? lanes
+      : [{ key: MANAGER_LANE, label: "Manager tab", kind: "manager" as const,
+           loginEmail: "", position: 10, connection: null, problem: "" }];
+    for (const lane of use) slots.push({ userEmail: p.userEmail, lane });
+  }
+
+  return slots.map(({ userEmail: who, lane }, i) => {
+    const r = own.get(`${who.toLowerCase()}\u0000${lane.key}`);
     const set = [r?.timezone, r?.first_run, r?.retry_hours, r?.attempts_per_day,
                  r?.grace_minutes, r?.all_day].some((v) => v !== null && v !== undefined);
     /*
@@ -949,8 +1080,23 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
      */
     const stagger = set ? 0 : i * STAGGER_MINUTES;
     return {
-      userEmail: p.userEmail,
-      enabled: r?.enabled ?? true,
+      userEmail: who,
+      lane: lane.key,
+      laneLabel: lane.label,
+      laneKind: lane.kind,
+      laneLoginEmail: lane.loginEmail,
+      connected: lane.connection !== null,
+      connectionProblem: lane.problem,
+      /*
+       * A personal tab with no Emburse account linked is OFF until
+       * one is. Leaving it on would mean a scheduled run every
+       * twenty minutes that can only fail, filling the history of
+       * a tab somebody has not finished setting up — and the
+       * failure would read like a broken import rather than a
+       * missing password.
+       */
+      enabled: (r?.enabled ?? true)
+        && (lane.kind === "manager" || lane.connection !== null),
       shared: !set,
       gridPath: r?.grid_path ?? null,
       gridSection: r?.grid_section ?? null,
@@ -998,6 +1144,12 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
 export async function setReviewerImport(
   userEmail: string,
   input: {
+    /**
+     * Which tab to write. Defaults to the manager one, which is
+     * what every existing caller means and what every existing row
+     * is. A change to one tab must never land on another.
+     */
+    lane?: string;
     enabled?: boolean;
     /** Their own times; null puts them back on the shared schedule. */
     schedule?: Partial<Schedule> | null;
@@ -1057,8 +1209,9 @@ export async function setReviewerImport(
   if (input.autoApprovePerRun !== undefined) set.auto_approve_per_run = input.autoApprovePerRun;
   set.updated_by = by;
 
-  const cols = ["user_email", ...Object.keys(set)];
-  const vals = [userEmail.trim().toLowerCase(), ...Object.values(set)];
+  const lane = (input.lane ?? MANAGER_LANE).trim() || MANAGER_LANE;
+  const cols = ["user_email", "lane", ...Object.keys(set)];
+  const vals = [userEmail.trim().toLowerCase(), lane, ...Object.values(set)];
   const marks = vals.map((_, i) => `$${i + 1}`).join(",");
   const updates = [
     ...Object.keys(set).map((c) => `${c} = EXCLUDED.${c}`),
@@ -1066,7 +1219,7 @@ export async function setReviewerImport(
   ].join(", ");
   await db().query(
     `INSERT INTO reviewer_imports (${cols.join(",")}) VALUES (${marks})
-     ON CONFLICT (user_email) DO UPDATE SET ${updates}`,
+     ON CONFLICT (user_email, lane) DO UPDATE SET ${updates}`,
     vals);
 }
 
@@ -1117,14 +1270,30 @@ export function startExportScheduler(): void {
         // the second never updates — the same fault as sharing one between
         // two reviewers, one level along.
         for (const list of lists) {
-          const { due, attempt } = await nextDue(who.schedule, new Date(), who.userEmail, list.key);
+          /*
+           * One timeline per TAB per list, not per person per list.
+           *
+           * Eric's manager queue, his MOJO account and his Mammoth
+           * account are three different Needs Review lists. Sharing
+           * a day's attempts between them means the first one read
+           * spends the others' budget and they never update — the
+           * same fault as sharing one between two reviewers, one
+           * level further along. The manager tab passes the empty
+           * lane, which is what every run recorded so far carries,
+           * so its count is unchanged by any of this.
+           */
+          const { due, attempt } = await nextDue(
+            who.schedule, new Date(), who.userEmail, list.key,
+            who.lane === MANAGER_LANE ? "" : who.lane);
           if (!due) continue;
 
           console.log(
             `export: starting scheduled attempt ${attempt} of ${list.label}` +
-            (who.userEmail ? ` for ${who.userEmail}` : ""));
-          const { run } = await attemptExport(
-            "scheduled", "scheduler", { reviewer: who.userEmail, source: list.key });
+            (who.userEmail ? ` for ${who.userEmail}` : "") +
+            (who.lane === MANAGER_LANE ? "" : ` (${who.laneLabel})`));
+          const { run } = await attemptExport("scheduled", "scheduler", {
+            reviewer: who.userEmail, source: list.key, lane: who.lane,
+          });
           const failed = run.steps.find((s) => !s.ok);
           console.log(
             run.ok
