@@ -8,6 +8,7 @@ import {
   saveMailSettings, searchMailbox, conflicts,
   type Target,
 } from "./receipt-mail.js";
+import { proposeWrites, queueWrite, writesFor } from "./receipt-writeback.js";
 
 /**
  * Finding receipts in a mailbox, and offering them.
@@ -57,6 +58,9 @@ receiptMailRouter.get("/receipt-mail", requireAuth, async (req: Request, res: Re
       graphConfigured: isGraphConfigured(),
       graphProblem: isGraphConfigured() ? "" : mailProblem(),
       matches: await matchesFor(null),
+      /* Every proposal and its state, so the page can show what
+         is waiting on a click and what has already landed. */
+      writes: await writesFor(),
     });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Could not read it." });
@@ -177,6 +181,56 @@ receiptMailRouter.post("/receipt-mail/scan", requireAuth,
         error: err instanceof Error ? err.message : "The scan could not run.",
       });
     }
+  });
+
+/* ------------------------------------------------------------------ *
+ * Sending it back
+ * ------------------------------------------------------------------ */
+
+/**
+ * What would be written, before anything is.
+ *
+ * Current value, proposed value, and the evidence it came from —
+ * which is the whole of the owner's "always ask". Proposing
+ * writes nothing to Emburse and queues nothing; it records what
+ * a person is being asked about.
+ */
+receiptMailRouter.post("/receipt-mail/propose", requireAuth,
+  async (req: Request, res: Response) => {
+    if (!guard(res)) return;
+    const me = owner(req, res);
+    if (!me) return;
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const out = await proposeWrites({
+      dedupeKey: String(b.dedupeKey ?? ""),
+      messageId: String(b.messageId ?? ""),
+      by: me,
+    });
+    if (!out.ok) { res.status(400).json({ error: out.problem }); return; }
+    res.json({ writes: out.writes });
+  });
+
+/**
+ * A person says yes to one change.
+ *
+ * The only way a write becomes eligible to run. Nothing is
+ * scheduled, nothing is queued by a rule, and a strong match does
+ * not queue itself — the owner's instruction is that even a
+ * strong match waits for a click, and this route is that click.
+ *
+ * It does not submit, approve or deny, and there is no parameter
+ * that would make it.
+ */
+receiptMailRouter.post("/receipt-mail/send", requireAuth,
+  async (req: Request, res: Response) => {
+    if (!guard(res)) return;
+    const me = owner(req, res);
+    if (!me) return;
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const kind = b.kind === "note" ? "note" : "receipt";
+    const out = await queueWrite(String(b.dedupeKey ?? ""), kind);
+    if (!out.ok) { res.status(400).json({ error: out.problem }); return; }
+    res.json({ writes: await writesFor(String(b.dedupeKey ?? "")) });
   });
 
 /** A person chooses one candidate, or rejects it. Nothing is attached here. */

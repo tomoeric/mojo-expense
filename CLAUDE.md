@@ -101,7 +101,7 @@ were added; "it compiles" is not "the button works".
 `connections`, `decisions`, `import-as`, `unclaimed`, `run-as`,
 `reviewer-schedules`, `manager-queue`, `view-as-brian`, `two-reviewers`,
 `corrections`, `decision-trace`, `auto-approve`, `rules`, `bulk-approve`,
-`lanes`, `two-accounts`, `rule-scope`, `receipt-mail`, `signin-errors`. For a change to "Your Emburse login", Export
+`lanes`, `two-accounts`, `rule-scope`, `receipt-mail`, `signin-errors`, `writeback`. For a change to "Your Emburse login", Export
 settings or the review queue, also
 `test-accounts-ui.ts` and `test-lanes-ui.ts` after a build.
 
@@ -2611,11 +2611,49 @@ list and then filtered out the only rows worth having.
   description, and Category**, and nothing else. **Always ask** — even a
   strong match waits for a click; nothing reaches Emburse unattended. **Never
   submit** — matching and field updates never submit, approve or deny.
-- **STILL TO BUILD:** the attach step itself and the Note write-back, against
-  those decisions. Category write-back already exists as
-  `category_corrections` and is now tenant-correct. The flow stops at
-  "chosen" until then, and the page says attaching is a separate step rather
-  than implying it happened.
+
+## Sending a matched receipt back
+
+`server/emburse/receipt-writeback.ts` (the model) and `attachAndAnnotate` in
+`decide.ts` (the browser step, the same road a category correction takes).
+
+- **Only the three fields the owner named** have a code path: the receipt
+  image, the description and the category. Widening that is a code change,
+  not a setting somebody can wander into.
+- **Nothing runs without a click.** `queueWrite` is the only way a proposal
+  becomes eligible, and it is reached from a button. A strong match does not
+  queue itself; proposing is not sending; nothing is on a timer.
+- **Nothing submits, approves or denies.** No path here touches a submit
+  control.
+- **It writes to THE ACCOUNT THE EXPENSE IS IN**, via `credentialForLaneOf`.
+  No fallback to the primary connection — a write to the wrong tenant is not
+  a failed attempt, it is an edit to a record that is not this expense. A
+  manager-queue expense is refused outright.
+- **A retry does not duplicate.** `applied` and `already` are terminal, so a
+  second pass cannot re-send a write that landed — and re-proposing does not
+  reopen them. The browser step also checks the form for a receipt already on
+  it before uploading: **a save that landed just as the step timed out is the
+  ordinary case, not the rare one.**
+- **A conflict stops the write.** The description is re-read on the form and
+  compared against what it said when the change was proposed; if somebody
+  edited it in Emburse since, nothing is written and the row goes `stale`.
+  This is the one thing a write-back can do that a read never can.
+- **The proposed description is dull on purpose** — merchant, date,
+  reference, from the evidence already extracted. No invention, and an empty
+  one is never proposed: setting a description to "Receipt" overwrites
+  something that may have said more.
+- **A body-only receipt is rendered to PDF** from the message's own HTML,
+  with the network blocked so a tracking pixel cannot tell the sender a
+  machine opened it.
+- **`editNote` / `editReceipt` / `editReceiptPresent` are GUESSES** until
+  somebody has looked at this tenant's edit form. The step refuses and prints
+  every control that IS there rather than typing into the wrong box — a guess
+  that matches the wrong field writes a receipt total into a cost centre.
+  "Look at the edit form" on the Import page answers it without changing
+  anything.
+- `scripts/test-writeback.ts`. **The browser step is unverified against real
+  Emburse** — this container has no tenant.
+
 
 ## What the shell hangs off `isStandalone`
 

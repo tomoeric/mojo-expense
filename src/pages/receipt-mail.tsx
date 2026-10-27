@@ -51,12 +51,28 @@ type Match = {
   state: "candidate" | "chosen" | "rejected" | "attached" | "failed";
   decidedBy: string; decidedAt: string | null; foundAt: string;
 };
+type Write = {
+  dedupeKey: string;
+  kind: "receipt" | "note";
+  lane: string;
+  proposed: string;
+  was: string;
+  messageId: string;
+  attachmentId: string;
+  state: "proposed" | "queued" | "applied" | "already" | "stale" | "failed";
+  attempts: number;
+  error: string;
+  proposedBy: string;
+  proposedAt: string;
+  settledAt: string | null;
+};
 type Answer = {
   settings: Settings;
   accounts: Account[];
   graphConfigured: boolean;
   graphProblem: string;
   matches: Match[];
+  writes: Write[];
 };
 type ScanResult = {
   mailbox: string; searched: string[]; missingFolders: string[];
@@ -112,8 +128,24 @@ export function ReceiptMailPage() {
     onError: (e) => setError((e as Error).message),
   });
   const decide = useMutation({
-    mutationFn: (v: { dedupeKey: string; messageId: string; choose: boolean }) =>
-      post<{ matches: Match[] }>("/api/receipt-mail/decide", v),
+    mutationFn: async (v: { dedupeKey: string; messageId: string; choose: boolean }) => {
+      await post<{ matches: Match[] }>("/api/receipt-mail/decide", v);
+      // Choosing proposes what WOULD be sent. It writes nothing
+      // to Emburse — the person still has to press Send — and
+      // showing the proposal straight away is what makes "always
+      // ask" an informed question rather than a yes/no on trust.
+      if (v.choose) {
+        await post<{ writes: Write[] }>("/api/receipt-mail/propose", {
+          dedupeKey: v.dedupeKey, messageId: v.messageId,
+        }).catch(() => undefined);
+      }
+    },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["receipt-mail"] }),
+    onError: (e) => setError((e as Error).message),
+  });
+  const send = useMutation({
+    mutationFn: (v: { dedupeKey: string; kind: "receipt" | "note" }) =>
+      post<{ writes: Write[] }>("/api/receipt-mail/send", v),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["receipt-mail"] }),
     onError: (e) => setError((e as Error).message),
   });
@@ -125,6 +157,10 @@ export function ReceiptMailPage() {
   const matches = (scan?.matches ?? q.data?.matches ?? [])
     .filter((m) => !chosen || m.lane === chosen);
   const waiting = matches.filter((m) => m.state === "candidate");
+  const writes = (q.data?.writes ?? []).filter((w) => !chosen || w.lane === chosen);
+  /** Grouped by expense: a receipt and a description are one edit. */
+  const byKey = new Map<string, Write[]>();
+  for (const w of writes) byKey.set(w.dedupeKey, [...(byKey.get(w.dedupeKey) ?? []), w]);
   /** One receipt wanted by several expenses, or the other way round. */
   const byMessage = new Map<string, number>();
   const byExpense = new Map<string, number>();
@@ -284,6 +320,74 @@ export function ReceiptMailPage() {
         </div>
       )}
 
+      {/*
+        * WHAT WOULD BE WRITTEN, before it is.
+        *
+        * Current value, proposed value, and the state of each.
+        * Nothing here has reached Emburse until it says
+        * "applied" — and nothing reaches it without the button
+        * below being pressed, which is the owner's standing
+        * instruction rather than a setting.
+        */}
+      {byKey.size > 0 && (
+        <div className="space-y-3">
+          <p className="text-sm font-semibold">Ready to send to Emburse</p>
+          {[...byKey.entries()].map(([key, group]) => (
+            <div key={key} className="space-y-2 rounded-xl border border-border p-3.5 text-sm">
+              <p className="font-mono text-xs text-muted-foreground">{key.slice(0, 16)}…</p>
+              {group.map((w) => (
+                <div key={w.kind} className="flex flex-wrap items-center gap-2 border-t
+                                             border-border pt-2">
+                  <span className="font-semibold">
+                    {w.kind === "receipt" ? "Receipt image" : "Description"}
+                  </span>
+                  <span className="flex-1 text-xs text-muted-foreground">
+                    {w.kind === "note" ? (
+                      <>
+                        now <span className="font-mono">{w.was || "(empty)"}</span> →{" "}
+                        <span className="font-mono">{w.proposed}</span>
+                      </>
+                    ) : (
+                      <>attach <span className="font-mono">{w.proposed}</span>
+                        {!w.attachmentId && " — rendered from the message body"}</>
+                    )}
+                  </span>
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                    w.state === "applied" || w.state === "already"
+                      ? "bg-emerald-600/15 text-emerald-700 dark:text-emerald-400"
+                      : w.state === "failed" || w.state === "stale"
+                        ? "bg-red-500/15 text-red-700 dark:text-red-400"
+                        : "bg-muted text-muted-foreground"}`}
+                  >
+                    {w.state === "already" ? "already there" : w.state}
+                  </span>
+                  {(w.state === "proposed" || w.state === "failed" || w.state === "stale") && (
+                    <button
+                      type="button"
+                      disabled={send.isPending}
+                      onClick={() => send.mutate({ dedupeKey: w.dedupeKey, kind: w.kind })}
+                      className="rounded-lg border border-sky-600/50 px-3 py-1 text-xs
+                                 font-semibold disabled:opacity-50"
+                    >
+                      {w.state === "proposed" ? "Send to Emburse" : "Try again"}
+                    </button>
+                  )}
+                  {w.error && (
+                    <span className="w-full text-xs text-red-700 dark:text-red-400">
+                      {w.error}
+                    </span>
+                  )}
+                </div>
+              ))}
+              <p className="text-[11px] text-muted-foreground">
+                Sent under {group[0]!.lane.replace(/^personal-/, "")}&rsquo;s own Emburse
+                login. It attaches and edits; it never submits, approves or denies.
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+
       {waiting.length === 0 ? (
         <p className="flex items-center gap-2 rounded-lg border border-border p-3 text-sm
                       text-muted-foreground">
@@ -389,7 +493,8 @@ export function ReceiptMailPage() {
                   Not this one
                 </button>
                 <span className="text-[11px] text-muted-foreground">
-                  Choosing records it here. Attaching it to Emburse is a separate step.
+                  Choosing shows you what would be written. Nothing reaches Emburse until
+                  you press Send below.
                 </span>
               </div>
             </div>

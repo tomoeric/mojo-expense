@@ -170,8 +170,26 @@ try {
   // And the conflict banner is gone, because there is no longer
   // a conflict: one candidate is left waiting, not two.
   check("…without still claiming a conflict", !text.includes("also matches"));
-  check("…and says attaching is a separate step",
-    text.includes("Attaching it to Emburse is a separate step"));
+  check("…and says nothing reaches Emburse without a press",
+    text.includes("Nothing reaches Emburse until you press Send"));
+
+  /*
+   * AND THE PROPOSAL IS SHOWN, not acted on. "Always ask" is
+   * only a real question if the person can see what the answer
+   * commits them to: the current value, the proposed value, and
+   * a button that has not been pressed.
+   */
+  check("the proposal appears", text.includes("Ready to send to Emburse"),
+    text.slice(-300).replace(/\n/g, " | "));
+  check("…naming the receipt it would attach", text.includes("Receipt image"));
+  check("…and offering a Send button that nothing has pressed",
+    (await page.getByRole("button", { name: "Send to Emburse" }).count()) > 0);
+  const { rows: wb } = await db().query<{ state: string; n: string }>(
+    `SELECT state, count(*)::text AS n FROM receipt_writebacks
+      WHERE dedupe_key LIKE 'zz-rm-%' GROUP BY state`);
+  check("…with NOTHING queued or applied",
+    wb.every((r) => r.state === "proposed"),
+    wb.map((r) => `${r.state}:${r.n}`).join(", ") || "(none)");
 
   console.log("\n5. No console errors");
   check("the page produced none", errors.length === 0, errors.slice(0, 3).join(" · "));
@@ -182,6 +200,8 @@ try {
   await db().query("DELETE FROM expenses WHERE dedupe_key LIKE 'zz-rm-%'")
     .catch(() => undefined);
   await db().query("DELETE FROM receipt_mail_settings WHERE user_email = $1", [APP])
+    .catch(() => undefined);
+  await db().query("DELETE FROM receipt_writebacks WHERE dedupe_key LIKE 'zz-rm-%'")
     .catch(() => undefined);
   server.kill("SIGTERM");
   console.log(failures === 0 ? "\nPASS" : `\n${failures} FAILED`);

@@ -3,7 +3,13 @@ import { readSettings } from "../import/settings.js";
 import { credentialForUser } from "./credentials.js";
 import { credentialForLaneOf, laneTag } from "./connections.js";
 import { db as database } from "../db.js";
-import { correctCategory, runDecisions, type BatchItem, type Target } from "./decide.js";
+import {
+  attachAndAnnotate, correctCategory, runDecisions, type BatchItem, type Target,
+} from "./decide.js";
+import {
+  queuedWrites, receiptBytes, settleWrite, type Write,
+} from "./receipt-writeback.js";
+import { mailSettings } from "./receipt-mail.js";
 import { applyCorrection, pendingCorrections, settleCorrection } from "./corrections.js";
 import { db } from "../db.js";
 import type { ChallengeHook } from "./auto-export.js";
@@ -98,6 +104,12 @@ async function tick(): Promise<void> {
     // being closed. First because a category change is usually the reason
     // the expense has not been approved yet.
     await runCorrections();
+
+    // And the receipts somebody has chosen to send. Same browser,
+    // same sign-in, same reason for being here rather than in the
+    // request that asked for them: a write takes a minute and the
+    // page that started it may be long closed.
+    await runWritebacks();
 
     let waiting = await pendingDecisions();
     if (waiting.length === 0) return;
@@ -430,6 +442,123 @@ async function targetFor(dedupeKey: string): Promise<Target | null> {
 
 export const anybodyToAsk = (batch: readonly BatchItem[]): boolean =>
   batch.some((b) => b.automatic !== true);
+
+/**
+ * Send the receipts and descriptions somebody has chosen.
+ *
+ * One at a time, one browser session each, and each one signed in
+ * to THE ACCOUNT THE EXPENSE IS IN. There is no fallback to the
+ * primary connection: a write to the wrong tenant is not a failed
+ * attempt, it is an edit to a record that is not this expense.
+ *
+ * Never throws. A write that cannot run is recorded with its
+ * reason, because the whole point of writing the proposal down
+ * was that somebody can read afterwards what happened to it.
+ *
+ * Nothing here submits, approves or denies.
+ */
+async function runWritebacks(): Promise<void> {
+  let waiting: Write[];
+  try {
+    waiting = await queuedWrites();
+  } catch (err) {
+    console.error("write-back: could not read the queue:", err);
+    return;
+  }
+  if (waiting.length === 0) return;
+
+  const settings = await readSettings();
+
+  /*
+   * One expense at a time, with its receipt and its description
+   * together. They are stored apart so each can be reported on
+   * its own, and they are APPLIED together because they are one
+   * edit to one form — two sign-ins and two saves for one expense
+   * would double the work and double the chances of a half-done
+   * change.
+   */
+  const byExpense = new Map<string, Write[]>();
+  for (const w of waiting) {
+    byExpense.set(w.dedupeKey, [...(byExpense.get(w.dedupeKey) ?? []), w]);
+  }
+
+  for (const [dedupeKey, writes] of byExpense) {
+    const receipt = writes.find((w) => w.kind === "receipt");
+    const note = writes.find((w) => w.kind === "note");
+    const fail = async (why: string) => {
+      for (const w of writes) await settleWrite(w.dedupeKey, w.kind, { state: "failed", error: why });
+    };
+
+    try {
+      const target = await targetFor(dedupeKey);
+      if (!target) {
+        await fail("This expense is no longer in the queue here, so there is nothing to "
+          + "attach it to.");
+        continue;
+      }
+
+      const who = writes[0]!.proposedBy;
+      const lane = writes[0]!.lane;
+      const got = await credentialForLaneOf(who, lane);
+      if (!got.ok) {
+        await fail(`${got.problem} A receipt is attached by signing in to the account the `
+          + "expense is in — no other login will be used in its place, because that would "
+          + "write to a different tenant.");
+        continue;
+      }
+
+      let file: { name: string; contentType: string; bytes: Buffer } | undefined;
+      if (receipt) {
+        const box = await mailSettings(who);
+        if (!box.mailbox) {
+          await fail("No mailbox is configured, so the receipt cannot be fetched.");
+          continue;
+        }
+        try {
+          file = await receiptBytes({
+            mailbox: box.mailbox,
+            messageId: receipt.messageId,
+            attachmentId: receipt.attachmentId,
+            subject: receipt.proposed.replace(/\.pdf$/i, ""),
+          });
+        } catch (err) {
+          await fail(err instanceof Error ? err.message : String(err));
+          continue;
+        }
+      }
+
+      console.log(`write-back: ${dedupeKey} as ${got.email} (${lane})`);
+      const run = await attachAndAnnotate(
+        target,
+        {
+          ...(file ? { receipt: file } : {}),
+          ...(note ? { note: note.proposed, noteWas: note.was } : {}),
+        },
+        settings.selectors,
+        settings.emburseUrl,
+        { userId: "", email: got.email, password: got.password },
+      );
+
+      const why = run.steps.filter((s) => !s.ok).map((s) => s.detail).join(" ");
+      for (const w of writes) {
+        const state = run.conflicted
+          ? "stale" as const
+          : !run.ok
+            ? "failed" as const
+            : w.kind === "receipt" && run.alreadyAttached
+              ? "already" as const
+              : "applied" as const;
+        await settleWrite(w.dedupeKey, w.kind, {
+          state,
+          error: state === "applied" || state === "already" ? "" : why,
+          steps: run.steps,
+        });
+      }
+    } catch (err) {
+      await fail(err instanceof Error ? err.message : String(err)).catch(() => undefined);
+    }
+  }
+}
 
 export function startDecisionWorker(): void {
   if (started) return;

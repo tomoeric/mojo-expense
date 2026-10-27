@@ -67,7 +67,8 @@ export type DecisionSelectorKey =
   | "resultRow" | "approveButton" | "rowMenu"
   | "denyButton" | "denyReason" | "denyConfirm" | "decisionApplied"
   | "userFilter" | "userFilterInput" | "userFilterOption" | "nextPage"
-  | "editMenuItem" | "editCategory" | "editCategoryOption" | "editSave";
+  | "editMenuItem" | "editCategory" | "editCategoryOption" | "editSave"
+  | "editNote" | "editReceipt" | "editReceiptPresent";
 
 export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
   // Both grid shapes, because Emburse uses the second one.
@@ -187,9 +188,29 @@ export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
     '[data-testid*="categ" i]',
   editCategoryOption: '[role="option"], li[role="option"], li',
   editSave: 'button:has-text("Save"), button:has-text("Update"), button[type="submit"]',
+  /*
+   * The description box, and the file input behind "add a
+   * receipt".
+   *
+   * Guesses, and said to be guesses: nobody has yet looked at
+   * this tenant's edit form. The run refuses rather than typing
+   * into the wrong box when one of these matches nothing, and
+   * prints every control that IS on the form so the selector can
+   * be corrected from the answer rather than from another guess.
+   * "Look at the edit form" on the Import page does the same
+   * without changing anything.
+   */
+  editNote: 'textarea, input[name*="description" i], input[name*="memo" i], '
+    + '[aria-label*="description" i], [aria-label*="memo" i], [placeholder*="description" i]',
+  editReceipt: 'input[type="file"]',
+  editReceiptPresent: '[data-testid*="receipt" i], img[alt*="receipt" i], '
+    + 'a[href*="receipt" i], [class*="receipt" i]',
 };
 
 export const DECISION_SELECTOR_HELP: Record<DecisionSelectorKey, string> = {
+  editNote: "The description or memo box on the edit form.",
+  editReceipt: "The file input the edit form uploads a receipt through.",
+  editReceiptPresent: "Anything shown on the form when a receipt is already attached.",
   resultRow: "One row of the results table.",
   approveButton: "The APPROVE button on a row.",
   rowMenu: "The ⋮ menu at the end of a row, which holds Deny.",
@@ -2910,4 +2931,231 @@ async function whatIsOnTheForm(page: Page, tried: string, what: string): Promise
       : `Nothing form-shaped is visible at all, so the edit form may not have opened — check ` +
         `the editMenuItem selector.`)
   );
+}
+
+/**
+ * Attach a receipt to one expense, and set its description.
+ *
+ * The same road as a category correction — find the row, open its
+ * ⋮ menu, click Edit, change the form, save, check it took — and
+ * the same rules, for the same reasons. What is different is what
+ * it carries and what it refuses.
+ *
+ * FOUR THINGS IT WILL NOT DO:
+ *
+ *   SUBMIT, APPROVE OR DENY. Attaching a receipt and writing a
+ *   description are edits to a record. The owner's instruction is
+ *   that neither ever submits, and there is no code path here
+ *   that touches a submit control.
+ *
+ *   ATTACH A SECOND COPY. A retry after a timeout is the ordinary
+ *   case, not the rare one: the save may well have landed before
+ *   the step gave up. The form is checked for a receipt already
+ *   on it BEFORE uploading, and an expense that has one is
+ *   reported as already done rather than given another.
+ *
+ *   TYPE INTO A BOX IT CANNOT IDENTIFY. The note and file
+ *   selectors are guesses until somebody has looked at this
+ *   tenant's form. When one matches nothing the step refuses and
+ *   prints every control that IS there, which is the one thing
+ *   somebody can act on — a guess that happens to match the
+ *   wrong box writes a receipt's total into a cost-centre field.
+ *
+ *   CLAIM SUCCESS IT HAS NOT SEEN. The save is followed by a
+ *   reload and a re-read. "Saved, but the row does not show it"
+ *   is a real answer and it is the one given.
+ */
+export async function attachAndAnnotate(
+  target: Target,
+  want: {
+    /** The receipt to upload, when one was chosen. */
+    receipt?: { name: string; contentType: string; bytes: Buffer };
+    /** The description to set, when one was proposed. */
+    note?: string;
+    /**
+     * What the description read when the change was proposed.
+     *
+     * The conflict check. Emburse is the record, and somebody may
+     * have edited it since — overwriting that silently is the one
+     * failure mode a write-back has that a read never does.
+     * Undefined skips the check, which is right for a first write
+     * into an empty box.
+     */
+    noteWas?: string;
+  },
+  selectors: Record<string, string>,
+  emburseUrl: string,
+  login: Login,
+  opts: { onChallenge?: ChallengeHook } = {},
+): Promise<DecisionRun & {
+  /** The receipt was already on the expense, so none was uploaded. */
+  alreadyAttached: boolean;
+  /** Emburse's description had changed since the proposal. Nothing written. */
+  conflicted: boolean;
+  /** What the description read before this ran. */
+  noteBefore: string | null;
+}> {
+  const steps: StepResult[] = [];
+  const step = makeStepper(steps);
+  const sel = { ...DECISION_SELECTORS, ...selectors } as Record<string, string>;
+  let alreadyAttached = false;
+  let conflicted = false;
+  let noteBefore: string | null = null;
+
+  const run = await withBrowser("attach a receipt", async () => {
+    let close: (() => Promise<void>) | null = null;
+    let page: Page | null = null;
+    try {
+      const opened = await openBrowser(login.email);
+      close = opened.close;
+      page = await opened.context.newPage();
+      page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
+
+      if (!(await signInOnce(page, sel, emburseUrl, login, step, opts.onChallenge))) {
+        return { ok: false, steps, matchedRow: null, screenshot: null };
+      }
+      await keepTrust(opened.context, login.email);
+
+      const ms = env.emburseLogin.stepTimeoutMs;
+      let row: Locator | null = null;
+
+      if (!(await step("find the expense", async () => {
+        const found = await findRow(page!, sel, target, emburseUrl, login);
+        row = found.row;
+        return found.detail;
+      }))) return { ok: false, steps, matchedRow: null, screenshot: null };
+
+      if (!(await step("open the edit form", async () => {
+        await (await rowMenuFor(page!, row!, sel, ms)).click();
+        await page!.waitForTimeout(400);
+        await clickFirstVisible(page!, sel.editMenuItem!, "Edit in the row menu", ms);
+        await page!.waitForTimeout(1200);
+        return "the edit form is open";
+      }))) return { ok: false, steps, matchedRow: null, screenshot: null };
+
+      /*
+       * WHAT IS ALREADY THERE, before anything is changed.
+       *
+       * Both halves of not making a mess on a retry: a receipt
+       * already on the expense means this ran before and landed,
+       * and a description that no longer reads what it read when
+       * the change was proposed means somebody edited it since.
+       */
+      if (!(await step("read what is there now", async () => {
+        const present = page!.locator(sel.editReceiptPresent!);
+        const n = await present.count().catch(() => 0);
+        for (let i = 0; i < n; i++) {
+          if (await present.nth(i).isVisible().catch(() => false)) {
+            alreadyAttached = true;
+            break;
+          }
+        }
+        const box = await firstVisible(page!, sel.editNote!, 2000);
+        noteBefore = box ? (await box.inputValue().catch(() => "")) : null;
+        if (want.noteWas !== undefined && noteBefore !== null
+          && noteBefore.trim() !== want.noteWas.trim()) {
+          conflicted = true;
+        }
+        return `${alreadyAttached ? "a receipt is already attached" : "no receipt on it"}`
+          + `; the description reads ${noteBefore === null ? "(no box found)"
+            : noteBefore ? `“${noteBefore.slice(0, 60)}”` : "(empty)"}`;
+      }))) return { ok: false, steps, matchedRow: null, screenshot: null };
+
+      if (conflicted) {
+        // Out the way we came in. Emburse is the record; a value
+        // that changed since the proposal is somebody's edit, and
+        // overwriting it without asking is the one thing a
+        // write-back can do that a read never can.
+        await page.keyboard.press("Escape").catch(() => undefined);
+        steps.push({
+          name: "stop: it changed in Emburse", ok: false, ms: 0,
+          detail: `the description now reads “${noteBefore ?? ""}” and the change was `
+            + `proposed against “${want.noteWas ?? ""}”. Nothing was written — somebody `
+            + "edited it in Emburse since. Look at it again and propose the change afresh.",
+        });
+        return {
+          ok: false, steps, matchedRow: null,
+          screenshot: (await page.screenshot().catch(() => null))?.toString("base64") ?? null,
+        };
+      }
+
+      if (want.receipt && !alreadyAttached) {
+        if (!(await step("attach the receipt", async () => {
+          const input = page!.locator(sel.editReceipt!).first();
+          const there = await input.count().catch(() => 0);
+          if (there === 0) {
+            throw await asError(whatIsOnTheForm(page!, sel.editReceipt!, "a file input"));
+          }
+          await input.setInputFiles({
+            name: want.receipt!.name,
+            mimeType: want.receipt!.contentType,
+            buffer: want.receipt!.bytes,
+          });
+          await page!.waitForTimeout(1500);
+          return `uploaded ${want.receipt!.name} (${want.receipt!.bytes.length} bytes)`;
+        }))) return { ok: false, steps, matchedRow: null, screenshot: null };
+      } else if (want.receipt) {
+        steps.push({
+          name: "attach the receipt", ok: true, ms: 0,
+          detail: "skipped — this expense already has a receipt on it. A second copy is "
+            + "what a retry after a timeout would otherwise leave behind.",
+        });
+      }
+
+      if (want.note !== undefined) {
+        if (!(await step("set the description", async () => {
+          const box = await firstVisible(page!, sel.editNote!, ms);
+          if (!box) throw await asError(whatIsOnTheForm(page!, sel.editNote!, "Description"));
+          await box.fill(want.note!);
+          const got = (await box.inputValue().catch(() => "")).trim();
+          if (got !== want.note!.trim()) {
+            throw new Error(
+              `the description did not go into the box: it was typed as “${want.note}” and `
+              + `the box now reads “${got || "(empty)"}”. Nothing was saved. Check the `
+              + "editNote selector against this tenant's edit form.");
+          }
+          return `the description now reads “${want.note!.slice(0, 60)}”`;
+        }))) return { ok: false, steps, matchedRow: null, screenshot: null };
+      }
+
+      if (!(await step("save it", async () => {
+        const how = await pressSave(page!, sel.editSave!, ms);
+        await page!.waitForTimeout(1800);
+        return how;
+      }))) return { ok: false, steps, matchedRow: null, screenshot: null };
+
+      // Said rather than assumed. A save that silently did nothing
+      // looks exactly like one that worked, and this is the
+      // finance record.
+      await step("check it took", async () => {
+        await page!.reload({ waitUntil: "domcontentloaded" }).catch(() => undefined);
+        if (!(await gridLoaded(page!, sel as never))) {
+          return "saved, but the grid did not come back to check it — look in Emburse";
+        }
+        const again = await findRow(page!, sel, target, emburseUrl, login).catch(() => null);
+        if (!again) return "saved; the row is no longer in this view to check against";
+        if (want.note && again.text.toLowerCase().includes(want.note.toLowerCase().slice(0, 20))) {
+          return "the row now shows the new description";
+        }
+        return "saved; the row does not show the change in this view, which it may not — "
+          + "check it in Emburse.";
+      });
+
+      return {
+        ok: true, steps, matchedRow: null,
+        screenshot: (await page.screenshot().catch(() => null))?.toString("base64") ?? null,
+      };
+    } catch (err) {
+      steps.push({ name: "attach a receipt", ok: false, ms: 0,
+        detail: err instanceof Error ? err.message : String(err) });
+      return {
+        ok: false, steps, matchedRow: null,
+        screenshot: page ? (await page.screenshot().catch(() => null))?.toString("base64") ?? null : null,
+      };
+    } finally {
+      if (close) await close().catch(() => undefined);
+    }
+  });
+
+  return { ...run, alreadyAttached, conflicted, noteBefore };
 }
