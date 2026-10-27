@@ -19,6 +19,7 @@ import {
   type RuleBody, type Subject,
 } from "../server/rules/engine.js";
 import type { Hit } from "../server/rules/store.js";
+import { ensureTaxonomy } from "../server/import/taxonomy.js";
 
 let failures = 0;
 const check = (label: string, ok: boolean, detail = "") => {
@@ -541,6 +542,9 @@ const store = await import("../server/rules/store.js");
 const { runRules, MAX_DECISIONS_PER_RUN } = await import("../server/rules/run.js");
 
 await ensureSchema();
+// The rule engine reads the permanent name lists directly, so on a
+// cold database `expense_taxonomy` does not exist yet.
+await ensureTaxonomy();
 await store.ensureRules();
 
 const TAG = `zz-rule-${Date.now()}`;

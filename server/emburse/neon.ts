@@ -70,6 +70,21 @@ export class NeonProvider implements EmburseProvider {
     private readonly reviewer: string = "",
     /** Who owns the blank-reviewer rows, if anybody does. */
     private readonly ownsBlanks = false,
+    /**
+     * WHICH QUEUE: the manager one, or one personal Emburse account.
+     *
+     * One person can now submit in two tenants, and their MOJO and
+     * Mammoth expenses are as separate as two people's. Defaults to
+     * the manager queue — the empty lane, which is what every row
+     * imported so far is — so a deployment with one Emburse account
+     * behaves exactly as it always has.
+     *
+     * Null asks for everything, which is deliberately not the
+     * default: a queue that silently mixes two companies' expenses
+     * is the failure this column exists to prevent, and somebody
+     * has to ask for it.
+     */
+    private readonly lane: string | null = "",
   ) {}
 
   async fetchReports(window: FetchWindow): Promise<ProviderResult> {
@@ -146,8 +161,10 @@ export class NeonProvider implements EmburseProvider {
          FROM expenses e
         WHERE e.expense_date BETWEEN $1::date AND $2::date
           AND ($3 = '' OR e.reviewer = $3 OR (e.reviewer = '' AND $4))
+          AND ($5::text IS NULL OR e.lane = $5)
         ORDER BY e.expense_date DESC, e.employee, e.merchant`,
-      [window.startDate, window.endDate, this.reviewer.trim().toLowerCase(), this.ownsBlanks],
+      [window.startDate, window.endDate, this.reviewer.trim().toLowerCase(), this.ownsBlanks,
+       this.lane],
     );
 
     // One group per employee per day.

@@ -39,12 +39,28 @@ export function dedupeKey(
   e: Pick<ParsedExpense,
     "employee" | "date" | "merchant" | "amountCents" | "category" | "location" | "department">,
   occurrence = 0,
+  /**
+   * WHICH EMBURSE ACCOUNT this row came from.
+   *
+   * One person can submit in two tenants, and the same purchase
+   * made in each is two expenses that must both survive — the
+   * seven fields above cannot tell them apart, and collapsing
+   * them loses one silently, exactly as the duplicate pair did
+   * before `occurrence` existed.
+   *
+   * Empty for the manager queue, which hashes exactly as before,
+   * so no row already in the table is re-identified. That is not
+   * a nicety: a changed key is a new expense and a lost decision
+   * history, for every row at once.
+   */
+  lane = "",
 ): string {
   const parts = [
     e.employee, e.date, e.merchant, String(e.amountCents),
     e.category, e.location, e.department,
   ].map((p) => (p ?? "").trim().toLowerCase().replace(/\s+/g, " "));
   if (occurrence > 0) parts.push(`#${occurrence}`);
+  if (lane) parts.push(`@${lane.trim().toLowerCase()}`);
   return crypto.createHash("sha256").update(parts.join("\u0000")).digest("hex").slice(0, 32);
 }
 

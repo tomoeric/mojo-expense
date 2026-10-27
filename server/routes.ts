@@ -12,6 +12,7 @@ import { isAuthConfigured, requireAdmin, requireAuth } from "./auth/index.js";
 import type { ExpenseReport, ProviderResult } from "./emburse/types.js";
 import { fetchReceipt, ReceiptError } from "./emburse/receipts.js";
 import { scopeFor } from "./emburse/credentials.js";
+import { MANAGER_LANE, laneTag, linkedLanesOf } from "./emburse/connections.js";
 import { db, isDbConfigured } from "./db.js";
 import { checkAi } from "./ai.js";
 import { isKind, listTaxonomy, taxonomyCounts } from "./import/taxonomy.js";
@@ -48,6 +49,15 @@ async function load(
   window: { startDate: string; endDate: string },
   force: boolean,
   reviewer: string,
+  /**
+   * WHICH QUEUE: the manager one, or one personal Emburse account.
+   *
+   * Part of the cache key for the same reason the reviewer is —
+   * two queues asking for the same date window are asking two
+   * different questions, and keying on the window alone would
+   * serve whichever was asked for first to both.
+   */
+  lane: string | null = "",
 ) {
   if (force) cache.clear();
   // Rows no import has claimed belong to whoever the shared import runs
@@ -57,14 +67,43 @@ async function load(
   // behaviour wearing a new name. One definition, in `scopeFor`, shared with
   // every other read that has to decide whose data something is.
   const { reviewer: who, ownsBlanks } = await scopeFor(reviewer);
-  return cache.get(`${who}:${ownsBlanks}:${window.startDate}:${window.endDate}`, async () => {
+  return cache.get(
+    `${who}:${ownsBlanks}:${lane ?? "*"}:${window.startDate}:${window.endDate}`, async () => {
     // The signed-in person's own queue. While an admin is viewing as
     // somebody else, `req.user` IS that person, so this is also what makes
     // "view as Brian" show Brian's expenses rather than a copy of Eric's.
-    const { provider, demo } = resolveProvider(who, ownsBlanks);
+    const { provider, demo } = resolveProvider(who, ownsBlanks, lane);
     const result = await provider.fetchReports(window);
     return { ...result, demo };
   });
+}
+
+/**
+ * The queues this person can switch between.
+ *
+ * The manager queue always, and one per personal Emburse account
+ * they have linked. Sent with every read so the page can offer the
+ * switch and say which account each one is, rather than leaving
+ * somebody to work out whose expenses they are looking at — which
+ * is the complaint that produced the reviewer column in the first
+ * place, one level along.
+ */
+async function queuesFor(
+  userEmail: string,
+): Promise<{ key: string; label: string; loginEmail: string; connected: boolean }[]> {
+  if (!userEmail) return [];
+  const lanes = await linkedLanesOf(userEmail).catch(() => []);
+  const out = [{
+    key: MANAGER_LANE, label: "Manager queue", loginEmail: "", connected: true,
+  }];
+  for (const l of lanes) {
+    if (l.kind !== "personal") continue;
+    out.push({
+      key: l.key, label: l.label, loginEmail: l.loginEmail,
+      connected: l.connection !== null,
+    });
+  }
+  return out.length > 1 ? out : [];
 }
 
 export const api = Router();
@@ -422,10 +461,27 @@ api.get("/reports", requireAuth, async (req, res) => {
     return;
   }
   const window = readWindow(req.query as Record<string, unknown>);
+  /*
+   * WHICH QUEUE. The manager one unless asked otherwise, which is
+   * what every row imported so far is, so a deployment with one
+   * Emburse account sees exactly what it always has.
+   *
+   * `all` is available and is deliberately not the default: a
+   * queue that silently mixes two companies' expenses is the
+   * thing the lane column exists to prevent, and somebody has to
+   * ask for it.
+   */
+  const asked = String((req.query as { lane?: string }).lane ?? "");
+  // The manager queue is stored as the EMPTY lane, which is what
+  // every row imported so far has. `laneTag` is the one place that
+  // conversion happens.
+  const lane = asked === "all" ? null : laneTag(asked);
   try {
-    const data = await load(window, req.query.refresh === "1", req.user?.email ?? "");
+    const data = await load(window, req.query.refresh === "1", req.user?.email ?? "", lane);
     res.json({
       window,
+      lane: asked === "all" ? "all" : lane,
+      queues: await queuesFor(req.user?.email ?? ""),
       demo: data.demo,
       fetchedAt: data.fetchedAt,
       warnings: data.warnings,
@@ -445,7 +501,9 @@ api.get("/reports/:id", requireAuth, async (req, res) => {
   }
   const window = readWindow(req.query as Record<string, unknown>);
   try {
-    const data = await load(window, false, req.user?.email ?? "");
+    const askedOne = String((req.query as { lane?: string }).lane ?? "");
+    const data = await load(window, false, req.user?.email ?? "",
+      askedOne === "all" ? null : laneTag(askedOne));
     const report = data.reports.find((r) => r.id === req.params.id);
     if (!report) {
       res.status(404).json({ error: "Report not found in the current window" });

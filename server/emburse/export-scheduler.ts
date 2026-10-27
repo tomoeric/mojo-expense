@@ -5,7 +5,7 @@ import { envLogin, runAutoExport, type ExportRun, type Selectors } from "./auto-
 import { waitForCode } from "./challenge.js";
 import { credentialForExport, credentialForUser, noteResult } from "./credentials.js";
 import {
-  MANAGER_LANE, credentialForLaneOf, linkedLanesOf, type LinkedLane,
+  MANAGER_LANE, credentialForLaneOf, laneTag, linkedLanesOf, type LinkedLane,
 } from "./connections.js";
 
 /**
@@ -485,7 +485,15 @@ export async function attemptExport(
   const settings = await readSettings();
   const day = localDate(settings.schedule);
 
-  const lane = (opts.lane ?? "").trim();
+  /*
+   * Stored as a TAG, which is empty for the manager queue.
+   *
+   * Every run and every expense already in the database has an
+   * empty lane, and the lane is part of the dedupe key — so
+   * writing "manager" here would re-identify every expense in the
+   * manager queue at once and lose its whole decision history.
+   */
+  const lane = laneTag(opts.lane);
   const { rows } = await db().query<{ id: string; attempt: number }>(
     `INSERT INTO export_runs (local_date, attempt, trigger, reviewer, source, lane)
      VALUES ($1, (SELECT count(*) + 1 FROM export_runs
@@ -547,7 +555,7 @@ export async function attemptExport(
      * The manager tab is untouched: it is `credentialForUser`,
      * exactly as before, pinned to the primary connection.
      */
-    const forLane = opts.reviewer && lane && lane !== MANAGER_LANE
+    const forLane = opts.reviewer && lane
       ? await credentialForLaneOf(opts.reviewer, lane)
       : null;
     if (forLane && !forLane.ok) throw new Error(forLane.problem);
@@ -760,6 +768,12 @@ export async function attemptExport(
       const imported = await ingestExport(
         run.pdf, `emburse-${day}.pdf`, by,
         { sectionsVerified, reviewer, source: opts.source ?? "",
+          // WHICH EMBURSE ACCOUNT these rows are. Part of their
+          // identity, not a label: the same purchase submitted in
+          // both tenants is two expenses, and without this they
+          // would collapse into one and each import would purge
+          // the other's queue.
+          lane, sourceLogin: login.email,
           // This run downloaded it moments ago, so the staleness guard —
           // which exists to catch somebody choosing yesterday's PDF out of
           // a folder — has nothing to protect against here, and refuses
@@ -1284,7 +1298,7 @@ export function startExportScheduler(): void {
            */
           const { due, attempt } = await nextDue(
             who.schedule, new Date(), who.userEmail, list.key,
-            who.lane === MANAGER_LANE ? "" : who.lane);
+            laneTag(who.lane));
           if (!due) continue;
 
           console.log(

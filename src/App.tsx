@@ -193,7 +193,13 @@ export function App() {
   // Only fetch reports once we know the viewer is allowed to see them —
   // otherwise every anonymous page load fires a request that 401s.
   const signedIn = Boolean(auth.data?.user) || auth.data?.authConfigured === false;
-  const reports = useReports(WINDOW_DAYS, signedIn);
+  /*
+   * WHICH QUEUE. The manager one until somebody switches, which is
+   * what every row imported so far is, so a deployment with one
+   * Emburse account behaves exactly as it always has.
+   */
+  const [queue, setQueue] = useState("");
+  const reports = useReports(WINDOW_DAYS, signedIn, queue);
   /**
    * Every expense on screen, in the order the lists show them.
    *
@@ -430,6 +436,46 @@ export function App() {
           />
 
           {data?.demo && <NotConnected config={config.data} />}
+
+          {/*
+            * WHICH EMBURSE ACCOUNT this queue is.
+            *
+            * Shown only when there is more than one, so a
+            * deployment with a single Emburse account sees nothing
+            * new. Each button names the account it reads, because
+            * the complaint that produced the reviewer column was
+            * somebody looking at a queue with no way to tell whose
+            * it was — and two companies is the same question
+            * again.
+            */}
+          {!isStandalone(route) && (data?.queues?.length ?? 0) > 1 && (
+            <div className="flex flex-wrap items-center gap-2">
+              {data!.queues!.map((q) => (
+                <button
+                  key={q.key}
+                  type="button"
+                  disabled={!q.connected}
+                  title={q.loginEmail
+                    ? (q.connected
+                      ? `Expenses imported from ${q.loginEmail}`
+                      : `No Emburse account is linked to ${q.label} yet`)
+                    : "Expenses waiting on you to approve"}
+                  onClick={() => setQueue(q.key)}
+                  className={`rounded-full border px-3 py-1 text-xs font-semibold
+                              disabled:opacity-40 ${
+                    (queue || "manager") === q.key
+                      ? "border-foreground bg-foreground text-background"
+                      : "border-border text-muted-foreground hover:text-foreground"}`}
+                >
+                  {q.label}
+                </button>
+              ))}
+              <span className="text-xs text-muted-foreground">
+                {data!.queues!.find((q) => q.key === (queue || "manager"))?.loginEmail
+                  || "The expenses waiting on you to approve."}
+              </span>
+            </div>
+          )}
 
           {!isStandalone(route) && <LiveStrip
             label={

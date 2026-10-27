@@ -64,6 +64,8 @@ ALTER TABLE expense_imports ADD COLUMN IF NOT EXISTS export_sections text[];
 -- in the whole table is not the newest expense in Brian's queue.
 ALTER TABLE expense_imports ADD COLUMN IF NOT EXISTS reviewer text NOT NULL DEFAULT '';
 ALTER TABLE expense_imports ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT '';
+-- And which Emburse account, for the same reason one column along.
+ALTER TABLE expense_imports ADD COLUMN IF NOT EXISTS lane text NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS expense_imports_at_idx ON expense_imports (imported_at DESC);
 CREATE INDEX IF NOT EXISTS expense_imports_who_idx
@@ -114,6 +116,24 @@ CREATE INDEX IF NOT EXISTS expenses_reviewer_idx ON expenses (reviewer) WHERE in
 -- correct without touching it.
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS expenses_source_idx ON expenses (source) WHERE in_inbox;
+-- WHICH EMBURSE ACCOUNT this came from.
+--
+-- One person can have more than one. Their MOJO Needs Review and
+-- their Mammoth Needs Review are two different lists in two
+-- different tenants, and the same argument as the reviewer column
+-- applies with the same force a third time: an import of one must
+-- not purge the other, and two expenses that are identical in
+-- merchant, date and amount are two expenses when they are in two
+-- accounts.
+--
+-- Blank is the manager queue — the only thing any existing row can
+-- be — so every row already in the table is correct untouched.
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS lane text NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS expenses_lane_idx ON expenses (reviewer, lane) WHERE in_inbox;
+-- The Emburse address the import signed in as, recorded for the
+-- trace rather than used as an identity: a login can be changed and
+-- the expenses it brought in are still that account's.
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS source_login text NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS expenses_date_idx     ON expenses (expense_date DESC);
 CREATE INDEX IF NOT EXISTS expenses_inbox_idx    ON expenses (in_inbox);
 CREATE INDEX IF NOT EXISTS expenses_employee_idx ON expenses (employee);

@@ -97,6 +97,22 @@ CREATE TABLE IF NOT EXISTS emburse_lanes (
 export const MANAGER_LANE = "manager";
 
 /**
+ * The lane as it is STORED on a run and on an expense.
+ *
+ * The manager queue stores the EMPTY string, not "manager", and
+ * that is load-bearing rather than tidy: every expense and every
+ * run already in the database has an empty lane, the dedupe key
+ * includes the lane, and a key that changes is a new expense with
+ * no decision history — for every row at once.
+ *
+ * So the conversion happens in exactly one place, here, and
+ * everything downstream of `attemptExport` deals in tags rather
+ * than in lane keys.
+ */
+export const laneTag = (lane: string | null | undefined): string =>
+  !lane || lane === MANAGER_LANE ? "" : lane.trim();
+
+/**
  * The mapping the owner confirmed, seeded once.
  *
  * Seeded rather than hardcoded in a constant that every read

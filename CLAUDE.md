@@ -101,7 +101,8 @@ were added; "it compiles" is not "the button works".
 `connections`, `decisions`, `import-as`, `unclaimed`, `run-as`,
 `reviewer-schedules`, `manager-queue`, `view-as-brian`, `two-reviewers`,
 `corrections`, `decision-trace`, `auto-approve`, `rules`, `bulk-approve`,
-`lanes`. For a change to "Your Emburse login" or Export settings, also
+`lanes`, `two-accounts`. For a change to "Your Emburse login", Export
+settings or the review queue, also
 `test-accounts-ui.ts` and `test-lanes-ui.ts` after a build.
 
 **6. Two things that only an EMPTY database shows.** Run the suites once
@@ -2459,6 +2460,42 @@ schedule and history. Widened in place: `lane text NOT NULL DEFAULT
   reader; the smoke test found it as a strict-mode violation, the same way the
   two Cancel buttons were found.
 - `scripts/test-lanes.ts` and `scripts/test-lanes-ui.ts`.
+
+## Two personal queues, and the account an expense came from
+
+- **`expenses.lane` is which Emburse account the row came from**, and the
+  manager queue's lane is the **empty string** — which every row already in
+  the table has, so nothing is re-identified. `laneTag()` in `connections.ts`
+  is the ONE place `"manager"` becomes `""`; everything downstream of
+  `attemptExport` deals in tags, never lane keys.
+- **The lane is part of the dedupe key**, appended only when non-empty, the
+  same trick `occurrence` uses. The same purchase submitted in both tenants
+  is two expenses and both must survive; collapsing them loses one silently,
+  exactly as the duplicate pair was lost before `occurrence` existed. A
+  changed key is a new expense with no decision history, for every row at
+  once — hence the empty default, and hence the test that asserts
+  `dedupeKey(e) === dedupeKey(e, 0, laneTag(MANAGER_LANE))`.
+- **`purgeFinished` scopes by lane** as well as reviewer and source. "Delete
+  everything this export no longer carries" is a statement about ONE Needs
+  Review list; it was right for one reviewer, then for one list, and now for
+  one account.
+- **The queue reads one lane, the manager one by default.** `?lane=all`
+  exists and is deliberately not the default: a queue that silently mixes two
+  companies' expenses is the thing this column prevents, and somebody has to
+  ask for it. The lane is in both the server cache key and the React Query
+  key, because two queues asking for the same window are asking two
+  different questions.
+- **The switcher appears only when there is more than one queue**, and each
+  button names the Emburse account it reads. The complaint that produced the
+  reviewer column was somebody looking at a queue with no way to tell whose
+  it was; two companies is that question again.
+- **`source_login` records the Emburse address a run signed in as**, for the
+  trace. It is never matched on — a login can change and the expenses it
+  brought in are still that account's.
+- `scripts/test-two-accounts.ts`, and section 6 of `test-lanes-ui.ts`.
+- **When a queue test inserts rows late and they do not appear, it is the
+  cache, not a bug.** The server caches per (person, lane, window). Insert
+  before the first page load, or pass `refresh=1`.
 
 ## Testing your own Emburse connection
 

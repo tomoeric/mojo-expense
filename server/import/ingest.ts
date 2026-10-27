@@ -109,6 +109,22 @@ export async function ingestExport(
      */
     source?: string;
     /**
+     * WHICH EMBURSE ACCOUNT this export came from.
+     *
+     * One person can submit in two tenants, and their two Needs
+     * Review lists are as separate as two people's. Same reasoning
+     * as `reviewer` and `source`, one level further along, and with
+     * one extra consequence: it is part of the dedupe key, because
+     * the same purchase made in both accounts is two expenses that
+     * must both survive.
+     *
+     * Blank is the manager queue, which is what every row already in
+     * the table is, so nothing existing is re-identified.
+     */
+    lane?: string;
+    /** The Emburse address this run signed in as. Recorded, never matched on. */
+    sourceLogin?: string;
+    /**
      * The run that produced this file read the section chips and confirmed
      * they matched the configuration.
      *
@@ -157,6 +173,8 @@ export async function ingestExport(
 
   const reviewer = (opts.reviewer ?? "").trim().toLowerCase();
   const source = (opts.source ?? "").trim().toLowerCase();
+  const lane = (opts.lane ?? "").trim();
+  const sourceLogin = (opts.sourceLogin ?? "").trim().toLowerCase();
   const totalCents = parsed.expenses.reduce((a, e) => a + e.amountCents, 0);
   const reconciled = parsed.statedTotalCents !== null && totalCents === parsed.statedTotalCents;
   if (parsed.statedTotalCents === null) {
@@ -229,11 +247,11 @@ export async function ingestExport(
     const imp = await client.query<{ id: string }>(
       `INSERT INTO expense_imports (filename, file_sha256, imported_by, page_count, parsed_rows,
                                     total_cents, stated_total_cents, reconciled, export_sections,
-                                    reviewer, source)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+                                    reviewer, source, lane)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
       [filename, fileHash, importedBy, parsed.pageCount, parsed.expenses.length,
        totalCents, parsed.statedTotalCents, reconciled, parsed.header?.sections ?? null,
-       reviewer, source]);
+       reviewer, source, lane]);
     const importId = Number(imp.rows[0]!.id);
 
     // Only unambiguous when the export covered exactly one *named* section.
@@ -251,11 +269,11 @@ export async function ingestExport(
     const seen = new Map<string, number>();
     let identical = 0;
     for (const e of parsed.expenses) {
-      const base = dedupeKey(e);
+      const base = dedupeKey(e, 0, lane);
       const n = seen.get(base) ?? 0;
       seen.set(base, n + 1);
       if (n > 0) identical++;
-      keys.set(n === 0 ? base : dedupeKey(e, n), e);
+      keys.set(n === 0 ? base : dedupeKey(e, n, lane), e);
     }
     if (identical > 0) {
       warnings.push(
@@ -291,8 +309,9 @@ export async function ingestExport(
     const inbox = await client.query<{ n: string; live: string }>(
       `SELECT count(*) AS n,
               count(*) FILTER (WHERE dedupe_key = ANY($1::text[])) AS live
-         FROM expenses WHERE in_inbox = true AND reviewer = $2 AND source = $3`,
-      [[...keys.keys()], reviewer, source],
+         FROM expenses WHERE in_inbox = true AND reviewer = $2 AND source = $3
+                          AND lane = $4`,
+      [[...keys.keys()], reviewer, source, lane],
     );
     const held = Number(inbox.rows[0]?.n ?? 0);
     const losing = held - Number(inbox.rows[0]?.live ?? 0);
@@ -437,8 +456,9 @@ export async function ingestExport(
         `INSERT INTO expenses (dedupe_key, employee, expense_date, merchant, amount_cents,
                                category, department, location, note, method, receipt_label,
                                in_inbox, first_import_id, last_import_id, source_page, section,
-                               reviewer, source)
-         VALUES ($1,$2,NULLIF($3,'')::date,$4,$5,$6,$7,$8,$9,$10,$11,true,$12,$12,$13,$14,$15,$16)
+                               reviewer, source, lane, source_login)
+         VALUES ($1,$2,NULLIF($3,'')::date,$4,$5,$6,$7,$8,$9,$10,$11,true,$12,$12,$13,$14,$15,
+                 $16,$17,$18)
          ON CONFLICT (dedupe_key) DO UPDATE SET
            note           = EXCLUDED.note,
            method         = EXCLUDED.method,
@@ -471,10 +491,16 @@ export async function ingestExport(
            -- lets the import report the overlap instead of hiding it.
            reviewer       = CASE WHEN expenses.reviewer = ''
                                  THEN EXCLUDED.reviewer ELSE expenses.reviewer END,
-           source         = EXCLUDED.source`,
+           source         = EXCLUDED.source,
+           -- The account it came from is part of the key, so it can
+           -- never change for an existing row; written on conflict
+           -- only so a row imported before the column existed gains
+           -- it the first time its own account imports again.
+           lane           = EXCLUDED.lane,
+           source_login   = EXCLUDED.source_login`,
         [key, e.employee, e.date, e.merchant, e.amountCents, e.category, e.department,
          e.location, e.note, e.method, e.receiptLabel, importId, e.sourcePage, section,
-         reviewer, source]);
+         reviewer, source, lane, sourceLogin]);
     }
 
     if (changes.length > 0) {
@@ -497,7 +523,7 @@ export async function ingestExport(
     // Now that this export has said which expenses are still in the queue,
     // everything absent from it goes — row, receipt and all. The newest export
     // is the truth about what is under review.
-    const freed = await purgeFinished(client, [...keys.keys()], reviewer, source);
+    const freed = await purgeFinished(client, [...keys.keys()], reviewer, source, lane);
     const purged = freed.expenses;
 
     // Last, because storeReceipts appends to `warnings` too.
@@ -929,6 +955,14 @@ export async function purgeFinished(
    * delete everything the other brought.
    */
   source = "",
+  /**
+   * And which Emburse account. One person's MOJO import must not
+   * purge their own Mammoth queue any more than it may purge
+   * somebody else's — two tenants are two Needs Review lists, and
+   * "everything this export no longer carries" is a statement
+   * about one of them.
+   */
+  lane = "",
 ): Promise<{ expenses: number; images: number; bytes: number }> {
   // The decision record outlives its expense, so a pending one has to be
   // closed out here rather than cascaded away. It could never be applied: an
@@ -940,15 +974,15 @@ export async function purgeFinished(
       WHERE state = 'pending' AND dedupe_key <> ALL($1::text[])
         AND EXISTS (SELECT 1 FROM expenses e
                      WHERE e.dedupe_key = expense_decisions.dedupe_key
-                       AND e.reviewer = $2 AND e.source = $3)`,
-    [live, reviewer, source],
+                       AND e.reviewer = $2 AND e.source = $3 AND e.lane = $4)`,
+    [live, reviewer, source, lane],
   );
 
   // Cascades to expense_receipts, expense_changes and expense_rule_hits.
   const gone = await client.query(
     `DELETE FROM expenses WHERE dedupe_key <> ALL($1::text[])
-       AND reviewer = $2 AND source = $3`,
-    [live, reviewer, source],
+       AND reviewer = $2 AND source = $3 AND lane = $4`,
+    [live, reviewer, source, lane],
   );
 
   // Measured before deleting, so the import can say what it reclaimed.

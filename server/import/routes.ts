@@ -11,8 +11,8 @@ import { DEFAULT_SELECTORS, SELECTOR_HELP, STEP_SELECTORS, envLogin } from "../e
 import { claimUnclaimed, credentialStatus, deleteCredential, hasCredential, listCredentials, saveCredential,
          scopeFor, unclaimedExpenses } from "../emburse/credentials.js";
 import {
-  MANAGER_LANE, addConnection, labelConnection, lanesFor, linkedLanes, listConnections,
-  removeConnection,
+  MANAGER_LANE, addConnection, labelConnection, laneTag, lanesFor, linkedLanes,
+  listConnections, removeConnection,
 } from "../emburse/connections.js";
 import { MANAGER_GRID, attemptExport, gridPathFor, isStopping, nextDue, recentRuns,
          reviewerImports, runScreenshot, setReviewerImport, stopRun }
@@ -636,11 +636,11 @@ importRouter.get("/export-runs", requireAuth, async (req: Request, res: Response
     // read, is the same unreadable mixture two reviewers' runs
     // used to be.
     const askedLane = String((req.query as { lane?: string }).lane ?? "").trim();
-    const recent = await recentRuns(20, mine, askedLane || undefined);
+    const recent = await recentRuns(
+      20, mine, askedLane ? laneTag(askedLane) : undefined);
     res.json({
       configured: (await listCredentials()).length > 0 || envLogin() !== null,
-      due: await nextDue(schedule, new Date(), mine ?? "", "",
-        askedLane === MANAGER_LANE ? "" : askedLane),
+      due: await nextDue(schedule, new Date(), mine ?? "", "", laneTag(askedLane)),
       runs: recent,
       // Who this page is about, so it can say so rather than leaving somebody
       // to work it out from the rows.

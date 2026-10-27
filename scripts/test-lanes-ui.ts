@@ -79,6 +79,18 @@ try {
   page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
   page.on("pageerror", (e) => errors.push(e.message));
 
+  const today = new Date().toISOString().slice(0, 10);
+  const row = (k: string, merchant: string, lane: string) => db().query(
+    `INSERT INTO expenses (dedupe_key, employee, expense_date, merchant, amount_cents,
+                           category, department, location, note, method, in_inbox,
+                           reviewer, source, lane)
+     VALUES ($1,'Eric S',$2::date,$3,4242,'Meals','Ops','Site','','Card',true,$4,'',$5)
+     ON CONFLICT (dedupe_key) DO NOTHING`,
+    [k, today, merchant, APP, lane]);
+  await row("zz-ui-mgr", "MANAGERMERCHANT", "");
+  await row("zz-ui-mojo", "MOJOMERCHANT", "personal-mojo");
+  await row("zz-ui-mam", "MAMMOTHMERCHANT", "personal-mammoth");
+
   console.log("\n1. The three tabs");
   await page.goto(`http://127.0.0.1:${PORT}/#/settings`, { waitUntil: "networkidle" });
   await page.waitForTimeout(2000);
@@ -158,13 +170,56 @@ try {
   check("…nor does the manager tab",
     !(await page.locator("body").innerText()).includes("?only=mojo"));
 
-  console.log("\n6. No console errors");
+  console.log("\n6. The review queue switches between the two accounts");
+  /*
+   * The claim that matters most on this page: each queue shows
+   * only its own account's expenses. Rows are inserted directly
+   * because the point under test is what the QUEUE shows, not
+   * what the importer writes — that has its own test.
+   *
+   * Inserted BEFORE the first page load. The server caches a
+   * queue's answer per (person, lane, window), so a row added
+   * after the manager queue has been read once does not appear
+   * until that entry expires — which is correct behaviour and
+   * makes a test that inserts late read as a product bug.
+   */
+  await page.goto(`http://127.0.0.1:${PORT}/#/queue`, { waitUntil: "networkidle" });
+  await page.reload({ waitUntil: "networkidle" });
+  await page.waitForTimeout(2500);
+  text = await page.locator("body").innerText();
+  check("the switcher offers the manager queue",
+    (await page.getByRole("button", { name: "Manager queue" }).count()) > 0,
+    text.slice(0, 200).replace(/\n/g, " | "));
+  check("…and both personal accounts",
+    (await page.getByRole("button", { name: "Personal Tab - MOJO" }).count()) > 0
+    && (await page.getByRole("button", { name: "Personal Tab - Mammoth" }).count()) > 0);
+  check("the manager queue shows its own expense", text.includes("MANAGERMERCHANT"));
+  check("…AND NOT THE PERSONAL ONES",
+    !text.includes("MOJOMERCHANT") && !text.includes("MAMMOTHMERCHANT"));
+
+  await page.getByRole("button", { name: "Personal Tab - MOJO" }).click();
+  await page.waitForTimeout(2000);
+  text = await page.locator("body").innerText();
+  check("switching shows the MOJO expense", text.includes("MOJOMERCHANT"));
+  check("…AND NOT THE MAMMOTH OR MANAGER ONES",
+    !text.includes("MAMMOTHMERCHANT") && !text.includes("MANAGERMERCHANT"));
+  check("…and names the account it is reading", text.includes(APP));
+
+  await page.getByRole("button", { name: "Personal Tab - Mammoth" }).click();
+  await page.waitForTimeout(2000);
+  text = await page.locator("body").innerText();
+  check("and the Mammoth queue shows only its own",
+    text.includes("MAMMOTHMERCHANT") && !text.includes("MOJOMERCHANT"));
+
+  console.log("\n7. No console errors");
   check("the page produced none", errors.length === 0, errors.slice(0, 3).join(" · "));
 } finally {
   await browser.close();
   await db().query("DELETE FROM emburse_credentials WHERE user_id = $1", [ID])
     .catch(() => undefined);
   await db().query("DELETE FROM reviewer_imports WHERE user_email = $1", [APP])
+    .catch(() => undefined);
+  await db().query("DELETE FROM expenses WHERE dedupe_key LIKE 'zz-ui-%'")
     .catch(() => undefined);
   server.kill("SIGTERM");
   console.log(failures === 0 ? "\nPASS" : `\n${failures} FAILED`);

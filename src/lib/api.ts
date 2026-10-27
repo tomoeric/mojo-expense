@@ -117,8 +117,27 @@ export type Summary = {
   byCategory: { name: string; total: number }[];
 };
 
+/** One queue to switch between: the manager one, or a personal account. */
+export type Queue = {
+  key: string;
+  label: string;
+  /** The Emburse account it reads. Empty on the manager queue. */
+  loginEmail: string;
+  connected: boolean;
+};
+
 export type ReportsResponse = {
   window: { startDate: string; endDate: string };
+  /** Which queue this is. "all" when every account was asked for. */
+  lane?: string;
+  /**
+   * The queues this person can switch between.
+   *
+   * Empty when there is only one, which is every deployment with a
+   * single Emburse account — a switcher offering one choice is
+   * noise, and the page hides it.
+   */
+  queues?: Queue[];
   demo: boolean;
   fetchedAt: string;
   warnings: string[];
@@ -203,10 +222,16 @@ export function useConfig() {
   return useQuery({ queryKey: ["config"], queryFn: () => get<ConfigResponse>("/api/config") });
 }
 
-export function useReports(days: number, enabled = true) {
+export function useReports(days: number, enabled = true, lane = "") {
   return useQuery({
     enabled,
-    queryKey: ["reports", days],
+    /*
+     * The QUEUE is part of the key. Two queues asking for the same
+     * window are asking two different questions, and sharing a
+     * cache entry would serve whichever was fetched first to both
+     * — one company's expenses under the other's name.
+     */
+    queryKey: ["reports", days, lane],
     queryFn: () => {
       const end = new Date();
       const start = new Date(end.getTime() - days * 86_400_000);
@@ -214,6 +239,7 @@ export function useReports(days: number, enabled = true) {
         startDate: start.toISOString().slice(0, 10),
         endDate: end.toISOString().slice(0, 10),
       });
+      if (lane) qs.set("lane", lane);
       return get<ReportsResponse>(`/api/reports?${qs}`);
     },
     /**
