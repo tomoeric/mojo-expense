@@ -107,7 +107,24 @@ try {
   check("…and marked as the one decisions use",
     text.includes("manager & decisions") || text.includes("manager &amp; decisions"));
 
-  console.log("\n2. The tab mapping, before the second account exists");
+  console.log("\n2. Nothing from the expense queue is on this page");
+  /*
+   * The account switcher was rendering here: three buttons named
+   * after the three tabs, one greyed out, directly above the form
+   * that adds an account. It reads as the control for choosing
+   * which tab you are adding to, and it is not — an account links
+   * itself by its Emburse address.
+   */
+  check("the queue switcher is not here",
+    (await page.getByRole("button", { name: "Manager queue" }).count()) === 0);
+  check("…nor the Live strip's expense count",
+    !text.includes("expenses awaiting a decision"),
+    text.slice(0, 200).replace(/\n/g, " | "));
+  check("…and the page's title appears once, not twice",
+    text.split("Your Emburse login").length - 1 === 1,
+    String(text.split("Your Emburse login").length - 1));
+
+  console.log("\n3. The tab mapping, before the second account exists");
   check("the mapping is shown", text.includes("Which account each tab uses"));
   check("Personal Tab - Mammoth is matched to it",
     text.includes("Personal Tab - Mammoth"));
@@ -116,7 +133,7 @@ try {
     text.slice(text.indexOf("Personal Tab - MOJO"), text.indexOf("Personal Tab - MOJO") + 180)
       .replace(/\n/g, " | "));
 
-  console.log("\n3. Adding the second account");
+  console.log("\n4. Adding the second account");
   await page.getByRole("button", { name: "Add another Emburse account" }).click();
   await page.waitForTimeout(300);
   const form = page.locator("div").filter({ hasText: "Another Emburse account" }).last();
@@ -135,7 +152,7 @@ try {
     (await page.locator('button[aria-label^="Remove "]').count()) === 2,
     String(await page.locator('button[aria-label^="Remove "]').count()));
 
-  console.log("\n4. The same Emburse login twice is refused, on the page");
+  console.log("\n5. The same Emburse login twice is refused, on the page");
   // Counted here, because the refusal below is a deliberate 400 and
   // the browser logs every 4xx as a console error. Everything up to
   // this point must be clean.
@@ -150,7 +167,7 @@ try {
   check("it says so rather than storing a second row",
     (await page.locator("body").innerText()).includes("already stored"));
 
-  console.log("\n5. NO PASSWORD REACHED THE BROWSER");
+  console.log("\n6. NO PASSWORD REACHED THE BROWSER");
   await page.waitForTimeout(400);
   const seen = bodies.join("\n");
   check("not the one stored before this test ran", !seen.includes(MAMMOTH_PW));
@@ -158,7 +175,7 @@ try {
   check("…and neither is in the rendered text",
     !(await page.locator("body").innerText()).includes(MOJO_PW));
 
-  console.log("\n6. No console errors");
+  console.log("\n7. No console errors");
   check("nothing before the deliberate refusal", errorsBeforeTheRefusal === 0,
     errors.slice(0, errorsBeforeTheRefusal).join(" · "));
   const after = errors.slice(errorsBeforeTheRefusal);

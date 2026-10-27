@@ -90,17 +90,15 @@ export function MyEmburseLoginPage() {
 
   return (
     <div className="max-w-2xl space-y-5">
-      <div>
-        <h2 className="flex items-center gap-2 text-base font-bold">
-          <KeyRound className="h-4 w-4" />
-          Your Emburse login
-        </h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          The app signs into Emburse with these. One for each Emburse account you have —
-          they are kept apart, and a sign-in, an import or a receipt upload always uses the
-          account it belongs to.
-        </p>
-      </div>
+      {/* No heading: the shell already renders the page's title
+          above this, and the screenshot showed "Your Emburse
+          login" twice, a paragraph apart. */}
+      <p className="text-sm text-muted-foreground">
+        One for each Emburse account you have — they are kept apart, and a sign-in, an
+        import or a receipt upload always uses the account it belongs to. To add another,
+        enter its Emburse address below: that address is what decides which tab it serves,
+        so there is nothing else to choose.
+      </p>
 
       {error && (
         <p className="rounded-lg border border-red-500/30 bg-red-500/10 p-2.5 text-sm">{error}</p>

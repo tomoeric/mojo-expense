@@ -117,6 +117,20 @@ type RailKey = PageKey | (typeof MENU_PAGES)[number]["key"];
 /** Pages that stand alone — no report window, no live strip. */
 const isStandalone = (k: RailKey) =>
   k === "import" || k === "settings" || k === "rules" || k === "configuration"
+  /*
+   * "Your Emburse login" belongs here too, and did not.
+   *
+   * Everything the shell hangs off this flag is about the expense
+   * queue: the Live strip's count, the loading state, and the
+   * account switcher. On a page about CREDENTIALS the switcher is
+   * worse than noise — three buttons named after the three tabs,
+   * one of them greyed out, directly above the form that adds an
+   * account, read exactly like the control for choosing which tab
+   * you are adding it to. They are not: an account links itself by
+   * its Emburse address. The first person to see this page asked
+   * how to use them.
+   */
+  || k === "emburse-login"
   || k === "receipt-mail" || k in LISTS;
 
 /**

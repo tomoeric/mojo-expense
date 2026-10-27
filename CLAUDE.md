@@ -2595,6 +2595,24 @@ Two paths reach Emburse with an edit, and both work ONE account's list:
   "chosen" until then, and the page says attaching is a separate step rather
   than implying it happened.
 
+## What the shell hangs off `isStandalone`
+
+The account switcher, the Live strip's expense count and the reports
+loading/error states are all about the EXPENSE QUEUE, and `isStandalone` in
+`App.tsx` is the one list that keeps them off pages that are not.
+
+- **"Your Emburse login" belongs on that list and did not.** The switcher
+  rendered three buttons named after the three tabs, one greyed out,
+  directly above the form that adds an account — which reads exactly like
+  the control for choosing which tab you are adding to. It is not: an
+  account links itself by its Emburse address and there is nothing to
+  choose. The first person to see the page asked how to use them, which is
+  the whole evidence needed.
+- **A new page under the user menu goes on the list too** unless it is
+  genuinely about the queue. Checked by `test-accounts-ui.ts`, which asserts
+  the switcher and the expense count are absent and that the page's title
+  appears once rather than twice.
+
 ## Testing your own Emburse connection
 
 - **Per account.** `POST /api/emburse-check` takes an `accountKey` and
