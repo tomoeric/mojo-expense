@@ -1,10 +1,14 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  AlertTriangle, Check, ChevronRight, Layers, Loader2, Lock, Plus, RotateCcw, X,
+  AlertTriangle, Check, ChevronRight, Layers, LayoutGrid, Loader2, Lock, Plus, RotateCcw,
+  Sparkles, Trash2, X,
 } from "lucide-react";
 import { SectionTitle } from "@/components/ui";
-import type { RegisteredItem } from "@/components/buckets";
+import { NewFlag, isNew, type BlockPage, type Placed, type RegisteredItem }
+  from "@/components/buckets";
+import { TemplateCanvas } from "@/components/template-canvas";
+import { TemplateNav } from "@/components/template-nav";
 
 /**
  * Shared Template — the catalogue every partner's pages are built from.
@@ -29,22 +33,39 @@ import type { RegisteredItem } from "@/components/buckets";
 
 type Block = {
   id: string;
-  page: string;
+  page: BlockPage;
   name: string;
   items: string[];
   columns: number;
   builtin: boolean;
   archivedAt: string | null;
+  newUntil: string | null;
   createdAt: string;
   createdBy: string;
 };
 
-type PageInfo = {
+/** A field the template defines rather than code registering it. */
+export type CustomField = {
   key: string;
+  page: BlockPage;
+  label: string;
+  input: "text" | "textarea" | "number" | "date" | "select" | "checkbox";
+  options: string[];
+  note: string;
+  archivedAt: string | null;
+  newUntil: string | null;
+};
+
+type PageInfo = {
+  key: BlockPage;
   label: string;
   items: RegisteredItem[];
   essential: string[];
   blocks: Block[];
+  /** The shared layout itself, so it can be arranged on a canvas. */
+  base: Placed[];
+  /** The fields this template defines for the page. */
+  fields: CustomField[];
   /** How many partners have their own arrangement of this page. */
   arranging: number;
 };
@@ -99,6 +120,8 @@ export function DmTemplatePage() {
         <p className="text-sm font-semibold text-red-600">{(q.error as Error).message}</p>
       )}
 
+      <TemplateNav />
+
       {(q.data?.pages ?? []).map((page) => (
         <PageCatalogue
           key={page.key}
@@ -119,6 +142,7 @@ function PageCatalogue({
   onToggle: () => void;
 }) {
   const [editing, setEditing] = useState<Block | "new" | null>(null);
+  const [arranging, setArranging] = useState(false);
   const live = page.blocks.filter((b) => b.archivedAt === null);
   const retired = page.blocks.filter((b) => b.archivedAt !== null);
 
@@ -157,6 +181,27 @@ function PageCatalogue({
               </span>
             </p>
           )}
+
+          {/* The canvas. The list below is still here because it
+              answers a different question — what a bucket HOLDS,
+              read without clicking — and the canvas answers what the
+              page will look like, which a list cannot. */}
+          {arranging ? (
+            <TemplateCanvas page={page} onDone={() => setArranging(false)} />
+          ) : (
+            <button
+              type="button"
+              onClick={() => setArranging(true)}
+              aria-label={`Arrange the shared ${page.label} page`}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border
+                         px-3 py-1.5 text-sm"
+            >
+              <LayoutGrid className="h-3.5 w-3.5" />
+              Arrange the shared page
+            </button>
+          )}
+
+          <PageFields page={page} />
 
           {live.map((b) => (
             <BlockRow
@@ -446,6 +491,295 @@ function BlockEditor({
           {save.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
             : <Check className="h-3.5 w-3.5" />}
           Save to the template
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-md border border-border px-3 py-1.5 text-sm"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * The page's fields
+ * ------------------------------------------------------------------ */
+
+/**
+ * Every field this page has, and the ones the template added.
+ *
+ * Two jobs in one list, because they are the same question asked
+ * twice. DEFINING a field is how a partner gets "Deal Jacket #"
+ * without waiting for a deploy — shared like everything else here,
+ * with each account's answers its own. FLAGGING one as new is how
+ * anybody finds out, and it has to work on a field the application
+ * registered in 2019 as much as one defined this morning: a feature
+ * nobody notices was still shipped.
+ */
+function PageFields({ page }: { page: PageInfo }) {
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<CustomField | "new" | null>(null);
+  const [error, setError] = useState("");
+
+  const post = async (url: string, body: unknown) => {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const out = await res.json();
+    if (!res.ok) throw new Error(out.error ?? "That did not work.");
+    return out;
+  };
+  const refresh = () => void qc.invalidateQueries({ queryKey: ["dm-template-blocks"] });
+
+  const flag = useMutation({
+    mutationFn: (v: { itemKey: string; on: boolean }) =>
+      post("/api/dutch-miller/template/new", { page: page.key, days: 14, ...v }),
+    onSuccess: refresh,
+    onError: (e) => setError((e as Error).message),
+  });
+  const archive = useMutation({
+    mutationFn: (v: { key: string; archived: boolean }) =>
+      post(`/api/dutch-miller/template/fields/${v.key}/archive`, { archived: v.archived }),
+    onSuccess: refresh,
+    onError: (e) => setError((e as Error).message),
+  });
+
+  const custom = page.fields;
+  const code = page.items.filter((i) => !i.custom);
+
+  return (
+    <div className="rounded-lg border border-border bg-background">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+      >
+        <ChevronRight className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-90" : ""}`} />
+        <span className="flex-1 text-sm font-semibold">Fields on this page</span>
+        <span className="text-xs text-muted-foreground">
+          {code.length} from the application
+          {custom.length > 0 && ` · ${custom.length} defined here`}
+        </span>
+      </button>
+
+      {open && (
+        <div className="space-y-3 border-t border-border px-3 py-3">
+          {error && <p className="text-xs font-semibold text-rose-600">{error}</p>}
+
+          <div className="space-y-1">
+            {custom.map((f) => (
+              <div
+                key={f.key}
+                className="flex flex-wrap items-center gap-2 rounded-md border border-border
+                           px-2 py-1.5 text-xs"
+              >
+                <span className="flex-1 truncate font-semibold">{f.label}</span>
+                <span className="text-muted-foreground">{f.input}</span>
+                {isNew(f) && <NewFlag />}
+                <button
+                  type="button"
+                  onClick={() => setEditing(f)}
+                  className="rounded-md border border-border px-2 py-0.5"
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => flag.mutate({ itemKey: f.key, on: !isNew(f) })}
+                  title="Show a New badge beside it for fourteen days"
+                  className="inline-flex items-center gap-1 rounded-md border border-border
+                             px-2 py-0.5"
+                >
+                  <Sparkles className="h-3 w-3" />
+                  {isNew(f) ? "Not new" : "New"}
+                </button>
+                <button
+                  type="button"
+                  disabled={archive.isPending}
+                  title="Stop offering it. Every answer written into it is kept, and bringing
+                         it back brings them with it."
+                  onClick={() => archive.mutate({ key: f.key, archived: true })}
+                  className="inline-flex items-center gap-1 rounded-md border border-border
+                             px-2 py-0.5 disabled:opacity-50"
+                >
+                  <Trash2 className="h-3 w-3" />
+                  Retire
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {editing !== null ? (
+            <FieldEditor
+              page={page}
+              field={editing === "new" ? null : editing}
+              onClose={() => setEditing(null)}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => setEditing("new")}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border
+                         px-3 py-1.5 text-sm"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Define a field
+            </button>
+          )}
+
+          {/* Flagging content that is already there. The case the
+              brief asks for by name, and the one a "new since your
+              last visit" scheme never covers: a field that shipped
+              years ago and that nobody has ever noticed. */}
+          <div className="space-y-1 border-t border-border pt-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              From the application
+            </p>
+            <div className="grid gap-1 sm:grid-cols-2">
+              {code.map((i) => (
+                <div
+                  key={i.key}
+                  className="flex items-center gap-2 rounded-md border border-border px-2
+                             py-1 text-xs"
+                >
+                  <span className="flex-1 truncate">{i.label}</span>
+                  {i.essential && <Lock className="h-3 w-3 text-muted-foreground" />}
+                  {isNew(i) && <NewFlag />}
+                  <button
+                    type="button"
+                    aria-label={`Flag ${i.label} as new`}
+                    onClick={() => flag.mutate({ itemKey: i.key, on: !isNew(i) })}
+                    className="rounded-md border border-border px-1.5 py-0.5"
+                  >
+                    {isNew(i) ? "Not new" : "New"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Define a field, or change one.
+ *
+ * The label can change freely because the KEY cannot: answers point
+ * at the key, so renaming "Deal Jacket #" to "Jacket #" does not
+ * orphan a year of them. That is said on the form rather than left
+ * for somebody to find out.
+ */
+function FieldEditor({
+  page, field, onClose,
+}: {
+  page: PageInfo;
+  field: CustomField | null;
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const [label, setLabel] = useState(field?.label ?? "");
+  const [input, setInput] = useState<CustomField["input"]>(field?.input ?? "text");
+  const [options, setOptions] = useState((field?.options ?? []).join("\n"));
+  const [note, setNote] = useState(field?.note ?? "");
+  const [error, setError] = useState("");
+
+  const save = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/dutch-miller/template/fields", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          key: field?.key, page: page.key, label, input, note,
+          options: options.split("\n").map((o) => o.trim()).filter(Boolean),
+        }),
+      });
+      const out = await res.json();
+      if (!res.ok) throw new Error(out.error ?? "Could not save it.");
+      return out;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["dm-template-blocks"] });
+      onClose();
+    },
+    onError: (e) => setError((e as Error).message),
+  });
+
+  return (
+    <div className="space-y-2 rounded-lg border border-foreground/20 bg-muted/30 p-3">
+      <p className="text-sm font-semibold">
+        {field ? `Editing “${field.label}”` : "A new field"}
+      </p>
+      <p className="text-[11px] text-muted-foreground">
+        Shared with every partner. What each one types into it is theirs, and stays theirs
+        {field && " — renaming this changes the label everywhere and loses no answers"}.
+      </p>
+      {error && <p className="text-xs font-semibold text-rose-600">{error}</p>}
+
+      <label className="block text-xs font-medium">
+        Label
+        <input
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1 text-sm"
+        />
+      </label>
+      <label className="block text-xs font-medium">
+        Typed into as
+        <select
+          value={input}
+          onChange={(e) => setInput(e.target.value as CustomField["input"])}
+          className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1 text-sm"
+        >
+          <option value="text">A line of text</option>
+          <option value="textarea">Several lines</option>
+          <option value="number">A number</option>
+          <option value="date">A date</option>
+          <option value="select">One of a list</option>
+          <option value="checkbox">Yes or no</option>
+        </select>
+      </label>
+      {input === "select" && (
+        <label className="block text-xs font-medium">
+          The choices, one per line
+          <textarea
+            rows={4}
+            value={options}
+            onChange={(e) => setOptions(e.target.value)}
+            className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1
+                       text-sm"
+          />
+        </label>
+      )}
+      <label className="block text-xs font-medium">
+        Help text
+        <input
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="One line, under the field"
+          className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1 text-sm"
+        />
+      </label>
+
+      <div className="flex gap-2 pt-1">
+        <button
+          type="button"
+          disabled={save.isPending || label.trim().length < 2}
+          onClick={() => { setError(""); save.mutate(); }}
+          className="inline-flex items-center gap-1.5 rounded-md bg-foreground px-3 py-1.5
+                     text-sm font-semibold text-background disabled:opacity-50"
+        >
+          {save.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            : <Check className="h-3.5 w-3.5" />}
+          Save
         </button>
         <button
           type="button"

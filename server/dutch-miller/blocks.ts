@@ -1,5 +1,6 @@
 import { db, ensureSchema } from "../db.js";
 import { DUTCH_MILLER } from "./accounts.js";
+import { asItem, isCustomKey, listFields, newMarks } from "./fields.js";
 
 /**
  * The shared template, and each account's arrangement of it.
@@ -86,6 +87,21 @@ export type RegisteredItem = {
   essential?: boolean;
   /** One line in the editor's checklist, saying what it is. */
   note?: string;
+  /**
+   * Defined in the template rather than registered in code.
+   *
+   * It behaves the same everywhere it is arranged, and differs in
+   * exactly two ways: it can be created without a deploy, and it can
+   * never be essential — essential means a workflow depends on it,
+   * and no workflow written before the field existed can.
+   */
+  custom?: boolean;
+  /** How a custom field is typed into. Absent for a code item. */
+  input?: "text" | "textarea" | "number" | "date" | "select" | "checkbox";
+  /** The choices, when the input is a list. */
+  options?: string[];
+  /** Shown as New until this moment, from a mark or from being created. */
+  newUntil?: string | null;
 };
 
 const ITEM: Record<BlockPage, RegisteredItem[]> = {
@@ -239,6 +255,47 @@ export const itemOn = (page: BlockPage, key: string): RegisteredItem | undefined
 export const essentialOn = (page: BlockPage): string[] =>
   ITEM[page].filter((i) => i.essential).map((i) => i.key);
 
+/**
+ * The page's FULL vocabulary: what code registered, plus what the
+ * template defines, plus whatever is currently flagged as new.
+ *
+ * Code first and in its own order, because that order was chosen
+ * once by somebody reading the page; custom fields after it, oldest
+ * first, so adding one never reshuffles what was already there.
+ *
+ * Everything that validates a key uses this, which is what makes a
+ * field created in the template usable in a bucket the same minute
+ * without a deploy — and what keeps a key nobody defined refused
+ * rather than rendered as a gap.
+ */
+export async function itemsFor(page: BlockPage): Promise<RegisteredItem[]> {
+  const [fields, marks] = await Promise.all([listFields(page), newMarks(page)]);
+  const custom = fields.filter((f) => f.archivedAt === null);
+  const all = [...ITEM[page], ...custom.map(asItem)];
+  const newUntilOf = (key: string): string | null => {
+    const mark = marks.get(`${page}:${key}`);
+    if (mark) return mark.newUntil;
+    const f = custom.find((c) => c.key === key);
+    if (f?.newUntil && Date.parse(f.newUntil) > Date.now()) return f.newUntil;
+    return null;
+  };
+  return all.map((i) => ({ ...i, newUntil: newUntilOf(i.key) }));
+}
+
+export const itemFor = async (
+  page: BlockPage, key: string,
+): Promise<RegisteredItem | undefined> =>
+  (await itemsFor(page)).find((i) => i.key === key);
+
+/**
+ * Is this key essential on this page?
+ *
+ * Only a code item ever is, so this stays synchronous and stays
+ * true for a custom key the registry has not been asked about yet.
+ */
+export const isEssential = (page: BlockPage, key: string): boolean =>
+  !isCustomKey(key) && itemOn(page, key)?.essential === true;
+
 /* ------------------------------------------------------------------ *
  * The template
  * ------------------------------------------------------------------ */
@@ -268,6 +325,8 @@ export type TemplateBlock = {
   builtin: boolean;
   /** Retired. Kept so a layout pointing at it still resolves. */
   archivedAt: string | null;
+  /** Shown as New until this moment. Null means it is not flagged. */
+  newUntil: string | null;
   createdAt: string;
   createdBy: string;
 };
@@ -339,6 +398,33 @@ CREATE TABLE IF NOT EXISTS dm_account_layout (
 );
 CREATE INDEX IF NOT EXISTS dm_account_layout_page
   ON dm_account_layout (account_id, page, position);
+
+ALTER TABLE dm_template_blocks ADD COLUMN IF NOT EXISTS new_until timestamptz;
+
+/**
+ * Which base layout an account's arrangement was made against.
+ *
+ * The answer to the thing a whole-page override gets wrong on its
+ * own: once an account has arranged a page, a later correction to
+ * the shared layout does not move it — and without this column,
+ * nobody would ever learn that there was one. A row remembers the
+ * revision it was saved against, so the page can say "the shared
+ * layout has changed since you arranged this" and offer to take it.
+ *
+ * Rows written before this column existed are caught up to the
+ * current revision once, below, rather than defaulting to zero: an
+ * account that has not been left behind must not be told it has.
+ */
+ALTER TABLE dm_account_layout ADD COLUMN IF NOT EXISTS base_rev bigint NOT NULL DEFAULT 0;
+
+/** One counter per page, bumped whenever the shared layout changes. */
+CREATE TABLE IF NOT EXISTS dm_template_layout_rev (
+  page       text        PRIMARY KEY,
+  rev        bigint      NOT NULL DEFAULT 1,
+  changed_at timestamptz NOT NULL DEFAULT now(),
+  changed_by text        NOT NULL DEFAULT '',
+  note       text        NOT NULL DEFAULT ''
+);
 `;
 
 /**
@@ -457,6 +543,22 @@ const ensure = (): Promise<void> =>
          ON CONFLICT (page, block_id) DO NOTHING`,
         [s.page, s.id, s.position, s.width, s.height]);
     }
+    for (const page of BLOCK_PAGES) {
+      await db().query(
+        `INSERT INTO dm_template_layout_rev (page, rev, changed_by, note)
+              VALUES ($1, 1, 'template', 'the layout the application ships with')
+         ON CONFLICT (page) DO NOTHING`, [page]);
+    }
+    /*
+     * One catch-up, for arrangements saved before the revision
+     * existed. They are not behind — there has been no correction
+     * since — so they are stamped with today's revision rather than
+     * left at zero and reported as drifted on the first load.
+     */
+    await db().query(
+      `UPDATE dm_account_layout a SET base_rev = r.rev
+         FROM dm_template_layout_rev r
+        WHERE r.page = a.page AND a.base_rev = 0`);
   }));
 
 /** For a test that needs the schema re-asserted against a fresh database. */
@@ -464,7 +566,8 @@ export const resetBlocksCache = (): void => { ready = null; };
 
 type DbBlock = {
   id: string; page: BlockPage; name: string; items: unknown; columns: number;
-  builtin: boolean; archived_at: Date | null; created_at: Date; created_by: string;
+  builtin: boolean; archived_at: Date | null; new_until: Date | null;
+  created_at: Date; created_by: string;
 };
 
 const shape = (r: DbBlock): TemplateBlock => ({
@@ -475,11 +578,13 @@ const shape = (r: DbBlock): TemplateBlock => ({
   columns: r.columns,
   builtin: r.builtin,
   archivedAt: r.archived_at?.toISOString() ?? null,
+  newUntil: r.new_until && r.new_until.getTime() > Date.now()
+    ? r.new_until.toISOString() : null,
   createdAt: r.created_at.toISOString(),
   createdBy: r.created_by,
 });
 
-const B_COLS = `id, page, name, items, columns, builtin, archived_at,
+const B_COLS = `id, page, name, items, columns, builtin, archived_at, new_until,
                 created_at, created_by`;
 
 /** Every bucket in the catalogue, for one page or all of them. */
@@ -526,7 +631,7 @@ export async function saveBlock(draft: BlockDraft, by: string): Promise<SaveResu
   if (name.length < 2) return { ok: false, problem: "A bucket needs a name." };
   if (name.length > 60) return { ok: false, problem: "That name is too long." };
 
-  const known = new Set(itemsOn(draft.page).map((i) => i.key));
+  const known = new Set((await itemsFor(draft.page)).map((i) => i.key));
   const items = [...new Set(draft.items.map(String))].filter((k) => known.has(k));
   if (items.length === 0) {
     return { ok: false, problem: "Choose at least one field or piece of content." };
@@ -546,7 +651,7 @@ export async function saveBlock(draft: BlockDraft, by: string): Promise<SaveResu
      * everywhere, with nobody having touched their own layout.
      */
     const lost = current.items.filter(
-      (k) => itemOn(draft.page, k)?.essential && !items.includes(k));
+      (k) => isEssential(draft.page, k) && !items.includes(k));
     if (lost.length > 0) {
       return {
         ok: false,
@@ -632,6 +737,13 @@ export async function layoutFor(
   await ensure();
   const blocks = (await listBlocks(page)).filter((b) => b.archivedAt === null);
   const byId = new Map(blocks.map((b) => [b.id, b]));
+  /*
+   * A bucket can hold a custom field that has since been retired.
+   * It is filtered out HERE rather than removed from the bucket, so
+   * bringing the field back brings every placement of it back too —
+   * including the accounts that had chosen to show it.
+   */
+  const live = new Set((await itemsFor(page)).map((i) => i.key));
 
   const base = await db().query<DbPlace>(
     `SELECT block_id, position, width, height FROM dm_template_layout WHERE page = $1`,
@@ -668,13 +780,14 @@ export async function layoutFor(
     // the registry and the bucket, so a field removed from the shared
     // bucket disappears for everybody rather than lingering in the
     // accounts that had picked it.
+    const held = block.items.filter((k) => live.has(k));
     const chosen = Array.isArray(own?.items)
-      ? (own!.items as unknown[]).map(String).filter((k) => block.items.includes(k))
+      ? (own!.items as unknown[]).map(String).filter((k) => held.includes(k))
       : null;
-    const essential = block.items.filter((k) => itemOn(page, k)?.essential);
+    const essential = held.filter((k) => isEssential(page, k));
     const items = chosen
       ? [...chosen, ...essential.filter((k) => !chosen.includes(k))]
-      : block.items;
+      : held;
     out.push({
       ...block,
       items,
@@ -698,6 +811,35 @@ export async function layoutFor(
 
 
   return out.sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
+}
+
+/**
+ * The shared layout itself, resolved the same way an account's page
+ * is. The template editor needs the real thing — the same buckets,
+ * widths and order the canvas will draw — rather than a list of
+ * rows that leaves somebody imagining the result.
+ */
+export async function baseLayout(page: BlockPage): Promise<Placed[]> {
+  await ensure();
+  const blocks = new Map(
+    (await listBlocks(page)).filter((b) => b.archivedAt === null).map((b) => [b.id, b]));
+  const live = new Set((await itemsFor(page)).map((i) => i.key));
+  const { rows } = await db().query<DbPlace>(
+    `SELECT block_id, position, width, height FROM dm_template_layout
+      WHERE page = $1 ORDER BY position`, [page]);
+  return rows.flatMap((r) => {
+    const block = blocks.get(r.block_id);
+    if (!block) return [];
+    return [{
+      ...block,
+      items: block.items.filter((k) => live.has(k)),
+      position: r.position,
+      width: (isWidth(r.width) ? Number(r.width) : 6) as Width,
+      height: (isHeight(r.height) ? r.height : "auto") as Height,
+      hidden: false,
+      overridden: false,
+    }];
+  });
 }
 
 export type LayoutInput = {
@@ -740,7 +882,7 @@ export async function saveLayout(
   for (const row of rows) {
     const block = blocks.get(String(row.blockId));
     if (!block) return { ok: false, problem: "That bucket is not on this page." };
-    const essential = block.items.filter((k) => itemOn(page, k)?.essential);
+    const essential = block.items.filter((k) => isEssential(page, k));
     const hidden = row.hidden === true;
     if (hidden && essential.length > 0) {
       return {
@@ -777,6 +919,12 @@ export async function saveLayout(
       items,
     });
   }
+  // Stamped with the base revision it was made against, so a later
+  // correction to the shared layout can be noticed rather than
+  // silently missed. It does not make the base win; it makes the
+  // difference visible, which is the part a whole-page override
+  // cannot do on its own.
+  const rev = await baseRev(page);
   const client = await db().connect();
   try {
     await client.query("BEGIN");
@@ -786,10 +934,11 @@ export async function saveLayout(
     for (const r of prepared) {
       await client.query(
         `INSERT INTO dm_account_layout
-           (account_id, page, block_id, position, width, height, hidden, items, updated_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)`,
+           (account_id, page, block_id, position, width, height, hidden, items,
+            updated_by, base_rev)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)`,
         [accountId, page, r.blockId, r.position, r.width, r.height, r.hidden,
-          r.items === null ? null : JSON.stringify(r.items), by]);
+          r.items === null ? null : JSON.stringify(r.items), by, rev]);
     }
     await client.query("COMMIT");
   } catch (err) {
@@ -820,7 +969,7 @@ export async function resetLayout(
 
 /** Set the base layout itself. The account administrator's. */
 export async function saveBaseLayout(
-  page: BlockPage, rows: LayoutInput[],
+  page: BlockPage, rows: LayoutInput[], by = "", note = "",
 ): Promise<{ ok: true } | { ok: false; problem: string }> {
   await ensure();
   const blocks = new Map(
@@ -847,6 +996,16 @@ export async function saveBaseLayout(
               VALUES ($1, $2, $3, $4, $5)`,
         [page, r.blockId, r.position, r.width, r.height]);
     }
+    // In the same transaction as the layout it describes. A bumped
+    // revision with no change behind it would tell every customised
+    // account to review something that did not happen.
+    await client.query(
+      `INSERT INTO dm_template_layout_rev (page, rev, changed_at, changed_by, note)
+            VALUES ($1, 1, now(), $2, $3)
+       ON CONFLICT (page) DO UPDATE
+            SET rev = dm_template_layout_rev.rev + 1, changed_at = now(),
+                changed_by = excluded.changed_by, note = excluded.note`,
+      [page, by, note.slice(0, 200)]);
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => undefined);
@@ -921,17 +1080,230 @@ export async function promoteLayout(
     .map((b, i) => ({
       blockId: b.id, position: (i + 1) * 10, width: b.width, height: b.height,
     }));
-  const saved = await saveBaseLayout(page, rows);
+  const saved = await saveBaseLayout(page, rows, by,
+    "a correction promoted from a partner account");
   if (!saved.ok) return saved;
   await db().query(
     "DELETE FROM dm_account_layout WHERE account_id = $1 AND page = $2",
     [accountId, page]);
-  void by;
   return {
     ok: true,
     layout: await layoutFor(accountId, page),
     reached: impact.following.length,
   };
+}
+
+/* ------------------------------------------------------------------ *
+ * Keeping a customised page in touch with the shared one
+ * ------------------------------------------------------------------ */
+
+/** The shared layout's current revision for a page. */
+export async function baseRev(page: BlockPage): Promise<number> {
+  await ensure();
+  const { rows } = await db().query<{ rev: string }>(
+    "SELECT rev FROM dm_template_layout_rev WHERE page = $1", [page]);
+  return Number(rows[0]?.rev ?? 1);
+}
+
+export type Drift = {
+  /** The shared layout has changed since this account arranged the page. */
+  behind: boolean;
+  /** The account has its own arrangement at all. */
+  own: boolean;
+  rev: number;
+  /** The revision this account's arrangement was made against. */
+  theirs: number;
+  changedAt: string | null;
+  changedBy: string;
+  why: string;
+  /** On the shared layout, not on this page. Offered, never imposed. */
+  added: { id: string; name: string; width: Width; height: Height }[];
+  /** On this page, no longer on the shared layout. */
+  removed: { id: string; name: string }[];
+  /** On both, placed differently. */
+  differs: {
+    id: string; name: string;
+    theirWidth: Width; baseWidth: Width;
+    theirHeight: Height; baseHeight: Height;
+    theirPlace: number; basePlace: number;
+  }[];
+};
+
+/**
+ * What the shared layout now says that this account's page does not.
+ *
+ * THE POINT OF THIS FUNCTION. An account's arrangement is its own
+ * and nothing here overwrites it — but "its own" must not mean
+ * "sealed". Saving a page used to end the conversation: a correction
+ * promoted afterwards reached every account still on the base and
+ * silently missed the customised ones, and nobody was told. That is
+ * a fork with a nice name.
+ *
+ * So the difference is computed on READ, every time, and reported.
+ * The account keeps what it arranged; the page says what changed and
+ * offers to take it — all of it, or one bucket of it. A correction
+ * still reaches a customised page; it knocks instead of walking in.
+ */
+export async function layoutDrift(accountId: string, page: BlockPage): Promise<Drift> {
+  await ensure();
+  const blocks = new Map((await listBlocks(page)).map((b) => [b.id, b]));
+  const { rows: revRows } = await db().query<{
+    rev: string; changed_at: Date; changed_by: string; note: string;
+  }>("SELECT rev, changed_at, changed_by, note FROM dm_template_layout_rev WHERE page = $1",
+    [page]);
+  const rev = Number(revRows[0]?.rev ?? 1);
+
+  const mine = await db().query<{ block_id: string; base_rev: string }>(
+    "SELECT block_id, base_rev FROM dm_account_layout WHERE account_id = $1 AND page = $2",
+    [accountId, page]);
+  const own = mine.rows.length > 0;
+  const theirs = own
+    ? Math.min(...mine.rows.map((r) => Number(r.base_rev))) : rev;
+
+  const base = await db().query<DbPlace>(
+    `SELECT block_id, position, width, height FROM dm_template_layout
+      WHERE page = $1 ORDER BY position`, [page]);
+  const placed = await layoutFor(accountId, page);
+
+  const baseList = base.rows
+    .filter((r) => blocks.get(r.block_id)?.archivedAt === null);
+  const baseIndex = new Map(baseList.map((r, i) => [r.block_id, i]));
+  const theirIndex = new Map(placed.map((b, i) => [b.id, i]));
+
+  const added = baseList
+    .filter((r) => !theirIndex.has(r.block_id))
+    .map((r) => ({
+      id: r.block_id,
+      name: blocks.get(r.block_id)?.name ?? r.block_id,
+      width: (isWidth(r.width) ? Number(r.width) : 6) as Width,
+      height: (isHeight(r.height) ? r.height : "auto") as Height,
+    }));
+  const removed = placed
+    .filter((b) => !baseIndex.has(b.id))
+    .map((b) => ({ id: b.id, name: b.name }));
+  const differs = placed
+    .filter((b) => baseIndex.has(b.id))
+    .map((b) => {
+      const r = baseList[baseIndex.get(b.id)!]!;
+      return {
+        id: b.id, name: b.name,
+        theirWidth: b.width,
+        baseWidth: (isWidth(r.width) ? Number(r.width) : 6) as Width,
+        theirHeight: b.height,
+        baseHeight: (isHeight(r.height) ? r.height : "auto") as Height,
+        theirPlace: theirIndex.get(b.id)! + 1,
+        basePlace: baseIndex.get(b.id)! + 1,
+      };
+    })
+    .filter((d) => d.theirWidth !== d.baseWidth || d.theirHeight !== d.baseHeight
+      || d.theirPlace !== d.basePlace);
+
+  return {
+    // Only an account with its own arrangement can be behind. One
+    // following the base already has every correction, by reading it.
+    behind: own && theirs < rev,
+    own,
+    rev,
+    theirs,
+    changedAt: revRows[0]?.changed_at.toISOString() ?? null,
+    changedBy: revRows[0]?.changed_by ?? "",
+    why: revRows[0]?.note ?? "",
+    added,
+    removed,
+    differs,
+  };
+}
+
+/**
+ * Take the shared layout's placement of some buckets, keeping the
+ * rest of this page as it is.
+ *
+ * The middle answer, and the one people actually want: a correction
+ * is usually about ONE bucket, and "adopt everything" would make
+ * taking it cost the arrangement somebody spent an afternoon on.
+ *
+ * A bucket the page does not show is added where the base puts it.
+ * A bucket it shows is moved and resized to match. Nothing else on
+ * the page is touched, and the page stops being reported as behind
+ * because it has now seen this revision.
+ */
+export async function adoptFromBase(opts: {
+  accountId: string; page: BlockPage; blockIds: string[]; by: string;
+}): Promise<{ ok: true; layout: Placed[] } | { ok: false; problem: string }> {
+  await ensure();
+  const { accountId, page } = opts;
+  const wanted = new Set(opts.blockIds.map(String));
+  const base = await db().query<DbPlace>(
+    `SELECT block_id, position, width, height FROM dm_template_layout
+      WHERE page = $1 ORDER BY position`, [page]);
+  const fromBase = new Map(base.rows.map((r) => [r.block_id, r]));
+  for (const id of wanted) {
+    if (!fromBase.has(id)) {
+      return { ok: false, problem: "That bucket is not on the shared layout." };
+    }
+  }
+
+  const placed = await layoutFor(accountId, page);
+  const rows: LayoutInput[] = placed.map((b) => {
+    const from = wanted.has(b.id) ? fromBase.get(b.id) : undefined;
+    return {
+      blockId: b.id,
+      position: from ? from.position : b.position,
+      width: from && isWidth(from.width) ? Number(from.width) : b.width,
+      height: from && isHeight(from.height) ? from.height : b.height,
+      hidden: b.hidden,
+      // Its field selection is the account's and is not part of a
+      // layout correction. Promoting cannot change it either.
+      items: b.items,
+    };
+  });
+  for (const id of wanted) {
+    if (placed.some((b) => b.id === id)) continue;
+    const from = fromBase.get(id)!;
+    rows.push({
+      blockId: id, position: from.position,
+      width: isWidth(from.width) ? Number(from.width) : 6,
+      height: isHeight(from.height) ? from.height : "auto",
+      hidden: false, items: null,
+    });
+  }
+  rows.sort((a, b) => Number(a.position) - Number(b.position));
+  return saveLayout(accountId, page, rows, opts.by);
+}
+
+/**
+ * "We have seen it, and we are keeping ours."
+ *
+ * Records that this account has met the current revision without
+ * changing a single thing about its page. The notice goes away; the
+ * NEXT correction raises it again. Deliberately not a permanent
+ * opt-out — the complaint this whole mechanism answers is a
+ * correction nobody heard about, and an account that can silence the
+ * channel for good is back to where it started.
+ */
+export async function acknowledgeDrift(
+  accountId: string, page: BlockPage,
+): Promise<{ rev: number }> {
+  await ensure();
+  const rev = await baseRev(page);
+  await db().query(
+    "UPDATE dm_account_layout SET base_rev = $3 WHERE account_id = $1 AND page = $2",
+    [accountId, page, rev]);
+  return { rev };
+}
+
+/** Flag a bucket as new, or take the flag off. Presentation only. */
+export async function setBlockNew(
+  id: string, days: number,
+): Promise<{ ok: boolean; problem?: string }> {
+  await ensure();
+  const d = Math.min(Math.max(Number(days) || 0, 0), 180);
+  const { rowCount } = d > 0
+    ? await db().query(
+      `UPDATE dm_template_blocks SET new_until = now() + ($2 || ' days')::interval
+        WHERE id = $1`, [id, String(d)])
+    : await db().query("UPDATE dm_template_blocks SET new_until = NULL WHERE id = $1", [id]);
+  return rowCount === 0 ? { ok: false, problem: "That bucket no longer exists." } : { ok: true };
 }
 
 /** Which accounts have arranged a page for themselves. For the template editor. */

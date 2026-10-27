@@ -391,6 +391,10 @@ export function DmRegistrationPage() {
       <ArrangedPage
         page="account-registration"
         render={render}
+        /* The account itself is the subject here — there is one
+           registration per partner, not one per record. */
+        subject=""
+        canWrite={!sending}
         fallback={(
           <p className="text-sm text-muted-foreground">
             Loading this page&rsquo;s arrangement…

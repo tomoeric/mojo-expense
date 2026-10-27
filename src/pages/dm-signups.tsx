@@ -2081,6 +2081,10 @@ function RecordBuckets({ row, tz }: { row: SignupRow; tz: string }) {
     <ArrangedPage
       page="member-signups-review"
       render={render}
+      /* What a template-defined field's answer is about: this record,
+         in this account. The account is never sent — the server takes
+         it from the request. */
+      subject={row.guid}
       fallback={(
         <div className="space-y-4">
           <Deliveries guid={row.guid} />
@@ -2221,6 +2225,11 @@ function AddFormBuckets({
     <ArrangedPage
       page="member-signups-add"
       render={render}
+      /* A template-defined field has nowhere to put an answer yet —
+         the record it would belong to does not exist until this form
+         is submitted. Shown, so the arrangement is honest about
+         what the page holds, and not typed into. */
+      canWrite={false}
       fallback={(
         <Bucket title="New member" note="Loading this page's arrangement…">
           {["dlwContractId", "firstName", "lastName", "rfid", "stickerAttached"].map((k) => (

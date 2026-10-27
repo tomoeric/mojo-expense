@@ -34,6 +34,15 @@ export type NavPage = {
   route: string;
   /** May other pages be placed under it? A heading always may. */
   parentable: boolean;
+  /**
+   * The heading this page belongs under.
+   *
+   * Not a rule — a page can be placed anywhere, or nowhere. It is
+   * what the application's own navigation does with it, so an
+   * account adding "Review Existing" can be offered "Member Signups"
+   * instead of being told its chosen parent does not exist.
+   */
+  naturalParent?: string;
 };
 
 /**
@@ -51,6 +60,7 @@ export const NAV_PAGES: NavPage[] = [
     grant: "member-signups",
     route: "member-signups/review",
     parentable: false,
+    naturalParent: "member-signups",
   },
   {
     key: "member-signups-add",
@@ -59,6 +69,7 @@ export const NAV_PAGES: NavPage[] = [
     grant: "member-signups-add",
     route: "member-signups/add",
     parentable: false,
+    naturalParent: "member-signups",
   },
   {
     key: "account-registration",
@@ -303,15 +314,41 @@ export async function navKeys(accountId: string): Promise<string[]> {
   return keys;
 }
 
+/** Every key on the rail, headings included. The duplicate check. */
+export async function railKeys(accountId: string): Promise<string[]> {
+  const rail = await navFor(accountId);
+  const keys: string[] = [];
+  for (const item of rail) {
+    keys.push(item.key);
+    for (const c of item.children) keys.push(c.key);
+  }
+  return keys;
+}
+
 /** Everything that could still be added, and where it could go. */
 export async function navOptions(accountId: string): Promise<{
-  pages: NavPage[];
+  pages: (NavPage & {
+    /**
+     * The heading this page belongs under, when the rail has not got
+     * it. The picker asks before adding rather than refusing after:
+     * somebody adding "Review Existing" to a rail with no "Member
+     * Signups" meant to add both, and a refusal that names a button
+     * they cannot see is a dead end.
+     */
+    needsParent: { key: string; label: string } | null;
+  })[];
   parents: { key: string; label: string }[];
 }> {
-  const used = new Set(await navKeys(accountId));
+  const used = new Set(await railKeys(accountId));
   const rail = await navFor(accountId);
+  const needsParent = (p: NavPage): { key: string; label: string } | null => {
+    if (!p.naturalParent || used.has(p.naturalParent)) return null;
+    const group = groupByKey(p.naturalParent);
+    return group ? { key: group.key, label: group.label } : null;
+  };
   return {
-    pages: NAV_PAGES.filter((p) => !used.has(p.key)),
+    pages: NAV_PAGES.filter((p) => !used.has(p.key))
+      .map((p) => ({ ...p, needsParent: needsParent(p) })),
     // Only a heading, or a page that says it may hold others. Nesting
     // under something that is itself a sub-button is not offered: the
     // rail is two deep and a third level would render nowhere.
@@ -339,6 +376,13 @@ export async function addNav(opts: {
   /** Null for a top-level button, or the key of an existing main entry. */
   parentKey?: string | null;
   label?: string;
+  /**
+   * Add the heading this page belongs under, if the rail has not got
+   * it. Asked for explicitly: adding a second button to somebody's
+   * navigation is not something to do as a side effect of adding the
+   * first, however obvious it looks from here.
+   */
+  withParent?: boolean;
   by: string;
 }): Promise<AddResult> {
   await ensure();
@@ -359,14 +403,28 @@ export async function addNav(opts: {
     };
   }
 
-  const parentKey = opts.parentKey?.trim() || null;
+  let parentKey = opts.parentKey?.trim() || null;
+  if (parentKey === null && opts.withParent === true && page.naturalParent) {
+    parentKey = page.naturalParent;
+  }
   if (parentKey !== null) {
     const { parents } = await navOptions(opts.accountId);
     if (!parents.some((p) => p.key === parentKey)) {
-      return {
-        ok: false,
-        problem: "Choose a main button that exists on this account's rail to put it under.",
-      };
+      // The one case where a missing parent is not a dead end: it is
+      // a heading the application defines, and the caller asked for
+      // it. Added first, so the page has somewhere to land.
+      const group = opts.withParent === true ? groupByKey(parentKey) : undefined;
+      if (!group) {
+        return {
+          ok: false,
+          problem: "Choose a main button that exists on this account's rail to put it under.",
+        };
+      }
+      await db().query(
+        `INSERT INTO dm_account_nav (account_id, page_key, parent_key, position, added_by)
+              VALUES ($1, $2, NULL, $3, $4)
+         ON CONFLICT (account_id, page_key) DO NOTHING`,
+        [opts.accountId, group.key, 90, opts.by]);
     }
   }
 
@@ -413,7 +471,138 @@ export async function removeNav(
       problem: "That button is part of the shared rail and cannot be removed here.",
     };
   }
+  /*
+   * A heading this account added, now with nothing under it, goes
+   * with the last page it held. An empty heading is a button that
+   * opens nothing, and nobody would think to remove it separately.
+   */
+  const rail = await navFor(accountId);
+  for (const item of rail) {
+    if (!item.group || !item.added || item.children.length > 0) continue;
+    await db().query(
+      "DELETE FROM dm_account_nav WHERE account_id = $1 AND page_key = $2",
+      [accountId, item.key]);
+  }
   return { ok: true, rail: await navFor(accountId) };
+}
+
+/* ------------------------------------------------------------------ *
+ * The shared rail itself
+ * ------------------------------------------------------------------ */
+
+/**
+ * The base rail, as rows rather than as a tree.
+ *
+ * For the template editor, which needs to see a page that is NOT on
+ * the base as much as one that is — the whole question there is what
+ * every new partner should start with.
+ */
+export async function templateNav(): Promise<{
+  key: string; label: string; blurb: string; parent: string | null;
+  position: number; group: boolean;
+}[]> {
+  await ensure();
+  const { rows } = await db().query<DbNav>(
+    "SELECT page_key, parent_key, position FROM dm_template_nav ORDER BY position");
+  return rows.map((r) => {
+    const group = groupByKey(r.page_key);
+    const page = pageByKey(r.page_key);
+    return {
+      key: r.page_key,
+      label: group?.label ?? page?.label ?? r.page_key,
+      blurb: group?.blurb ?? page?.blurb ?? "",
+      parent: r.parent_key,
+      position: r.position,
+      group: Boolean(group),
+    };
+  });
+}
+
+/** What the base rail could still hold, and where. */
+export async function templateNavOptions(): Promise<{
+  pages: NavPage[];
+  parents: { key: string; label: string }[];
+}> {
+  const rows = await templateNav();
+  const used = new Set(rows.map((r) => r.key));
+  return {
+    pages: NAV_PAGES.filter((p) => !used.has(p.key)),
+    parents: rows
+      .filter((r) => r.parent === null
+        && (r.group || pageByKey(r.key)?.parentable === true))
+      .map((r) => ({ key: r.key, label: r.label })),
+  };
+}
+
+/**
+ * Put a page on the rail every account starts with.
+ *
+ * It reaches every account that has not already got that page,
+ * because the rail is resolved on read — which is the reason this
+ * exists at all. Adding a page to twelve partners one account at a
+ * time is how eleven of them end up with it.
+ */
+export async function addTemplateNav(opts: {
+  pageKey: string; parentKey?: string | null; withParent?: boolean; by: string;
+}): Promise<{ ok: true } | { ok: false; problem: string }> {
+  await ensure();
+  const page = pageByKey(opts.pageKey);
+  if (!page) {
+    return {
+      ok: false,
+      problem: "That page is not in the catalogue. A page has to be shipped before it can "
+        + "be put on the shared rail.",
+    };
+  }
+  const rows = await templateNav();
+  if (rows.some((r) => r.key === page.key)) {
+    return { ok: false, problem: `${page.label} is already on the shared rail.` };
+  }
+  let parentKey = opts.parentKey?.trim() || null;
+  if (parentKey === null && opts.withParent === true && page.naturalParent) {
+    parentKey = page.naturalParent;
+  }
+  if (parentKey !== null && !rows.some((r) => r.key === parentKey)) {
+    const group = opts.withParent === true ? groupByKey(parentKey) : undefined;
+    if (!group) {
+      return { ok: false, problem: "Choose a main button that is on the shared rail." };
+    }
+    await db().query(
+      `INSERT INTO dm_template_nav (page_key, parent_key, position) VALUES ($1, NULL, $2)
+       ON CONFLICT (page_key) DO NOTHING`, [group.key, 90]);
+  }
+  const next = Math.max(...rows.map((r) => r.position), 0) + 10;
+  await db().query(
+    `INSERT INTO dm_template_nav (page_key, parent_key, position) VALUES ($1, $2, $3)
+     ON CONFLICT (page_key) DO NOTHING`, [page.key, parentKey, next]);
+  return { ok: true };
+}
+
+/**
+ * Take a page off the shared rail.
+ *
+ * It disappears from every account that had it from the base, which
+ * is why the page itself, its route and its data are untouched: an
+ * account that needs it can add it back, and one that had added it
+ * for itself never loses it. A heading with pages still under it is
+ * refused rather than orphaning them.
+ */
+export async function removeTemplateNav(
+  pageKey: string,
+): Promise<{ ok: true } | { ok: false; problem: string }> {
+  await ensure();
+  const rows = await templateNav();
+  const row = rows.find((r) => r.key === pageKey);
+  if (!row) return { ok: false, problem: "That page is not on the shared rail." };
+  if (rows.some((r) => r.parent === pageKey)) {
+    return {
+      ok: false,
+      problem: "Take the pages under it off first — otherwise they would be left with no "
+        + "button to sit under.",
+    };
+  }
+  await db().query("DELETE FROM dm_template_nav WHERE page_key = $1", [pageKey]);
+  return { ok: true };
 }
 
 /** Drop a removed account's navigation. */

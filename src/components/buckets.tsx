@@ -44,7 +44,35 @@ export type RegisteredItem = {
   kind: "data" | "input" | "content" | "control";
   essential?: boolean;
   note?: string;
+  /** Defined in the shared template rather than registered in code. */
+  custom?: boolean;
+  input?: "text" | "textarea" | "number" | "date" | "select" | "checkbox";
+  options?: string[];
+  /** Shown as New until this moment. */
+  newUntil?: string | null;
 };
+
+export const isNew = (item?: { newUntil?: string | null }): boolean =>
+  Boolean(item?.newUntil && Date.parse(item.newUntil) > Date.now());
+
+/**
+ * The badge.
+ *
+ * Small, and it says the one thing it knows. It expires on its own
+ * — a flag somebody has to remember to take down is still on the
+ * page in March, and by then it means nothing anywhere.
+ */
+export function NewFlag({ title }: { title?: string }) {
+  return (
+    <span
+      title={title || "Added recently"}
+      className="rounded-full bg-emerald-600/15 px-1.5 py-0.5 text-[10px] font-semibold
+                 uppercase tracking-wide text-emerald-700 dark:text-emerald-400"
+    >
+      New
+    </span>
+  );
+}
 
 export type Placed = {
   id: string;
@@ -54,11 +82,38 @@ export type Placed = {
   columns: number;
   builtin: boolean;
   archivedAt: string | null;
+  newUntil?: string | null;
   position: number;
   width: 2 | 3 | 4 | 6;
   height: "auto" | "short" | "tall";
   hidden: boolean;
   overridden: boolean;
+};
+
+/**
+ * What the shared layout now says that this page does not.
+ *
+ * The account keeps what it arranged — nothing here overwrites one
+ * — but it is TOLD, and taking the change is a click. A page that
+ * somebody customised once is not a page that stops hearing from
+ * the template.
+ */
+export type Drift = {
+  behind: boolean;
+  own: boolean;
+  rev: number;
+  theirs: number;
+  changedAt: string | null;
+  changedBy: string;
+  why: string;
+  added: { id: string; name: string; width: 2 | 3 | 4 | 6; height: string }[];
+  removed: { id: string; name: string }[];
+  differs: {
+    id: string; name: string;
+    theirWidth: number; baseWidth: number;
+    theirHeight: string; baseHeight: string;
+    theirPlace: number; basePlace: number;
+  }[];
 };
 
 export type LayoutAnswer = {
@@ -75,6 +130,7 @@ export type LayoutAnswer = {
   /** Promoting reaches other partners, so it is the platform's. */
   canPromote: boolean;
   impact: { following: string[]; keeping: string[]; hasOwn: boolean };
+  drift: Drift;
 };
 
 export function useLayout(page: BlockPage) {
@@ -88,13 +144,25 @@ export function useLayout(page: BlockPage) {
   });
 }
 
-const SPAN: Record<number, string> = {
+export const SPAN: Record<number, string> = {
   2: "md:col-span-2", 3: "md:col-span-3", 4: "md:col-span-4", 6: "md:col-span-6",
 };
-const TALL: Record<string, string> = {
-  auto: "", short: "max-h-56 overflow-auto", tall: "min-h-80",
+/*
+ * Three steps rather than a pixel value.
+ *
+ *   auto   fits whatever is in it
+ *   short  capped and scrolls, which SHRINKS a tall bucket
+ *   tall   a floor, which GROWS a short one
+ *
+ * They are deliberately different kinds of thing, and the inspector
+ * says which: "tall" on a bucket that is already taller than the
+ * floor changes nothing, and a control that silently does nothing
+ * reads as broken unless the panel has said why.
+ */
+export const TALL: Record<string, string> = {
+  auto: "", short: "max-h-56 overflow-auto", tall: "min-h-96",
 };
-const INNER: Record<number, string> = {
+export const INNER: Record<number, string> = {
   1: "grid-cols-1", 2: "grid-cols-1 sm:grid-cols-2", 3: "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3",
 };
 
@@ -106,12 +174,20 @@ const INNER: Record<number, string> = {
  * reads as something that failed to load.
  */
 export function BucketGrid({
-  layout, render, empty,
+  layout, render, empty, items, page, subject, canWrite,
 }: {
   layout: Placed[];
   render: (itemKey: string) => React.ReactNode;
   empty?: React.ReactNode;
+  /** The page's vocabulary, so a template-defined field can render itself. */
+  items?: RegisteredItem[];
+  page?: BlockPage;
+  /** What the custom answers are about: a record's id, or nothing. */
+  subject?: string;
+  canWrite?: boolean;
 }) {
+  const byKey = useMemo(
+    () => new Map((items ?? []).map((i) => [i.key, i])), [items]);
   const shown = layout.filter((b) => !b.hidden);
   if (shown.length === 0) {
     return <>{empty ?? null}</>;
@@ -119,15 +195,39 @@ export function BucketGrid({
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-6">
       {shown.map((b) => {
-        const parts = b.items.map((key) => ({ key, node: render(key) }))
-          .filter((p) => p.node !== null && p.node !== undefined && p.node !== false);
+        /*
+         * A field the TEMPLATE defined is not something the page
+         * knows how to draw, so it draws itself — and only when the
+         * page did not already return something for that key, so a
+         * page that wants to own one still can.
+         */
+        const parts = b.items.map((key) => {
+          const node = render(key);
+          const item = byKey.get(key);
+          if ((node === null || node === undefined || node === false)
+            && item?.custom && page) {
+            return {
+              key,
+              node: (
+                <CustomFieldValue
+                  page={page} subject={subject ?? ""} item={item}
+                  canWrite={canWrite !== false}
+                />
+              ),
+            };
+          }
+          return { key, node };
+        }).filter((p) => p.node !== null && p.node !== undefined && p.node !== false);
         if (parts.length === 0) return null;
         return (
           <section
             key={b.id}
             className={`rounded-xl border border-border bg-card p-4 ${SPAN[b.width] ?? "md:col-span-6"}`}
           >
-            <h3 className="mb-3 text-sm font-semibold">{b.name}</h3>
+            <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold">
+              {b.name}
+              {isNew(b) && <NewFlag title="This section was added recently" />}
+            </h3>
             <div className={`grid gap-3 ${INNER[b.columns] ?? INNER[3]} ${TALL[b.height] ?? ""}`}>
               {parts.map((p) => <div key={p.key}>{p.node}</div>)}
             </div>
@@ -135,6 +235,118 @@ export function BucketGrid({
         );
       })}
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * A field the template defined
+ * ------------------------------------------------------------------ */
+
+/**
+ * One template-defined field, and this account's answer to it.
+ *
+ * The definition is shared and the VALUE is not: it is written
+ * against (this account, this page, this subject, this field), and
+ * the account is never sent from the browser — the server takes it
+ * from the request's account, which it has already refused if this
+ * person does not hold it.
+ *
+ * It saves when the field is left rather than on each keystroke, so
+ * a slow connection does not turn a sentence into forty writes.
+ */
+function CustomFieldValue({
+  page, subject, item, canWrite,
+}: {
+  page: BlockPage;
+  subject: string;
+  item: RegisteredItem;
+  canWrite: boolean;
+}) {
+  const qc = useQueryClient();
+  const key = ["dm-values", page, subject] as const;
+  const q = useQuery({
+    queryKey: key,
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/dutch-miller/blocks/${page}/values?subject=${encodeURIComponent(subject)}`);
+      if (!res.ok) throw new Error((await res.json()).error ?? "Could not read it.");
+      return (await res.json()) as { values: Record<string, string> };
+    },
+  });
+  const stored = q.data?.values[item.key] ?? "";
+  const [draft, setDraft] = useState<string | null>(null);
+  const value = draft ?? stored;
+  const [error, setError] = useState("");
+
+  const save = useMutation({
+    mutationFn: async (next: string) => {
+      const res = await fetch(`/api/dutch-miller/blocks/${page}/values`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ subject, values: { [item.key]: next } }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Could not save it.");
+      return body;
+    },
+    onSuccess: () => { setDraft(null); setError(""); void qc.invalidateQueries({ queryKey: key }); },
+    onError: (e) => setError((e as Error).message),
+  });
+
+  const commit = () => {
+    if (draft === null || draft === stored) { setDraft(null); return; }
+    save.mutate(draft);
+  };
+
+  const label = (
+    <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+      {item.label}
+      {isNew(item) && <NewFlag title="This field was added recently" />}
+    </span>
+  );
+
+  if (!canWrite) {
+    return (
+      <div>
+        {label}
+        <p className="text-sm">{value || <span className="text-muted-foreground">—</span>}</p>
+      </div>
+    );
+  }
+
+  const common = {
+    value,
+    onChange: (e: { target: { value: string } }) => setDraft(e.target.value),
+    onBlur: commit,
+    className: "mt-1 w-full rounded-md border border-border bg-background px-2 py-1 text-sm",
+  };
+
+  return (
+    <label className="block">
+      {label}
+      {item.input === "textarea" ? <textarea rows={3} {...common} />
+        : item.input === "select" ? (
+          <select {...common} onBlur={undefined}
+            onChange={(e) => { setDraft(e.target.value); save.mutate(e.target.value); }}>
+            <option value="">—</option>
+            {(item.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
+          </select>
+        ) : item.input === "checkbox" ? (
+          <input
+            type="checkbox"
+            checked={value === "yes"}
+            onChange={(e) => { const v = e.target.checked ? "yes" : ""; setDraft(v); save.mutate(v); }}
+            className="mt-1 h-4 w-4"
+          />
+        ) : (
+          <input
+            type={item.input === "number" ? "number" : item.input === "date" ? "date" : "text"}
+            {...common}
+          />
+        )}
+      {item.note && <span className="text-[11px] text-muted-foreground">{item.note}</span>}
+      {error && <span className="block text-[11px] font-semibold text-rose-600">{error}</span>}
+    </label>
   );
 }
 
@@ -168,8 +380,8 @@ export function BucketGrid({
 
 type Draft = Placed[];
 
-const HEIGHT_STEP: Record<string, number> = { auto: 0, short: 1, tall: 2 };
-const STEP_HEIGHT: ("auto" | "short" | "tall")[] = ["auto", "short", "tall"];
+export const HEIGHT_STEP: Record<string, number> = { auto: 0, short: 1, tall: 2 };
+export const STEP_HEIGHT: ("auto" | "short" | "tall")[] = ["auto", "short", "tall"];
 
 /**
  * A page, as this account arranged it — and the pencil that changes it.
@@ -178,12 +390,16 @@ const STEP_HEIGHT: ("auto" | "short" | "tall")[] = ["auto", "short", "tall"];
  * admin-only check is made in one place rather than on each page.
  */
 export function ArrangedPage({
-  page, render, fallback,
+  page, render, fallback, subject, canWrite,
 }: {
   page: BlockPage;
   render: (itemKey: string) => React.ReactNode;
   /** What to show before the layout lands. Never a spinner on a working page. */
   fallback?: React.ReactNode;
+  /** What a template-defined field's answer is about. A record's id, or nothing. */
+  subject?: string;
+  /** Whether those answers may be typed into here. */
+  canWrite?: boolean;
 }) {
   const q = useLayout(page);
   const [editing, setEditing] = useState(false);
@@ -196,6 +412,7 @@ export function ArrangedPage({
       <PageEditor
         answer={answer}
         render={render}
+        subject={subject}
         onClose={() => setEditing(false)}
       />
     );
@@ -203,6 +420,7 @@ export function ArrangedPage({
 
   return (
     <div className="space-y-3">
+      {answer.canArrange && <DriftNotice answer={answer} />}
       {answer.canArrange && (
         <div className="flex flex-wrap items-center gap-2">
           <button
@@ -216,23 +434,169 @@ export function ArrangedPage({
             Arrange this page
           </button>
           <span className="text-xs text-muted-foreground">
-            {answer.layout.some((b) => b.overridden)
+            {answer.drift.own
               ? `${answer.account.name} has its own arrangement of this page.`
               : "Following the shared layout."}
           </span>
         </div>
       )}
-      <BucketGrid layout={answer.layout} render={render} />
+      <BucketGrid
+        layout={answer.layout}
+        render={render}
+        items={answer.items}
+        page={page}
+        subject={subject}
+        canWrite={canWrite}
+      />
+    </div>
+  );
+}
+
+/**
+ * "The shared layout has changed since you arranged this page."
+ *
+ * The thing that was missing. An account's arrangement is its own
+ * and stays its own — but saving a page is not a reason for later
+ * corrections to stop reaching it, and before this the account was
+ * never even told one had been made.
+ *
+ * Three answers, all of them the account's:
+ *   take one bucket of it, keeping the rest of the page;
+ *   take all of it;
+ *   keep ours, which clears the notice until the NEXT change.
+ */
+function DriftNotice({ answer }: { answer: LayoutAnswer }) {
+  const qc = useQueryClient();
+  const [error, setError] = useState("");
+  const d = answer.drift;
+
+  const post = async (url: string, body?: unknown) => {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const out = await res.json();
+    if (!res.ok) throw new Error(out.error ?? "That did not work.");
+    return out;
+  };
+  const done = () => void qc.invalidateQueries({ queryKey: ["dm-layout", answer.page] });
+  const adopt = useMutation({
+    mutationFn: (blockIds: string[]) =>
+      post(`/api/dutch-miller/blocks/${answer.page}/adopt`, { blockIds }),
+    onSuccess: done,
+    onError: (e) => setError((e as Error).message),
+  });
+  const keep = useMutation({
+    mutationFn: () => post(`/api/dutch-miller/blocks/${answer.page}/acknowledge`),
+    onSuccess: done,
+    onError: (e) => setError((e as Error).message),
+  });
+
+  if (!d.behind) return null;
+  const all = [...d.added.map((a) => a.id), ...d.differs.map((x) => x.id)];
+
+  return (
+    <div className="space-y-2 rounded-xl border border-amber-500/50 bg-amber-500/5 p-3">
+      <p className="flex items-center gap-1.5 text-sm font-semibold">
+        <ArrowUpToLine className="h-3.5 w-3.5" />
+        The shared layout has changed since {answer.account.name} arranged this page
+      </p>
+      <p className="text-xs text-muted-foreground">
+        {d.why ? `${d.why[0]!.toUpperCase()}${d.why.slice(1)}` : "It was corrected"}
+        {d.changedAt && ` on ${new Date(d.changedAt).toLocaleDateString()}`}.
+        Nothing has been changed here — this page is still arranged the way you left it.
+      </p>
+
+      {error && <p className="text-xs font-semibold text-rose-600">{error}</p>}
+
+      <ul className="space-y-1">
+        {d.added.map((a) => (
+          <li key={a.id} className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="flex-1">
+              <span className="font-semibold">{a.name}</span> is on the shared layout and
+              not on this page.
+            </span>
+            <button
+              type="button"
+              disabled={adopt.isPending}
+              onClick={() => { setError(""); adopt.mutate([a.id]); }}
+              className="rounded-md border border-border px-2 py-0.5 disabled:opacity-50"
+            >
+              Add it here
+            </button>
+          </li>
+        ))}
+        {d.differs.map((x) => (
+          <li key={x.id} className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="flex-1">
+              <span className="font-semibold">{x.name}</span>{" "}
+              {x.theirPlace !== x.basePlace
+                && `sits ${x.theirPlace} here and ${x.basePlace} on the shared layout`}
+              {x.theirPlace !== x.basePlace
+                && (x.theirWidth !== x.baseWidth || x.theirHeight !== x.baseHeight) && "; "}
+              {x.theirWidth !== x.baseWidth
+                && `is ${x.theirWidth}/6 here and ${x.baseWidth}/6 shared`}
+              {x.theirWidth !== x.baseWidth && x.theirHeight !== x.baseHeight && "; "}
+              {x.theirHeight !== x.baseHeight
+                && `is ${x.theirHeight} here and ${x.baseHeight} shared`}.
+            </span>
+            <button
+              type="button"
+              disabled={adopt.isPending}
+              onClick={() => { setError(""); adopt.mutate([x.id]); }}
+              className="rounded-md border border-border px-2 py-0.5 disabled:opacity-50"
+            >
+              Match the shared one
+            </button>
+          </li>
+        ))}
+        {d.removed.map((r) => (
+          <li key={r.id} className="text-xs text-muted-foreground">
+            <span className="font-semibold">{r.name}</span> is on this page and no longer on
+            the shared layout. It stays until you take it off.
+          </li>
+        ))}
+      </ul>
+
+      <div className="flex flex-wrap gap-2 pt-1">
+        {all.length > 0 && (
+          <button
+            type="button"
+            disabled={adopt.isPending}
+            onClick={() => { setError(""); adopt.mutate(all); }}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border
+                       bg-background px-2.5 py-1 text-xs font-semibold disabled:opacity-50"
+          >
+            {adopt.isPending ? <Loader2 className="h-3 w-3 animate-spin" />
+              : <Check className="h-3 w-3" />}
+            Take all of it
+          </button>
+        )}
+        <button
+          type="button"
+          disabled={keep.isPending}
+          onClick={() => { setError(""); keep.mutate(); }}
+          className="rounded-md border border-border px-2.5 py-1 text-xs disabled:opacity-50"
+        >
+          Keep ours
+        </button>
+        <span className="text-[11px] text-muted-foreground">
+          Keeping yours changes nothing and clears this notice. The next shared change
+          raises it again.
+        </span>
+      </div>
     </div>
   );
 }
 
 function PageEditor({
-  answer, render, onClose,
+  answer, render, onClose, subject,
 }: {
   answer: LayoutAnswer;
   render: (itemKey: string) => React.ReactNode;
   onClose: () => void;
+  subject?: string;
 }) {
   const qc = useQueryClient();
   const [draft, setDraft] = useState<Draft>(() => answer.layout.map((b) => ({ ...b })));
@@ -374,6 +738,9 @@ function PageEditor({
                 locked={essentialIn(b)}
                 labelOf={(k) => byKey.get(k)?.label ?? k}
                 essential={(k) => byKey.get(k)?.essential === true}
+                itemOf={(k) => byKey.get(k)}
+                page={answer.page}
+                subject={subject ?? ""}
                 render={render}
                 onSelect={() => setSelected(b.id)}
                 onDragStart={() => setDragging(b.id)}
@@ -405,6 +772,18 @@ function PageEditor({
                 <p className="flex items-center gap-1.5 text-sm font-semibold">
                   <Settings2 className="h-3.5 w-3.5" />
                   {here.name}
+                </p>
+
+                {/* What the controls below have made it. A slider
+                    with no readout is a control somebody has to
+                    guess at, and the canvas alone cannot say
+                    "4 of 6" out loud. */}
+                <p className="rounded-md bg-muted/60 px-2 py-1 text-[11px] text-muted-foreground">
+                  <span className="font-semibold text-foreground">{here.width}/6 wide</span>
+                  {" · "}{here.columns} column{here.columns === 1 ? "" : "s"}
+                  {" · "}
+                  {here.height === "auto" ? "fits its content"
+                    : here.height === "short" ? "short, scrolls" : "tall, at least 24rem"}
                 </p>
 
                 <fieldset>
@@ -455,7 +834,9 @@ function PageEditor({
                   />
                   <span className="text-[11px] text-muted-foreground">
                     {here.height === "auto" ? "Fits its content"
-                      : here.height === "short" ? "Short — scrolls" : "Tall"}
+                      : here.height === "short"
+                        ? "Short — capped, and scrolls if there is more"
+                        : "Tall — at least 24rem, taller if its content needs it"}
                   </span>
                 </label>
 
@@ -480,7 +861,11 @@ function PageEditor({
                                      hover:bg-muted"
                         >
                           <Plus className="h-3 w-3 shrink-0" />
-                          {byKey.get(k)?.label ?? k}
+                          <span className="flex-1">{byKey.get(k)?.label ?? k}</span>
+                          {byKey.get(k)?.custom && (
+                            <span className="text-[10px] text-muted-foreground">template</span>
+                          )}
+                          {isNew(byKey.get(k)) && <NewFlag />}
                         </button>
                       ))}
                     </div>
@@ -623,9 +1008,9 @@ function PageEditor({
  * plus an empty one at the end, so where a field can go is visible
  * rather than implied. A bucket does not have to be full.
  */
-function EditableBucket({
+export function EditableBucket({
   bucket, index, count, selected, dragging, locked,
-  labelOf, essential, render,
+  labelOf, essential, itemOf, page, subject, render,
   onSelect, onDragStart, onDragEnd, onDrop, onMove, onRemove, onDropField, onMoveField,
 }: {
   bucket: Placed;
@@ -636,6 +1021,9 @@ function EditableBucket({
   locked: string[];
   labelOf: (key: string) => string;
   essential: (key: string) => boolean;
+  itemOf: (key: string) => RegisteredItem | undefined;
+  page: BlockPage;
+  subject: string;
   render: (key: string) => React.ReactNode;
   onSelect: () => void;
   onDragStart: () => void;
@@ -710,10 +1098,26 @@ function EditableBucket({
         </button>
       </div>
 
-      <h3 className="mb-3 pr-44 text-sm font-semibold">{bucket.name}</h3>
+      <h3 className="mb-3 flex items-center gap-2 pr-44 text-sm font-semibold">
+        {bucket.name}
+        {isNew(bucket) && <NewFlag title="This section was added recently" />}
+        {/* The size, written down. The canvas shows the width and the
+            height; saying them makes the two controls that produced
+            them legible, and a change visible even at 2/6. */}
+        <span className="text-[10px] font-normal text-muted-foreground">
+          {bucket.width}/6 · {bucket.columns} col
+          {bucket.height !== "auto" && ` · ${bucket.height}`}
+        </span>
+      </h3>
 
+      {/*
+        * The height the inspector set, applied HERE as well as on the
+        * live page. Without it the slider moved and the canvas did
+        * not, which reads as a control that does nothing — the
+        * change only appeared after saving and leaving the editor.
+        */}
       <div className={`grid gap-2 rounded-lg bg-white p-2 dark:bg-background ${
-        INNER[bucket.columns] ?? INNER[3]}`}>
+        INNER[bucket.columns] ?? INNER[3]} ${TALL[bucket.height] ?? ""}`}>
         {bucket.items.map((key, i) => (
           <div
             key={key}
@@ -756,8 +1160,14 @@ function EditableBucket({
                 <ArrowDown className="h-2.5 w-2.5" />
               </button>
             </span>
+            {isNew(itemOf(key)) && (
+              <span className="absolute -top-1.5 left-4 z-10"><NewFlag /></span>
+            )}
             <div className="pointer-events-none pt-1">{render(key) ?? (
-              <span className="text-xs text-muted-foreground">{labelOf(key)}</span>
+              itemOf(key)?.custom
+                ? <CustomFieldValue
+                    page={page} subject={subject} item={itemOf(key)!} canWrite={false} />
+                : <span className="text-xs text-muted-foreground">{labelOf(key)}</span>
             )}</div>
           </div>
         ))}

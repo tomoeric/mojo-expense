@@ -66,7 +66,16 @@ A change to the Dutch Miller side means at least: `accounts`, `blocks`, `nav`,
 `registration`, `isolation`, `signups`, `rfid`, `vendors`, `bulk`, `grants`,
 `placement`, `sticker`, `dm-users`, `roles`, `notify`, `delivery`, `reminders`,
 `vehicles`, `dealer-auth`, `view-scope`, `viewas-log`, `permissions`,
-`app-access`, `events`, `two-reviewers`.
+`app-access`, `events`, `two-reviewers`, `propagation`, `custom-fields`.
+
+Anything touching the arranging canvas or the Shared Template page also means
+the two browser passes: `pnpm run build` first, then
+`scripts/test-arrange-ui.ts` and `scripts/test-template-ui.ts`. They boot
+`dist/server.js` on a spare port with a forged session cookie **and a
+`mojo_app=dutch-miller` cookie** — the real switch endpoint sets that one
+`secure: true`, so it never sticks over http and the shell would otherwise
+render the Emburse console and every assertion would fail for the wrong
+reason.
 
 **3. A new suite for any rule that could fail QUIETLY.** The test to write is
 not the happy path — it is the one where the application keeps working and the
@@ -730,6 +739,99 @@ RFID Inventory.
 - `scripts/test-blocks.ts` covers the model; `test-isolation.ts` covers the
   routes, including that an administrator cannot touch the shared template.
 
+### A customised page still hears from the template
+
+A whole-page override answers "an account keeps what it arranged" and, on its
+own, answers it too well: before this, a correction promoted afterwards
+reached every account still on the base and silently missed the customised
+ones, and nobody was ever told. **Saving a complete page is NOT a reason for
+later shared corrections to stop reaching it.** The rule now:
+
+- **The account's arrangement is never overwritten.** No code path rewrites an
+  account's layout because the base changed. That part was right and stays.
+- **`dm_template_layout_rev` counts corrections, one row per page**, bumped
+  inside the same transaction as `saveBaseLayout` with a note saying WHY.
+  Bumping it with no change behind it would send every customised account to
+  review something that did not happen.
+- **`dm_account_layout.base_rev` records which revision an arrangement was
+  made against.** Rows written before the column existed were caught up to the
+  current revision once, in `ensure()` — an account that has not been left
+  behind must not be told it has.
+- **`layoutDrift()` computes the difference on every read** and the page shows
+  it: what the shared layout has that this page does not, what this page has
+  that it no longer does, and which buckets are placed differently. Only an
+  account with its own arrangement can be behind; one following the base
+  already has every correction by reading them, and telling it otherwise
+  would train everybody to dismiss the notice.
+- **Three answers, all the account's**: take one bucket of it (`adoptFromBase`,
+  which keeps the rest of the page — a correction is usually about one bucket
+  and "all or nothing" would make taking it cost an afternoon's work), take all
+  of it, or keep ours (`acknowledgeDrift`, which changes no layout). Keeping
+  ours is **not a permanent opt-out**: the next correction raises the notice
+  again, because silence is the thing this mechanism exists to end.
+- `scripts/test-propagation.ts` covers all of it; `test-arrange-ui.ts` proves
+  the notice actually appears in a browser and that both buttons are there.
+
+**What propagates, and what does not — the whole contract in one table:**
+
+| Changed in the template | Account on the base | Account with its own layout |
+| --- | --- | --- |
+| A bucket's NAME, columns, or field list | immediately | **immediately** — definition, not arrangement |
+| A field's label, help text, type | immediately | **immediately** |
+| A field ADDED to a bucket | immediately | immediately, unless that account picked its own fields for that bucket — then it is in the inventory |
+| A bucket's position / width / height | immediately | kept, **and the notice says so**, one click to take |
+| A bucket ADDED to the base layout | immediately | offered in the notice and in Add-a-bucket; never imposed |
+| A new bucket in the catalogue, not on the base | offered | offered |
+
+`scripts/demo-propagation.ts` prints all six rows against live scratch
+accounts and restores the template afterwards. Run it rather than reasoning
+about it.
+
+### Fields the template defines, with each account's data its own
+
+`server/dutch-miller/fields.ts`. The registry is still the whole vocabulary
+for what CODE provides, and it is still not enough: a partner asking for
+"Deal Jacket #" cannot be told to wait for a deploy.
+
+- **The definition is shared, the data is not.** `dm_template_fields` holds one
+  definition; `dm_custom_values` is keyed on **(account, page, subject,
+  field)** with the account FIRST, so isolation is a property of the schema
+  rather than of remembering a WHERE clause. There is no read in that file
+  that is not account-scoped.
+- **`itemsFor(page)` is the full vocabulary** — code's items then the
+  template's, oldest first — and everything that validates a key uses it. A
+  key nobody defined is still refused rather than rendered as a gap.
+- **A custom key is minted `cf_<slug>_<ts>`** so it can never shadow a
+  code-registered key, now or after somebody registers a new one.
+- **A custom field is never essential.** Essential means a workflow depends on
+  it, and no workflow written before the field existed can.
+- **Renaming is free; the KEY never moves.** Answers point at the key, so
+  "Deal Jacket #" becoming "Jacket #" does not orphan a year of them.
+- **Retire, never delete.** A retired field leaves the vocabulary and stops
+  rendering without being taken out of the bucket, and every answer is kept;
+  un-retiring brings them all back.
+- **SUBJECT is what the answer is about**: a member record's guid on Review
+  Existing, the empty string on Account Registration (one registration per
+  partner). Add New passes `canWrite={false}` — the record the answer would
+  belong to does not exist yet.
+- `scripts/test-custom-fields.ts`, including the case that matters: two
+  partners asking for the same subject id get their own answers and never
+  each other's.
+
+### "New", including on content that has been there for years
+
+`dm_new_marks` (page, item key) plus `new_until` on buckets and custom fields.
+
+- **It is presentation and nothing else** — no access, no validation, no
+  ordering changes. It **expires by itself**, because a badge somebody has to
+  remember to take down is still on the page in March.
+- **It works on EXISTING content**, which is the case actually asked for: a
+  field the application registered in 2019 that nobody has ever noticed. The
+  marks table is separate from the things it marks precisely so that anything
+  with a key on a page can carry one.
+- Flagged from the Shared Template page: buckets from the canvas inspector,
+  fields (code's and the template's alike) from "Fields on this page".
+
 ### The rail is a catalogue, arranged per account
 
 `server/dutch-miller/nav.ts`. Same split as the buckets: a PAGE is code and
@@ -766,6 +868,26 @@ the top of the rail or under something else, is the account's.
   second reason: that menu is where the app is administered and approving a
   company to be paid is work. Records, routes, reviews and audit history are
   untouched, and a partner that genuinely has vendors adds the button back.
+- **Add Page exists at BOTH levels, and they are different jobs.** The
+  account's picker (`components/add-page.tsx`) puts a button on ONE account.
+  **Shared navigation** on the Shared Template page (`components/template-nav.tsx`
+  → `addTemplateNav` / `removeTemplateNav`) puts it on the base rail, which
+  reaches every account that has not already got that page — because the rail
+  is read fresh rather than copied. Adding a page to twelve partners one
+  account at a time is how eleven of them end up with it. Taking one off the
+  base removes the BUTTON, never the page: its route, records and history are
+  untouched, and an account that needs it adds it back. A heading with pages
+  still under it is refused rather than orphaning them.
+- **The parent-dependency prompt.** A page with a `naturalParent` (Review
+  Existing and Add New belong under Member Signups) used to be REFUSED on a
+  rail without that heading — naming a button the person cannot see and giving
+  them nowhere to go. `navOptions` now reports `needsParent`, the picker says
+  "saving will add Member Signups too", and `addNav({ withParent: true })`
+  inserts the heading first. It is sent explicitly, never inferred server-side:
+  putting a second button on somebody's navigation is not a side effect of
+  adding the first, however obvious it looks from here. Removing the last page
+  under a heading THIS ACCOUNT added takes the heading with it — an empty
+  heading is a button that opens nothing.
 
 ### Account Registration
 
@@ -890,6 +1012,26 @@ editor. Four pages use it and none of them knows how any of it works.
   is the same ambiguity a screen reader would have hit.
 - **An empty section is always shown inside a bucket**, so a bucket that is
   not full says so and there is somewhere obvious for the next field to go.
+- **The size controls must change the bucket ON THE CANVAS.** Width always
+  did; height did not — `TALL[...]` was applied to the live page and not to
+  the thing being edited, so the slider moved, nothing happened, and the
+  change only appeared after saving and leaving. Both are applied in
+  `EditableBucket` now, and the inspector prints "4/6 wide · 2 columns ·
+  short, scrolls" because a slider with no readout is a control somebody has
+  to guess at. The three heights are different KINDS of thing and the panel
+  says which: auto fits, short caps and scrolls (shrinks a tall bucket), tall
+  is a floor of 24rem (grows a short one, and does nothing to one that is
+  already taller — which reads as broken unless the panel has said why).
+  `scripts/test-arrange-ui.ts` measures the rendered box before and after.
+- **The same canvas arranges the SHARED template** (`components/template-canvas.tsx`,
+  from the Shared Template page). Same controls in the same corners, so
+  somebody who has arranged one account's page already knows how to use it.
+  Two differences, both stated on the panel before the save: moving or
+  resizing a bucket changes the BASE LAYOUT (accounts following it get it;
+  accounts with their own are told), while putting a field in or taking one
+  out changes the BUCKET ITSELF for every partner at once, arrangement or
+  not. The palette lists every field the page has — code's and the
+  template's — minus the ones the selected bucket already holds.
 
 ### Shared administration says so on the page
 

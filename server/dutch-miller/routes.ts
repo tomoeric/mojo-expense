@@ -54,8 +54,13 @@ import {
 } from "../mail.js";
 import { forgetEpoch } from "../auth/index.js";
 import {
-  NAV_PAGES, addNav, navFor, navOptions, removeNav,
+  NAV_PAGES, addNav, addTemplateNav, navFor, navOptions, removeNav,
+  removeTemplateNav, templateNav, templateNavOptions,
 } from "./nav.js";
+import {
+  INPUTS, archiveField, clearNew, fieldUsage, listFields, markNew, newMarks,
+  saveField, saveValues, valuesFor,
+} from "./fields.js";
 import {
   AGREEMENT, BUSINESS_FIELDS, BUSINESS_TYPES, DOCUMENT_TYPES, MAX_DOCUMENT_BYTES,
   acceptAgreement, blockers, completeVerification, currentDocument, decideBusiness,
@@ -64,9 +69,10 @@ import {
   type DocumentState,
 } from "./business.js";
 import {
-  BLOCK_PAGES, HEIGHTS, PAGE_LABEL, WIDTHS, archiveBlock, essentialOn, isBlockPage,
-  accountsArranging, itemsOn, layoutFor, layoutImpact, listBlocks, promoteLayout,
-  resetLayout, saveBaseLayout, saveBlock, saveLayout,
+  BLOCK_PAGES, HEIGHTS, PAGE_LABEL, WIDTHS, acknowledgeDrift, adoptFromBase,
+  archiveBlock, essentialOn, isBlockPage,
+  accountsArranging, baseLayout, itemsFor, itemsOn, layoutDrift, layoutFor, layoutImpact, listBlocks,
+  promoteLayout, resetLayout, saveBaseLayout, saveBlock, saveLayout, setBlockNew,
   type BlockPage,
 } from "./blocks.js";
 import {
@@ -2030,8 +2036,18 @@ dutchMillerRouter.get("/blocks/:page", async (req: Request, res: Response) => {
     layout: await layoutFor(account.id, page),
     /** The catalogue, so the editor can offer what is not placed yet. */
     available: (await listBlocks(page)).filter((b) => b.archivedAt === null),
-    items: itemsOn(page),
+    /* Code's items AND the template's own fields, in one list, so
+       nothing downstream has to know which kind it is holding. */
+    items: await itemsFor(page),
     essential: essentialOn(page),
+    /*
+     * What the shared layout now says that this page does not.
+     *
+     * Sent on every read, not only when something changed, because
+     * the page decides what to show from it — and an account that
+     * is up to date gets `behind: false` rather than no answer.
+     */
+    drift: await layoutDrift(account.id, page),
     widths: WIDTHS,
     heights: HEIGHTS,
     /* Arranging an account's own page is administering that account.
@@ -2129,6 +2145,276 @@ dutchMillerRouter.post("/blocks/:page/reset", requireDmAdmin,
   });
 
 /**
+ * Take part of the shared layout, keeping the rest of this page.
+ *
+ * The answer to a correction that a customised page would otherwise
+ * never see. The account chooses — all of it, one bucket of it, or
+ * none — and whatever it chooses, it has now MET this revision, so
+ * the notice goes away until the next change rather than nagging.
+ */
+dutchMillerRouter.post("/blocks/:page/adopt", requireDmAdmin,
+  async (req: Request, res: Response) => {
+    const page = asPage(req.params.page);
+    if (!page) { res.status(404).json({ error: "No such page." }); return; }
+    const account = accountOf(req, res);
+    if (!account) return;
+    const b = (req.body ?? {}) as { blockIds?: unknown };
+    const ids = Array.isArray(b.blockIds) ? (b.blockIds as unknown[]).map(String) : [];
+    if (ids.length === 0) {
+      res.status(400).json({ error: "Choose at least one bucket to take." });
+      return;
+    }
+    const out = await adoptFromBase({
+      accountId: account.id, page, blockIds: ids, by: actor(req),
+    });
+    if (!out.ok) { res.status(400).json({ error: out.problem }); return; }
+    await audit({
+      action: "layout.saved", ...who(req), resource: page,
+      detail: `${PAGE_LABEL[page]} — took ${ids.length} bucket(s) from the shared layout`,
+    });
+    emitChange("settings");
+    res.json({ layout: out.layout, drift: await layoutDrift(account.id, page) });
+  });
+
+/** "Seen it, keeping ours." Records the revision, changes no layout. */
+dutchMillerRouter.post("/blocks/:page/acknowledge", requireDmAdmin,
+  async (req: Request, res: Response) => {
+    const page = asPage(req.params.page);
+    if (!page) { res.status(404).json({ error: "No such page." }); return; }
+    const account = accountOf(req, res);
+    if (!account) return;
+    const out = await acknowledgeDrift(account.id, page);
+    await audit({
+      action: "layout.saved", ...who(req), resource: page,
+      detail: `${PAGE_LABEL[page]} — shared layout v${out.rev} reviewed, `
+        + "this account's arrangement kept",
+    });
+    res.json({ drift: await layoutDrift(account.id, page) });
+  });
+
+/* ------------------------------------------------------------------ *
+ * What an account typed into the template's own fields
+ * ------------------------------------------------------------------ */
+
+/**
+ * One account's answers for one subject.
+ *
+ * Account-scoped at the query, not at the check: the account id
+ * comes from the request's account, which the middleware has
+ * already refused if this person does not hold it.
+ */
+dutchMillerRouter.get("/blocks/:page/values", async (req: Request, res: Response) => {
+  const page = asPage(req.params.page);
+  if (!page) { res.status(404).json({ error: "No such page." }); return; }
+  const account = accountOf(req, res);
+  if (!account) return;
+  const access = await dmAccessFor(req.user?.email ?? "", account.id);
+  if (!canAdminister(access) && access.pages.length === 0) {
+    res.status(403).json({ error: "You do not have access to that page." });
+    return;
+  }
+  const subject = String(req.query.subject ?? "");
+  res.json({
+    subject,
+    values: await valuesFor(account.id, page, subject),
+    fields: (await listFields(page)).filter((f) => f.archivedAt === null),
+  });
+});
+
+/** Write them. Still this account's, still this page's fields. */
+dutchMillerRouter.post("/blocks/:page/values", async (req: Request, res: Response) => {
+  const page = asPage(req.params.page);
+  if (!page) { res.status(404).json({ error: "No such page." }); return; }
+  const account = accountOf(req, res);
+  if (!account) return;
+  if (req.viewingAs) {
+    res.status(403).json({ error: "You are viewing as somebody else; this is read-only." });
+    return;
+  }
+  const access = await dmAccessFor(req.user?.email ?? "", account.id);
+  if (!canAdminister(access) && access.pages.length === 0) {
+    res.status(403).json({ error: "You do not have access to that page." });
+    return;
+  }
+  const b = (req.body ?? {}) as { subject?: unknown; values?: unknown };
+  const values = (b.values ?? {}) as Record<string, unknown>;
+  if (typeof values !== "object" || Array.isArray(values)) {
+    res.status(400).json({ error: "Send the values as an object." });
+    return;
+  }
+  const out = await saveValues({
+    accountId: account.id, page, subject: String(b.subject ?? ""),
+    values, by: actor(req),
+  });
+  if (!out.ok) { res.status(400).json({ error: out.problem }); return; }
+  res.json({ values: out.values });
+});
+
+/* ------------------------------------------------------------------ *
+ * Fields the template defines
+ * ------------------------------------------------------------------ */
+
+/**
+ * The template's own fields.
+ *
+ * Readable by any administrator — knowing a field exists is how you
+ * decide whether to put it in a bucket. Writable only by the
+ * platform: a field is shared, so defining one defines it for every
+ * partner at once, and the DATA underneath stays each account's.
+ */
+dutchMillerRouter.get("/template/fields", requireDmAdmin,
+  async (_req: Request, res: Response) => {
+    const fields = await listFields();
+    res.json({
+      fields: await Promise.all(fields.map(async (f) => ({
+        ...f, answers: await fieldUsage(f.key),
+      }))),
+      inputs: INPUTS,
+    });
+  });
+
+dutchMillerRouter.post("/template/fields",
+  requireSuperTo("define a shared field"),
+  async (req: Request, res: Response) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const page = asPage(b.page);
+    if (!page) { res.status(400).json({ error: "Choose a page." }); return; }
+    const out = await saveField({
+      key: typeof b.key === "string" && b.key ? b.key : undefined,
+      page,
+      label: String(b.label ?? ""),
+      input: typeof b.input === "string" ? b.input : "text",
+      options: Array.isArray(b.options) ? (b.options as unknown[]).map(String) : [],
+      note: String(b.note ?? ""),
+      newForDays: Number(b.newForDays ?? 0),
+    }, actor(req));
+    if (!out.ok) { res.status(400).json({ error: out.problem }); return; }
+    await audit({
+      action: out.created ? "template.block.created" : "template.block.changed",
+      ...who(req), resource: out.field.key,
+      detail: `${PAGE_LABEL[page]} — field “${out.field.label}” `
+        + `${out.created ? "defined" : "changed"}`,
+    });
+    emitChange("settings");
+    res.json({ field: out.field, created: out.created });
+  });
+
+dutchMillerRouter.post("/template/fields/:key/archive",
+  requireSuperTo("retire a shared field"),
+  async (req: Request, res: Response) => {
+    const b = (req.body ?? {}) as { archived?: unknown };
+    const archived = b.archived !== false;
+    const key = String(req.params.key ?? "");
+    const out = await archiveField(key, archived);
+    if (!out.ok) { res.status(400).json({ error: out.problem }); return; }
+    await audit({
+      action: "template.block.changed", ...who(req), resource: key,
+      detail: archived
+        ? `field retired — ${await fieldUsage(key)} answer(s) kept`
+        : "field brought back, with every answer it held",
+    });
+    emitChange("settings");
+    res.json({ ok: true });
+  });
+
+/* ------------------------------------------------------------------ *
+ * "New"
+ * ------------------------------------------------------------------ */
+
+/**
+ * Flag something as new, or take the flag off.
+ *
+ * Works on anything with a key on a page — a bucket, a field the
+ * application registered years ago, a field defined last week —
+ * because the case that matters is EXISTING content nobody noticed.
+ * It changes nothing but a badge, and it expires by itself.
+ */
+dutchMillerRouter.post("/template/new",
+  requireSuperTo("flag something as new"),
+  async (req: Request, res: Response) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const page = String(b.page ?? "");
+    const itemKey = String(b.itemKey ?? "");
+    const kind = String(b.kind ?? "field");
+    if (!page || !itemKey) { res.status(400).json({ error: "Nothing to flag." }); return; }
+    const days = Number(b.days ?? 14);
+    const on = b.on !== false;
+
+    if (kind === "bucket") {
+      // A bucket's flag lives on the bucket, so the catalogue can
+      // show it without a second read.
+      const out = await setBlockNew(itemKey, on ? days : 0);
+      if (!out.ok) { res.status(400).json({ error: out.problem }); return; }
+    }
+    if (on) await markNew({ page, itemKey, kind, days, note: String(b.note ?? ""),
+      by: actor(req) });
+    else await clearNew(page, itemKey);
+
+    await audit({
+      action: "template.block.changed", ...who(req), resource: itemKey,
+      detail: on ? `flagged as new for ${Math.min(Math.max(days, 1), 180)} day(s)`
+        : "new flag removed",
+    });
+    emitChange("settings");
+    res.json({ marks: [...(await newMarks()).values()] });
+  });
+
+dutchMillerRouter.get("/template/new", requireDmAdmin,
+  async (_req: Request, res: Response) => {
+    res.json({ marks: [...(await newMarks()).values()] });
+  });
+
+/* ------------------------------------------------------------------ *
+ * The shared rail
+ * ------------------------------------------------------------------ */
+
+/** The rail every new partner starts on, and what could still go on it. */
+dutchMillerRouter.get("/template/nav", requireDmAdmin,
+  async (_req: Request, res: Response) => {
+    const { pages, parents } = await templateNavOptions();
+    res.json({
+      rail: await templateNav(),
+      pages,
+      parents,
+      groups: NAV_PAGES.filter((p) => p.naturalParent)
+        .map((p) => ({ key: p.key, parent: p.naturalParent })),
+    });
+  });
+
+dutchMillerRouter.post("/template/nav",
+  requireSuperTo("change the shared navigation"),
+  async (req: Request, res: Response) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const out = await addTemplateNav({
+      pageKey: String(b.pageKey ?? ""),
+      parentKey: typeof b.parentKey === "string" && b.parentKey ? b.parentKey : null,
+      withParent: b.withParent === true,
+      by: actor(req),
+    });
+    if (!out.ok) { res.status(400).json({ error: out.problem }); return; }
+    await audit({
+      action: "template.layout.changed", ...who(req), resource: String(b.pageKey ?? ""),
+      detail: "added to the shared rail — reaches every account that has not got it",
+    });
+    emitChange("settings");
+    res.json({ rail: await templateNav() });
+  });
+
+dutchMillerRouter.post("/template/nav/remove",
+  requireSuperTo("change the shared navigation"),
+  async (req: Request, res: Response) => {
+    const b = (req.body ?? {}) as { pageKey?: unknown };
+    const out = await removeTemplateNav(String(b.pageKey ?? ""));
+    if (!out.ok) { res.status(400).json({ error: out.problem }); return; }
+    await audit({
+      action: "template.layout.changed", ...who(req), resource: String(b.pageKey ?? ""),
+      detail: "taken off the shared rail",
+    });
+    emitChange("settings");
+    res.json({ rail: await templateNav() });
+  });
+
+/**
  * The catalogue itself.
  *
  * Readable by any administrator, because knowing what a bucket holds
@@ -2142,9 +2428,14 @@ dutchMillerRouter.get("/template/blocks", requireDmAdmin,
       pages: await Promise.all(BLOCK_PAGES.map(async (p) => ({
         key: p,
         label: PAGE_LABEL[p],
-        items: itemsOn(p),
+        items: await itemsFor(p),
         essential: essentialOn(p),
         blocks: await listBlocks(p),
+        /* The base layout, so the template can be arranged on the
+           same canvas an account uses rather than described in a
+           list of names that says nothing about the result. */
+        base: await baseLayout(p),
+        fields: (await listFields(p)).filter((f) => f.archivedAt === null),
         /* Which partners have arranged this page for themselves, so
            the editor can say how many layouts a change will meet
            rather than letting somebody find out afterwards. */
@@ -2209,7 +2500,7 @@ dutchMillerRouter.post("/template/layout/:page",
         height: String(r.height ?? "auto"),
       }))
       : [];
-    const out = await saveBaseLayout(page, rows);
+    const out = await saveBaseLayout(page, rows, actor(req), "the shared layout was edited");
     if (!out.ok) { res.status(400).json({ error: out.problem }); return; }
     await audit({
       action: "template.layout.changed", ...who(req), resource: page,

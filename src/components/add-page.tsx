@@ -28,6 +28,12 @@ import { Check, Loader2, Plus, Trash2, X } from "lucide-react";
 type NavPage = {
   key: string; label: string; blurb: string; grant: string; route: string;
   parentable: boolean;
+  /**
+   * The heading this page belongs under, when this rail has not got
+   * it. The server works it out and sends it, so the picker can
+   * offer to add both rather than refuse the one.
+   */
+  needsParent: { key: string; label: string } | null;
 };
 type Options = {
   pages: NavPage[];
@@ -75,6 +81,14 @@ export function AddPage() {
           pageKey,
           parentKey: kind === "sub" ? parentKey : null,
           label,
+          /*
+           * Add the heading too, when the page needs one this rail
+           * has not got. Sent explicitly rather than inferred on the
+           * server: putting a second button on somebody's navigation
+           * is not a side effect of adding the first, however
+           * obvious it looks from here.
+           */
+          withParent: needsParent !== null,
         }),
       });
       const body = await res.json();
@@ -120,6 +134,7 @@ export function AddPage() {
   }
 
   const chosen = q.data?.pages.find((p) => p.key === pageKey);
+  const needsParent = chosen?.needsParent ?? null;
   const spare = q.data?.pages ?? [];
   const parents = q.data?.parents ?? [];
   const added = (q.data?.rail ?? []).flatMap((i) => [
@@ -172,7 +187,26 @@ export function AddPage() {
             <p className="text-[11px] text-muted-foreground">{chosen.blurb}</p>
           )}
 
-          <fieldset className="text-xs">
+          {/*
+            * The dependency prompt.
+            *
+            * "Review Existing" is a sub-button of "Member Signups",
+            * and a rail without that heading used to refuse it —
+            * naming a button the person cannot see and giving them
+            * nowhere to go. It asks instead, and adding the heading
+            * is part of the same click.
+            */}
+          {needsParent && (
+            <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5
+                          text-[11px]">
+              <strong>{chosen?.label}</strong> is a sub-button of{" "}
+              <strong>{needsParent.label}</strong>, which is not on this rail. Saving will add{" "}
+              <strong>{needsParent.label}</strong> as a main button and put{" "}
+              {chosen?.label} under it.
+            </p>
+          )}
+
+          <fieldset className={`text-xs ${needsParent ? "hidden" : ""}`}>
             <legend className="font-medium">Button type</legend>
             <div className="mt-1 flex gap-3">
               <label className="flex items-center gap-1.5">
@@ -199,7 +233,7 @@ export function AddPage() {
             </div>
           </fieldset>
 
-          {kind === "sub" && (
+          {kind === "sub" && !needsParent && (
             <label className="block text-xs font-medium">
               Under
               <select
@@ -230,9 +264,11 @@ export function AddPage() {
           {chosen && (
             <p className="rounded-md bg-muted/50 px-2 py-1.5 text-[11px] text-muted-foreground">
               <strong>{label.trim() || chosen.label}</strong>
-              {kind === "sub" && parentKey
-                ? ` under ${parents.find((p) => p.key === parentKey)?.label ?? ""}`
-                : " at the top of the rail"}
+              {needsParent
+                ? ` under a new ${needsParent.label} button`
+                : kind === "sub" && parentKey
+                  ? ` under ${parents.find((p) => p.key === parentKey)?.label ?? ""}`
+                  : " at the top of the rail"}
               , opening <span className="font-mono">/{q.data?.account.slug}#/{chosen.route}</span>
               . For {q.data?.account.name} only.
             </p>
@@ -243,7 +279,8 @@ export function AddPage() {
           <div className="flex gap-2">
             <button
               type="button"
-              disabled={!pageKey || (kind === "sub" && !parentKey) || add.isPending}
+              disabled={!pageKey || (kind === "sub" && !parentKey && !needsParent)
+                || add.isPending}
               onClick={() => { setError(""); add.mutate(); }}
               className="inline-flex items-center gap-1.5 rounded-md bg-foreground px-2.5 py-1
                          text-xs font-semibold text-background disabled:opacity-50"
