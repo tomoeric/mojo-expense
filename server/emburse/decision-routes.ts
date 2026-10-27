@@ -5,7 +5,8 @@ import { requireAuth } from "../auth/index.js";
 import { answerChallenge, cancelChallenge, currentChallenge, waitForCode } from "../emburse/challenge.js";
 import { openCodeRequests } from "../emburse/challenge-log.js";
 import { browserQueue, whyWaiting } from "./browser-lock.js";
-import { credentialForUser, hasCredential, noteResult } from "./credentials.js";
+import { PRIMARY, credentialForUser, hasCredential, noteResult } from "./credentials.js";
+import { credentialFor, listConnections, setAwaitingCode } from "./connections.js";
 import {
   inspectEditForm, runDecision, testConnection,
   type Decision, type Target,
@@ -160,12 +161,33 @@ decisionRouter.post("/corrections/clear-failed", requireAuth, async (req: Reques
   }
 });
 
+/**
+ * Test ONE Emburse account.
+ *
+ * Which one is named in the request and defaults to the primary,
+ * which is what a deployment with a single login has always tested.
+ * Now that somebody can hold two, a test that quietly picked one of
+ * them would be the least useful possible answer to "is my MOJO
+ * connection working".
+ */
 decisionRouter.post("/emburse-check", requireAuth, async (req: Request, res: Response) => {
   const who = req.user?.email ?? "";
-  const login = await credentialForUser(who);
+  const userId = req.user?.id ?? "";
+  const body = (req.body ?? {}) as { accountKey?: unknown };
+  const accountKey = typeof body.accountKey === "string" && body.accountKey
+    ? body.accountKey : PRIMARY;
+
+  const login = accountKey === PRIMARY
+    ? await credentialForUser(who).then((c) => (c ? { ...c, accountKey: PRIMARY } : null))
+    : await credentialFor(who, accountKey);
   if (!login) {
+    const mine = userId ? await listConnections(userId) : [];
     res.status(400).json({
-      error: "You have no Emburse login stored. Add one under “Your Emburse login” in the user menu.",
+      error: mine.length > 0
+        ? "That Emburse account is not one of yours. The ones stored are "
+          + `${mine.map((c) => c.loginEmail).join(", ")}.`
+        : "You have no Emburse login stored. Add one under “Your Emburse login” in the "
+          + "user menu.",
     });
     return;
   }
@@ -175,17 +197,46 @@ decisionRouter.post("/emburse-check", requireAuth, async (req: Request, res: Res
     const run = await testConnection(settings.selectors, settings.emburseUrl, login, {
       // Somebody pressed a button and is watching, so a code CAN be asked for —
       // and answering it here is the whole reason to press it.
-      onChallenge: (ctx: { prompt: string; screenshot: string | null; attempt: number; lastError: string | null }) =>
-        waitForCode({ ...ctx, owner: who, loginEmail: login.email }),
+      onChallenge: async (ctx: {
+        prompt: string; screenshot: string | null; attempt: number; lastError: string | null;
+      }) => {
+        /*
+         * Recorded against THIS account while the browser waits.
+         * There is one browser between every connection, so the
+         * other account's card has to be able to say "Mammoth is
+         * waiting" rather than offer a code box that would submit
+         * six digits to the wrong tenant.
+         */
+        await setAwaitingCode(who, login.accountKey, true).catch(() => undefined);
+        try {
+          return await waitForCode({ ...ctx, owner: who, loginEmail: login.email });
+        } finally {
+          await setAwaitingCode(who, login.accountKey, false).catch(() => undefined);
+        }
+      },
     });
     // A failed connection test is NOT automatically a wrong password: a device
     // check and a moved button fail the same way, and flagging those for
     // re-entry asks somebody to retype a password that was never the problem.
     const why = run.ok ? null : lastFailure(run.steps);
-    await noteResult(who, run.ok, why, Boolean(why && /password|credential|rejected/i.test(why)));
+    /*
+     * The USER ID, not the email.
+     *
+     * This passed `who` into a parameter the query uses as
+     * `user_id`, so the update matched nothing and the test's
+     * result was never recorded: "last signed in successfully"
+     * stayed blank however many times somebody pressed the button,
+     * and a password Emburse had rejected was never flagged for
+     * re-entry from here. Found while making the test name its
+     * account, which is what the brief asks the status to mean.
+     */
+    await noteResult(login.userId, run.ok, why,
+      Boolean(why && /password|credential|rejected/i.test(why)), login.accountKey);
     res.json({
       ok: run.ok,
       who,
+      accountKey: login.accountKey,
+      loginEmail: login.email,
       steps: run.steps,
       screenshot: run.screenshot,
     });

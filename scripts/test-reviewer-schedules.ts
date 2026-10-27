@@ -20,7 +20,7 @@ process.env.SESSION_SECRET ||= "test-secret-schedules";
 
 import { db, ensureSchema } from "../server/db.js";
 import { deleteCredential, saveCredential } from "../server/emburse/credentials.js";
-import { gridPathFor, nextDue, reviewerImports, setReviewerImport } from "../server/emburse/export-scheduler.js";
+import { ensureSchedulerSchema, gridPathFor, nextDue, reviewerImports, setReviewerImport } from "../server/emburse/export-scheduler.js";
 import { gridUrl } from "../server/emburse/auto-export.js";
 
 const ERIC = "eric.s@test.invalid";
@@ -43,6 +43,9 @@ const mine = async (who: string) =>
   (await reviewerImports()).find((r) => r.userEmail.toLowerCase() === who);
 
 await ensureSchema();
+// On a cold database this module's tables do not exist yet, and the
+// writes below go straight at them rather than through a route.
+await ensureSchedulerSchema();
 
 try {
   await clean();

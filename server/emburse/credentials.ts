@@ -22,6 +22,25 @@ import { env } from "../env.js";
  * password in here to protect.
  */
 
+/**
+ * ONE PERSON, MORE THAN ONE EMBURSE ACCOUNT.
+ *
+ * The table was keyed on the app user, one row each, which was true
+ * until somebody had two Emburse logins — a company one and a second
+ * company's. Widened rather than replaced, and widened with a
+ * DEFAULT, so every row that already exists becomes the 'primary'
+ * connection and every caller that asks the old question gets the
+ * old answer.
+ *
+ * 'primary' is not a label, it is a JOB: it is the connection the
+ * manager queue is read with and the one a decision is applied
+ * under. A second connection must never be able to inherit that by
+ * being newer or by having signed in more recently — this codebase
+ * has already been bitten once by "most recently proven to work"
+ * silently moving whose queue the app shows.
+ */
+export const PRIMARY = "primary";
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS emburse_credentials (
   user_id      text PRIMARY KEY,
@@ -33,6 +52,28 @@ CREATE TABLE IF NOT EXISTS emburse_credentials (
   last_error   text
 );
 ALTER TABLE emburse_credentials ADD COLUMN IF NOT EXISTS needs_reentry boolean NOT NULL DEFAULT false;
+ALTER TABLE emburse_credentials
+  ADD COLUMN IF NOT EXISTS account_key text NOT NULL DEFAULT 'primary';
+/* What its owner calls it. Never used to decide anything. */
+ALTER TABLE emburse_credentials ADD COLUMN IF NOT EXISTS label text NOT NULL DEFAULT '';
+/* A sign-in parked on a verification code, per connection, so a tab
+   can say "this one is waiting" without claiming the other is. */
+ALTER TABLE emburse_credentials
+  ADD COLUMN IF NOT EXISTS awaiting_code boolean NOT NULL DEFAULT false;
+ALTER TABLE emburse_credentials ADD COLUMN IF NOT EXISTS code_asked_at timestamptz;
+
+DO $do$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'emburse_credentials_user_account_pk'
+  ) THEN
+    ALTER TABLE emburse_credentials DROP CONSTRAINT IF EXISTS emburse_credentials_pkey;
+    ALTER TABLE emburse_credentials
+      ADD CONSTRAINT emburse_credentials_user_account_pk PRIMARY KEY (user_id, account_key);
+  END IF;
+END $do$;
+
+CREATE INDEX IF NOT EXISTS emburse_credentials_owner
+  ON emburse_credentials (lower(user_email), account_key);
 `;
 
 let ready: Promise<void> | null = null;
@@ -58,6 +99,10 @@ export type CredentialStatus = {
    * message.
    */
   needsReentry: boolean;
+  /** Which of its owner's Emburse accounts this is. */
+  accountKey: string;
+  /** What its owner calls it. Never used to decide anything. */
+  label: string;
 };
 
 const ALGO = "aes-256-gcm";
@@ -100,32 +145,48 @@ export async function saveCredential(
   userEmail: string,
   loginEmail: string,
   password: string,
+  /** Which of this person's Emburse accounts. Theirs alone decides. */
+  accountKey: string = PRIMARY,
+  label = "",
 ): Promise<void> {
   await ensure();
   await db().query(
-    `INSERT INTO emburse_credentials (user_id, user_email, login_email, secret, updated_at, last_ok_at, last_error)
-     VALUES ($1,$2,$3,$4, now(), NULL, NULL)
-     ON CONFLICT (user_id) DO UPDATE SET
+    `INSERT INTO emburse_credentials
+       (user_id, user_email, login_email, secret, updated_at, last_ok_at, last_error,
+        account_key, label)
+     VALUES ($1,$2,$3,$4, now(), NULL, NULL, $5, $6)
+     ON CONFLICT (user_id, account_key) DO UPDATE SET
        user_email = EXCLUDED.user_email, login_email = EXCLUDED.login_email,
        secret = EXCLUDED.secret, updated_at = now(),
+       label = CASE WHEN EXCLUDED.label = '' THEN emburse_credentials.label
+                    ELSE EXCLUDED.label END,
        -- A new password invalidates what the old one proved.
-       last_ok_at = NULL, last_error = NULL, needs_reentry = false`,
-    [userId, userEmail, loginEmail, seal(password)],
+       last_ok_at = NULL, last_error = NULL, needs_reentry = false,
+       awaiting_code = false, code_asked_at = NULL`,
+    [userId, userEmail, loginEmail, seal(password), accountKey, label],
   );
 }
 
-export async function deleteCredential(userId: string): Promise<boolean> {
+export async function deleteCredential(
+  userId: string, accountKey: string = PRIMARY,
+): Promise<boolean> {
   await ensure();
-  const r = await db().query("DELETE FROM emburse_credentials WHERE user_id = $1", [userId]);
+  const r = await db().query(
+    "DELETE FROM emburse_credentials WHERE user_id = $1 AND account_key = $2",
+    [userId, accountKey]);
   return (r.rowCount ?? 0) > 0;
 }
 
 /** Status for one user. Never includes the password. */
-export async function credentialStatus(userId: string): Promise<CredentialStatus | null> {
+export async function credentialStatus(
+  userId: string, accountKey: string = PRIMARY,
+): Promise<CredentialStatus | null> {
   await ensure();
   const { rows } = await db().query(
-    `SELECT user_email, login_email, updated_at, last_ok_at, last_error, needs_reentry
-       FROM emburse_credentials WHERE user_id = $1`, [userId]);
+    `SELECT user_email, login_email, updated_at, last_ok_at, last_error, needs_reentry,
+            account_key, label
+       FROM emburse_credentials WHERE user_id = $1 AND account_key = $2`,
+    [userId, accountKey]);
   return rows[0] ? toStatus(rows[0]) : null;
 }
 
@@ -138,8 +199,9 @@ export async function credentialStatus(userId: string): Promise<CredentialStatus
 export async function listCredentials(): Promise<CredentialStatus[]> {
   await ensure();
   const { rows } = await db().query(
-    `SELECT user_email, login_email, updated_at, last_ok_at, last_error, needs_reentry
-       FROM emburse_credentials ORDER BY user_email`);
+    `SELECT user_email, login_email, updated_at, last_ok_at, last_error, needs_reentry,
+            account_key, label
+       FROM emburse_credentials ORDER BY user_email, (account_key = 'primary') DESC, label`);
   return rows.map(toStatus);
 }
 
@@ -147,6 +209,8 @@ function toStatus(r: Record<string, unknown>): CredentialStatus {
   return {
     userEmail: r.user_email as string,
     loginEmail: r.login_email as string,
+    accountKey: (r.account_key as string) ?? PRIMARY,
+    label: (r.label as string) ?? "",
     updatedAt: (r.updated_at as Date).toISOString(),
     lastOkAt: r.last_ok_at ? (r.last_ok_at as Date).toISOString() : null,
     lastError: (r.last_error as string | null) ?? null,
@@ -185,8 +249,16 @@ export async function credentialForExport(): Promise<
   const preferred = await flagOwner("importAs").catch(() => null);
   if (preferred) {
     const { rows } = await db().query<{ user_id: string; login_email: string; secret: Buffer; user_email: string }>(
+      /*
+       * Their PRIMARY connection, never just "a connection of
+       * theirs". Somebody's second Emburse account is a different
+       * Needs Review, and letting the shared import drift onto one
+       * because it happened to be newer is the same bug this
+       * function was rewritten to stop.
+       */
       `SELECT user_id, login_email, secret, user_email FROM emburse_credentials
-        WHERE lower(btrim(user_email)) = lower(btrim($1))`, [preferred]);
+        WHERE lower(btrim(user_email)) = lower(btrim($1)) AND account_key = $2`,
+      [preferred, PRIMARY]);
     const chosen = rows[0];
     if (chosen) {
       try {
@@ -211,8 +283,10 @@ export async function credentialForExport(): Promise<
 
   const { rows } = await db().query<{ user_id: string; login_email: string; secret: Buffer; user_email: string }>(
     `SELECT user_id, login_email, secret, user_email FROM emburse_credentials
+      WHERE account_key = $1
       ORDER BY (last_ok_at IS NOT NULL) DESC, last_ok_at DESC, updated_at DESC
       LIMIT 1`,
+    [PRIMARY],
   );
   const row = rows[0];
   if (!row) return null;
@@ -253,9 +327,21 @@ export async function credentialForUser(userEmail: string): Promise<
   { userId: string; email: string; password: string } | null
 > {
   await ensure();
+  /*
+   * Their PRIMARY connection and no other.
+   *
+   * An approval is recorded in Emburse against whichever account
+   * signed in. Now that one person can hold two, "a credential of
+   * theirs" is not good enough: applying Eric's manager approval
+   * under his personal Mammoth login would put the wrong account's
+   * name on a decision, in the finance system, permanently.
+   * Falling back to another of their own connections is as wrong
+   * as falling back to somebody else's.
+   */
   const { rows } = await db().query<{ user_id: string; login_email: string; secret: Buffer }>(
-    "SELECT user_id, login_email, secret FROM emburse_credentials WHERE lower(user_email) = lower($1)",
-    [userEmail],
+    `SELECT user_id, login_email, secret FROM emburse_credentials
+      WHERE lower(user_email) = lower($1) AND account_key = $2`,
+    [userEmail, PRIMARY],
   );
   const row = rows[0];
   if (!row) return null;
@@ -273,9 +359,11 @@ export async function credentialForUser(userEmail: string): Promise<
 /** Whether this person could act in Emburse as themselves, without decrypting. */
 export async function hasCredential(userEmail: string): Promise<boolean> {
   await ensure();
+  // The primary one, because that is the one a decision would use.
   const { rows } = await db().query<{ n: string }>(
-    "SELECT count(*) AS n FROM emburse_credentials WHERE lower(user_email) = lower($1)",
-    [userEmail],
+    `SELECT count(*) AS n FROM emburse_credentials
+      WHERE lower(user_email) = lower($1) AND account_key = $2`,
+    [userEmail, PRIMARY],
   );
   return Number(rows[0]?.n ?? 0) > 0;
 }
@@ -301,15 +389,19 @@ export async function noteResult(
    * teaching them to ignore the warning by the time it is real.
    */
   credentialFault: boolean,
+  /** Which of this person's accounts signed in, or tried to. */
+  accountKey: string = PRIMARY,
 ): Promise<void> {
   await ensure();
   await db().query(
     `UPDATE emburse_credentials
         SET last_ok_at    = CASE WHEN $2 THEN now() ELSE last_ok_at END,
             last_error    = CASE WHEN $2 THEN NULL ELSE $3 END,
-            needs_reentry = CASE WHEN $2 THEN false ELSE $4 END
-      WHERE user_id = $1`,
-    [userId, ok, error?.slice(0, 500) ?? null, credentialFault],
+            needs_reentry = CASE WHEN $2 THEN false ELSE $4 END,
+            awaiting_code = false,
+            code_asked_at = NULL
+      WHERE user_id = $1 AND account_key = $5`,
+    [userId, ok, error?.slice(0, 500) ?? null, credentialFault, accountKey],
   );
 }
 
@@ -344,7 +436,12 @@ export async function sharedImporter(): Promise<string | null> {
   // ambiguous, and the app says so and offers to settle it (Import page →
   // claim) rather than guessing and being wrong in silence.
   const { rows } = await db().query<{ user_email: string }>(
-    "SELECT user_email FROM emburse_credentials LIMIT 2");
+    // DISTINCT, and primary only: one person with two Emburse
+    // accounts is still one candidate, and counting their second
+    // connection as a second person would make an unambiguous
+    // deployment look ambiguous and stop naming an owner at all.
+    `SELECT DISTINCT user_email FROM emburse_credentials
+      WHERE account_key = $1 LIMIT 2`, [PRIMARY]);
   return rows.length === 1 ? rows[0]!.user_email : null;
 }
 
@@ -365,7 +462,8 @@ export async function unclaimedExpenses(): Promise<{
   const { rows } = await db().query<{ n: string }>(
     "SELECT count(*) AS n FROM expenses WHERE reviewer = '' AND in_inbox");
   const { rows: people } = await db().query<{ user_email: string }>(
-    "SELECT user_email FROM emburse_credentials ORDER BY user_email");
+    `SELECT DISTINCT user_email FROM emburse_credentials
+      WHERE account_key = $1 ORDER BY user_email`, [PRIMARY]);
   // Whose the queue actually is, counted from the rows themselves. The one
   // readout that would have answered "why is Brian seeing Eric's?" in a
   // glance, instead of three rounds of inference from screenshots.
@@ -434,7 +532,8 @@ export async function claimUnclaimed(
 
   if (!who) throw new Error("Name whose expenses these are.");
   const { rows } = await db().query<{ n: string }>(
-    "SELECT count(*) AS n FROM emburse_credentials WHERE lower(user_email) = $1", [who]);
+    `SELECT count(*) AS n FROM emburse_credentials
+      WHERE lower(user_email) = $1 AND account_key = $2`, [who, PRIMARY]);
   if (Number(rows[0]?.n ?? 0) === 0) {
     throw new Error(
       `${userEmail} has no Emburse login stored, so these expenses cannot be theirs — ` +

@@ -26,7 +26,20 @@ type Result = { ok: boolean; who?: string; steps?: Step[]; screenshot?: string |
  * had entered the code. The prompt is in this box now, where the person who
  * just pressed the button is looking.
  */
-export function EmburseCheck({ canDecide }: { canDecide: boolean }) {
+export function EmburseCheck({
+  canDecide, accountKey, loginEmail,
+}: {
+  canDecide: boolean;
+  /**
+   * Which Emburse account to test. Absent means the primary one,
+   * which is what a deployment with a single login has always
+   * tested. Once somebody holds two, a test that did not say which
+   * it ran is the least useful possible answer to "is my MOJO
+   * connection working".
+   */
+  accountKey?: string;
+  loginEmail?: string;
+}) {
   const [result, setResult] = useState<Result | null>(null);
   const [busy, setBusy] = useState(false);
   const qc = useQueryClient();
@@ -50,7 +63,11 @@ export function EmburseCheck({ canDecide }: { canDecide: boolean }) {
     setBusy(true);
     setResult(null);
     try {
-      const res = await fetch("/api/emburse-check", { method: "POST" });
+      const res = await fetch("/api/emburse-check", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(accountKey ? { accountKey } : {}),
+      });
       setResult((await res.json()) as Result);
     } catch (err) {
       setResult({ ok: false, error: (err as Error).message });
@@ -63,10 +80,13 @@ export function EmburseCheck({ canDecide }: { canDecide: boolean }) {
     <div className="rounded-lg border border-border bg-muted/30 px-3 py-2.5">
       <div className="flex flex-wrap items-center gap-2">
         <PlugZap className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <p className="text-sm font-semibold">Your Emburse connection</p>
+        <p className="text-sm font-semibold">
+          {loginEmail ? `Test ${loginEmail}` : "Your Emburse connection"}
+        </p>
         <p className="text-xs text-muted-foreground">
           {canDecide
-            ? "Signs in as you and opens the expenses grid. Approves nothing."
+            ? `Signs in as ${loginEmail ?? "you"} and opens the expenses grid. Approves `
+              + "nothing, and touches no other account."
             : "Add your Emburse login first — there is nothing to test yet."}
         </p>
         <button

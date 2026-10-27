@@ -176,6 +176,19 @@ const ensure = (): Promise<void> =>
     await db().query(SCHEMA);
   }));
 
+/**
+ * Create this module's tables, for a caller that reaches them
+ * without going through one of its functions first.
+ *
+ * Every route does — `ensure()` is the first line of each — so this
+ * only matters on a cold database, which is exactly where it was
+ * missing: `test-run-as.ts` and `test-reviewer-schedules.ts` write
+ * straight into `reviewer_imports` and both died on "relation does
+ * not exist" against an empty one. Harmless on this deployment,
+ * fatal on the first boot of a new one.
+ */
+export const ensureSchedulerSchema = (): Promise<void> => ensure();
+
 export type RunRow = {
   id: number;
   startedAt: string;
@@ -576,6 +589,12 @@ export async function attemptExport(
      * two reviewers' queues kept turning out to be the same queue: every
      * step reported the account we MEANT to use and nothing ever asked the
      * page.
+     *
+     * This now includes the OTHER accounts belonging to the same
+     * person, and that is the point rather than an oversight:
+     * signing in as your own Mammoth login when the run meant your
+     * MOJO one pulls the wrong tenant's expenses, and it is exactly
+     * as wrong as signing in as somebody else's.
      */
     const otherLogins = await (async () => {
       try {
@@ -867,7 +886,24 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
   await ensure();
   const { schedule: shared } = await readSettings();
   const { listCredentials } = await import("./credentials.js");
-  const people = await listCredentials().catch(() => []);
+  /*
+   * ONE ROW PER PERSON, not per stored login.
+   *
+   * Somebody can now hold two Emburse accounts, and this used to
+   * build a reviewer from every credential row — so the moment Eric
+   * added his second, he would have appeared twice in Export
+   * settings, taken two stagger slots, and had his import run
+   * twice on every tick. The primary one is kept because
+   * `listCredentials` orders it first.
+   */
+  const everyLogin = await listCredentials().catch(() => []);
+  const seen = new Set<string>();
+  const people = everyLogin.filter((c) => {
+    const who = c.userEmail.toLowerCase();
+    if (seen.has(who)) return false;
+    seen.add(who);
+    return true;
+  });
   if (people.length === 0) {
     return [{ userEmail: "", enabled: true, schedule: shared, shared: true,
               staggeredBy: 0, gridPath: null, gridSection: null, gridQuery: null,

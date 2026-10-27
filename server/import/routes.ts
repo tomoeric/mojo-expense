@@ -10,6 +10,9 @@ import { ALL_SECTIONS, cleanSchedule, readSettings, writeSettings } from "./sett
 import { DEFAULT_SELECTORS, SELECTOR_HELP, STEP_SELECTORS, envLogin } from "../emburse/auto-export.js";
 import { claimUnclaimed, credentialStatus, deleteCredential, hasCredential, listCredentials, saveCredential,
          scopeFor, unclaimedExpenses } from "../emburse/credentials.js";
+import {
+  addConnection, labelConnection, linkedLanes, listConnections, removeConnection,
+} from "../emburse/connections.js";
 import { MANAGER_GRID, attemptExport, gridPathFor, isStopping, nextDue, recentRuns,
          reviewerImports, runScreenshot, setReviewerImport, stopRun }
   from "../emburse/export-scheduler.js";
@@ -857,6 +860,117 @@ importRouter.delete("/my-emburse-login", requireAuth, async (req: Request, res: 
   }
   res.json({ removed: await deleteCredential(id) });
 });
+
+/* ------------------------------------------------------------------ *
+ * More than one Emburse account, for one person
+ * ------------------------------------------------------------------ */
+
+/**
+ * Who may manage a connection: its owner, acting as themselves.
+ *
+ * Keyed on the caller's own user id, so there is no id in the
+ * request for an administrator to substitute and no ownership check
+ * to get wrong. View-as is refused outright — somebody looking at
+ * the app through another person's eyes must not be able to store,
+ * replace or delete that person's Emburse password, and "read-only
+ * while viewing" is a rule this app already keeps everywhere else.
+ */
+function owner(req: Request, res: Response): { id: string; email: string } | null {
+  if (req.viewingAs) {
+    res.status(403).json({
+      error: "You are viewing as somebody else. An Emburse login is managed by its owner, "
+        + "signed in as themselves.",
+    });
+    return null;
+  }
+  const user = req.user;
+  if (!user?.id) {
+    res.status(401).json({ error: "Sign in first." });
+    return null;
+  }
+  return { id: user.id, email: user.email };
+}
+
+/**
+ * Every Emburse account this person has stored, and which tab each
+ * serves.
+ *
+ * The lanes come back whether or not anything is linked, because
+ * "Personal Tab - MOJO has no connection, and here is what IS
+ * stored instead" is the answer somebody needs — a tab that simply
+ * does not appear teaches nobody anything.
+ */
+importRouter.get("/my-emburse-accounts", requireAuth, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  const me = owner(req, res);
+  if (!me) return;
+  try {
+    res.json({
+      connections: await listConnections(me.id),
+      lanes: await linkedLanes(me.id, me.email),
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Could not read your Emburse accounts.",
+    });
+  }
+});
+
+/** Add one, or replace one by naming its key. Never returns a password. */
+importRouter.post("/my-emburse-accounts", requireAuth, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  const me = owner(req, res);
+  if (!me) return;
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  try {
+    const out = await addConnection({
+      userId: me.id,
+      userEmail: me.email,
+      loginEmail: String(b.loginEmail ?? ""),
+      password: String(b.password ?? ""),
+      label: typeof b.label === "string" ? b.label : "",
+      accountKey: typeof b.accountKey === "string" && b.accountKey ? b.accountKey : undefined,
+    });
+    if (!out.ok) { res.status(400).json({ error: out.problem }); return; }
+    res.json({
+      connection: out.connection,
+      connections: await listConnections(me.id),
+      lanes: await linkedLanes(me.id, me.email),
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Could not save that Emburse account.",
+    });
+  }
+});
+
+importRouter.post("/my-emburse-accounts/:key/label", requireAuth,
+  async (req: Request, res: Response) => {
+    if (!guard(res)) return;
+    const me = owner(req, res);
+    if (!me) return;
+    const b = (req.body ?? {}) as { label?: unknown };
+    const ok = await labelConnection(me.id, String(req.params.key ?? ""),
+      String(b.label ?? ""));
+    if (!ok) { res.status(404).json({ error: "No such Emburse account." }); return; }
+    res.json({
+      connections: await listConnections(me.id),
+      lanes: await linkedLanes(me.id, me.email),
+    });
+  });
+
+importRouter.delete("/my-emburse-accounts/:key", requireAuth,
+  async (req: Request, res: Response) => {
+    if (!guard(res)) return;
+    const me = owner(req, res);
+    if (!me) return;
+    const removed = await removeConnection(me.id, String(req.params.key ?? ""));
+    res.json({
+      removed,
+      connections: await listConnections(me.id),
+      lanes: await linkedLanes(me.id, me.email),
+    });
+  });
 
 /**
  * Who has stored a login, for an administrator setting the export up.

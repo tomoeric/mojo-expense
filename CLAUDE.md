@@ -97,6 +97,12 @@ renders what it should, and assert **zero console errors** — a React crash
 below the fold is invisible to every other check here. Click the controls that
 were added; "it compiles" is not "the button works".
 
+**5a. A change on the Emburse side means at least**: `credentials`,
+`connections`, `decisions`, `import-as`, `unclaimed`, `run-as`,
+`reviewer-schedules`, `manager-queue`, `view-as-brian`, `two-reviewers`,
+`corrections`, `decision-trace`, `auto-approve`, `rules`, `bulk-approve`. For
+a change to "Your Emburse login", also `test-accounts-ui.ts` after a build.
+
 **6. Two things that only an EMPTY database shows.** Run the suites once
 against a fresh database, because the live one has every table already and
 hides both: a column or index that was never written (the signup soft-delete
@@ -2355,8 +2361,70 @@ before a person did. Add to it before adding to the runner.
   meter existed was wrong, once by a factor of fifty, because it rested on
   assumed token counts. Quote the meter or say you do not know.
 
+## One person, more than one Emburse account
+
+`server/emburse/connections.ts`. Eric submits expenses in two Emburse
+tenants, so a person's login is a LIST now. `emburse_credentials` was widened
+in place — `account_key text NOT NULL DEFAULT 'primary'`, primary key
+`(user_id, account_key)` — so every row that already exists becomes the
+primary connection and every caller asking the old question gets the old
+answer, with no migration step.
+
+- **`primary` is a JOB, not a label.** It is the connection the manager queue
+  is read with and the one every approval and denial is applied under.
+  `credentialForUser`, `credentialForExport` and `hasCredential` are all
+  pinned to it. A second connection must NEVER be able to inherit that by
+  being newer or by having signed in more recently — this codebase has
+  already been bitten once by "most recently proven to work" silently moving
+  whose queue the app shows, and Emburse records an approval against
+  whichever account signed in, permanently, in the finance system.
+- **No fallback between one person's own accounts.** A lane with nothing
+  linked is an error with a sentence. `credentialFor(userEmail, accountKey)`
+  is the only function that decrypts and it always names its account; there
+  is deliberately no variant that takes a person and works out which.
+- **A tab is linked by COMPARING EMBURSE ADDRESSES.** `emburse_lanes` holds
+  the tab (Manager · Personal Tab - MOJO · Personal Tab - Mammoth) and the
+  Emburse login it is defined by; `linkedLanes()` links a stored connection
+  to a tab only when the connection's `login_email` IS that address. **The
+  app user's own email says nothing about it** — the connection already
+  stored signs in as `eric.s@mammothholdings.com` while its owner signs into
+  this app as `eric.s@mojocarwash.com`, and believing those agree is how a
+  receipt gets attached in the wrong tenant. A tab that matches nothing is
+  returned unlinked, with a sentence naming what IS on file.
+- **The mapping is seeded as DATA, not written as a constant.** `SEED` in
+  `connections.ts` inserts the owner-confirmed rows with `ON CONFLICT DO
+  NOTHING`, so a second person with two Emburse accounts is a row rather than
+  a code change and an edit survives a redeploy.
+- **The same Emburse login twice is refused.** Two rows for one tenant is two
+  sealed passwords that can disagree, two sign-in states, and a lane link
+  that picks whichever came back first — an intermittent sign-in failure
+  nobody could reproduce.
+- **A label decides nothing.** Naming a connection "Personal Tab - MOJO" does
+  not make it the MOJO tab's; the address does. Tested.
+- **A verification code belongs to one connection.** `awaiting_code` is per
+  row, set around `waitForCode` in the connection test. There is one browser
+  between every connection, so the other account's card must be able to say
+  "Mammoth is waiting" rather than offer a code box that would submit six
+  digits to the wrong tenant.
+- **A connection is managed only by its owner, signed in as themselves.** The
+  routes key on `req.user.id`, so there is no id to substitute, and view-as
+  is refused outright — somebody looking through another person's eyes must
+  not be able to store or delete that person's Emburse password.
+- **`noteResult` was being given an email where the query uses `user_id`**, so
+  the Emburse-check's result was never recorded: "last signed in
+  successfully" stayed blank however many times somebody pressed the button,
+  and a password Emburse had rejected was never flagged for re-entry from
+  there. Fixed while making the test name its account. If a status on that
+  page ever looks stale again, check that call first.
+- `scripts/test-connections.ts`.
+
 ## Testing your own Emburse connection
 
+- **Per account.** `POST /api/emburse-check` takes an `accountKey` and
+  defaults to the primary, which is what a single-login deployment has always
+  tested. Each connection card has its own button, because "is it working" is
+  a question about one Emburse tenant and the answer for the other says
+  nothing about it.
 - **It lives on "Your Emburse login", under the user icon** — the page where
   the credential is entered is where "does it work" belongs. It tests the
   signed-in person's own login and nobody else's, so Brian testing it tests

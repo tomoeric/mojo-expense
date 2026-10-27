@@ -159,6 +159,20 @@ const ensure = (): Promise<void> =>
     await db().query(SCHEMA);
   }));
 
+/**
+ * Create this module's tables, for a caller that reaches them
+ * without going through one of its functions first.
+ *
+ * `purgeFinished` in the ingest reads `expense_decisions` directly,
+ * which is right in the server — the decisions module is always
+ * loaded by then — and wrong on a cold database, where
+ * `test-two-reviewers.ts` died on "relation does not exist". Called
+ * from that test rather than from inside the ingest's transaction,
+ * because DDL on another connection while a transaction is open is
+ * a deadlock waiting for the one day the tables are not there.
+ */
+export const ensureDecisionsSchema = (): Promise<void> => ensure();
+
 type Row = {
   id: string; dedupe_key: string; decision: Decision; reason: string | null;
   decided_by: string; decided_at: Date; state: DecisionState; attempts: number;

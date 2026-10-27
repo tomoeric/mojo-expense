@@ -18,6 +18,8 @@
 import pg from "pg";
 import { db, ensureSchema } from "../server/db.js";
 import { purgeFinished } from "../server/import/ingest.js";
+import { ensureDecisionsSchema } from "../server/emburse/decisions.js";
+import { ensureReceiptItems } from "../server/emburse/receipt-items.js";
 
 const ERIC = "eric.s@test.invalid";
 const BRIAN = "brian.c@test.invalid";
@@ -51,6 +53,11 @@ const clean = async (): Promise<void> => {
 };
 
 await ensureSchema();
+// The purge reads expense_decisions and receipt_readings, which
+// this file reaches directly rather than through the modules
+// that own them. On a cold database neither table exists yet.
+await ensureDecisionsSchema();
+await ensureReceiptItems();
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const client = await pool.connect();
 
