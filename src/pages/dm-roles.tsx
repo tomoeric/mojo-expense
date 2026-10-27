@@ -92,7 +92,10 @@ export function DmRolesPage() {
           </h1>
           <p className="text-sm text-muted-foreground">
             What each kind of person can <strong>open</strong>, and what they can{" "}
-            <strong>do</strong>. Account Administrator only.
+            <strong>do</strong>. These are <strong>shared template</strong> roles: they
+            exist in every partner account and a change here changes them all. An
+            account can add roles of its own on top, under Users &amp; Access.
+            Account Administrator only.
           </p>
         </div>
         <button

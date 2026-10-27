@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowDown, ArrowUp, Check, GripVertical, Loader2, Lock, Plus, RotateCcw, Trash2, X,
+  ArrowDown, ArrowUp, ArrowUpToLine, Check, GripVertical, Loader2, Lock, Plus,
+  RotateCcw, Trash2, X,
 } from "lucide-react";
 
 /**
@@ -71,6 +72,9 @@ export type LayoutAnswer = {
   widths: (2 | 3 | 4 | 6)[];
   heights: ("auto" | "short" | "tall")[];
   canArrange: boolean;
+  /** Promoting reaches other partners, so it is the platform's. */
+  canPromote: boolean;
+  impact: { following: string[]; keeping: string[]; hasOwn: boolean };
 };
 
 export function useLayout(page: BlockPage) {
@@ -230,6 +234,30 @@ export function LayoutEditor({
     onError: (e) => setError((e as Error).message),
   });
 
+  /**
+   * Make this arrangement the one new partners start on.
+   *
+   * The reason an account-level fix is called a CORRECTION: without
+   * this it stays in one account and the next partner provisioned
+   * inherits the fault. It says what it will reach before it is
+   * clicked, because "every partner still on the base" is the part
+   * somebody would otherwise find out afterwards.
+   */
+  const promote = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/dutch-miller/blocks/${answer.page}/promote`,
+        { method: "POST" });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Could not promote it.");
+      return body as { reached: number };
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["dm-layout", answer.page] });
+      onClose();
+    },
+    onError: (e) => setError((e as Error).message),
+  });
+
   const restore = useMutation({
     mutationFn: async () => {
       const res = await fetch(`/api/dutch-miller/blocks/${answer.page}/reset`,
@@ -287,6 +315,39 @@ export function LayoutEditor({
           </button>
         </div>
       </div>
+
+      {answer.canPromote && answer.impact.hasOwn && (
+        <div className="rounded-lg border border-sky-500/40 bg-sky-500/5 p-3">
+          <p className="text-xs font-semibold">
+            Make this the layout every new partner starts on
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {answer.impact.following.length === 0
+              ? "No existing partner is still following the shared layout, so this would "
+                + "change only accounts created from here on."
+              : `This becomes the shared base. It reaches ${answer.impact.following.length} `
+                + `existing partner${answer.impact.following.length === 1 ? "" : "s"} — the `
+                + `one${answer.impact.following.length === 1 ? "" : "s"} still following it`
+                + `${answer.impact.keeping.length > 0
+                  ? `, while ${answer.impact.keeping.length} with their own arrangement keep `
+                    + "it" : ""}.`}
+            {" "}Only the order, width and height move; what a bucket holds is a template
+            change and stays on Shared Template.
+          </p>
+          <button
+            type="button"
+            disabled={promote.isPending}
+            onClick={() => { setError(""); promote.mutate(); }}
+            className="mt-2 inline-flex items-center gap-1.5 rounded-md border
+                       border-sky-600/50 px-3 py-1.5 text-xs font-semibold
+                       disabled:opacity-50"
+          >
+            {promote.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
+            <ArrowUpToLine className="h-3 w-3" />
+            Promote to the shared template
+          </button>
+        </div>
+      )}
 
       {error && <p className="text-sm font-semibold text-red-600">{error}</p>}
 

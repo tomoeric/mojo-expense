@@ -479,7 +479,7 @@ export function DmAccountSettingsPage() {
     <div className="space-y-5">
       <SectionTitle
         title="Account Settings"
-        description="Platform-wide configuration."
+        description="Platform-wide configuration — shared template, not one partner's."
       />
       <div className="rounded-xl border border-border bg-card p-5">
         <p className="flex items-center gap-2 text-sm font-semibold">

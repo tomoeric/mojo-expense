@@ -65,8 +65,8 @@ import {
 } from "./business.js";
 import {
   BLOCK_PAGES, HEIGHTS, PAGE_LABEL, WIDTHS, archiveBlock, essentialOn, isBlockPage,
-  accountsArranging, itemsOn, layoutFor, listBlocks, resetLayout, saveBaseLayout,
-  saveBlock, saveLayout,
+  accountsArranging, itemsOn, layoutFor, layoutImpact, listBlocks, promoteLayout,
+  resetLayout, saveBaseLayout, saveBlock, saveLayout,
   type BlockPage,
 } from "./blocks.js";
 import {
@@ -1940,8 +1940,45 @@ dutchMillerRouter.get("/blocks/:page", async (req: Request, res: Response) => {
        It is shown here and decided again on the write. */
     canArrange: canAdminister(await dmAccessFor(
       req.viewingAs?.real.email ?? req.user?.email ?? "")),
+    /*
+     * Promoting is the platform's, not the partner's. The whole
+     * point is that it reaches other accounts, so it cannot be an
+     * action one partner's administrator takes on their own page.
+     */
+    canPromote: isSuperEmail(req.viewingAs?.real.email ?? req.user?.email ?? ""),
+    impact: await layoutImpact(account.id, page),
   });
 });
+
+/**
+ * Make this account's arrangement the one new partners start on.
+ *
+ * The account-level change was a CORRECTION; this is what makes it
+ * carry over. Layout only — what a bucket CONTAINS is a template
+ * edit and belongs on the Shared Template page, because promoting a
+ * field selection would rewrite a shared definition from inside one
+ * partner.
+ *
+ * Account administrator only, and it says how many partners it
+ * reaches before it is clicked rather than after.
+ */
+dutchMillerRouter.post("/blocks/:page/promote",
+  requireSuperTo("promote a layout to the shared template"),
+  async (req: Request, res: Response) => {
+    const page = asPage(req.params.page);
+    if (!page) { res.status(404).json({ error: "No such page." }); return; }
+    const account = accountOf(req, res);
+    if (!account) return;
+    const out = await promoteLayout(account.id, page, actor(req));
+    if (!out.ok) { res.status(400).json({ error: out.problem }); return; }
+    await audit({
+      action: "template.layout.changed", ...who(req), resource: page,
+      detail: `${PAGE_LABEL[page]} — ${account.name}'s arrangement promoted to the `
+        + `shared base, reaching ${out.reached} other partner(s) on it`,
+    });
+    emitChange("settings");
+    res.json({ layout: out.layout, reached: out.reached });
+  });
 
 /**
  * Save this account's arrangement of one page.

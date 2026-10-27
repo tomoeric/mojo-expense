@@ -26,8 +26,8 @@ import {
   DUTCH_MILLER, createAccount,
 } from "../server/dutch-miller/accounts.js";
 import {
-  archiveBlock, essentialOn, forgetLayouts, itemsOn, layoutFor, listBlocks,
-  resetLayout, saveBaseLayout, saveBlock, saveLayout,
+  archiveBlock, essentialOn, forgetLayouts, itemsOn, layoutFor, layoutImpact,
+  listBlocks, promoteLayout, resetLayout, saveBaseLayout, saveBlock, saveLayout,
 } from "../server/dutch-miller/blocks.js";
 import { db } from "../server/db.js";
 
@@ -237,6 +237,59 @@ try {
     items: ["rule"], columns: 1,
   }, BY);
   check("refused", moved.ok === false, moved.ok ? "" : moved.problem);
+
+  console.log("\n12. Promoting a correction so it carries over");
+  /*
+   * The whole reason an account-level change is called a CORRECTION.
+   * Without this it stays in one account and the next partner
+   * provisioned inherits the fault.
+   */
+  await saveLayout(DUTCH_MILLER, PAGE, [
+    { blockId: "blk_review_customer", position: 10, width: 4, height: "auto" },
+    { blockId: "blk_review_auto", position: 20, width: 2, height: "auto" },
+    { blockId: "blk_review_dealer", position: 30, width: 6, height: "auto" },
+  ], BY);
+  await resetLayout(second, PAGE);
+
+  const before = await layoutImpact(DUTCH_MILLER, PAGE);
+  check("the impact is known before the action", before.hasOwn === true);
+  check("…naming the accounts that would change",
+    before.following.includes(second), before.following.join(", "));
+
+  const up = await promoteLayout(DUTCH_MILLER, PAGE, BY);
+  check("it promotes", up.ok === true, up.ok ? "" : up.problem);
+  check("…reporting how many it reached", up.ok && up.reached >= 1, String(up.ok && up.reached));
+  check("the other account now shows the corrected order",
+    (await layoutFor(second, PAGE))[0]?.id === "blk_review_customer",
+    (await layoutFor(second, PAGE))[0]?.id);
+  check("…including the width",
+    (await layoutFor(second, PAGE))[0]?.width === 4);
+  /*
+   * And the promoting account STOPS overriding. It is the base now,
+   * so an override saying the same thing would be a copy that stops
+   * following the next correction — the snapshot this design exists
+   * to avoid.
+   */
+  const after = await layoutFor(DUTCH_MILLER, PAGE);
+  check("the promoting account goes back to FOLLOWING the base",
+    after.every((b) => !b.overridden));
+  check("…and still shows the same thing", after[0]?.id === "blk_review_customer");
+  const twice = await promoteLayout(DUTCH_MILLER, PAGE, BY);
+  check("promoting again when there is nothing to promote is refused",
+    twice.ok === false, twice.ok ? "" : twice.problem);
+
+  // An account with its OWN arrangement is not overwritten by a promotion.
+  await saveLayout(second, PAGE, [
+    { blockId: "blk_review_dealer", position: 10, width: 6, height: "auto" },
+  ], BY);
+  await saveLayout(DUTCH_MILLER, PAGE, [
+    { blockId: "blk_review_auto", position: 10, width: 6, height: "auto" },
+    { blockId: "blk_review_customer", position: 20, width: 6, height: "auto" },
+  ], BY);
+  await promoteLayout(DUTCH_MILLER, PAGE, BY);
+  check("AN ACCOUNT WITH ITS OWN ARRANGEMENT KEEPS IT",
+    (await layoutFor(second, PAGE))[0]?.id === "blk_review_dealer",
+    (await layoutFor(second, PAGE))[0]?.id);
 
 } finally {
   // Put the shared template back the way it was, so running this

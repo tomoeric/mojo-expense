@@ -66,7 +66,10 @@ export function DmSecurityPage() {
         <h1 className="text-lg font-semibold">Security</h1>
         <p className="text-sm text-muted-foreground">
           Attempts, refusals and patterns worth a look — and a plain statement of
-          what this application can and cannot see.
+          what this application can and cannot see. <strong>Shared</strong>: one
+          record and one set of controls for the whole platform. Business events
+          carry the partner they happened in; sign-ins and refusals belong to
+          nobody's account.
         </p>
       </div>
 

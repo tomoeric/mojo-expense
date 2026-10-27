@@ -709,6 +709,24 @@ RFID Inventory.
   work with a keyboard and on a phone.
 - **Restore deletes the overrides** rather than writing today's base into them,
   which is what keeps the page FOLLOWING the template afterwards.
+- **An account's saved layout is the WHOLE page, not a per-bucket patch.** The
+  first version merged the base into the gaps, which looks harmless and is
+  not: a bucket somebody deliberately removed came back on the next load,
+  because "absent from the account's rows" and "follow the base" meant the
+  same thing. It also forced a bucket added to the base later into a layout
+  somebody had customised — the one thing the brief says not to do. An account
+  with NO rows still follows the base, which is what keeps a shared correction
+  reaching everybody who has not arranged the page.
+- **Promoting is how an account-level correction carries over.**
+  `promoteLayout` makes one account's arrangement the shared base, so every
+  partner created afterwards starts with it and every partner still following
+  the base gets it now. It says how many that is BEFORE the click. Layout only
+  — order, width, height — because what a bucket CONTAINS is a template edit
+  and promoting a field selection would rewrite a shared definition from
+  inside one partner. The promoting account stops overriding afterwards: it is
+  the base now, and an override saying the same thing would be a copy that
+  stops following the next correction. Account administrator only; it reaches
+  other partners, so it cannot be one partner's administrator's to take.
 - `scripts/test-blocks.ts` covers the model; `test-isolation.ts` covers the
   routes, including that an administrator cannot touch the shared template.
 
@@ -801,6 +819,11 @@ page is shared; the record never is.
   somebody having to grant it.
 
 ### Shared administration says so on the page
+
+All five sections say it now — Users & Access, Roles & Permissions, Account
+Settings, Security, Email & Notifications. A setting that looks like this
+account's and is not is how somebody switches off one partner's reminders and
+stops everybody's.
 
 Users & Access and Email & Notifications are platform-wide and now read that
 way — "everyone who can reach the platform", "these recipients apply to every

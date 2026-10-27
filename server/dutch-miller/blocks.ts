@@ -641,9 +641,26 @@ export async function layoutFor(
        FROM dm_account_layout WHERE account_id = $1 AND page = $2`,
     [accountId, page]);
 
+  /*
+   * WHOLE PAGE, not bucket by bucket.
+   *
+   * Once an account has saved a layout, that layout IS its page.
+   * Merging the base into the gaps looks harmless and is not: a
+   * bucket somebody deliberately removed in the editor comes back on
+   * the next load, because "absent from the account's rows" and
+   * "follow the base" would mean the same thing. It also forces a
+   * bucket added to the base later into a layout somebody has
+   * customised, which is the one thing the brief says not to do —
+   * a new optional bucket is AVAILABLE to an account, never imposed
+   * on one.
+   *
+   * An account with no rows at all still follows the base, which is
+   * what keeps a shared correction reaching everybody who has not
+   * arranged the page for themselves.
+   */
+  const mineFirst = mine.rows.length > 0;
   const overrides = new Map(mine.rows.map((r) => [r.block_id, r]));
   const out: Placed[] = [];
-  const seen = new Set<string>();
 
   const place = (block: TemplateBlock, from: DbPlace, overridden: boolean): void => {
     const own = overrides.get(block.id);
@@ -671,21 +688,14 @@ export async function layoutFor(
       hidden: own?.hidden === true && essential.length === 0,
       overridden,
     });
-    seen.add(block.id);
   };
 
-  for (const row of base.rows) {
+  for (const row of (mineFirst ? mine.rows : base.rows)) {
     const block = byId.get(row.block_id);
     if (!block) continue;
-    const own = overrides.get(row.block_id);
-    place(block, own ?? row, Boolean(own));
+    place(block, row, mineFirst);
   }
-  // Buckets this account added that are not in the base layout.
-  for (const row of mine.rows) {
-    if (seen.has(row.block_id)) continue;
-    const block = byId.get(row.block_id);
-    if (block) place(block, row, true);
-  }
+
 
   return out.sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
 }
@@ -845,6 +855,83 @@ export async function saveBaseLayout(
     client.release();
   }
   return { ok: true };
+}
+
+/**
+ * What promoting this account's page would touch.
+ *
+ * Asked BEFORE the action, not reported after it. Promoting changes
+ * what every account on the base sees, and the number of them is the
+ * one fact somebody needs to decide — "this will reach two of four
+ * partners" is a different decision from "this will reach eleven".
+ */
+export async function layoutImpact(
+  accountId: string, page: BlockPage,
+): Promise<{
+  /** Accounts that follow the base and would therefore change. */
+  following: string[];
+  /** Accounts with their own arrangement, which keeps it. */
+  keeping: string[];
+  /** Does this account actually have anything to promote? */
+  hasOwn: boolean;
+}> {
+  await ensure();
+  const arranging = new Set(await accountsArranging(page));
+  const { rows } = await db().query<{ id: string }>("SELECT id FROM dm_accounts");
+  const all = rows.map((r) => r.id);
+  return {
+    following: all.filter((id) => !arranging.has(id) && id !== accountId),
+    keeping: all.filter((id) => arranging.has(id) && id !== accountId),
+    hasOwn: arranging.has(accountId),
+  };
+}
+
+/**
+ * Make this account's arrangement the one every new partner starts on.
+ *
+ * The answer to "an account-level change is a CORRECTION, and a
+ * correction should carry over" — without it a fix made where
+ * somebody noticed the problem stays in one account, and the next
+ * partner provisioned inherits the fault.
+ *
+ * LAYOUT ONLY: order, width, height, and which buckets are placed.
+ * What a bucket CONTAINS is a template edit and belongs on the
+ * Shared Template page — promoting one account's field selection
+ * would quietly rewrite a shared definition from inside a partner.
+ *
+ * The account stops overriding afterwards. It is now the base, so an
+ * override saying the same thing would only be a copy that stops
+ * following the next correction — the exact snapshot this whole
+ * design avoids.
+ */
+export async function promoteLayout(
+  accountId: string, page: BlockPage, by: string,
+): Promise<{ ok: true; layout: Placed[]; reached: number } | { ok: false; problem: string }> {
+  await ensure();
+  const mine = await layoutFor(accountId, page);
+  const impact = await layoutImpact(accountId, page);
+  if (!impact.hasOwn) {
+    return {
+      ok: false,
+      problem: "This page already follows the shared layout. There is nothing to promote.",
+    };
+  }
+  const rows: LayoutInput[] = mine
+    .filter((b) => !b.hidden)
+    .map((b, i) => ({
+      blockId: b.id, position: (i + 1) * 10, width: b.width, height: b.height,
+    }));
+  const saved = await saveBaseLayout(page, rows);
+  if (!saved.ok) return saved;
+  await db().query(
+    "DELETE FROM dm_account_layout WHERE account_id = $1 AND page = $2",
+    [accountId, page]);
+  void by;
+  return {
+    ok: true,
+    layout: await layoutFor(accountId, page),
+    reached: impact.following.length,
+  };
 }
 
 /** Which accounts have arranged a page for themselves. For the template editor. */
