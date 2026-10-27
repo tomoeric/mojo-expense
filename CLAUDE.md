@@ -101,7 +101,7 @@ were added; "it compiles" is not "the button works".
 `connections`, `decisions`, `import-as`, `unclaimed`, `run-as`,
 `reviewer-schedules`, `manager-queue`, `view-as-brian`, `two-reviewers`,
 `corrections`, `decision-trace`, `auto-approve`, `rules`, `bulk-approve`,
-`lanes`, `two-accounts`, `rule-scope`. For a change to "Your Emburse login", Export
+`lanes`, `two-accounts`, `rule-scope`, `receipt-mail`. For a change to "Your Emburse login", Export
 settings or the review queue, also
 `test-accounts-ui.ts` and `test-lanes-ui.ts` after a build.
 
@@ -2526,6 +2526,47 @@ queue.
   this rule touch my MOJO expenses" is a question about a rule somebody is
   scanning past.
 - `scripts/test-rule-scope.ts`.
+
+## Receipts that arrive as email
+
+`server/emburse/receipt-mail.ts`, page under the user menu.
+
+- **READ ONLY, on both sides.** Every Graph call in that file is a GET;
+  nothing moves, deletes, marks as read, flags, files or replies to a
+  message, and nothing touches Emburse. Somebody's inbox is not this app's to
+  tidy.
+- **THE MAILBOX IS NOT THE EMBURSE LOGIN AND NOT THE APP LOGIN.** Three
+  different concepts, and on this deployment three different addresses: the
+  person signs into the app as MOJO, their saved Emburse connection signs in
+  as Mammoth, and the mailbox is a third thing. `receipt_mail_settings` holds
+  it per person, configured on its own, and the page says so.
+- **ACCOUNT IDENTITY COMES FROM THE EXPENSE.** One MOJO mailbox holds
+  receipts for both personal accounts; a receipt belongs to an account
+  because it matches an expense in it, never because it arrived there. The
+  candidate carries the lane of ITS OWN expense, and the evidence carries
+  none at all.
+- **A candidate is never "confirmed".** Strongest is `strong`, which still
+  means a person says yes. Scoring is additive with REASONS as the output
+  rather than a by-product — "same amount" alone cannot reach strong, because
+  two $12.99 lunches in a month is not a coincidence, it is Tuesday.
+  Explicitly handled and tested: refunds (equal and opposite), currency
+  mismatch, date offsets (a card posts a day or two later), body-only
+  receipts, and an unlabelled total read as the largest figure.
+- **Both conflict shapes are shown, neither is resolved.** One receipt wanted
+  by several expenses, and one expense with several plausible receipts.
+  Choosing one candidate rejects the other candidates FOR THAT EXPENSE only —
+  one receipt covering several expenses is real when a purchase was split
+  across sites, which this app already handles, so that stays a person's
+  call.
+- **Graph access reuses the sign-in app's `Mail.Read`**, via `graphToken()`
+  exported from `mail.ts`. One token cache, not two.
+- `scripts/test-receipt-mail.ts` (reading and scoring, against real message
+  text) and `test-receipt-mail-ui.ts`.
+- **NOT BUILT YET, and waiting on the owner:** attaching a chosen receipt to
+  Emburse, and writing field changes back. The brief says to ask before
+  enabling either — which fields may be written, and whether a strong match
+  applies automatically — so the page stops at "chosen" and says attaching is
+  a separate step.
 
 ## Testing your own Emburse connection
 

@@ -27,6 +27,7 @@ import { AnalyticsPage } from "@/pages/analytics";
 import { ImportPage } from "@/pages/import";
 import { ExportSettingsPage } from "@/pages/export-settings";
 import { MyEmburseLoginPage } from "@/pages/my-emburse-login";
+import { ReceiptMailPage } from "@/pages/receipt-mail";
 import { TaxonomyPage } from "@/pages/taxonomy";
 import { RulesPage } from "@/pages/rules";
 import { ConfigurationPage } from "@/pages/configuration";
@@ -104,13 +105,19 @@ const MENU_PAGES = [
     label: "Your Emburse login",
     description: "The account the app signs into Emburse with. Only you can see or change yours.",
   },
+  {
+    key: "receipt-mail",
+    label: "Receipts in email",
+    description: "Search a mailbox for receipts and match them to your personal expenses.",
+  },
 ] as const;
 
 type RailKey = PageKey | (typeof MENU_PAGES)[number]["key"];
 
 /** Pages that stand alone — no report window, no live strip. */
 const isStandalone = (k: RailKey) =>
-  k === "import" || k === "settings" || k === "rules" || k === "configuration" || k in LISTS;
+  k === "import" || k === "settings" || k === "rules" || k === "configuration"
+  || k === "receipt-mail" || k in LISTS;
 
 /**
  * How far back to load, with no selector to change it.
@@ -549,6 +556,7 @@ export function App() {
           {route === "rules" && <RulesPage isAdmin={auth.data?.isAdmin ?? false} />}
           {route === "settings" && <ExportSettingsPage isAdmin={auth.data?.isAdmin ?? false} />}
           {route === "emburse-login" && <MyEmburseLoginPage />}
+          {route === "receipt-mail" && <ReceiptMailPage />}
         </main>
       </div>
 

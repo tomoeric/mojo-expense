@@ -18,7 +18,7 @@
  * every mailbox in the tenant, not just this one.
  */
 
-const GRAPH = "https://graph.microsoft.com/v1.0";
+export const GRAPH = "https://graph.microsoft.com/v1.0";
 
 /**
  * Its own app registration, or the one that signs people in.
@@ -63,6 +63,12 @@ const clientId = () => creds().clientId;
 const clientSecret = () => creds().clientSecret;
 const sender = () => envOf("MAIL_FROM");
 
+/** The Microsoft app credentials, without the sending mailbox. */
+export const isGraphConfigured = (): boolean => {
+  const c = creds();
+  return Boolean(c.tenantId && c.clientId && c.clientSecret);
+};
+
 export function isMailConfigured(): boolean {
   const c = creds();
   return Boolean(c.tenantId && c.clientId && c.clientSecret && sender());
@@ -98,7 +104,14 @@ export const mailAppIsSeparate = (): boolean =>
 
 let token: { value: string; expiresAt: number } | null = null;
 
-async function graphToken(): Promise<string> {
+/**
+ * A Graph token for the app's own credentials.
+ *
+ * Exported because reading a mailbox needs the same one. Kept
+ * here rather than copied: two token caches would mean two sets
+ * of expiry arithmetic and one of them going stale unnoticed.
+ */
+export async function graphToken(): Promise<string> {
   if (token && Date.now() < token.expiresAt) return token.value;
   const res = await fetch(
     `https://login.microsoftonline.com/${tenantId()}/oauth2/v2.0/token`,

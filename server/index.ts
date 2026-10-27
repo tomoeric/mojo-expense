@@ -22,6 +22,7 @@ import { startAutoApprove } from "./rules/auto-approve.js";
 import { runRules } from "./rules/run.js";
 import { ensureSchema, isDbConfigured } from "./db.js";
 import { rulesRouter } from "./rules/routes.js";
+import { receiptMailRouter } from "./emburse/receipt-mail-routes.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -75,6 +76,7 @@ app.use("/api", requireApp("emburse"));
 app.use("/api", importRouter);
 app.use("/api", decisionRouter);
 app.use("/api", rulesRouter);
+app.use("/api", receiptMailRouter);
 app.use("/api", api);
 
 // Anything left under /api is a genuine 404. Without this it falls through to
