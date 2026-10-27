@@ -856,6 +856,41 @@ are true at once and neither weakens the other.
   none.
 - `scripts/test-account-roles.ts`, plus HTTP coverage in `test-isolation.ts`.
 
+### Editing a page in place
+
+`ArrangedPage` in `components/buckets.tsx` is the one entry point: a page
+passes its registry-key renderer and gets the live page, the pencil, and the
+editor. Four pages use it and none of them knows how any of it works.
+
+- **The editor edits the LIVE page, not a list beside it.** A list of
+  dropdowns is easier to build and is the wrong thing: somebody arranging a
+  page is deciding how it will look, and a control panel makes them imagine
+  the result instead of seeing it.
+- **Three control clusters, each in a fixed place so they are learnt once.**
+  TOP-RIGHT of a bucket: settings, remove, drag handle, and the two arrows
+  that do the same job with a keyboard. TOP-LEFT of a field: remove — the
+  opposite corner on purpose, so it can never be mistaken for the bucket's.
+  RIGHT-HAND INSPECTOR: width presets, columns, a height slider, the field
+  inventory, and the buttons that end the session.
+- **Everything is a DRAFT until Save**, which is the only reason Cancel can
+  honestly claim to restore what was there.
+- **A removed field returns to that bucket's inventory and can be put back.**
+  The inventory is the bucket's template fields minus the ones placed in it —
+  a field already on the page must never also be offered as something to add,
+  because that is the duplicate somebody makes first. Deliberately NOT
+  excluded from other buckets on the same page: the brief leaves that open,
+  so the narrower rule is the one implemented.
+- **Removing a field or a bucket is a layout change.** It deletes no template
+  field, no submitted value and no other account's anything.
+- **The editor's buttons carry their own accessible names** — "Save this
+  page's arrangement", "Cancel arranging", "Restore the shared layout". On Add
+  New the panel sits beside a form with its own Cancel and Submit, and two
+  controls called Cancel is a trap for anybody reading the page rather than
+  looking at it. The smoke test found this as a strict-mode violation, which
+  is the same ambiguity a screen reader would have hit.
+- **An empty section is always shown inside a bucket**, so a bucket that is
+  not full says so and there is somewhere obvious for the next field to go.
+
 ### Shared administration says so on the page
 
 All five sections say it now — Users & Access, Roles & Permissions, Account

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowDown, ArrowUp, ArrowUpToLine, Check, GripVertical, Loader2, Lock, Plus,
-  RotateCcw, Trash2, X,
+  ArrowDown, ArrowUp, ArrowUpToLine, Check, GripVertical, Loader2, Lock, Pencil,
+  Plus, RotateCcw, Settings2, X,
 } from "lucide-react";
 
 /**
@@ -138,50 +138,141 @@ export function BucketGrid({
   );
 }
 
-type Draft = Placed[];
+
+/* ------------------------------------------------------------------ *
+ * Editing a page, in place
+ * ------------------------------------------------------------------ */
 
 /**
- * Arrange this account's page.
+ * The editor, modelled on WashIQ Conversations.
  *
- * Works on a DRAFT and writes nothing until Save, so Cancel really
- * does leave the page as it was. Restore is a separate act with its
- * own button: it deletes this account's overrides rather than writing
- * today's shared layout into them, which is what keeps the page
- * following the template afterwards instead of frozen at a copy of it.
+ * It edits the LIVE page rather than a list of controls beside it. A
+ * list is easier to build and is the wrong thing: somebody arranging
+ * a page is deciding how it will look, and a panel of dropdowns makes
+ * them imagine the result instead of seeing it.
+ *
+ * Three control clusters, each in a fixed place so they are learnt
+ * once:
+ *
+ *   TOP-RIGHT of a bucket — settings, remove, drag handle. These act
+ *   on the bucket.
+ *   TOP-LEFT of a field — remove. This acts on the one field, and is
+ *   deliberately at the opposite corner so it can never be mistaken
+ *   for the bucket's.
+ *   RIGHT-HAND INSPECTOR — width, columns, height, and the buttons
+ *   that end the session.
+ *
+ * Everything is a DRAFT until Save. Cancel restores what was there,
+ * which is only true because nothing here writes as it goes.
  */
-export function LayoutEditor({
-  answer, onClose,
+
+type Draft = Placed[];
+
+const HEIGHT_STEP: Record<string, number> = { auto: 0, short: 1, tall: 2 };
+const STEP_HEIGHT: ("auto" | "short" | "tall")[] = ["auto", "short", "tall"];
+
+/**
+ * A page, as this account arranged it — and the pencil that changes it.
+ *
+ * One component so a page adds all of this in a line, and so the
+ * admin-only check is made in one place rather than on each page.
+ */
+export function ArrangedPage({
+  page, render, fallback,
+}: {
+  page: BlockPage;
+  render: (itemKey: string) => React.ReactNode;
+  /** What to show before the layout lands. Never a spinner on a working page. */
+  fallback?: React.ReactNode;
+}) {
+  const q = useLayout(page);
+  const [editing, setEditing] = useState(false);
+  const answer = q.data;
+
+  if (!answer) return <>{fallback ?? null}</>;
+
+  if (editing) {
+    return (
+      <PageEditor
+        answer={answer}
+        render={render}
+        onClose={() => setEditing(false)}
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {answer.canArrange && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            aria-label={`Arrange ${answer.label}`}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border
+                       px-2.5 py-1 text-xs"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+            Arrange this page
+          </button>
+          <span className="text-xs text-muted-foreground">
+            {answer.layout.some((b) => b.overridden)
+              ? `${answer.account.name} has its own arrangement of this page.`
+              : "Following the shared layout."}
+          </span>
+        </div>
+      )}
+      <BucketGrid layout={answer.layout} render={render} />
+    </div>
+  );
+}
+
+function PageEditor({
+  answer, render, onClose,
 }: {
   answer: LayoutAnswer;
+  render: (itemKey: string) => React.ReactNode;
   onClose: () => void;
 }) {
   const qc = useQueryClient();
   const [draft, setDraft] = useState<Draft>(() => answer.layout.map((b) => ({ ...b })));
+  const [selected, setSelected] = useState<string>(answer.layout[0]?.id ?? "");
+  const [dragging, setDragging] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
-  const [dragging, setDragging] = useState<string | null>(null);
-
-  useEffect(() => { setDraft(answer.layout.map((b) => ({ ...b }))); }, [answer.layout]);
 
   const byKey = useMemo(
     () => new Map(answer.items.map((i) => [i.key, i])), [answer.items]);
   const essentialIn = (b: Placed) => b.items.filter((k) => byKey.get(k)?.essential);
+  const here = draft.find((b) => b.id === selected) ?? draft[0];
 
-  const placed = new Set(draft.map((b) => b.id));
-  const spare = answer.available.filter((b) => !placed.has(b.id));
+  /** Everything the SHARED bucket holds. The account chooses from it. */
+  const fullOf = (id: string) =>
+    answer.available.find((a) => a.id === id)?.items ?? [];
+  /**
+   * What this bucket could still show.
+   *
+   * Its template fields minus the ones already placed in it. A field
+   * in the bucket must not also appear as something to add — that is
+   * the duplicate somebody would create first. Deliberately NOT
+   * excluded from other buckets on the page: the brief leaves that
+   * open, so the narrower rule is the one implemented.
+   */
+  const spareIn = (b: Placed) => fullOf(b.id).filter((k) => !b.items.includes(k));
 
-  const move = (id: string, by: number) => {
-    setDraft((rows) => {
-      const i = rows.findIndex((r) => r.id === id);
-      const j = i + by;
-      if (i < 0 || j < 0 || j >= rows.length) return rows;
-      const next = [...rows];
-      [next[i], next[j]] = [next[j]!, next[i]!];
-      return next;
-    });
-  };
+  const patch = (id: string, change: Partial<Placed>) =>
+    setDraft((rows) => rows.map((r) => (r.id === id ? { ...r, ...change } : r)));
 
-  const dropOn = (id: string) => {
+  const move = (id: string, by: number) => setDraft((rows) => {
+    const i = rows.findIndex((r) => r.id === id);
+    const j = i + by;
+    if (i < 0 || j < 0 || j >= rows.length) return rows;
+    const next = [...rows];
+    [next[i], next[j]] = [next[j]!, next[i]!];
+    return next;
+  });
+
+  const dropBucketOn = (id: string) => {
     if (!dragging || dragging === id) return;
     setDraft((rows) => {
       const from = rows.findIndex((r) => r.id === dragging);
@@ -195,375 +286,488 @@ export function LayoutEditor({
     setDragging(null);
   };
 
-  const patch = (id: string, change: Partial<Placed>) =>
-    setDraft((rows) => rows.map((r) => (r.id === id ? { ...r, ...change } : r)));
-
-  const toggleItem = (b: Placed, key: string) => {
+  /** Take a field's PLACEMENT off. Not the field, and not its data. */
+  const dropField = (b: Placed, key: string) => {
     if (byKey.get(key)?.essential) return;
-    const has = b.items.includes(key);
-    // Kept in the SHARED bucket's order rather than the order they
-    // were ticked, so two accounts showing the same fields show them
-    // the same way round.
-    const full = answer.available.find((a) => a.id === b.id)?.items ?? b.items;
-    const next = has
-      ? b.items.filter((k) => k !== key)
-      : full.filter((k) => b.items.includes(k) || k === key);
+    patch(b.id, { items: b.items.filter((k) => k !== key) });
+  };
+
+  /** Put one back, in the shared bucket's order so two accounts match. */
+  const addField = (b: Placed, key: string) => {
+    const full = fullOf(b.id);
+    patch(b.id, { items: full.filter((k) => b.items.includes(k) || k === key) });
+  };
+
+  const moveField = (b: Placed, key: string, by: number) => {
+    const i = b.items.indexOf(key);
+    const j = i + by;
+    if (i < 0 || j < 0 || j >= b.items.length) return;
+    const next = [...b.items];
+    [next[i], next[j]] = [next[j]!, next[i]!];
     patch(b.id, { items: next });
   };
 
+  const post = async (url: string, body?: unknown) => {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const out = await res.json();
+    if (!res.ok) throw new Error(out.error ?? "That did not work.");
+    return out;
+  };
+  const done = () => {
+    void qc.invalidateQueries({ queryKey: ["dm-layout", answer.page] });
+    onClose();
+  };
+
   const save = useMutation({
-    mutationFn: async () => {
-      const res = await fetch(`/api/dutch-miller/blocks/${answer.page}/layout`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          layout: draft.map((b, i) => ({
-            blockId: b.id, position: (i + 1) * 10, width: b.width,
-            height: b.height, hidden: b.hidden, items: b.items,
-          })),
-        }),
-      });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? "Could not save the layout.");
-      return body;
-    },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["dm-layout", answer.page] });
-      onClose();
-    },
+    mutationFn: () => post(`/api/dutch-miller/blocks/${answer.page}/layout`, {
+      layout: draft.map((b, i) => ({
+        blockId: b.id, position: (i + 1) * 10, width: b.width,
+        height: b.height, hidden: b.hidden, items: b.items,
+      })),
+    }),
+    onSuccess: done,
     onError: (e) => setError((e as Error).message),
   });
-
-  /**
-   * Make this arrangement the one new partners start on.
-   *
-   * The reason an account-level fix is called a CORRECTION: without
-   * this it stays in one account and the next partner provisioned
-   * inherits the fault. It says what it will reach before it is
-   * clicked, because "every partner still on the base" is the part
-   * somebody would otherwise find out afterwards.
-   */
-  const promote = useMutation({
-    mutationFn: async () => {
-      const res = await fetch(`/api/dutch-miller/blocks/${answer.page}/promote`,
-        { method: "POST" });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? "Could not promote it.");
-      return body as { reached: number };
-    },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["dm-layout", answer.page] });
-      onClose();
-    },
-    onError: (e) => setError((e as Error).message),
-  });
-
   const restore = useMutation({
-    mutationFn: async () => {
-      const res = await fetch(`/api/dutch-miller/blocks/${answer.page}/reset`,
-        { method: "POST" });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? "Could not restore it.");
-      return body;
-    },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["dm-layout", answer.page] });
-      onClose();
-    },
+    mutationFn: () => post(`/api/dutch-miller/blocks/${answer.page}/reset`),
+    onSuccess: done,
     onError: (e) => setError((e as Error).message),
   });
+  const promote = useMutation({
+    mutationFn: () => post(`/api/dutch-miller/blocks/${answer.page}/promote`),
+    onSuccess: done,
+    onError: (e) => setError((e as Error).message),
+  });
+
+  const placed = new Set(draft.map((b) => b.id));
+  const spareBuckets = answer.available.filter((b) => !placed.has(b.id));
 
   return (
-    <div className="space-y-3 rounded-xl border border-border bg-muted/30 p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-semibold">Arranging {answer.label}</p>
-          <p className="text-xs text-muted-foreground">
-            For {answer.account.name} only. Other partners keep their own arrangement, and
-            a bucket&rsquo;s contents are shared — change those under Shared Template.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            disabled={save.isPending}
-            onClick={() => { setError(""); save.mutate(); }}
-            className="inline-flex items-center gap-1.5 rounded-md bg-foreground px-3 py-1.5
-                       text-sm font-semibold text-background disabled:opacity-50"
-          >
-            {save.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              : <Check className="h-3.5 w-3.5" />}
-            Save
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md border border-border px-3 py-1.5 text-sm"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            disabled={restore.isPending}
-            title="Put this page back to the shared layout and keep following it"
-            onClick={() => { setError(""); restore.mutate(); }}
-            className="inline-flex items-center gap-1.5 rounded-md border border-border
-                       px-3 py-1.5 text-sm disabled:opacity-50"
-          >
-            <RotateCcw className="h-3.5 w-3.5" />
-            Restore shared layout
-          </button>
-        </div>
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-foreground/20
+                      bg-muted/40 px-3 py-2">
+        <Pencil className="h-3.5 w-3.5" />
+        <span className="text-sm font-semibold">Arranging {answer.label}</span>
+        <span className="text-xs text-muted-foreground">
+          For {answer.account.name} only. Click a bucket to open its settings.
+        </span>
       </div>
 
-      {answer.canPromote && answer.impact.hasOwn && (
-        <div className="rounded-lg border border-sky-500/40 bg-sky-500/5 p-3">
-          <p className="text-xs font-semibold">
-            Make this the layout every new partner starts on
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {answer.impact.following.length === 0
-              ? "No existing partner is still following the shared layout, so this would "
-                + "change only accounts created from here on."
-              : `This becomes the shared base. It reaches ${answer.impact.following.length} `
-                + `existing partner${answer.impact.following.length === 1 ? "" : "s"} — the `
-                + `one${answer.impact.following.length === 1 ? "" : "s"} still following it`
-                + `${answer.impact.keeping.length > 0
-                  ? `, while ${answer.impact.keeping.length} with their own arrangement keep `
-                    + "it" : ""}.`}
-            {" "}Only the order, width and height move; what a bucket holds is a template
-            change and stays on Shared Template.
-          </p>
-          <button
-            type="button"
-            disabled={promote.isPending}
-            onClick={() => { setError(""); promote.mutate(); }}
-            className="mt-2 inline-flex items-center gap-1.5 rounded-md border
-                       border-sky-600/50 px-3 py-1.5 text-xs font-semibold
-                       disabled:opacity-50"
-          >
-            {promote.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
-            <ArrowUpToLine className="h-3 w-3" />
-            Promote to the shared template
-          </button>
-        </div>
-      )}
+      {error && <p className="text-sm font-semibold text-rose-600">{error}</p>}
 
-      {error && <p className="text-sm font-semibold text-red-600">{error}</p>}
-
-      <div className="space-y-2">
-        {draft.map((b, i) => {
-          const locked = essentialIn(b);
-          const full = answer.available.find((a) => a.id === b.id)?.items ?? b.items;
-          return (
-            <div
-              key={b.id}
-              draggable
-              onDragStart={() => setDragging(b.id)}
-              onDragEnd={() => setDragging(null)}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={() => dropOn(b.id)}
-              className={`rounded-lg border bg-background p-3 ${dragging === b.id
-                ? "border-foreground/40 opacity-60" : "border-border"}`}
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <GripVertical
-                  className="h-4 w-4 shrink-0 cursor-grab text-muted-foreground"
-                  aria-hidden
-                />
-                <span className="flex-1 truncate text-sm font-semibold">{b.name}</span>
-
-                {/* Keyboard and touch get the same job done as dragging. */}
-                <button
-                  type="button" aria-label={`Move ${b.name} up`}
-                  disabled={i === 0} onClick={() => move(b.id, -1)}
-                  className="rounded-md border border-border p-1 disabled:opacity-30"
-                >
-                  <ArrowUp className="h-3 w-3" />
-                </button>
-                <button
-                  type="button" aria-label={`Move ${b.name} down`}
-                  disabled={i === draft.length - 1} onClick={() => move(b.id, 1)}
-                  className="rounded-md border border-border p-1 disabled:opacity-30"
-                >
-                  <ArrowDown className="h-3 w-3" />
-                </button>
-
-                <label className="text-xs">
-                  <span className="sr-only">{b.name} width</span>
-                  <select
-                    value={b.width}
-                    onChange={(e) => patch(b.id, { width: Number(e.target.value) as 2 })}
-                    className="rounded-md border border-border bg-background px-1.5 py-1 text-xs"
-                  >
-                    {answer.widths.map((w) => (
-                      <option key={w} value={w}>{w} of 6 wide</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-xs">
-                  <span className="sr-only">{b.name} height</span>
-                  <select
-                    value={b.height}
-                    onChange={(e) => patch(b.id, { height: e.target.value as "auto" })}
-                    className="rounded-md border border-border bg-background px-1.5 py-1 text-xs"
-                  >
-                    {answer.heights.map((h) => (
-                      <option key={h} value={h}>
-                        {h === "auto" ? "Fits content" : h === "short" ? "Short" : "Tall"}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <label
-                  className={`flex items-center gap-1 text-xs ${locked.length > 0
-                    ? "opacity-50" : ""}`}
-                  title={locked.length > 0
-                    ? `Cannot be hidden — it holds ${locked
-                      .map((k) => byKey.get(k)?.label ?? k).join(", ")}`
-                    : "Hide this bucket on this account's page"}
-                >
-                  <input
-                    type="checkbox"
-                    disabled={locked.length > 0}
-                    checked={b.hidden}
-                    onChange={(e) => patch(b.id, { hidden: e.target.checked })}
-                  />
-                  Hidden
-                </label>
-
-                <button
-                  type="button" aria-label={`Remove ${b.name} from this page`}
-                  disabled={locked.length > 0}
-                  title={locked.length > 0
-                    ? "This bucket holds something the page's workflow depends on."
-                    : "Take this bucket off this account's page"}
-                  onClick={() => setDraft((rows) => rows.filter((r) => r.id !== b.id))}
-                  className="rounded-md border border-border p-1 disabled:opacity-30"
-                >
-                  <Trash2 className="h-3 w-3" />
-                </button>
-              </div>
-
-              {/* The checklist. Everything the SHARED bucket holds, with
-                  the ones this account shows ticked. */}
-              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 border-t border-border pt-2">
-                {full.map((k) => {
-                  const item = byKey.get(k);
-                  const fixed = item?.essential === true;
-                  return (
-                    <label
-                      key={k}
-                      title={fixed
-                        ? item?.note ?? "The page's workflow depends on this."
-                        : item?.note ?? ""}
-                      className={`flex items-center gap-1.5 text-xs ${fixed
-                        ? "text-muted-foreground" : ""}`}
-                    >
-                      <input
-                        type="checkbox"
-                        disabled={fixed}
-                        checked={b.items.includes(k)}
-                        onChange={() => toggleItem(b, k)}
-                      />
-                      {item?.label ?? k}
-                      {fixed && <Lock className="h-3 w-3" aria-label="always shown" />}
-                    </label>
-                  );
-                })}
-              </div>
-              {locked.length > 0 && (
-                <p className="mt-1.5 text-[11px] text-muted-foreground">
-                  Always shown:{" "}
-                  {locked.map((k) => byKey.get(k)?.label ?? k).join(", ")} — hiding it would
-                  not change the rule behind it, only your ability to see why a submission
-                  was refused.
-                </p>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {spare.length > 0 && (
-        <div>
-          {!adding ? (
-            <button
-              type="button"
-              onClick={() => setAdding(true)}
-              className="inline-flex items-center gap-1.5 rounded-md border border-border
-                         px-3 py-1.5 text-sm"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              Add a bucket ({spare.length} available)
-            </button>
-          ) : (
-            <div className="space-y-1 rounded-lg border border-border bg-background p-3">
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold">From the shared template</p>
-                <button type="button" onClick={() => setAdding(false)} aria-label="Close">
-                  <X className="h-3.5 w-3.5 text-muted-foreground" />
-                </button>
-              </div>
-              {spare.map((b) => (
-                <button
-                  key={b.id}
-                  type="button"
-                  onClick={() => {
-                    setDraft((rows) => [...rows, {
-                      ...b, position: (rows.length + 1) * 10, width: 6,
-                      height: "auto", hidden: false, overridden: true,
-                    } as Placed]);
-                    setAdding(false);
-                  }}
-                  className="flex w-full items-baseline gap-2 rounded-md px-2 py-1.5 text-left
-                             text-xs hover:bg-muted"
-                >
-                  <span className="font-semibold">{b.name}</span>
-                  <span className="truncate text-muted-foreground">
-                    {b.items.map((k) => byKey.get(k)?.label ?? k).join(" · ")}
-                  </span>
-                </button>
-              ))}
-            </div>
+      <div className="flex flex-col gap-4 lg:flex-row">
+        {/* The page itself, edited where it lives. */}
+        <div className="min-w-0 flex-1">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-6">
+            {draft.map((b, i) => (
+              <EditableBucket
+                key={b.id}
+                bucket={b}
+                index={i}
+                count={draft.length}
+                selected={b.id === selected}
+                dragging={dragging === b.id}
+                locked={essentialIn(b)}
+                labelOf={(k) => byKey.get(k)?.label ?? k}
+                essential={(k) => byKey.get(k)?.essential === true}
+                render={render}
+                onSelect={() => setSelected(b.id)}
+                onDragStart={() => setDragging(b.id)}
+                onDragEnd={() => setDragging(null)}
+                onDrop={() => dropBucketOn(b.id)}
+                onMove={(by) => move(b.id, by)}
+                onRemove={() => {
+                  setDraft((rows) => rows.filter((r) => r.id !== b.id));
+                  setSelected("");
+                }}
+                onDropField={(k) => dropField(b, k)}
+                onMoveField={(k, by) => moveField(b, k, by)}
+              />
+            ))}
+          </div>
+          {draft.length === 0 && (
+            <p className="rounded-xl border border-dashed border-border px-6 py-12
+                          text-center text-sm text-muted-foreground">
+              Every bucket has been taken off this page. Add one from the panel.
+            </p>
           )}
         </div>
-      )}
+
+        {/* The inspector. Width, columns, height, and the way out. */}
+        <aside className="w-full shrink-0 space-y-3 lg:w-72" aria-label="Bucket settings">
+          <div className="space-y-3 rounded-xl border border-border bg-card p-3">
+            {here ? (
+              <>
+                <p className="flex items-center gap-1.5 text-sm font-semibold">
+                  <Settings2 className="h-3.5 w-3.5" />
+                  {here.name}
+                </p>
+
+                <fieldset>
+                  <legend className="text-xs font-medium">Width</legend>
+                  <div className="mt-1 flex gap-1">
+                    {answer.widths.map((w) => (
+                      <button
+                        key={w}
+                        type="button"
+                        aria-pressed={here.width === w}
+                        onClick={() => patch(here.id, { width: w })}
+                        className={`flex-1 rounded-md border px-1.5 py-1 text-xs ${
+                          here.width === w
+                            ? "border-foreground bg-foreground text-background font-semibold"
+                            : "border-border"}`}
+                      >
+                        {w}/6
+                      </button>
+                    ))}
+                  </div>
+                </fieldset>
+
+                <label className="block text-xs font-medium">
+                  Columns inside it
+                  <select
+                    value={here.columns}
+                    onChange={(e) => patch(here.id, { columns: Number(e.target.value) })}
+                    className="mt-1 w-full rounded-md border border-border bg-background
+                               px-2 py-1 text-xs"
+                  >
+                    <option value={1}>1</option>
+                    <option value={2}>2</option>
+                    <option value={3}>3</option>
+                  </select>
+                </label>
+
+                <label className="block text-xs font-medium">
+                  Height
+                  <input
+                    type="range"
+                    min={0}
+                    max={2}
+                    step={1}
+                    value={HEIGHT_STEP[here.height] ?? 0}
+                    onChange={(e) => patch(here.id,
+                      { height: STEP_HEIGHT[Number(e.target.value)] ?? "auto" })}
+                    className="mt-1 w-full"
+                  />
+                  <span className="text-[11px] text-muted-foreground">
+                    {here.height === "auto" ? "Fits its content"
+                      : here.height === "short" ? "Short — scrolls" : "Tall"}
+                  </span>
+                </label>
+
+                {/* The fields this bucket is not showing. A field that
+                    IS placed never appears here — that is the
+                    duplicate somebody would make first. */}
+                <div>
+                  <p className="text-xs font-medium">Fields it is not showing</p>
+                  {spareIn(here).length === 0 ? (
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      Every field this bucket offers is on the page.
+                    </p>
+                  ) : (
+                    <div className="mt-1 space-y-1">
+                      {spareIn(here).map((k) => (
+                        <button
+                          key={k}
+                          type="button"
+                          onClick={() => addField(here, k)}
+                          className="flex w-full items-center gap-1.5 rounded-md border
+                                     border-dashed border-border px-2 py-1 text-left text-xs
+                                     hover:bg-muted"
+                        >
+                          <Plus className="h-3 w-3 shrink-0" />
+                          {byKey.get(k)?.label ?? k}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {essentialIn(here).length > 0 && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Always shown:{" "}
+                    {essentialIn(here).map((k) => byKey.get(k)?.label ?? k).join(", ")} —
+                    hiding one would not change the rule behind it, only your ability to
+                    see why a submission was refused.
+                  </p>
+                )}
+              </>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Click a bucket to open its settings.
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-2 rounded-xl border border-border bg-card p-3">
+            {spareBuckets.length > 0 ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setAdding((v) => !v)}
+                  className="inline-flex w-full items-center justify-center gap-1.5 rounded-md
+                             border border-border px-2.5 py-1.5 text-xs"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Add a bucket ({spareBuckets.length})
+                </button>
+                {adding && (
+                  <div className="space-y-1">
+                    {spareBuckets.map((b) => (
+                      <button
+                        key={b.id}
+                        type="button"
+                        onClick={() => {
+                          setDraft((rows) => [...rows, {
+                            ...b, position: (rows.length + 1) * 10, width: 6,
+                            height: "auto", hidden: false, overridden: true,
+                          } as Placed]);
+                          setSelected(b.id);
+                          setAdding(false);
+                        }}
+                        className="w-full rounded-md px-2 py-1.5 text-left text-xs hover:bg-muted"
+                      >
+                        <span className="font-semibold">{b.name}</span>
+                        <span className="block truncate text-muted-foreground">
+                          {b.items.map((k) => byKey.get(k)?.label ?? k).join(" · ")}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Every bucket the template offers for this page is already on it.
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-2 rounded-xl border border-border bg-card p-3">
+            {/* Named apart from the page's own buttons. On Add New
+                this panel sits beside a form with its own Cancel and
+                Submit, and two controls called Cancel is a trap for
+                anybody reading the page rather than looking at it. */}
+            <button
+              type="button"
+              aria-label="Save this page's arrangement"
+              disabled={save.isPending}
+              onClick={() => { setError(""); save.mutate(); }}
+              className="inline-flex w-full items-center justify-center gap-1.5 rounded-md
+                         bg-foreground px-3 py-1.5 text-sm font-semibold text-background
+                         disabled:opacity-50"
+            >
+              {save.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                : <Check className="h-3.5 w-3.5" />}
+              Save
+            </button>
+            <button
+              type="button"
+              aria-label="Cancel arranging, discarding the changes"
+              onClick={onClose}
+              className="w-full rounded-md border border-border px-3 py-1.5 text-sm"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              aria-label="Restore the shared layout"
+              disabled={restore.isPending}
+              title="Put this page back to the shared layout and keep following it"
+              onClick={() => { setError(""); restore.mutate(); }}
+              className="inline-flex w-full items-center justify-center gap-1.5 rounded-md
+                         border border-border px-3 py-1.5 text-xs disabled:opacity-50"
+            >
+              <RotateCcw className="h-3 w-3" />
+              Restore shared layout
+            </button>
+            {answer.canPromote && answer.impact.hasOwn && (
+              <>
+                <button
+                  type="button"
+                  disabled={promote.isPending}
+                  onClick={() => { setError(""); promote.mutate(); }}
+                  className="inline-flex w-full items-center justify-center gap-1.5 rounded-md
+                             border border-sky-600/50 px-3 py-1.5 text-xs font-semibold
+                             disabled:opacity-50"
+                >
+                  <ArrowUpToLine className="h-3 w-3" />
+                  Promote to the shared template
+                </button>
+                <p className="text-[11px] text-muted-foreground">
+                  {answer.impact.following.length === 0
+                    ? "No existing partner still follows the shared layout, so this would "
+                      + "change only accounts created from here on."
+                    : `Reaches ${answer.impact.following.length} partner`
+                      + `${answer.impact.following.length === 1 ? "" : "s"} still following `
+                      + `it${answer.impact.keeping.length > 0
+                        ? `; ${answer.impact.keeping.length} with their own keep it` : ""}.`}
+                </p>
+              </>
+            )}
+          </div>
+        </aside>
+      </div>
     </div>
   );
 }
 
 /**
- * The button that opens the editor, and the editor itself.
+ * One bucket, while the page is being edited.
  *
- * One component so a page adds arranging in one line, and so the
- * admin-only check is made in one place rather than on each page.
+ * The white canvas inside is divided into sections, one per field
+ * plus an empty one at the end, so where a field can go is visible
+ * rather than implied. A bucket does not have to be full.
  */
-export function ArrangeBar({ page }: { page: BlockPage }) {
-  const q = useLayout(page);
-  const [open, setOpen] = useState(false);
-  if (!q.data?.canArrange) return null;
-  const changed = q.data.layout.some((b) => b.overridden);
+function EditableBucket({
+  bucket, index, count, selected, dragging, locked,
+  labelOf, essential, render,
+  onSelect, onDragStart, onDragEnd, onDrop, onMove, onRemove, onDropField, onMoveField,
+}: {
+  bucket: Placed;
+  index: number;
+  count: number;
+  selected: boolean;
+  dragging: boolean;
+  locked: string[];
+  labelOf: (key: string) => string;
+  essential: (key: string) => boolean;
+  render: (key: string) => React.ReactNode;
+  onSelect: () => void;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+  onDrop: () => void;
+  onMove: (by: number) => void;
+  onRemove: () => void;
+  onDropField: (key: string) => void;
+  onMoveField: (key: string, by: number) => void;
+}) {
   return (
-    <div className="space-y-3">
-      {!open && (
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setOpen(true)}
-            className="rounded-md border border-border px-2.5 py-1 text-xs"
+    <section
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={onDrop}
+      onClick={onSelect}
+      className={`relative rounded-xl border bg-card p-4 ${SPAN[bucket.width] ?? "md:col-span-6"} ${
+        dragging ? "opacity-50" : ""} ${
+        selected ? "border-foreground ring-1 ring-foreground/20" : "border-border"}`}
+    >
+      {/* The bucket's own controls, always top-right so they are
+          learnt once and never confused with a field's. */}
+      <div className="absolute right-2 top-2 flex items-center gap-1">
+        <button
+          type="button"
+          aria-label={`${bucket.name} bucket settings`}
+          onClick={(e) => { e.stopPropagation(); onSelect(); }}
+          className="rounded-md border border-border bg-background p-1"
+        >
+          <Settings2 className="h-3 w-3" />
+        </button>
+        <button
+          type="button"
+          aria-label={`Remove ${bucket.name} bucket`}
+          disabled={locked.length > 0}
+          title={locked.length > 0
+            ? `Cannot be removed — it holds ${locked.map(labelOf).join(", ")}, which the `
+              + "page's workflow depends on."
+            : `Take ${bucket.name} off this account's page`}
+          onClick={(e) => { e.stopPropagation(); onRemove(); }}
+          className="rounded-md border border-border bg-background p-1 disabled:opacity-30"
+        >
+          <X className="h-3 w-3" />
+        </button>
+        {/* Dragging moves it; the two arrows do the same thing with a
+            keyboard, which is the only way it works on a phone. */}
+        <span
+          draggable
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
+          aria-hidden
+          className="cursor-grab rounded-md border border-border bg-background p-1"
+        >
+          <GripVertical className="h-3 w-3" />
+        </span>
+        <button
+          type="button"
+          aria-label={`Move ${bucket.name} bucket up`}
+          disabled={index === 0}
+          onClick={(e) => { e.stopPropagation(); onMove(-1); }}
+          className="rounded-md border border-border bg-background p-1 disabled:opacity-30"
+        >
+          <ArrowUp className="h-3 w-3" />
+        </button>
+        <button
+          type="button"
+          aria-label={`Move ${bucket.name} bucket down`}
+          disabled={index === count - 1}
+          onClick={(e) => { e.stopPropagation(); onMove(1); }}
+          className="rounded-md border border-border bg-background p-1 disabled:opacity-30"
+        >
+          <ArrowDown className="h-3 w-3" />
+        </button>
+      </div>
+
+      <h3 className="mb-3 pr-44 text-sm font-semibold">{bucket.name}</h3>
+
+      <div className={`grid gap-2 rounded-lg bg-white p-2 dark:bg-background ${
+        INNER[bucket.columns] ?? INNER[3]}`}>
+        {bucket.items.map((key, i) => (
+          <div
+            key={key}
+            className="relative rounded-md border border-dashed border-border/70 p-2"
           >
-            Arrange this page
-          </button>
-          <span className="text-xs text-muted-foreground">
-            {changed
-              ? `${q.data.account.name} has its own arrangement of this page.`
-              : "Following the shared layout."}
-          </span>
+            {/* The FIELD's control, top-left, at the opposite corner
+                from the bucket's so the two can never be mistaken. */}
+            <button
+              type="button"
+              aria-label={`Remove ${labelOf(key)} field`}
+              disabled={essential(key)}
+              title={essential(key)
+                ? `${labelOf(key)} cannot be removed — the page's workflow depends on it.`
+                : `Take ${labelOf(key)} off this bucket`}
+              onClick={(e) => { e.stopPropagation(); onDropField(key); }}
+              className="absolute -left-1.5 -top-1.5 z-10 rounded-full border border-border
+                         bg-background p-0.5 disabled:opacity-30"
+            >
+              {essential(key) ? <Lock className="h-2.5 w-2.5" /> : <X className="h-2.5 w-2.5" />}
+            </button>
+            <span className="absolute -top-1.5 right-1 z-10 flex gap-0.5">
+              <button
+                type="button"
+                aria-label={`Move ${labelOf(key)} earlier`}
+                disabled={i === 0}
+                onClick={(e) => { e.stopPropagation(); onMoveField(key, -1); }}
+                className="rounded-full border border-border bg-background p-0.5
+                           disabled:opacity-20"
+              >
+                <ArrowUp className="h-2.5 w-2.5" />
+              </button>
+              <button
+                type="button"
+                aria-label={`Move ${labelOf(key)} later`}
+                disabled={i === bucket.items.length - 1}
+                onClick={(e) => { e.stopPropagation(); onMoveField(key, 1); }}
+                className="rounded-full border border-border bg-background p-0.5
+                           disabled:opacity-20"
+              >
+                <ArrowDown className="h-2.5 w-2.5" />
+              </button>
+            </span>
+            <div className="pointer-events-none pt-1">{render(key) ?? (
+              <span className="text-xs text-muted-foreground">{labelOf(key)}</span>
+            )}</div>
+          </div>
+        ))}
+        {/* An empty section, so a bucket that is not full says so and
+            there is somewhere obvious for the next field to go. */}
+        <div className="flex min-h-14 items-center justify-center rounded-md border
+                        border-dashed border-border/50 text-[11px] text-muted-foreground">
+          {selected ? "Add a field from the panel" : "Empty"}
         </div>
-      )}
-      {open && <LayoutEditor answer={q.data} onClose={() => setOpen(false)} />}
-    </div>
+      </div>
+    </section>
   );
 }

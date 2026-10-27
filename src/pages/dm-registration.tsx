@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle, Check, CheckCircle2, Clock, FileText, Loader2, Mail, Upload,
 } from "lucide-react";
-import { ArrangeBar, BucketGrid, useLayout } from "@/components/buckets";
+import { ArrangedPage } from "@/components/buckets";
 
 /**
  * Account Registration — the partner's own business record.
@@ -236,8 +236,6 @@ export function DmRegistrationPage() {
   const r = q.data?.record;
   const spec = useMemo(
     () => new Map((q.data?.fields ?? []).map((f) => [f.key, f])), [q.data?.fields]);
-  const layout = useLayout("account-registration");
-
   const field = (key: string) => {
     const f = spec.get(key);
     if (!f) return null;
@@ -390,13 +388,15 @@ export function DmRegistrationPage() {
         </div>
       )}
 
-      <ArrangeBar page="account-registration" />
-
-      {layout.data?.layout
-        ? <BucketGrid layout={layout.data.layout} render={render} />
-        : (
-          <p className="text-sm text-muted-foreground">Loading this page&rsquo;s arrangement…</p>
+      <ArrangedPage
+        page="account-registration"
+        render={render}
+        fallback={(
+          <p className="text-sm text-muted-foreground">
+            Loading this page&rsquo;s arrangement…
+          </p>
         )}
+      />
 
       <div className="flex flex-wrap items-center gap-2">
         <button

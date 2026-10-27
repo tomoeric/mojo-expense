@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrangeBar, BucketGrid, useLayout } from "@/components/buckets";
+import { ArrangedPage } from "@/components/buckets";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Download, Eye, Loader2, Trash2, Upload, X } from "lucide-react";
 
@@ -547,7 +547,6 @@ export function DmRfidPage() {
           The filters, the search and the table are registered as
           essential — a pool of thousands with no way to filter or
           find is not a page somebody can be given instead. */}
-      <ArrangeBar page="rfid-review" />
       <InventoryBuckets
         canManage={canManage}
         sections={{
@@ -745,23 +744,24 @@ function InventoryBuckets({
   canManage: boolean;
   sections: Record<string, React.ReactNode>;
 }) {
-  const q = useLayout("rfid-review");
   const render = (key: string): React.ReactNode => {
     if (key === "upload" && !canManage) return null;
     if (key === "format" && !canManage) return null;
     return sections[key] ?? null;
   };
-  const layout = q.data?.layout;
   // Until it lands, the list and the way to filter it. A table with no
   // filters is still the page; a spinner is not.
-  if (!layout) {
-    return (
-      <div className="space-y-4">
-        {sections.counts}
-        {sections.search}
-        {sections.table}
-      </div>
-    );
-  }
-  return <BucketGrid layout={layout} render={render} />;
+  return (
+    <ArrangedPage
+      page="rfid-review"
+      render={render}
+      fallback={(
+        <div className="space-y-4">
+          {sections.counts}
+          {sections.search}
+          {sections.table}
+        </div>
+      )}
+    />
+  );
 }

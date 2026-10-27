@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { ArrangeBar, BucketGrid, useLayout } from "@/components/buckets";
+import { ArrangedPage } from "@/components/buckets";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, ChevronLeft, ChevronRight, Circle,
@@ -179,10 +179,6 @@ export function DmSignupsPage({
           with RFID {justSaved.customer.rfid}.
         </p>
       )}
-
-      {/* Arranging is per page and per account, so the bar follows the
-          sub-page rather than sitting above both. */}
-      <ArrangeBar page={view === "add" ? "member-signups-add" : "member-signups-review"} />
 
       {view === "review"
         ? <ReviewExisting />
@@ -2039,7 +2035,6 @@ function Deliveries({ guid }: { guid: string }) {
  * was here before buckets existed.
  */
 function RecordBuckets({ row, tz }: { row: SignupRow; tz: string }) {
-  const q = useLayout("member-signups-review");
   const c = row.customer;
 
   const render = (key: string): React.ReactNode => {
@@ -2077,23 +2072,27 @@ function RecordBuckets({ row, tz }: { row: SignupRow; tz: string }) {
     }
   };
 
-  // Until the layout lands, the record rather than a spinner: this is
-  // a modal somebody opened to read one thing, and a flash of nothing
-  // where the fields go is worse than a frame of the default order.
-  const layout = q.data?.layout;
-  if (!layout) {
-    return (
-      <div className="space-y-4">
-        <Deliveries guid={row.guid} />
-        <Bucket title="Customer">
-          {["firstName", "lastName", "plate", "rfid", "stickerAttached"].map((k) => (
-            <div key={k}>{render(k)}</div>
-          ))}
-        </Bucket>
-      </div>
-    );
-  }
-  return <BucketGrid layout={layout} render={render} />;
+  /*
+   * Until the layout lands, the record rather than a spinner. This is
+   * a modal somebody opened to read one thing, and a flash of nothing
+   * where the fields go is worse than a frame of the default order.
+   */
+  return (
+    <ArrangedPage
+      page="member-signups-review"
+      render={render}
+      fallback={(
+        <div className="space-y-4">
+          <Deliveries guid={row.guid} />
+          <Bucket title="Customer">
+            {["firstName", "lastName", "plate", "rfid", "stickerAttached"].map((k) => (
+              <div key={k}>{render(k)}</div>
+            ))}
+          </Bucket>
+        </div>
+      )}
+    />
+  );
 }
 
 /**
@@ -2123,7 +2122,6 @@ function AddFormBuckets({
   options: { data?: { options: string[]; testOnly?: string[] }; isPending: boolean };
   placement: Placement;
 }) {
-  const q = useLayout("member-signups-add");
   const field = (key: keyof Form, label: string, placeholder?: string, required = false) => (
     <Field
       label={label} required={required} error={errors[key]}
@@ -2213,22 +2211,23 @@ function AddFormBuckets({
   };
 
   /*
-   * Before the layout lands, the WHOLE form rather than a partial one.
+   * Before the layout lands, the required fields rather than nothing.
    *
-   * A fallback that showed only the required fields would be a form
-   * somebody could start filling in and then watch rearrange under
-   * them. Every registered item, in the shared order, is the same
-   * thing the base layout resolves to.
+   * A form somebody could start filling in and then watch rearrange
+   * under them would be worse, which is why this is deliberately the
+   * short version and not a guess at the full one.
    */
-  const layout = q.data?.layout;
-  if (!layout) {
-    return (
-      <Bucket title="New member" note="Loading this page's arrangement…">
-        {["dlwContractId", "firstName", "lastName", "rfid", "stickerAttached"].map((k) => (
-          <div key={k}>{render(k)}</div>
-        ))}
-      </Bucket>
-    );
-  }
-  return <BucketGrid layout={layout} render={render} />;
+  return (
+    <ArrangedPage
+      page="member-signups-add"
+      render={render}
+      fallback={(
+        <Bucket title="New member" note="Loading this page's arrangement…">
+          {["dlwContractId", "firstName", "lastName", "rfid", "stickerAttached"].map((k) => (
+            <div key={k}>{render(k)}</div>
+          ))}
+        </Bucket>
+      )}
+    />
+  );
 }

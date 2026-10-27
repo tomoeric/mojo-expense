@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrangeBar, BucketGrid, useLayout } from "@/components/buckets";
+import { ArrangedPage } from "@/components/buckets";
 import { useState } from "react";
 import { AlertTriangle, Check, ImageOff, Loader2, X } from "lucide-react";
 
@@ -159,7 +159,6 @@ export function DmRfidInstructionsPage({ isAdmin = false }: { isAdmin?: boolean 
           placement rule and the number-match warning cannot be hidden:
           hiding either would not change the rule, only somebody's
           chance of reading it before they stick a tag on glass. */}
-      <ArrangeBar page="rfid-instructions" />
       <InstructionBuckets v={v} placement={placement} />
     </div>
   );
@@ -278,8 +277,6 @@ function PlacementToggle({
  * make a mis-stuck tag any easier to undo.
  */
 function InstructionBuckets({ v, placement }: { v: Variant; placement: Placement }) {
-  const q = useLayout("rfid-instructions");
-
   const render = (key: string): React.ReactNode => {
     switch (key) {
       case "rule":
@@ -345,16 +342,20 @@ function InstructionBuckets({ v, placement }: { v: Variant; placement: Placement
 
   // Until the layout lands, the rule and the warning. Not a spinner:
   // somebody is standing at a vehicle holding a sticker.
-  const layout = q.data?.layout;
-  if (!layout) {
-    return (
-      <div className="space-y-4">
-        <div className="rounded-lg border border-border bg-card px-4 py-3">{render("rule")}</div>
-        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3">
-          {render("numberMatch")}
+  return (
+    <ArrangedPage
+      page="rfid-instructions"
+      render={render}
+      fallback={(
+        <div className="space-y-4">
+          <div className="rounded-lg border border-border bg-card px-4 py-3">
+            {render("rule")}
+          </div>
+          <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3">
+            {render("numberMatch")}
+          </div>
         </div>
-      </div>
-    );
-  }
-  return <BucketGrid layout={layout} render={render} />;
+      )}
+    />
+  );
 }
