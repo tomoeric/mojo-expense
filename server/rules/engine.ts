@@ -398,6 +398,17 @@ export type Condition = {
   compare?: Field | null;
 };
 
+/**
+ * Which Emburse accounts a rule judges.
+ *
+ * Lane tags, with "" meaning the manager queue. A rule with no
+ * scope stored is manager-only — every rule written before this
+ * existed was written about the manager queue, and quietly
+ * extending them to somebody's personal accounts would be a new
+ * rule nobody wrote, acting on expenses nobody meant.
+ */
+export const MANAGER_SCOPE: string[] = [""];
+
 export type RuleBody = {
   name: string;
   enabled: boolean;
@@ -409,11 +420,41 @@ export type RuleBody = {
   action: Action;
   /** Shown on the flag, and used as the reason on a denial. */
   message: string;
+  /**
+   * WHICH EMBURSE ACCOUNTS this rule judges, as lane tags.
+   *
+   * "" is the manager queue. A rule can name one account, several,
+   * or the manager queue as well — defined once and evaluated
+   * independently against each, so a threshold counted over one
+   * account's day is never added to another's.
+   *
+   * Every rule written before this existed is manager-only, which
+   * is what the empty-lane default gives them. Extending them
+   * silently to somebody's personal accounts would be a rule
+   * nobody wrote, acting on expenses nobody meant.
+   *
+   * Optional in the type, and absent means manager-only. The
+   * alternative was a required field on every rule literal in
+   * fifteen test files, each of which is about the manager queue
+   * and would have said so by rote — which is how a default that
+   * matters stops being read.
+   */
+  scope?: string[];
 };
 
 /** One expense, in the shape a rule sees it. */
 export type Subject = {
   dedupeKey: string;
+  /**
+   * WHICH EMBURSE ACCOUNT this expense came from.
+   *
+   * The empty string is the manager queue. A rule only judges a
+   * subject whose lane is in the rule's scope, and the day groups
+   * are counted per lane — "three meals in a day" is a question
+   * about one account's day, and two companies' expenses added
+   * together is a threshold nobody set.
+   */
+  lane: string;
   employee: string;
   /**
    * The person's job title, from the directory — "" when unknown.

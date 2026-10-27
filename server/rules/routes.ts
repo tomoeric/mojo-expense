@@ -13,6 +13,7 @@ import {
   deleteRule, getRule, listRules, problems, ruleStats, saveRule, setEnabled, summarise,
 } from "./store.js";
 import { MAX_DECISIONS_PER_RUN, previewRule, runRules } from "./run.js";
+import { linkedLanesOf } from "../emburse/connections.js";
 
 export const rulesRouter: IRouter = Router();
 
@@ -72,6 +73,22 @@ export function readBody(raw: unknown): RuleBody | { error: string } {
   const action = String(r.action ?? "flag") as Action;
   if (!(ACTIONS as readonly string[]).includes(action)) return { error: `Unknown action “${action}”.` };
 
+  /*
+   * WHICH EMBURSE ACCOUNTS this rule judges, as lane tags.
+   *
+   * The empty string is the manager queue and is a real answer,
+   * so the list is NOT filtered for truthiness — dropping "" here
+   * would turn a manager rule into one that judges nothing while
+   * looking saved. Absent means manager-only, which is what every
+   * rule written before scopes existed is.
+   */
+  const scope = Array.isArray(r.scope)
+    ? [...new Set((r.scope as unknown[]).map((v) => String(v).trim()))]
+    : undefined;
+  if (scope && scope.length === 0) {
+    return { error: "Choose at least one Emburse account for this rule to judge." };
+  }
+
   return {
     name: String(r.name ?? "").slice(0, 120),
     enabled: r.enabled !== false,
@@ -80,11 +97,25 @@ export function readBody(raw: unknown): RuleBody | { error: string } {
     must,
     action,
     message: String(r.message ?? "").slice(0, 500),
+    ...(scope ? { scope } : {}),
   };
 }
 
 /** Everything the rule editor needs to offer sensible choices. */
-rulesRouter.get("/rules/options", requireAuth, async (_req: Request, res: Response) => {
+/** The accounts a rule may be scoped to: the manager queue, plus personal ones. */
+async function ruleScopes(
+  userEmail: string,
+): Promise<{ lane: string; label: string; loginEmail: string }[]> {
+  const out = [{ lane: "", label: "Manager queue", loginEmail: "" }];
+  if (!userEmail) return out;
+  for (const l of await linkedLanesOf(userEmail).catch(() => [])) {
+    if (l.kind !== "personal") continue;
+    out.push({ lane: l.key, label: l.label, loginEmail: l.loginEmail });
+  }
+  return out;
+}
+
+rulesRouter.get("/rules/options", requireAuth, async (req: Request, res: Response) => {
   if (!guard(res)) return;
   try {
     const [categories, locations, departments] = await Promise.all([
@@ -112,6 +143,15 @@ rulesRouter.get("/rules/options", requireAuth, async (_req: Request, res: Respon
       },
       maxDecisionsPerRun: MAX_DECISIONS_PER_RUN,
       moneyTolerance: { abs: MONEY_TOLERANCE_ABS, pct: MONEY_TOLERANCE_PCT },
+      /*
+       * The Emburse accounts a rule can be scoped to.
+       *
+       * The manager queue always, plus each personal account the
+       * viewer has. Offered rather than typed, so a rule cannot
+       * be scoped to an account that does not exist and then
+       * silently judge nothing.
+       */
+      scopes: await ruleScopes(req.user?.email ?? ""),
     });
   } catch (err) {
     res.status(500).json({ error: describe(err) });

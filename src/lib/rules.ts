@@ -35,6 +35,16 @@ export type RuleBody = {
   must: Condition | null;
   action: Action;
   message: string;
+  /**
+   * WHICH EMBURSE ACCOUNTS this rule judges, as lane tags.
+   *
+   * "" is the manager queue, and it is a real answer rather than
+   * an absent one — a list filtered for truthiness would turn a
+   * manager rule into one that judges nothing. Absent means
+   * manager-only, which is what every rule written before scopes
+   * existed is.
+   */
+  scope?: string[];
 };
 
 export type Rule = RuleBody & {
@@ -78,6 +88,8 @@ export type Options = {
   lists: Record<"category" | "location" | "department", string[]>;
   maxDecisionsPerRun: number;
   moneyTolerance: { abs: number; pct: number };
+  /** The Emburse accounts a rule may be scoped to. */
+  scopes?: { lane: string; label: string; loginEmail: string }[];
 };
 
 export type Preview = {
@@ -121,6 +133,9 @@ export const BLANK: RuleBody = {
   must: { field: "category", op: "is", value: "" },
   action: "flag",
   message: "",
+  // A new rule is about the manager queue until somebody says
+  // otherwise, which is the same default every existing rule has.
+  scope: [""],
 };
 
 export function useRules() {

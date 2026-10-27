@@ -3,7 +3,10 @@ import { db } from "../db.js";
 import { queueDecision, decisionsFor } from "../emburse/decisions.js";
 import { hasCredential } from "../emburse/credentials.js";
 import { nudgeDecisionWorker } from "../emburse/decision-worker.js";
-import { applies, evaluate, explain, fires, type Group, type RuleBody, type Subject } from "./engine.js";
+import {
+  MANAGER_SCOPE, applies, evaluate, explain, fires,
+  type Group, type RuleBody, type Subject,
+} from "./engine.js";
 import { activeRules, ensureRules, subjects, type Rule } from "./store.js";
 
 /**
@@ -79,8 +82,23 @@ export async function runRules(opts: { keys?: string[]; decide?: boolean } = {})
   const acting = new Map<number, { subject: Subject; detail: string }[]>();
 
   for (const rule of rules) {
-    const groups = groupsFor(rows, rule);
-    for (const subject of rows) {
+    /*
+     * WHICH ACCOUNTS this rule judges. "" is the manager queue,
+     * and a rule with nothing stored is manager-only — every rule
+     * written before scopes existed was written about that queue,
+     * and extending them silently to somebody's personal accounts
+     * would be a rule nobody wrote, acting on expenses nobody
+     * meant, with approve and deny among the actions available.
+     */
+    const scope = new Set(rule.scope ?? MANAGER_SCOPE);
+    const mine = rows.filter((r) => scope.has(r.lane ?? ""));
+    if (mine.length === 0) continue;
+    // Counted from this rule's OWN expenses, which are already
+    // one account's or several — and `dayKey` keeps each
+    // account's day separate inside that, so a rule scoped to
+    // both accounts still counts two days rather than one.
+    const groups = groupsFor(mine, rule);
+    for (const subject of mine) {
       const group = groups.get(dayKey(subject));
       const verdict = evaluate(subject, rule, group);
       if (verdict === "not-applicable") continue;
@@ -155,8 +173,19 @@ async function markJudged(
     keys ? [keys] : []);
 }
 
-/** One person, one day — the unit "three meals in a day" is counted over. */
-const dayKey = (s: Subject): string => `${s.employee.trim().toLowerCase()}|${s.date ?? ""}`;
+/**
+ * One person, one day, IN ONE EMBURSE ACCOUNT — the unit "three
+ * meals in a day" is counted over.
+ *
+ * The account is in the key because a threshold counted across two
+ * companies is a threshold nobody set: three MOJO meals and two
+ * Mammoth meals is not five meals in a day, and a rule scoped to
+ * both accounts would otherwise fire on each from the other's
+ * total. The empty lane is the manager queue, so nothing about a
+ * single-account deployment changes.
+ */
+const dayKey = (s: Subject): string =>
+  `${s.lane ?? ""}|${s.employee.trim().toLowerCase()}|${s.date ?? ""}`;
 
 /**
  * How many of the expenses this rule matched fall on the same person's same
@@ -248,6 +277,34 @@ async function decide(
   targets: { subject: Subject; detail: string }[],
   result: RunResult,
 ): Promise<void> {
+  /*
+   * A DECISION ON A PERSONAL ACCOUNT IS WITHHELD, for now.
+   *
+   * `queueDecision` is applied under the decider's PRIMARY
+   * Emburse login, which is the manager connection. Approving a
+   * personal MOJO expense under the Mammoth login would record
+   * the decision in the wrong tenant, permanently, in a finance
+   * system — and there is no way to tell from the queue
+   * afterwards.
+   *
+   * The owner has not yet said whether a personal expense should
+   * be decided automatically at all, so this does not guess: the
+   * rule still FLAGS, and the run says plainly what it did not
+   * do. Flagging is free and reversible; this is not.
+   */
+  const personal = targets.filter((t) => (t.subject.lane ?? "") !== "");
+  if (personal.length > 0) {
+    const accounts = [...new Set(personal.map((t) => t.subject.lane))].join(", ");
+    result.warnings.push(
+      `“${rule.name}” would ${rule.action} ${personal.length} expense`
+      + `${personal.length === 1 ? "" : "s"} in a personal Emburse account (${accounts}), `
+      + "and did not. A decision is applied under the primary connection, which is a "
+      + "different tenant — they are flagged instead, for a person to decide.");
+  }
+  const managerOnly = targets.filter((t) => (t.subject.lane ?? "") === "");
+  if (managerOnly.length === 0) return;
+  targets = managerOnly;
+
   const owner = rule.createdBy ?? "";
   if (!owner || !(await hasCredential(owner))) {
     result.warnings.push(

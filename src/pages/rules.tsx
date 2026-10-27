@@ -228,6 +228,23 @@ function RuleRow({
           <p className={`text-sm font-semibold ${rule.enabled ? "" : "text-muted-foreground"}`}>
             {rule.name}
             {!rule.enabled && <span className="ml-2 text-xs font-normal text-muted-foreground">off</span>}
+            {/* WHICH ACCOUNTS it judges, on the list as well as in
+                the editor — "does this rule touch my MOJO
+                expenses" is a question about a rule somebody is
+                scanning past, not one they are editing. Shown
+                only when it is not the manager queue alone,
+                which is every rule on a single-account
+                deployment. */}
+            {(rule.scope ?? [""]).join(",") !== "" && (
+              <span className="ml-2 rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px]
+                               font-semibold text-sky-700 dark:text-sky-300">
+                {(rule.scope ?? [])
+                  .map((l) => (l === ""
+                    ? "Manager"
+                    : l.replace(/^personal-/, "").replace(/^./, (c) => c.toUpperCase())))
+                  .join(" + ")}
+              </span>
+            )}
           </p>
           <p className="mt-0.5 text-xs text-muted-foreground">{rule.summary}</p>
           {rule.message && <p className="mt-0.5 text-xs text-muted-foreground italic">“{rule.message}”</p>}

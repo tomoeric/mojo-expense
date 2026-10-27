@@ -130,6 +130,63 @@ export function RuleEditor({
         )}
       </Block>
 
+      {/*
+        * WHICH EMBURSE ACCOUNTS this rule judges.
+        *
+        * Shown only when there is more than one, so a deployment
+        * with a single Emburse account sees nothing new. Chosen
+        * from a list rather than typed: a rule scoped to an
+        * account that does not exist would judge nothing and look
+        * saved.
+        */}
+      {(options?.scopes?.length ?? 0) > 1 && (
+        <Block label="On" hint="Which Emburse account's expenses this rule judges.">
+          <div className="flex flex-wrap items-center gap-2">
+            {options!.scopes!.map((sc) => {
+              const chosen = (body.scope ?? [""]).includes(sc.lane);
+              return (
+                <button
+                  key={sc.lane || "manager"}
+                  type="button"
+                  aria-pressed={chosen}
+                  title={sc.loginEmail
+                    ? `Expenses imported from ${sc.loginEmail}`
+                    : "Expenses waiting on you to approve"}
+                  onClick={() => {
+                    const now = new Set(body.scope ?? [""]);
+                    if (now.has(sc.lane)) now.delete(sc.lane);
+                    else now.add(sc.lane);
+                    // Never nothing. A rule scoped to no account
+                    // judges nothing while looking saved, which is
+                    // the one state this control must not reach.
+                    set({ scope: now.size > 0 ? [...now] : [sc.lane] });
+                  }}
+                  className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+                    chosen
+                      ? "border-foreground bg-foreground text-background"
+                      : "border-border text-muted-foreground hover:text-foreground"}`}
+                >
+                  {sc.label}
+                </button>
+              );
+            })}
+          </div>
+          {(body.scope ?? [""]).some((l) => l !== "") && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              Counted separately for each account: a daily total never adds one company&rsquo;s
+              expenses to another&rsquo;s.
+              {body.action !== "flag" && (
+                <span className="mt-1 block text-amber-800 dark:text-amber-300">
+                  A decision is applied under your primary Emburse connection, which is a
+                  different tenant — so in a personal account this rule flags and does not{" "}
+                  {body.action}. The run says so each time.
+                </span>
+              )}
+            </p>
+          )}
+        </Block>
+      )}
+
       <Block label={body.must ? "Otherwise" : "Then"} hint={undefined}>
         <div className="flex flex-wrap items-center gap-3">
           <SegmentedControl value={body.action} onChange={(action) => set({ action })} options={ACTIONS} />

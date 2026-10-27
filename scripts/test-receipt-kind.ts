@@ -28,7 +28,7 @@ const check = (what: string, ok: boolean, detail = "") => {
 };
 
 const expense = (over: Partial<Subject> = {}): Subject => ({
-  dedupeKey: "k", employee: "Pat Lee", title: "", merchant: "HOME DEPOT",
+  dedupeKey: "k", lane: "", employee: "Pat Lee", title: "", merchant: "HOME DEPOT",
   note: "Parts", category: "Repairs & Maintenance", location: "Richland",
   department: "Operations and Field", method: "Corporate card", amountCents: 11655,
   hasReceipt: true, receiptItems: "", inInbox: true,

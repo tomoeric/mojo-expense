@@ -4,7 +4,8 @@ import { ensureReceiptItems } from "../emburse/receipt-items.js";
 import { KEY_SQL, ensureTitles } from "../people/titles.js";
 import { fuelEvidence } from "./fuel.js";
 import {
-  ACTIONS, FIELDS, OPS, centsDiffer, chosenReceiptTotal, comparableTo, isGroupField, opsFor,
+  ACTIONS, FIELDS, MANAGER_SCOPE, OPS, centsDiffer, chosenReceiptTotal, comparableTo,
+  isGroupField, opsFor,
   problems, summarise,
   type Action, type Condition, type Field, type Op, type RuleBody, type Subject,
 } from "./engine.js";
@@ -43,6 +44,17 @@ CREATE TABLE IF NOT EXISTS expense_rules (
 -- "Gas must be Fuel" would make a flag ambiguous. Case-insensitive, because
 -- two names differing only in case are the same name to a person.
 CREATE UNIQUE INDEX IF NOT EXISTS expense_rules_name_idx ON expense_rules (lower(name));
+
+/**
+ * WHICH EMBURSE ACCOUNTS this rule judges, as lane tags.
+ *
+ * NULL is the manager queue and nothing else. Every rule written
+ * before this column existed was written about the manager queue;
+ * extending them silently to somebody's personal accounts would be
+ * a rule nobody wrote, acting on expenses nobody meant — and the
+ * actions available here include approving and denying real money.
+ */
+ALTER TABLE expense_rules ADD COLUMN IF NOT EXISTS scope jsonb;
 
 CREATE TABLE IF NOT EXISTS expense_rule_hits (
   dedupe_key text   NOT NULL REFERENCES expenses (dedupe_key) ON DELETE CASCADE,
@@ -89,12 +101,13 @@ export type Rule = RuleBody & {
 type Row = {
   id: string; name: string; enabled: boolean; match_mode: string;
   conditions: unknown; must: unknown; action: string; message: string;
+  scope: unknown;
   created_by: string | null; created_at: Date;
   updated_by: string | null; updated_at: Date; last_run_at: Date | null;
 };
 
 const COLUMNS = `id, name, enabled, match_mode, conditions, must, action, message,
-                 created_by, created_at, updated_by, updated_at, last_run_at`;
+                 scope, created_by, created_at, updated_by, updated_at, last_run_at`;
 
 /**
  * Read a rule back out of the database defensively.
@@ -138,6 +151,13 @@ function shape(row: Row): Rule {
     must: condition(row.must),
     action,
     message: row.message ?? "",
+    // NULL means the manager queue, which is what every rule
+    // stored before this column existed is about. An empty array
+    // would mean "no accounts", i.e. a rule that judges nothing,
+    // so it is read the same way rather than taken literally.
+    scope: Array.isArray(row.scope) && row.scope.length > 0
+      ? (row.scope as unknown[]).map(String)
+      : MANAGER_SCOPE,
     createdBy: row.created_by,
     createdAt: row.created_at.toISOString(),
     updatedBy: row.updated_by,
@@ -176,10 +196,24 @@ export async function saveRule(
   const bad = problems(body);
   if (bad.length > 0) return { ok: false, error: bad.join(" ") };
 
+  /*
+   * The scope, as a list of lane tags, deduplicated and with the
+   * empty string preserved — "" is the manager queue, not an
+   * absent value, and filtering falsy entries out of this list
+   * would quietly turn a manager rule into one that judges
+   * nothing.
+   *
+   * Absent or empty means manager-only, which is what every rule
+   * stored before this column existed is.
+   */
+  const scope = Array.isArray(body.scope) && body.scope.length > 0
+    ? [...new Set(body.scope.map((l) => String(l).trim()))]
+    : MANAGER_SCOPE;
+
   const args = [
     body.name.trim(), body.enabled, body.match,
     JSON.stringify(body.when), body.must ? JSON.stringify(body.must) : null,
-    body.action, body.message.trim(), by,
+    body.action, body.message.trim(), by, JSON.stringify(scope),
   ];
 
   try {
@@ -187,13 +221,14 @@ export async function saveRule(
       ? await db().query<Row>(
           `UPDATE expense_rules
               SET name=$1, enabled=$2, match_mode=$3, conditions=$4, must=$5,
-                  action=$6, message=$7, updated_by=$8, updated_at=now()
-            WHERE id=$9 RETURNING ${COLUMNS}`,
+                  action=$6, message=$7, updated_by=$8, scope=$9::jsonb,
+                  updated_at=now()
+            WHERE id=$10 RETURNING ${COLUMNS}`,
           [...args, id])
       : await db().query<Row>(
           `INSERT INTO expense_rules (name, enabled, match_mode, conditions, must,
-                                      action, message, created_by, updated_by)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8) RETURNING ${COLUMNS}`,
+                                      action, message, created_by, updated_by, scope)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8,$9::jsonb) RETURNING ${COLUMNS}`,
           args);
     if (!rows[0]) return { ok: false, error: "That rule no longer exists." };
 
@@ -310,6 +345,7 @@ export async function subjects(
 ): Promise<Subject[]> {
   const { rows } = await client.query<{
     dedupe_key: string; employee: string; merchant: string; note: string | null;
+    lane: string;
     category: string | null; location: string | null; department: string | null;
     method: string | null; amount_cents: string; receipts: string; items: string | null;
     title: string;
@@ -321,7 +357,7 @@ export async function subjects(
     receipt_date: string | null; receipt_merchant: string | null;
   }>(
     `SELECT e.dedupe_key, e.employee, e.merchant, e.note, e.category, e.location,
-            e.department, e.method, e.amount_cents, e.in_inbox,
+            e.department, e.method, e.amount_cents, e.in_inbox, e.lane,
             -- The person's job title, matched on a normalised name. The
             -- export carries no email, so the name is the only join there
             -- is; NULL here means "we could not match them", which the
@@ -483,6 +519,9 @@ export async function subjects(
 
   return rows.map((r) => ({
     dedupeKey: r.dedupe_key,
+    // Which Emburse account it came from. "" is the manager queue,
+    // which is what every row imported before accounts existed is.
+    lane: r.lane ?? "",
     title: r.title ?? "",
     employee: r.employee ?? "",
     merchant: r.merchant ?? "",

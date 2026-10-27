@@ -20,6 +20,7 @@ import {
 } from "../server/rules/engine.js";
 import type { Hit } from "../server/rules/store.js";
 import { ensureTaxonomy } from "../server/import/taxonomy.js";
+import { ensureDecisionsSchema } from "../server/emburse/decisions.js";
 
 let failures = 0;
 const check = (label: string, ok: boolean, detail = "") => {
@@ -28,7 +29,7 @@ const check = (label: string, ok: boolean, detail = "") => {
 };
 
 const expense = (over: Partial<Subject> = {}): Subject => ({
-  dedupeKey: "k", employee: "Christopher Allen", title: "Store Manager",
+  dedupeKey: "k", lane: "", employee: "Christopher Allen", title: "Store Manager",
   merchant: "RW6708RACETRAC INC",
   note: "Gas for truck", category: "Auto Fee & Fuel", location: "Richland",
   department: "Operations and Field", method: "Corporate card", amountCents: 4512,
@@ -545,6 +546,9 @@ await ensureSchema();
 // The rule engine reads the permanent name lists directly, so on a
 // cold database `expense_taxonomy` does not exist yet.
 await ensureTaxonomy();
+// A deciding rule reads expense_decisions to avoid stacking a
+// second decision behind an existing one.
+await ensureDecisionsSchema();
 await store.ensureRules();
 
 const TAG = `zz-rule-${Date.now()}`;

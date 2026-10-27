@@ -101,7 +101,7 @@ were added; "it compiles" is not "the button works".
 `connections`, `decisions`, `import-as`, `unclaimed`, `run-as`,
 `reviewer-schedules`, `manager-queue`, `view-as-brian`, `two-reviewers`,
 `corrections`, `decision-trace`, `auto-approve`, `rules`, `bulk-approve`,
-`lanes`, `two-accounts`. For a change to "Your Emburse login", Export
+`lanes`, `two-accounts`, `rule-scope`. For a change to "Your Emburse login", Export
 settings or the review queue, also
 `test-accounts-ui.ts` and `test-lanes-ui.ts` after a build.
 
@@ -2496,6 +2496,36 @@ schedule and history. Widened in place: `lane text NOT NULL DEFAULT
 - **When a queue test inserts rows late and they do not appear, it is the
   cache, not a bug.** The server caches per (person, lane, window). Insert
   before the first page load, or pass `refresh=1`.
+
+## A rule says which Emburse accounts it judges
+
+`expense_rules.scope jsonb` — a list of lane tags, where `""` is the manager
+queue.
+
+- **NULL is manager-only, and that is the whole point.** Every rule written
+  before this column existed was written about the manager queue; extending
+  them silently to somebody's personal accounts would be a rule nobody wrote,
+  acting on expenses nobody meant — with approve and deny among the actions
+  available. An empty array is read the same way rather than literally, since
+  "judges nothing" is never what somebody meant to save.
+- **`""` is a real answer, so the list is never filtered for truthiness.**
+  Dropping the empty string would turn a manager rule into one that judges
+  nothing while looking saved. Both the route and the store keep it.
+- **The day group key includes the lane.** Three MOJO meals and two Mammoth
+  meals is not five meals in a day, and a rule scoped to both accounts would
+  otherwise fire on each from the other's total. Tested both ways: nothing
+  fires on two-and-two, and it does fire once one account alone goes over.
+- **A rule does NOT decide in a personal account.** `queueDecision` applies
+  under the decider's PRIMARY connection, which is a different tenant —
+  approving a personal MOJO expense under the Mammoth login would record it
+  in the wrong finance system, permanently. The rule still flags, and the run
+  warns, naming the account. The owner has not been asked yet whether
+  personal expenses should be decided automatically at all; **ask before
+  changing this.**
+- **The scope is shown on the rule list, not only in the editor** — "does
+  this rule touch my MOJO expenses" is a question about a rule somebody is
+  scanning past.
+- `scripts/test-rule-scope.ts`.
 
 ## Testing your own Emburse connection
 
