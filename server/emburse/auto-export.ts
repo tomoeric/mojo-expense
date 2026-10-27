@@ -1889,10 +1889,29 @@ async function whyStuck(page: Page): Promise<string> {
     );
   }
   if (credentialsRejected(text)) {
-    return `Emburse rejected the credentials. It says: "${snippet(text)}"`;
+    /*
+     * The ADDRESS as much as the password.
+     *
+     * Emburse's own wording is "email address and/or password",
+     * and it means it: the same screen answers a typo in the
+     * address and a wrong password identically. Saying only
+     * "the password was rejected" sends somebody to re-type a
+     * password that was never the problem — which is the exact
+     * mistake `needsReentry` exists to avoid, one step along.
+     */
+    return (
+      "Emburse rejected the sign-in. It does not say which half is wrong, so check the "
+      + "Emburse ADDRESS on this connection as well as the password — a typo in the "
+      + `address gets this same answer. It says: "${snippet(text)}"`
+    );
   }
   if (/microsoft|sign in with|single sign|saml|okta/i.test(text)) {
-    return `Emburse handed sign-in to another identity provider. It says: "${snippet(text)}"`;
+    return (
+      "Emburse handed sign-in to another identity provider, so there may be no password "
+      + "for this account to store — an account that signs in through Microsoft or SSO "
+      + "cannot be driven by a stored email and password at all. "
+      + `It says: "${snippet(text)}"`
+    );
   }
   if (!text) {
     return `the page at ${safeUrl(url)} has no readable text yet — it may still be loading, or be a redirect.`;
@@ -1920,10 +1939,32 @@ export function isCredentialFault(text: string, url = ""): boolean {
   return credentialsRejected(text);
 }
 
+/**
+ * Has Emburse said the sign-in details are wrong?
+ *
+ * This was a list of exact phrases and it did not include the one
+ * Emburse actually uses. The page reads "Incorrect email address
+ * and/or password" — which matches none of "incorrect password",
+ * "wrong email or password" or "invalid email" — so a plainly
+ * rejected login fell through to the catch-all below and was
+ * reported as "if that looks like Emburse, the loggedIn selector
+ * is what needs correcting". Somebody was sent to debug a
+ * selector while the page on their screen said the password was
+ * wrong, and the password was never flagged for re-entry.
+ *
+ * So it is a SHAPE now rather than a phrase book: a rejection
+ * word, then up to forty characters that are not a sentence end,
+ * then "password" or "credentials". The sentence boundary is what
+ * keeps it honest — "Incorrect code. Enter password" is a
+ * verification screen, not a rejected password, and the gap
+ * cannot cross the full stop. The challenge test runs before this
+ * one anyway, which is the belt to that brace.
+ */
 export function credentialsRejected(text: string): boolean {
-  return /wrong email or password|incorrect password|invalid (email|password|credentials)|password (is|was) (incorrect|wrong)|could not (sign|log) you in/i.test(
-    text,
-  );
+  return /(wrong|incorrect|invalid|bad|unrecognis?zed)[^.!?]{0,40}\b(password|credentials)\b/i
+    .test(text)
+    || /password (is|was) (incorrect|wrong)|could not (sign|log) you in/i.test(text)
+    || /invalid (email|user ?name)/i.test(text);
 }
 
 const snippet = (t: string) => (t.length > 220 ? `${t.slice(0, 220)}…` : t);

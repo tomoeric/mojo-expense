@@ -101,7 +101,7 @@ were added; "it compiles" is not "the button works".
 `connections`, `decisions`, `import-as`, `unclaimed`, `run-as`,
 `reviewer-schedules`, `manager-queue`, `view-as-brian`, `two-reviewers`,
 `corrections`, `decision-trace`, `auto-approve`, `rules`, `bulk-approve`,
-`lanes`, `two-accounts`, `rule-scope`, `receipt-mail`. For a change to "Your Emburse login", Export
+`lanes`, `two-accounts`, `rule-scope`, `receipt-mail`, `signin-errors`. For a change to "Your Emburse login", Export
 settings or the review queue, also
 `test-accounts-ui.ts` and `test-lanes-ui.ts` after a build.
 
@@ -2612,6 +2612,35 @@ loading/error states are all about the EXPENSE QUEUE, and `isStandalone` in
   genuinely about the queue. Checked by `test-accounts-ui.ts`, which asserts
   the switcher and the expense count are absent and that the page's title
   appears once rather than twice.
+
+## Why a sign-in failed: say the right thing
+
+`credentialsRejected` / `isCredentialFault` / `whyStuck` in `auto-export.ts`
+decide the single most-read sentence in the app. Getting one wrong breaks
+nothing and sends a person to fix the wrong thing, which is worse, because
+they believe it.
+
+- **Match a SHAPE, not a phrase.** It was a list of exact phrases and it did
+  not contain the one Emburse uses: the page reads **"Incorrect email address
+  and/or password"**, which matches none of "incorrect password", "wrong
+  email or password" or "invalid email". A plainly rejected login was
+  therefore reported as *"if that looks like Emburse, the loggedIn selector
+  is what needs correcting"*, and the password was never flagged for
+  re-entry. The rule is now a rejection word, then up to forty characters
+  that are not a sentence end, then "password" or "credentials" — the
+  sentence boundary is what keeps "Incorrect code. Enter password" out.
+- **Say the ADDRESS might be wrong too.** Emburse's own wording is "email
+  address and/or password" and it means it: a typo in the address gets the
+  same screen. Telling somebody only to re-type the password is the same
+  mistake one step along.
+- **An SSO hand-off says there may be no password at all.** An account that
+  signs in through Microsoft or Okta cannot be driven by a stored email and
+  password, and the message says so rather than implying a bad secret.
+- **`scripts/test-signin-errors.ts`**, which needs nothing to run. These
+  checks used to live in `test-export.ts`, behind a required export PDF
+  nobody has to hand — so the test that should have caught this wording had
+  not run in a long time. **A test that needs a file nobody has is a test
+  that is not run**; pure classification belongs somewhere it always runs.
 
 ## Testing your own Emburse connection
 
