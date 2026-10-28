@@ -1740,7 +1740,13 @@ export async function testConnection(
             throw await asError(whyNoGrid(sheet, sel, login.email));
           }
           const rows = await sheet.locator(sel.resultRow!).count().catch(() => 0);
-          return `the grid is there with ${rows} row(s) — a decision could find its expense here`;
+          // Naming the list, because WHICH one was opened is half the
+          // answer. One connection can serve both the manager queue and a
+          // personal tab, so "the grid is there" on its own does not say
+          // whether the thing that works is the approver's list or this
+          // account's own.
+          return `${sel.gridPath} is there with ${rows} row(s) — a decision could find its `
+            + "expense here";
         });
       }
 

@@ -2512,10 +2512,36 @@ queue. Two separate causes, and either one alone reproduces it.
   empty string — so "non-empty" IS "personal". The manager queue gets the
   base object back unchanged, deliberately: it has read the team grid since
   before tabs existed.
+- **"Test connection" too, which is the instrument people use to find out
+  which of these is happening.** It goes one step past signing in and opens
+  the grid — and opened the deployment's team-wide one for every account, so
+  testing a PERSONAL connection signed in as that account and then looked
+  for the approver's queue. A good connection could come back red with a
+  message pointing at the password. The route is handed an `accountKey`
+  rather than a tab, so `laneForAccount(userEmail, accountKey)` in
+  `connections.ts` converts. **The PRIMARY connection always maps to the
+  manager queue**, even where a personal tab is linked to it as well (Eric's
+  Mammoth login is both): one connection serving two tabs has no single
+  answer, so it keeps the answer it has always had, because scoping the
+  primary to a personal grid would stop this testing what every approval
+  does. The step now names the list it opened, since "the grid is there" did
+  not say which one.
 - `scripts/test-personal-grid.ts` — the lane-aware lookup, plus a mock run
   per tab asserting the team tab is pressed for the manager and never for a
   personal one (`mock.state().admin`). Section 10 of `test-writeback.ts`
-  covers `selectorsForLane`.
+  covers `selectorsForLane`, section 10 of `test-connections.ts`
+  `laneForAccount`.
+- **Still open: device trust is per Emburse login, and the page cannot show
+  it.** The profile directory and the cookie jar are keyed by
+  `login.email` — the Emburse address — so each personal tab arrives as a
+  stranger and is asked for its own verification code. Two things have not
+  caught up: the Export settings readout calls `cookiesSavedAt(ownLoginEmail(
+  user))`, which is the PRIMARY connection only, so a personal tab's trust is
+  invisible; and the legacy-device adopt buttons offer app-user addresses
+  (`listCredentials().map(c => c.userEmail)`) while the jar is read by login
+  address, so trust can never be assigned to `eric.s@mammothholdings.com`.
+  A scheduled run gets no code hook at all, so on an untrusted personal
+  profile it fails as "the scheduled import is locked out".
 
 ## Two personal queues, and the account an expense came from
 

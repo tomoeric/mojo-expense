@@ -428,6 +428,42 @@ function link(lanes: Lane[], conns: Connection[]): LinkedLane[] {
 }
 
 /**
+ * WHICH TAB a stored connection serves, as a lane tag.
+ *
+ * The inverse of `credentialForLaneOf`, and needed because some
+ * callers name an ACCOUNT where the rest of the app names a tab —
+ * "Test connection" is handed an `accountKey` by the card the
+ * button sits on. Without this they fall back to the deployment's
+ * selectors, which point at the team-wide grid: the test then
+ * signed in as the personal account and went looking for the
+ * approver's list, so a perfectly good personal connection could
+ * come back red for a reason that has nothing to do with it.
+ *
+ * Returns the TAG, so the empty string is the manager queue and
+ * can be passed straight on.
+ *
+ * THE PRIMARY CONNECTION IS ALWAYS THE MANAGER QUEUE'S, even
+ * where a personal tab is also linked to it. One connection can
+ * serve both — Eric's Mammoth login is the primary one AND what
+ * the Mammoth tab signs in with — and that question has no single
+ * answer, so it is answered the way it has always been answered:
+ * the primary is what the manager queue and every approval use.
+ * Only a non-primary connection unambiguously belongs to one
+ * personal tab. Calling the primary "personal" here would stop
+ * "Test connection" testing what the approvals actually do, which
+ * is the one thing this must not break.
+ */
+export async function laneForAccount(
+  userEmail: string, accountKey: string,
+): Promise<string> {
+  if (!accountKey || accountKey === PRIMARY) return "";
+  const lanes = await linkedLanesOf(userEmail).catch(() => []);
+  const mine = lanes.find(
+    (l) => l.kind === "personal" && l.connection?.accountKey === accountKey);
+  return mine ? laneTag(mine.key) : "";
+}
+
+/**
  * The connection one lane must use, or a refusal naming the lane.
  *
  * Every import, upload and write-back goes through here, so there

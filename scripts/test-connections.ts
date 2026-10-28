@@ -24,6 +24,7 @@
  */
 import {
   addConnection, credentialFor, credentialForLane, getConnection, labelConnection,
+  laneForAccount,
   lanesFor, linkedLanes, listConnections, removeConnection, setAwaitingCode,
 } from "../server/emburse/connections.js";
 import {
@@ -185,6 +186,35 @@ try {
   check("…even when the label claims to be the other tab",
     (await linkedLanes(ID, APP)).find((l) => l.key === "personal-mojo")
       ?.connection?.loginEmail === APP);
+
+  /*
+   * WHICH TAB AN ACCOUNT BELONGS TO, for the callers that are
+   * handed an account where the rest of the app deals in tabs.
+   *
+   * "Test connection" is one: it goes one step past signing in and
+   * opens the grid, and the grid it opened was the deployment's —
+   * the team-wide list — for every account. So testing the MOJO
+   * connection signed in as MOJO and then went looking for the
+   * approver's queue, which is not on that tenant: a good
+   * connection could come back red with a message pointing at the
+   * password.
+   */
+  console.log("\n10. An account knows which tab it serves");
+  check("a non-primary connection names its own tab",
+    (await laneForAccount(APP, back.connection.accountKey)) === "personal-mojo",
+    await laneForAccount(APP, back.connection.accountKey));
+  /*
+   * And the PRIMARY is the manager queue's, even though the
+   * Mammoth tab is linked to it too. One connection, two tabs, and
+   * the question has no single answer — so it keeps the answer it
+   * has always had. Scoping the primary to a personal grid would
+   * stop this testing what every approval actually does.
+   */
+  check("THE PRIMARY STAYS THE MANAGER QUEUE'S",
+    (await laneForAccount(APP, PRIMARY)) === "",
+    JSON.stringify(await laneForAccount(APP, PRIMARY)));
+  check("…and an account nobody holds is not guessed into a tab",
+    (await laneForAccount(APP, "acct_does_not_exist")) === "");
 
 } finally {
   await deleteCredential(ID).catch(() => undefined);

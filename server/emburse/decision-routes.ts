@@ -6,7 +6,10 @@ import { answerChallenge, cancelChallenge, currentChallenge, waitForCode } from 
 import { openCodeRequests } from "../emburse/challenge-log.js";
 import { browserQueue, whyWaiting } from "./browser-lock.js";
 import { PRIMARY, credentialForUser, hasCredential, noteResult } from "./credentials.js";
-import { credentialFor, listConnections, setAwaitingCode } from "./connections.js";
+import {
+  credentialFor, laneForAccount, listConnections, setAwaitingCode,
+} from "./connections.js";
+import { selectorsForLane } from "./decision-worker.js";
 import {
   inspectEditForm, runDecision, testConnection,
   type Decision, type Target,
@@ -194,7 +197,23 @@ decisionRouter.post("/emburse-check", requireAuth, async (req: Request, res: Res
 
   try {
     const settings = await readSettings();
-    const run = await testConnection(settings.selectors, settings.emburseUrl, login, {
+    /*
+     * IN THE GRID THAT ACCOUNT ACTUALLY READS.
+     *
+     * The test goes one step past signing in — it opens the grid,
+     * because that is where decisions fail. But the grid it opened
+     * was `settings.selectors.gridPath`, the team-wide list, for
+     * every account: so testing a PERSONAL connection signed in as
+     * that account and then went looking for the approver's queue,
+     * which is not on that tenant. A good connection could come
+     * back red, and the message would send somebody to check a
+     * password that was never the problem. The button exists to
+     * answer "is my MOJO connection working"; it has to ask about
+     * MOJO's own list.
+     */
+    const lane = await laneForAccount(who, login.accountKey).catch(() => "");
+    const forAccount = await selectorsForLane(who, lane, settings.selectors);
+    const run = await testConnection(forAccount, settings.emburseUrl, login, {
       // Somebody pressed a button and is watching, so a code CAN be asked for —
       // and answering it here is the whole reason to press it.
       onChallenge: async (ctx: {
