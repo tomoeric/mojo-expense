@@ -28,6 +28,8 @@ import {
 } from "../server/emburse/receipt-writeback.js";
 import { recordCandidates, decideMatch } from "../server/emburse/receipt-mail.js";
 import { ensureDecisionsSchema } from "../server/emburse/decisions.js";
+import { selectorsForLane } from "../server/emburse/decision-worker.js";
+import { PERSONAL_GRID, MANAGER_GRID } from "../server/emburse/export-scheduler.js";
 
 let failures = 0;
 const check = (what: string, ok: boolean, detail = "") => {
@@ -205,6 +207,35 @@ try {
   }, evidence({ merchant: "", date: null, reference: "" }));
   check("…and a reading too thin to say anything proposes nothing",
     thin.note === "", thin.note);
+
+  /*
+   * AND IT LOOKS FOR THE ROW IN THE TAB'S OWN GRID.
+   *
+   * The deployment's `gridPath` is the team-wide list, which is
+   * the approver's queue. A write-back signs in to the PERSONAL
+   * account and then searched that list: the row is not there, so
+   * the send failed with "not in the queue" after signing in and
+   * searching — or, on a tenant where the same merchant and
+   * amount recur, found a different row and annotated THAT one.
+   * The same held for a category correction.
+   */
+  console.log("\n10. The row is looked for in the tab’s own grid");
+  const team = { gridPath: MANAGER_GRID, gridQuery: "" };
+  const forMojo = await selectorsForLane(ERIC, MOJO, team);
+  check("a personal tab searches its own list",
+    forMojo.gridPath === PERSONAL_GRID, String(forMojo.gridPath));
+  // The manager queue is the one thing that must not move: it has been
+  // reading the team grid since before tabs existed.
+  const forManager = await selectorsForLane(ERIC, "", team);
+  check("THE MANAGER QUEUE IS UNTOUCHED",
+    forManager.gridPath === MANAGER_GRID, String(forManager.gridPath));
+  check("…and it is the same object, so nothing else can have changed",
+    forManager === team);
+  // A lane nobody has configured still must not fall back to the team
+  // grid: a non-empty lane is a personal tab by construction.
+  const unknown = await selectorsForLane(ERIC, "personal-invented", team);
+  check("an unconfigured tab still does NOT get the team grid",
+    unknown.gridPath === PERSONAL_GRID, String(unknown.gridPath));
 
 } finally {
   await db().query("DELETE FROM expenses WHERE dedupe_key LIKE $1", [`${TAG}%`])

@@ -629,6 +629,18 @@ export async function runAutoExport(
      * and the run ends and is recorded like any other failure.
      */
     onOpen?: (close: () => Promise<void>) => void;
+    /**
+     * This run reads ONE PERSON'S OWN expenses, not a review queue.
+     *
+     * Two steps below reach for the team-wide view unprompted — the
+     * MANAGER/ADMIN tab is clicked before anything is opened, and a path
+     * that fails to load is retried as "<path>/team" because that is this
+     * tenant's naming scheme for a list's team-wide view. Both are right
+     * for an approver and wrong for a personal tab, where the team grid is
+     * somebody else's expenses. Off by default, so the manager queue and
+     * every existing deployment behave exactly as before.
+     */
+    personalQueue?: boolean;
   } = {},
 ): Promise<ExportRun> {
   const steps: StepResult[] = [];
@@ -1981,6 +1993,8 @@ async function runSteps(
     dryRun?: boolean; onChallenge?: ChallengeHook; shouldStop?: () => boolean;
     /** The other logins this app knows, to catch being signed in as one. */
     otherLogins?: string[];
+    /** A personal tab: this person's own expenses, never the team grid. */
+    personalQueue?: boolean;
   },
   setItemLine: (v: string) => void,
   setPdf: (b: Buffer) => void,
@@ -2047,6 +2061,14 @@ async function runSteps(
     // clicking it first would land on the wrong list before the URL below
     // corrects it — or leave Emburse remembering the wrong tab for the
     // next run.
+    //
+    // A personal tab is the clear-cut case and is checked FIRST, because
+    // the path test below cannot be trusted to catch it: a tab whose list
+    // somebody has typed by hand could still be a "/team" address, and
+    // clicking the tab then teaches Emburse to reopen there next time.
+    if (opts.personalQueue) {
+      return "skipped — this is a personal tab, which reads this account's own expenses";
+    }
     if (sel.gridPath && !/\/team\b/.test(sel.gridPath)) {
       return `skipped — this run reads ${sel.gridPath}, which is not the team-wide list`;
     }
@@ -2152,7 +2174,14 @@ async function runSteps(
        * nav link may well point at the PERSONAL view, which is a different
        * queue from the one a reviewer approves out of.
        */
-      const sameScheme = /\/team\b/.test(sel.gridPath)
+      //
+      // Never on a personal tab. "<list>/team" is the approver's view of
+      // the same list, so trying it there answers a failed /transactions
+      // by exporting other people's expenses — and the run says so only
+      // in a NOTE at the end of a step that passed. A personal tab whose
+      // own list does not load has nothing to fall back TO; the nav is
+      // still asked, and a "/me" link is the right answer there.
+      const sameScheme = opts.personalQueue || /\/team\b/.test(sel.gridPath)
         ? null
         : `${sel.gridPath.replace(/\/$/, "")}/team`;
       let found: string | null = null;
@@ -2164,6 +2193,12 @@ async function runSteps(
         if (await gridLoaded(page, sel)) found = sameScheme;
       }
       found ??= await askTheNav();
+      // And a nav link into the team-wide view is not an answer for a
+      // personal tab either, however it was arrived at. Pressing a
+      // single-page nav item is the only way to learn where it goes, so
+      // this can already have navigated — the grid is reopened by URL
+      // below, which puts it back.
+      if (found && opts.personalQueue && /\/team\b/.test(found)) found = null;
       // Back through gridUrl, so the list is opened with this reviewer's
       // filters rather than whatever the nav's own default view is.
       if (found && found !== sel.gridPath) {

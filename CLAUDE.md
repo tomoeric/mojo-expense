@@ -101,7 +101,8 @@ were added; "it compiles" is not "the button works".
 `connections`, `decisions`, `import-as`, `unclaimed`, `run-as`,
 `reviewer-schedules`, `manager-queue`, `view-as-brian`, `two-reviewers`,
 `corrections`, `decision-trace`, `auto-approve`, `rules`, `bulk-approve`,
-`lanes`, `two-accounts`, `rule-scope`, `receipt-mail`, `signin-errors`, `writeback`, `receipt-link`. For a change to "Your Emburse login", Export
+`lanes`, `two-accounts`, `rule-scope`, `receipt-mail`, `signin-errors`, `writeback`, `receipt-link`,
+`personal-grid`. For a change to "Your Emburse login", Export
 settings or the review queue, also
 `test-accounts-ui.ts` and `test-lanes-ui.ts` after a build.
 
@@ -2460,6 +2461,61 @@ schedule and history. Widened in place: `lane text NOT NULL DEFAULT
   reader; the smoke test found it as a strict-mode violation, the same way the
   two Cancel buttons were found.
 - `scripts/test-lanes.ts` and `scripts/test-lanes-ui.ts`.
+
+## A personal tab must never touch the team-wide grid
+
+The symptom was one line in a run log: a personal tab reporting "clicked the
+team-wide tab" and then exporting `/transactions/team` — the approver's
+queue. Two separate causes, and either one alone reproduces it.
+
+- **Look a person's import settings up BY TAB. There is one lookup, and it is
+  `importFor(reviewer, lane)`.** `reviewerImports()` returns a row per
+  (person, tab), and `attemptExport` had the lookup written twice: lane-aware
+  where it picked the PASSWORD, email-only where it picked the LIST. So a
+  personal run got the MANAGER row — its grid path, its stages, its receipt
+  filter. The manager row stores no path of its own, so `gridPathFor` came
+  back undefined and the run fell through to the deployment default, which is
+  the team grid. **Never add a second lookup by email alone**; the first row
+  for anybody with two tabs is the manager one.
+- **The browser reaches for the team view on its own, twice, and has to be
+  told not to.** `runAutoExport`/`runSteps` take `personalQueue`, set from
+  the lane's kind in `attemptExport`:
+  1. the "switch to the team view" step clicks the MANAGER/ADMIN tab before
+     anything is opened. The old guard was a path test
+     (`!/\/team\b/.test(sel.gridPath)`), which a hand-typed path defeats —
+     and the click is not harmless even when the URL corrects it afterwards,
+     because Emburse reopens on whichever tab was last used;
+  2. a path that fails to load is retried as `"<path>/team"`, the tenant's
+     naming scheme for a list's team-wide view. Right for an approver reading
+     `/reimbursements`; on a personal tab it answers "your own list did not
+     load" by exporting other people's expenses, and says so only in a NOTE
+     at the end of a step that PASSED. A nav link into a `/team` view is
+     refused for the same reason. A personal tab whose own list does not load
+     has nothing to fall back to and should fail.
+- **`PERSONAL_GRID = "/transactions"` is a default on the LANE, not an
+  inheritance.** Null means inherit, and what a personal tab inherited was
+  the shared team grid. `reviewerImports()` resolves it from `lane.kind`, the
+  same way it forces `receiptsOnly` to false there.
+- **The "Needs Review is off" warning is manager-only.** On a personal tab it
+  is backwards — those expenses are the person's own, at whatever stage, and
+  the advice sends them to re-tick a filter that removes most of what they
+  came for. The personal equivalent is "no stages selected at all".
+- **The same applies to every OTHER browser run, not just the import.** A
+  write-back and a category correction both signed in to the personal
+  account and then searched `settings.selectors.gridPath` — the team-wide
+  list. The row is not there, so the edit failed with "not in the queue"
+  having signed in and searched; on a tenant where the same merchant and
+  amount recur it could instead find a DIFFERENT row and change that one.
+  `selectorsForLane(who, lane, base)` in `decision-worker.ts` is the one
+  place that scopes them. A non-empty lane gets the personal grid even with
+  no import row of its own, because `laneTag` makes the manager queue the
+  empty string — so "non-empty" IS "personal". The manager queue gets the
+  base object back unchanged, deliberately: it has read the team grid since
+  before tabs existed.
+- `scripts/test-personal-grid.ts` — the lane-aware lookup, plus a mock run
+  per tab asserting the team tab is pressed for the manager and never for a
+  personal one (`mock.state().admin`). Section 10 of `test-writeback.ts`
+  covers `selectorsForLane`.
 
 ## Two personal queues, and the account an expense came from
 

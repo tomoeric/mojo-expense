@@ -19,6 +19,35 @@ import {
   cancelBecauseFlagged, flaggedNow, noteAttemptFailed, peersFor, pendingDecisions, settleDecision,
 } from "./decisions.js";
 import { getFlag } from "../flags.js";
+import { importFor, PERSONAL_GRID } from "./export-scheduler.js";
+
+/**
+ * The selectors for ONE TAB — the deployment's, with that tab's grid.
+ *
+ * `settings.selectors.gridPath` is the TEAM-WIDE list, which is the right
+ * default for the manager queue and wrong for everything a personal tab
+ * does. A write-back or a category change signs in to the personal account
+ * and then looked for the row in the approver's grid: on that tenant the
+ * row is not there, so the edit failed with "not in the queue" having
+ * signed in, searched and found nothing — or, on a tenant where the same
+ * merchant and amount recur, found a DIFFERENT row and changed that one.
+ *
+ * A non-empty lane IS a personal tab (`laneTag` makes the manager one the
+ * empty string), so a lane with no import row of its own still gets the
+ * personal grid rather than falling back to the team one. The manager
+ * queue passes through untouched.
+ */
+export async function selectorsForLane<T extends { gridPath?: string; gridQuery?: string }>(
+  who: string, lane: string, base: T,
+): Promise<T> {
+  if (!lane) return base;
+  const mine = await importFor(who, lane).catch(() => undefined);
+  return {
+    ...base,
+    gridPath: mine?.gridPath ?? PERSONAL_GRID,
+    ...(mine?.gridQuery ? { gridQuery: mine.gridQuery } : {}),
+  };
+}
 
 /**
  * Apply queued decisions, in batches, on one browser session.
@@ -380,7 +409,8 @@ async function runCorrections(): Promise<void> {
       }
       console.log(`corrections: setting ${c.dedupeKey} to “${c.to}” as ${c.requestedBy}`);
       const run = await correctCategory(
-        target, c.to, settings.selectors, settings.emburseUrl, login);
+        target, c.to, await selectorsForLane(c.requestedBy, lane, settings.selectors),
+        settings.emburseUrl, login);
       await settleCorrection(
         c.id,
         run.ok
@@ -553,7 +583,7 @@ async function runWritebacks(): Promise<void> {
           ...(file ? { receipt: file } : {}),
           ...(note ? { note: note.proposed, noteWas: note.was } : {}),
         },
-        settings.selectors,
+        await selectorsForLane(who, lane, settings.selectors),
         settings.emburseUrl,
         { userId: "", email: got.email, password: got.password },
       );

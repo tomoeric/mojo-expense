@@ -541,11 +541,25 @@ function ReviewerPanel({
           </span>
         </label>
 
-        {!stages.includes("Needs Review") && (
+        {/* Only on the manager tab, where "Needs Review" means what this
+            says. A personal tab is not an approval queue: its expenses are
+            this account's own, at whatever stage they happen to be, and
+            telling somebody their own expenses are "waiting on" them sends
+            them to turn a stage back on that filters out most of what they
+            came for. What goes wrong THERE is picking no stage at all. */}
+        {row.laneKind !== "personal" && !stages.includes("Needs Review") && (
           <p className="mt-2 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm">
             <strong>Needs Review is off.</strong> That is the approver&rsquo;s queue — the expenses
             waiting on {row.userEmail}. With it off their import brings in expenses they cannot act
             on, and the ones they can disappear from the queue.
+          </p>
+        )}
+        {row.laneKind === "personal" && stages.length === 0 && (
+          <p className="mt-2 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm">
+            <strong>No stages are selected.</strong> The export dialog needs at least one, so this
+            tab will bring back nothing. Tick the stages your own expenses sit in — on a personal
+            tab that is usually all of them, since the point is to find the ones still missing a
+            receipt.
           </p>
         )}
       </section>
@@ -636,6 +650,20 @@ function ReviewerPanel({
               {row.gridSection ? `filters[section]=${row.gridSection}` : ""}
               {row.gridSection && row.gridQuery ? " · " : ""}
               {row.gridQuery ?? ""}
+            </p>
+          )}
+          {/* A section filter on a personal tab is the approver's stage
+              applied to the person's own list. On a tenant that has no
+              such section on the personal view the page comes back with
+              no grid on it at all, which reads as "the list did not
+              load". Said rather than overridden: a pasted URL is an
+              explicit choice and somebody may have meant it. */}
+          {row.laneKind === "personal" && row.gridSection && (
+            <p className="mt-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+              <strong>This tab is filtered to one stage.</strong> On a personal tab that is the
+              approver&rsquo;s slice of your own list — most of your expenses, including the ones
+              still missing a receipt, are not in it. Clear the filters unless you pasted this
+              URL on purpose.
             </p>
           )}
 

@@ -170,6 +170,41 @@ try {
   check("…nor does the manager tab",
     !(await page.locator("body").innerText()).includes("?only=mojo"));
 
+  /*
+   * The advice on the page has to be the advice for THAT tab.
+   *
+   * "Needs Review is off. That is the approver's queue — the
+   * expenses waiting on <them>" was rendered on every tab. On a
+   * personal one it is backwards: those expenses are the person's
+   * own, at whatever stage, and doing what it says re-ticks a
+   * filter that removes most of what the tab exists to find.
+   * Wrong instructions on a page are not a cosmetic fault — they
+   * get followed.
+   */
+  console.log("\n5b. Stage advice belongs to the tab it is on");
+  const setStages = (lane: string, sections: string[]) =>
+    fetch(`http://127.0.0.1:${PORT}/api/reviewer-imports`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: `mojo_sid=${payload}.${mac}` },
+      body: JSON.stringify({ email: APP, lane, sections }),
+    });
+  const WARNING = "Needs Review is off";
+  await setStages("personal-mojo", ["Needs Manager Review"]);
+  await setStages("manager", ["Needs Manager Review"]);
+  await page.reload({ waitUntil: "networkidle" });
+  await page.waitForTimeout(1800);
+  await page.getByRole("button", { name: /^Personal Tab - MOJO/ }).click();
+  await page.waitForTimeout(600);
+  check("a personal tab is NOT told its own expenses are waiting on it",
+    !(await page.locator("body").innerText()).includes(WARNING));
+  await page.getByRole("button", { name: "Manager tab" }).click();
+  await page.waitForTimeout(600);
+  check("…while the manager tab still gets the warning it has always had",
+    (await page.locator("body").innerText()).includes(WARNING));
+  // Back as they were, so section 6 reads a tab nothing here narrowed.
+  await setStages("personal-mojo", []);
+  await setStages("manager", []);
+
   console.log("\n6. The review queue switches between the two accounts");
   /*
    * The claim that matters most on this page: each queue shows

@@ -99,6 +99,19 @@ try {
     got(MOJO_LANE).receiptsOnly === false, String(got(MOJO_LANE).receiptsOnly));
   check("…and the manager tab still inherits that too",
     got(MANAGER_LANE).receiptsOnly === null, String(got(MANAGER_LANE).receiptsOnly));
+  /*
+   * And no SECTION filter, for the same reason one level along.
+   * The shared default is "inbox" — Emburse's Needs Review, the
+   * approver's stage. Asked of a personal list on a tenant that
+   * has no such section there, the page comes back with no grid
+   * on it: "/transactions did not load", after which the run went
+   * hunting for a team-wide list to read instead. Empty string,
+   * not null, because null means inherit.
+   */
+  check("a personal tab asks for no section at all",
+    got(MOJO_LANE).gridSection === "", JSON.stringify(got(MOJO_LANE).gridSection));
+  check("…and the manager tab still inherits the approver's stage",
+    got(MANAGER_LANE).gridSection === null, JSON.stringify(got(MANAGER_LANE).gridSection));
 
   console.log("\n3. A setting on one tab does not land on another");
   await setReviewerImport(APP, { lane: MOJO_LANE, gridQuery: "?reviewer=mojo" }, "test");

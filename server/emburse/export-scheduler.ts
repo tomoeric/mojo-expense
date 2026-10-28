@@ -534,12 +534,18 @@ export async function attemptExport(
      * from a request. Defaults to themselves, which is what every
      * deployment did before this existed.
      */
-    const mineForLogin = opts.reviewer
-      ? (await reviewerImports().catch(() => []))
-          .find((r) => r.userEmail.toLowerCase() === opts.reviewer!.toLowerCase()
-            && r.lane === (lane || MANAGER_LANE))
-      : undefined;
+    const mineForLogin = await importFor(opts.reviewer, lane);
     const signsIn = mineForLogin?.runAs?.trim() || opts.reviewer;
+
+    /*
+     * Whether this is a personal tab, decided once.
+     *
+     * The tab itself says so; the empty tag is the manager queue and
+     * every pre-existing run has it. Read from the lane row where
+     * there is one so a future kind of tab is not silently personal.
+     */
+    const personalQueue =
+      (mineForLogin?.laneKind ?? (lane ? "personal" : "manager")) === "personal";
 
     /*
      * A PERSONAL TAB SIGNS IN AS ITS OWN EMBURSE ACCOUNT.
@@ -649,17 +655,26 @@ export async function attemptExport(
       throw new Error(`There is no import source called “${opts.source}”.`);
     }
     /*
-     * And WHOSE stage to read, by the same mechanism.
+     * And WHOSE stage to read, by the same mechanism — THE SAME ROW THE
+     * LOGIN WAS TAKEN FROM, tab and all.
      *
      * Approval is a chain — Eric approves, then it goes to Brian — so the
      * two reviewers have two queues that the same URL cannot both describe.
      * A reviewer's own path and section override the shared ones; set
      * neither and nothing changes, which is every single-reviewer tenant.
+     *
+     * This used to be its own lookup, matched on the email ALONE, and
+     * `reviewerImports()` now returns one row per (person, tab). So a
+     * personal tab's run found Eric's FIRST row — the manager tab — and
+     * took its list, its sections and its receipt filter. The manager tab
+     * stores no path of its own, so `chosenPath` came back undefined and
+     * the run fell through to the shared default: the team-wide grid. A
+     * personal tab therefore clicked the team tab and exported the
+     * approver's queue, which is the opposite of what the tab is for.
+     * `mineForLogin` was already lane-aware for picking the password;
+     * there is no second row to find.
      */
-    const mine = opts.reviewer
-      ? (await reviewerImports().catch(() => []))
-          .find((r) => r.userEmail.toLowerCase() === opts.reviewer!.toLowerCase())
-      : undefined;
+    const mine = mineForLogin;
     const askedForAnotherList = Boolean(opts.source);
     const chosenPath = gridPathFor(opts.source, list, mine);
     const forThisRun = {
@@ -671,7 +686,14 @@ export async function attemptExport(
       // nothing at all.
       ...(askedForAnotherList
         ? (list?.section === undefined ? {} : { gridSection: list.section })
-        : (mine?.gridSection ? { gridSection: mine.gridSection } : {})),
+        // An EMPTY section is a choice, not an absence: it means "the
+        // list's own default view", which is what a personal tab wants
+        // and what `gridUrl` does with a blank. Tested for presence
+        // rather than truthiness, or the empty string falls through to
+        // the deployment's "inbox" and the tab reads the approver's
+        // stage of its own list.
+        : (mine?.gridSection !== null && mine?.gridSection !== undefined
+          ? { gridSection: mine.gridSection } : {})),
       // The filters that pick this reviewer's queue out of a list their
       // login can see more of than their own.
       ...(mine?.gridQuery ? { gridQuery: mine.gridQuery } : {}),
@@ -725,6 +747,18 @@ export async function attemptExport(
       ...opts,
       otherLogins,
       onChallenge,
+      /*
+       * This run reads ONE PERSON'S OWN expenses, not a queue.
+       *
+       * The browser needs telling, because two of its steps reach for
+       * the team-wide view on their own: it clicks the MANAGER/ADMIN
+       * tab before opening anything, and if the configured path does
+       * not load it tries "<path>/team" as the tenant's own naming
+       * scheme. Both are right for an approver and wrong here — the
+       * second is how a personal tab that asked for /transactions
+       * ended up reporting the team grid as a fallback.
+       */
+      personalQueue,
       // Written as they happen. A run can take twenty minutes, most of it
       // waiting for Emburse to build the file, and the steps used to appear
       // only once it was over — so "is it stuck?" had no answer anywhere.
@@ -1002,6 +1036,30 @@ export const MANAGER_GRID = "/transactions/team";
  */
 export const PERSONAL_GRID = "/transactions";
 
+/**
+ * One person's import settings FOR ONE TAB.
+ *
+ * `reviewerImports()` returns a row per (person, tab), so a lookup by
+ * email alone is a lookup for "whichever tab happens to come first" —
+ * which is the manager one, because that is how the lanes are ordered.
+ * A personal run that took that row got the manager tab's list, stages
+ * and receipt filter: it clicked the team tab and exported the
+ * approver's queue under the personal tab's name.
+ *
+ * `attemptExport` had this right where it picked the PASSWORD and wrong
+ * where it picked the LIST, because the lookup was written twice. There
+ * is one of it now, and it takes the tab.
+ */
+export async function importFor(
+  reviewer: string | undefined,
+  lane: string,
+): Promise<ReviewerImport | undefined> {
+  if (!reviewer) return undefined;
+  return (await reviewerImports().catch(() => []))
+    .find((r) => r.userEmail.toLowerCase() === reviewer.toLowerCase()
+      && r.lane === (lane || MANAGER_LANE));
+}
+
 export function gridPathFor(
   source: string | undefined,
   list: { path: string } | undefined,
@@ -1132,7 +1190,23 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
        * already knows what it is; it should not need telling.
        */
       gridPath: r?.grid_path ?? (lane.kind === "personal" ? PERSONAL_GRID : null),
-      gridSection: r?.grid_section ?? null,
+      /*
+       * AND NO SECTION FILTER.
+       *
+       * The shared default is "inbox", which is Emburse's Needs
+       * Review — the approver's stage. On a personal tab that asks
+       * the person's own list for the slice waiting on an approver,
+       * which on a tenant that does not have that section on the
+       * personal view comes back as a page with no grid on it at
+       * all. "/transactions did not load" was this, and the run
+       * then went looking for a team-wide list instead.
+       *
+       * Empty string rather than null because null means inherit.
+       * `blank()` writes an empty box back as null, so a personal
+       * tab somebody clears lands here again rather than on the
+       * approver's section.
+       */
+      gridSection: r?.grid_section ?? (lane.kind === "personal" ? "" : null),
       gridQuery: r?.grid_query ?? null,
       sections: Array.isArray(r?.sections)
         ? (r!.sections as unknown[]).filter((x): x is string => typeof x === "string")
