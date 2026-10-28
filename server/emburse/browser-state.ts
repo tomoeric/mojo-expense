@@ -47,6 +47,17 @@ CREATE TABLE IF NOT EXISTS emburse_browser_state (
 -- session it holds, which is the entire problem, and guessing an owner for
 -- it would be the same mistake in a different place. Everybody signs in
 -- once more and the jars are right from then on.
+--
+-- THE KEY IS THE EMBURSE LOGIN ADDRESS, not the address somebody signs
+-- into this app with. The column name says user_email because it was
+-- written when those were assumed to be the same, and they are not: a
+-- mojocarwash.com user holds a mammothholdings.com Emburse login, and
+-- one person now holds two Emburse logins at once. Every caller passes
+-- the login email, which is the Emburse one, and the profile directory is
+-- named from the same string — so the two halves of a remembered device
+-- agree. Reading it with an APP address is how a personal tab's trust
+-- became invisible: the readout asked about an address no jar is ever
+-- written under.
 CREATE TABLE IF NOT EXISTS emburse_browser_jars (
   user_email text PRIMARY KEY,
   state      bytea       NOT NULL,
@@ -171,10 +182,20 @@ export async function legacyDevice(): Promise<string | null> {
  * it. Copied rather than moved, so a wrong answer is corrected by choosing
  * again rather than by hunting for a code.
  */
-export async function adoptLegacyDevice(userEmail: string): Promise<boolean> {
+export async function adoptLegacyDevice(loginEmail: string): Promise<boolean> {
   if (!isDbConfigured()) return false;
   await ensure();
-  const who = userEmail.trim().toLowerCase();
+  /*
+   * The EMBURSE LOGIN address, like every other key in this table.
+   *
+   * It used to be handed an app address, because the buttons offering the
+   * choice listed app users — so the jar landed under a key no run ever
+   * reads, the adoption reported success, and the account was asked for a
+   * code anyway. For `eric.s@mojocarwash.com` the two strings happen to be
+   * equal and it appeared to work; for `eric.s@mammothholdings.com` there
+   * was no way to say it at all.
+   */
+  const who = loginEmail.trim().toLowerCase();
   if (!who) return false;
   const { rows } = await db().query<{ state: Buffer }>(
     "SELECT state FROM emburse_browser_state WHERE id");
@@ -194,21 +215,64 @@ export async function adoptLegacyDevice(userEmail: string): Promise<boolean> {
  * button did when there was one jar and is still the right thing for "this
  * browser has gone strange".
  */
-export async function forgetCookies(userEmail = ""): Promise<void> {
+export async function forgetCookies(loginEmail = ""): Promise<void> {
   if (!isDbConfigured()) return;
   await ensure();
-  const who = userEmail.trim().toLowerCase();
+  const who = loginEmail.trim().toLowerCase();
+  if (who) {
+    // ONE account's, and not the shared row. This used to delete
+    // `emburse_browser_state` whatever was named, so forgetting one tab's
+    // stale jar destroyed the pre-keying trust that every OTHER account was
+    // still waiting to adopt — a code already given, thrown away by a
+    // button that said it was about one account.
+    await db().query("DELETE FROM emburse_browser_jars WHERE user_email = $1", [who]);
+    return;
+  }
   await db().query("DELETE FROM emburse_browser_state");
-  await (who
-    ? db().query("DELETE FROM emburse_browser_jars WHERE user_email = $1", [who])
-    : db().query("DELETE FROM emburse_browser_jars"));
+  await db().query("DELETE FROM emburse_browser_jars");
 }
 
-/** When a jar was last written, for showing whether a device is remembered. */
-export async function cookiesSavedAt(userEmail = ""): Promise<string | null> {
+/**
+ * Drop the pre-keying shared jar, once nothing is waiting to adopt it.
+ *
+ * Adoption COPIES, so the shared row outlives it — which is right while
+ * another account may still need it and clutter once none does. Separate
+ * from `forgetCookies` because this throws away no account's trust: the
+ * copies it has already handed out are untouched.
+ */
+export async function dropLegacyDevice(): Promise<void> {
+  if (!isDbConfigured()) return;
+  await ensure();
+  await db().query("DELETE FROM emburse_browser_state");
+}
+
+/**
+ * Every remembered device, by the Emburse login it belongs to.
+ *
+ * One query rather than one per tab: the page shows a row per Emburse
+ * account and asking separately for each turned a page render into N
+ * round trips for a readout nobody can act on individually.
+ */
+export async function savedJars(): Promise<{ loginEmail: string; savedAt: string }[]> {
+  if (!isDbConfigured()) return [];
+  await ensure();
+  const { rows } = await db().query<{ user_email: string; updated_at: Date }>(
+    "SELECT user_email, updated_at FROM emburse_browser_jars ORDER BY user_email");
+  return rows.map((r) => ({
+    loginEmail: r.user_email, savedAt: r.updated_at.toISOString(),
+  }));
+}
+
+/**
+ * When a jar was last written, for showing whether a device is remembered.
+ *
+ * By EMBURSE LOGIN address. Unnamed is the newest of anybody's, which is
+ * only ever a "has this browser ever been trusted" answer.
+ */
+export async function cookiesSavedAt(loginEmail = ""): Promise<string | null> {
   if (!isDbConfigured()) return null;
   await ensure();
-  const who = userEmail.trim().toLowerCase();
+  const who = loginEmail.trim().toLowerCase();
   const { rows } = await db().query<{ updated_at: Date }>(
     who
       ? "SELECT updated_at FROM emburse_browser_jars WHERE user_email = $1"

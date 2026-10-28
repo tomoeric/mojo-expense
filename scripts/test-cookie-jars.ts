@@ -18,8 +18,10 @@
 process.env.SESSION_SECRET ||= "test-secret-jars";
 
 import { db, ensureSchema } from "../server/db.js";
-import { cookiesSavedAt, forgetCookies, rememberCookies, restoreCookies }
-  from "../server/emburse/browser-state.js";
+import {
+  adoptLegacyDevice, cookiesSavedAt, dropLegacyDevice, forgetCookies, legacyDevice,
+  rememberCookies, restoreCookies, savedJars,
+} from "../server/emburse/browser-state.js";
 
 const ERIC = "eric.s@mammothholdings.test";
 const BRIAN = "brian.c@mammothholdings.test";
@@ -100,10 +102,61 @@ try {
   check("Eric's is gone", (await cookiesSavedAt(ERIC)) === null);
   check("…and Brian's is not", (await cookiesSavedAt(BRIAN)) !== null);
 
+  console.log("\nEvery remembered device, in one answer");
+  // The page shows a row per Emburse account; asking per account turned one
+  // render into N round trips for a readout nobody acts on individually.
+  const all = await savedJars();
+  check("Brian's is listed", all.some((j) => j.loginEmail === BRIAN), JSON.stringify(all));
+  check("…and Eric's, just forgotten, is not",
+    !all.some((j) => j.loginEmail === ERIC));
+  check("…with the time it was saved",
+    all.every((j) => !Number.isNaN(Date.parse(j.savedAt))));
+
+  /*
+   * THE PRE-KEYING SHARED ROW SURVIVES FORGETTING ONE ACCOUNT.
+   *
+   * `forgetCookies(who)` used to delete it whatever was named, so clearing
+   * one tab's stale jar threw away the trust every OTHER account was still
+   * waiting to adopt — a verification code already given, destroyed by a
+   * button that said it was about one account.
+   */
+  console.log("\nForgetting one account does not throw away the shared device");
+  await db().query(
+    `INSERT INTO emburse_browser_state (id, state, updated_at) VALUES (true, $1, now())
+     ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, updated_at = now()`,
+    [(await db().query<{ state: Buffer }>(
+      "SELECT state FROM emburse_browser_jars WHERE user_email = $1", [BRIAN])).rows[0]!.state]);
+  check("there is a shared device to lose", (await legacyDevice()) !== null);
+  await forgetCookies(BRIAN);
+  check("the named account's jar is gone", (await cookiesSavedAt(BRIAN)) === null);
+  check("…AND THE SHARED ONE IS STILL THERE", (await legacyDevice()) !== null);
+
+  console.log("\nThe shared device is assigned by EMBURSE LOGIN, and copied");
+  check("it can be given to an account", (await adoptLegacyDevice(ERIC)) === true);
+  check("…which now has its own", (await cookiesSavedAt(ERIC)) !== null);
+  // Copied, not moved: a wrong answer is corrected by choosing again
+  // rather than by hunting for a code, and the other accounts can still
+  // take it.
+  check("…and the shared one is still available to the others",
+    (await legacyDevice()) !== null);
+  check("…so a second account can take it too",
+    (await adoptLegacyDevice(BRIAN)) === true && (await cookiesSavedAt(BRIAN)) !== null);
+  check("an unnamed adoption is refused", (await adoptLegacyDevice("")) === false);
+
+  console.log("\nAnd it can be dropped once nothing is waiting for it");
+  await dropLegacyDevice();
+  check("the shared row is gone", (await legacyDevice()) === null);
+  // The whole point of a separate call: it throws away no account's trust.
+  check("…and neither account lost its own",
+    (await cookiesSavedAt(ERIC)) !== null && (await cookiesSavedAt(BRIAN)) !== null);
+  check("…and adopting now has nothing to carry",
+    (await adoptLegacyDevice(ERIC)) === false);
+
   console.log("\nAnd forgetting everything still works");
   await forgetCookies();
   check("nothing is remembered", (await cookiesSavedAt()) === null);
   check("…for anybody", (await cookiesSavedAt(BRIAN)) === null);
+  check("…and nothing is listed", (await savedJars()).length === 0);
 } finally {
   await forgetCookies();
   await db().end();

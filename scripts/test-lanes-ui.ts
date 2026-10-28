@@ -205,6 +205,32 @@ try {
   await setStages("personal-mojo", []);
   await setStages("manager", []);
 
+  /*
+   * THE REMEMBERED-DEVICE LINE NAMES THIS TAB'S ACCOUNT.
+   *
+   * Emburse trusts a browser per account, and this line used to report the
+   * signed-in person's FIRST credential — the primary, which here is the
+   * Mammoth login — on every tab. So the MOJO tab could read "Emburse
+   * trusts this browser" about an account that had never been trusted, and
+   * then a run stopped to ask for a code the page had just said was
+   * unnecessary. Only a rendered page shows this.
+   */
+  console.log("\n5c. The remembered-device line is about the tab's own account");
+  await page.getByRole("button", { name: /^Personal Tab - MOJO/ }).click();
+  await page.waitForTimeout(800);
+  const mojoDevice = await page.locator("body").innerText();
+  check("the MOJO tab names the MOJO Emburse address",
+    /does not know this browser as\s+eric\.s@mojocarwash\.com/i.test(
+      mojoDevice.replace(/\s+/g, " ")),
+    mojoDevice.replace(/\n/g, " | ").slice(0, 300));
+  check("…and does NOT claim the primary account's trust",
+    !mojoDevice.includes(`trusts this browser for ${MAMMOTH}`));
+  await page.getByRole("button", { name: "Manager tab" }).click();
+  await page.waitForTimeout(800);
+  const mgrDevice = (await page.locator("body").innerText()).replace(/\s+/g, " ");
+  check("the manager tab names the primary Emburse address",
+    mgrDevice.includes(MAMMOTH), mgrDevice.slice(0, 300));
+
   console.log("\n6. The review queue switches between the two accounts");
   /*
    * The claim that matters most on this page: each queue shows

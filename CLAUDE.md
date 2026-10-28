@@ -102,7 +102,7 @@ were added; "it compiles" is not "the button works".
 `reviewer-schedules`, `manager-queue`, `view-as-brian`, `two-reviewers`,
 `corrections`, `decision-trace`, `auto-approve`, `rules`, `bulk-approve`,
 `lanes`, `two-accounts`, `rule-scope`, `receipt-mail`, `signin-errors`, `writeback`, `receipt-link`,
-`personal-grid`. For a change to "Your Emburse login", Export
+`personal-grid`, `cookie-jars`, `device-trust` (needs a build). For a change to "Your Emburse login", Export
 settings or the review queue, also
 `test-accounts-ui.ts` and `test-lanes-ui.ts` after a build.
 
@@ -2531,17 +2531,64 @@ queue. Two separate causes, and either one alone reproduces it.
   personal one (`mock.state().admin`). Section 10 of `test-writeback.ts`
   covers `selectorsForLane`, section 10 of `test-connections.ts`
   `laneForAccount`.
-- **Still open: device trust is per Emburse login, and the page cannot show
-  it.** The profile directory and the cookie jar are keyed by
-  `login.email` — the Emburse address — so each personal tab arrives as a
-  stranger and is asked for its own verification code. Two things have not
-  caught up: the Export settings readout calls `cookiesSavedAt(ownLoginEmail(
-  user))`, which is the PRIMARY connection only, so a personal tab's trust is
-  invisible; and the legacy-device adopt buttons offer app-user addresses
-  (`listCredentials().map(c => c.userEmail)`) while the jar is read by login
-  address, so trust can never be assigned to `eric.s@mammothholdings.com`.
-  A scheduled run gets no code hook at all, so on an untrusted personal
-  profile it fails as "the scheduled import is locked out".
+
+## A remembered device belongs to ONE EMBURSE ACCOUNT
+
+Emburse issues "remember this device" against the account that signed in, so
+trust is per Emburse login — which is how `emburse_browser_jars` and the
+Chromium profile directory are both keyed (`openBrowser(login.email)`,
+`rememberCookies(ctx, login.email)`). **The jar's column is called
+`user_email` and holds the LOGIN address, not the app address.** Those were
+assumed equal and are not: a mojocarwash.com user holds a
+mammothholdings.com login, and one person now holds two at once. Reading
+that table with an app address is the single mistake behind all of this.
+
+- **The readout is per tab and names the account.** It used to be
+  `cookiesSavedAt(ownLoginEmail(user))` — the person's FIRST credential,
+  i.e. the primary connection — on every tab. So a personal tab could read
+  "Emburse trusts this browser" about an account that had never been
+  trusted, and a run then stopped for a code the page had just said was
+  unnecessary. `deviceAccount(reviewer, lane)` in `import/routes.ts`
+  resolves the tab's own connection; the route answers
+  `device: { loginEmail, label, linked, rememberedAt }`. **`linked` is a
+  third state and load-bearing**: a tab with no account attached is
+  unconfigured, not untrusted, and the two need different sentences.
+- **Adoption is offered BY LOGIN ADDRESS**, from `deviceChoices()`, labelled
+  with the tabs that connection serves. The buttons used to list app users
+  (`listCredentials().map(c => c.userEmail)`), so the shared jar landed under
+  a key no run reads, reported success, and the account was asked for a code
+  anyway — it appeared to work for `eric.s@mojocarwash.com`, where the two
+  strings coincide, and could never work for `eric.s@mammothholdings.com`.
+  The route **validates the address against a stored connection**: the jar
+  and the profile directory are both named from this string, so an arbitrary
+  one is a silent no-op reported as success. An adoption that carried
+  nothing says so (`carried: false`) rather than returning a cheerful tick.
+- **The offer stays visible while ANY account still lacks trust.** It was
+  hidden once the tab on screen was trusted, which on a three-tab page is
+  most of the time — so the offer was invisible to the accounts that needed
+  it. An account that already has its own is shown disabled: adopting over
+  it would replace live trust with an older jar.
+- **`forgetCookies(login)` no longer deletes the shared row.** It did,
+  whatever was named, so clearing one tab's stale jar destroyed the
+  pre-keying trust every OTHER account was still waiting to adopt — a code
+  already given, thrown away by a button that said it was about one account.
+  Unnamed still clears everything, which is the "this browser has gone
+  strange" answer. The "Forget it" link beside the readout now names that
+  tab's account only.
+- **`dropLegacyDevice()` / `DELETE /api/export-device/legacy`** retires the
+  shared row once every connection has its own, without touching anybody's
+  trust — adoption COPIES, so the row outlives being given away.
+- **`deviceChoices` is admin-gated on the ROUTE**, not just in the page: it
+  names other people's Emburse accounts, and hiding a button is not a
+  control.
+- **A scheduled run is given no code hook** (`trigger === "scheduled"`), so
+  on an account whose profile has never been trusted it fails as "the
+  scheduled import is locked out" rather than parking. Trust each account
+  once from a manual Test run, which does ask.
+- `scripts/test-device-trust.ts` (over HTTP, needs a build) and the new
+  sections of `scripts/test-cookie-jars.ts`; section 5c of
+  `test-lanes-ui.ts` asserts the rendered line names the tab's own account.
+
 
 ## Two personal queues, and the account an expense came from
 

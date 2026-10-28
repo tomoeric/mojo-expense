@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import express from "express";
 import { db, ensureSchema, isDbConfigured } from "../db.js";
-import { requireAdmin, requireAuth } from "../auth/index.js";
+import { isAdminUser, requireAdmin, requireAuth } from "../auth/index.js";
 import { ingestExport } from "./ingest.js";
 import { describeSchedule } from "./schedule.js";
 import { reportsChanged } from "../reports-cache.js";
@@ -12,7 +12,7 @@ import { claimUnclaimed, credentialStatus, deleteCredential, hasCredential, list
          scopeFor, unclaimedExpenses } from "../emburse/credentials.js";
 import {
   MANAGER_LANE, addConnection, labelConnection, laneTag, lanesFor, linkedLanes,
-  listConnections, removeConnection,
+  linkedLanesOf, listConnections, removeConnection,
 } from "../emburse/connections.js";
 import { MANAGER_GRID, attemptExport, gridPathFor, isStopping, nextDue, recentRuns,
          reviewerImports, runScreenshot, setReviewerImport, stopRun }
@@ -21,7 +21,8 @@ import { isMicrosoft } from "../auth/session.js";
 import { isSuperEmail } from "../dutch-miller/users.js";
 import { browserQueue } from "../emburse/browser-lock.js";
 import { answerChallenge, cancelChallenge, currentChallenge } from "../emburse/challenge.js";
-import { adoptLegacyDevice, cookiesSavedAt, forgetCookies, legacyDevice }
+import { adoptLegacyDevice, cookiesSavedAt, dropLegacyDevice, forgetCookies, legacyDevice,
+  savedJars }
   from "../emburse/browser-state.js";
 
 /**
@@ -673,19 +674,40 @@ importRouter.get("/export-runs", requireAuth, async (req: Request, res: Response
         mine: challenge.owner.trim().toLowerCase() ===
           (req.viewingAs?.real.email ?? req.user?.email ?? "").trim().toLowerCase(),
       },
-      // When the browser last kept a session. The only visible sign that a
-      // device is still trusted, and the thing to look at when a code gets
-      // asked for that should not have been.
-      // Their device, not whoever signed in last. One shared jar was both
-      // a wrong readout and a way for one person's run to pick up another's
-      // session, which is why there is one per account now.
-      // A device trusted before the jars were keyed, still unassigned. It
-      // is somebody's, and until it is said whose, that person would be
-      // asked for a verification code they have already given.
+      // A device trusted BEFORE the jars were keyed per account, still
+      // unassigned. It is somebody's, the app cannot know whose, and until
+      // that is said the account it belongs to is asked for a verification
+      // code it has already given. The per-tab reading is `device` below.
       legacyDeviceAt: await legacyDevice().catch(() => null),
-      people: (await listCredentials().catch(() => [])).map((c) => c.userEmail),
-      deviceRememberedAt: await cookiesSavedAt(
-        await ownLoginEmail(req.user?.email ?? "")),
+      /*
+       * THE DEVICE FOR THE TAB BEING LOOKED AT.
+       *
+       * Trust is per Emburse login, and this used to report the signed-in
+       * person's FIRST credential — the primary connection — on every tab.
+       * So a personal tab read "Emburse trusts this browser" about an
+       * account that had never been trusted, and then a run stopped to ask
+       * for a code the page had just said was unnecessary. It names the
+       * account now, because "this browser" means nothing when one browser
+       * holds three accounts' sessions.
+       */
+      device: await (async () => {
+        const who = await deviceAccount(mine ?? "", laneTag(askedLane));
+        return {
+          ...who,
+          rememberedAt: who.loginEmail
+            ? await cookiesSavedAt(who.loginEmail).catch(() => null)
+            : null,
+        };
+      })(),
+      /*
+       * Who the pre-keying shared jar can be given to. Admin-only: it
+       * names other people's Emburse accounts, and the buttons that use
+       * it were already gated in the page — which is presentation, not a
+       * control, so the gate is here too.
+       */
+      deviceChoices: isAdminUser(req.viewingAs?.real ?? req.user)
+        ? await deviceChoices().catch(() => [])
+        : [],
     });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Could not read export runs." });
@@ -726,26 +748,101 @@ importRouter.post("/export-challenge", requireAuth, requireAdmin, (req: Request,
  */
 importRouter.delete("/export-device", requireAuth, requireAdmin, async (req: Request, res: Response) => {
   if (!guard(res)) return;
-  // Everybody's. This is the "the browser has gone strange" button, and a
-  // stale jar for one account is rarely the only stale one; the cost is one
-  // verification code each, which is the point of pressing it.
-  await forgetCookies();
-  console.log(`export: remembered devices cleared by ${req.user?.email ?? "unknown"}`);
-  res.json({ ok: true });
+  /*
+   * ONE ACCOUNT'S when one is named, everybody's when none is.
+   *
+   * The readout this button sits under names an Emburse account now, so
+   * the button has to mean that account — clearing all three tabs' trust
+   * from a line that says "Emburse trusts this browser for
+   * eric.s@mojocarwash.com" costs two verification codes nobody asked to
+   * spend. Unnamed keeps its old meaning, which is the "this browser has
+   * gone strange" answer.
+   */
+  const asked = String((req.query as { loginEmail?: string }).loginEmail ?? "").trim();
+  const known = asked
+    ? (await listCredentials().catch(() => []))
+      .find((c) => c.loginEmail.toLowerCase() === asked.toLowerCase())
+    : undefined;
+  if (asked && !known) {
+    res.status(400).json({ error: `No Emburse connection signs in as ${asked}.` });
+    return;
+  }
+  await forgetCookies(known?.loginEmail ?? "");
+  console.log(
+    `export: remembered device${known ? ` for ${known.loginEmail}` : "s"} cleared by ` +
+    `${req.user?.email ?? "unknown"}`);
+  res.json({ ok: true, loginEmail: known?.loginEmail ?? null });
 });
 
 /**
- * The Emburse login email behind an app user, for keying their cookie jar.
+ * WHICH EMBURSE ACCOUNT ONE TAB'S DEVICE TRUST BELONGS TO.
  *
- * The jar belongs to the Emburse account that signed in, which is not the
- * app address when somebody signs into Emburse under a different one — as
- * here, where mojocarwash.com users hold mammothholdings.com logins.
+ * A remembered device is per Emburse login — that is how the cookie jar
+ * and the browser profile are both keyed, because that is what Emburse
+ * trusts. The readout used to ask about the app user's FIRST stored
+ * credential, which is the primary connection: so a personal tab showed
+ * the manager queue's trust, could read "Emburse trusts this browser"
+ * while its own account had never been trusted at all, and then stopped
+ * a run to ask for a code the page had just said was unnecessary.
+ *
+ * Returns the address and a name for it, or an empty address when the tab
+ * has no connection linked — which is a different thing from untrusted
+ * and has a different answer.
  */
-async function ownLoginEmail(appUser: string): Promise<string> {
-  if (!appUser) return "";
-  const found = (await listCredentials().catch(() => []))
-    .find((c) => c.userEmail.toLowerCase() === appUser.trim().toLowerCase());
-  return found?.loginEmail ?? "";
+async function deviceAccount(
+  reviewer: string, lane: string,
+): Promise<{ loginEmail: string; label: string; linked: boolean }> {
+  const lanes = reviewer ? await linkedLanesOf(reviewer).catch(() => []) : [];
+  const want = lane || MANAGER_LANE;
+  const mine = lanes.find((l) => l.key === want)
+    // An unknown tab is the manager queue's, which is what a deployment
+    // that has never heard of tabs is asking about.
+    ?? lanes.find((l) => l.kind === "manager");
+  if (!mine) return { loginEmail: "", label: "", linked: false };
+  return {
+    loginEmail: mine.connection?.loginEmail ?? "",
+    label: mine.label,
+    linked: mine.connection !== null,
+  };
+}
+
+/**
+ * Every Emburse account a remembered device could belong to, with its
+ * trust and the tabs it serves.
+ *
+ * The list the pre-keying shared jar is offered to. It used to be app
+ * addresses (`listCredentials().map(c => c.userEmail)`), and the jar is
+ * read by LOGIN address — so adopting wrote it under a key no run looks
+ * at, said it had worked, and the account was asked for a code anyway.
+ * For `eric.s@mojocarwash.com` the two strings coincide and it appeared
+ * to work; for `eric.s@mammothholdings.com` there was no way to say it.
+ *
+ * Admin-only at the call site: it names other people's Emburse accounts.
+ */
+async function deviceChoices(): Promise<
+  { loginEmail: string; userEmail: string; label: string; rememberedAt: string | null }[]
+> {
+  const creds = await listCredentials().catch(() => []);
+  const jars = new Map((await savedJars().catch(() => []))
+    .map((j) => [j.loginEmail.toLowerCase(), j.savedAt]));
+  // One lane lookup per PERSON, not per connection: a tab's label is the
+  // useful name here ("Personal Tab - MOJO" rather than an address), and
+  // one connection can serve two tabs.
+  const people = [...new Set(creds.map((c) => c.userEmail.toLowerCase()))];
+  const tabs = new Map<string, string[]>();
+  for (const who of people) {
+    for (const l of await linkedLanesOf(who).catch(() => [])) {
+      if (!l.connection) continue;
+      const key = l.connection.loginEmail.toLowerCase();
+      tabs.set(key, [...(tabs.get(key) ?? []), l.label]);
+    }
+  }
+  return creds.map((c) => ({
+    loginEmail: c.loginEmail,
+    userEmail: c.userEmail,
+    label: tabs.get(c.loginEmail.toLowerCase())?.join(" · ") || c.label || c.loginEmail,
+    rememberedAt: jars.get(c.loginEmail.toLowerCase()) ?? null,
+  }));
 }
 
 /**
@@ -759,26 +856,69 @@ async function ownLoginEmail(appUser: string): Promise<string> {
  */
 importRouter.post("/export-device/adopt", requireAuth, requireAdmin, async (req: Request, res: Response) => {
   if (!guard(res)) return;
-  const email = String((req.body as { email?: unknown })?.email ?? "").trim();
-  if (!email) {
-    res.status(400).json({ error: "Name whose remembered device this is." });
+  const body = (req.body ?? {}) as { loginEmail?: unknown };
+  const asked = String(body.loginEmail ?? "").trim();
+  if (!asked) {
+    res.status(400).json({ error: "Name the Emburse account this remembered device belongs to." });
     return;
   }
+  /*
+   * CHECKED AGAINST A STORED CONNECTION, not taken as given.
+   *
+   * The jar and the profile directory are both named from this string, so
+   * an arbitrary one makes a jar nothing ever reads and a directory
+   * nothing ever opens — a silent no-op reported as success. Matching a
+   * real connection also means the answer can only ever be one of the
+   * accounts the page offered.
+   */
+  const known = (await listCredentials().catch(() => []))
+    .find((c) => c.loginEmail.toLowerCase() === asked.toLowerCase());
+  if (!known) {
+    res.status(400).json({
+      error: `No Emburse connection signs in as ${asked}, so a remembered device cannot `
+        + "belong to it. Add that account under “Your Emburse login” first.",
+    });
+    return;
+  }
+  const loginEmail = known.loginEmail;
   try {
     // Inside the browser lock: copying a Chromium profile out from under a
     // running Chromium is how a profile gets half-copied.
     const { withBrowser } = await import("../emburse/browser-lock.js");
     const { adoptLegacyProfile } = await import("../emburse/auto-export.js");
-    const jar = await adoptLegacyDevice(email);
+    const jar = await adoptLegacyDevice(loginEmail);
     const files = await withBrowser("keeping the remembered device",
-      () => adoptLegacyProfile(email));
+      () => adoptLegacyProfile(loginEmail));
     console.log(
-      `export: remembered device assigned to ${email} by ${req.viewingAs?.real.email ?? req.user?.email}` +
+      `export: remembered device assigned to ${loginEmail} by ` +
+      `${req.viewingAs?.real.email ?? req.user?.email}` +
       ` (jar: ${jar ? "yes" : "none"}, profile entries: ${files})`);
-    res.json({ ok: true, jar, files });
+    // Said rather than assumed: with neither a jar nor a profile entry
+    // nothing was carried, and a cheerful ok would send somebody away
+    // believing a code had been saved.
+    res.json({
+      ok: true, jar, files,
+      carried: jar || files > 0,
+      loginEmail,
+    });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Could not keep it." });
   }
+});
+
+/**
+ * Throw away the pre-keying shared jar, once nothing needs it.
+ *
+ * Adoption copies, so the shared row survives being given away — right
+ * while another account may still want it, clutter once every one of them
+ * has its own. This deletes only that row: the copies already handed out,
+ * and every trust earned since, are untouched.
+ */
+importRouter.delete("/export-device/legacy", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  await dropLegacyDevice();
+  console.log(`export: the pre-keying shared device dropped by ${req.user?.email ?? "unknown"}`);
+  res.json({ ok: true });
 });
 
 /**

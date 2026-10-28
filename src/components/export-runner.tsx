@@ -87,6 +87,36 @@ type Run = {
 };
 
 /**
+ * The remembered device FOR THE TAB ON SCREEN.
+ *
+ * Emburse trusts a browser per account, so "this browser" is not a
+ * property of the browser — it is a property of one Emburse login. The
+ * readout reported the signed-in person's primary connection on every
+ * tab, which meant a personal tab could say the device was trusted while
+ * its own account had never been, and then a run stopped to ask for a
+ * code the page had just said was unnecessary.
+ *
+ * `linked` is a third state and not a nicety: a tab with no Emburse
+ * account attached is not untrusted, it is unconfigured, and the two need
+ * different sentences.
+ */
+type Device = {
+  loginEmail: string;
+  label: string;
+  linked: boolean;
+  rememberedAt: string | null;
+};
+
+/** An Emburse account the pre-keying shared device can be given to. */
+type DeviceChoice = {
+  loginEmail: string;
+  userEmail: string;
+  /** The tabs it serves, or its own label — a name, not an address. */
+  label: string;
+  rememberedAt: string | null;
+};
+
+/**
  * Run the export by hand and watch every step.
  *
  * This is how the selectors get fixed. Emburse's markup is not knowable from
@@ -174,11 +204,11 @@ export function ExportRunner({
         due: { due: boolean; attempt: number; reason: string };
         runs: Run[];
         challenge: Challenge | null;
-        deviceRememberedAt: string | null;
+        device: Device;
         viewingAs: string | null;
         runsFor: string | null;
         legacyDeviceAt: string | null;
-        people: string[];
+        deviceChoices: DeviceChoice[];
         browser: { holder: { label: string; since: number } | null; waiting: string[] };
         stopping: number[];
       }>(res);
@@ -188,11 +218,11 @@ export function ExportRunner({
         due: { due: boolean; attempt: number; reason: string };
         runs: Run[];
         challenge: Challenge | null;
-        deviceRememberedAt: string | null;
+        device: Device;
         viewingAs: string | null;
         runsFor: string | null;
         legacyDeviceAt: string | null;
-        people: string[];
+        deviceChoices: DeviceChoice[];
         browser: { holder: { label: string; since: number } | null; waiting: string[] };
         stopping: number[];
       };
@@ -300,26 +330,66 @@ export function ExportRunner({
     }
   }
 
-  /** Keep a trust already earned, under the account it belongs to. */
-  async function adopt(email: string): Promise<void> {
+  /**
+   * Keep a trust already earned, under the EMBURSE ACCOUNT it belongs to.
+   *
+   * The address, not the app user's: the jar and the profile directory are
+   * both named from the Emburse login, so sending an app address wrote a
+   * jar nothing reads and reported success.
+   */
+  async function adopt(loginEmail: string): Promise<void> {
     setBusy("real");
+    setError("");
     try {
-      await fetch("/api/export-device/adopt", {
+      const res = await fetch("/api/export-device/adopt", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ loginEmail }),
       });
+      const body = await readJson<{ error?: string; carried?: boolean }>(res);
+      if (!res.ok) throw new Error(body.error ?? "Could not keep it");
+      // Nothing to carry is not success. A cheerful tick here sent somebody
+      // away believing a code had been saved.
+      if (body.carried === false) {
+        setError(
+          `There was nothing left to carry over to ${loginEmail} — no shared cookie jar and no `
+          + "old profile. That account will be asked for a verification code once, on its "
+          + "next run, and remembered after that.");
+      }
       await qc.invalidateQueries({ queryKey: ["export-runs"] });
+    } catch (err) {
+      setError((err as Error).message);
     } finally {
       setBusy("");
     }
   }
 
-  async function forgetDevice() {
+  /**
+   * Forget ONE account's remembered device — the one this readout names.
+   *
+   * Unnamed clears everybody's, which is the "the browser has gone strange"
+   * answer and no longer what this button does: the line above it names an
+   * Emburse account, so spending the other tabs' codes from here would be
+   * a surprise.
+   */
+  async function forgetDevice(loginEmail: string) {
     setError("");
     try {
-      const res = await fetch("/api/export-device", { method: "DELETE" });
+      const qs = loginEmail ? `?loginEmail=${encodeURIComponent(loginEmail)}` : "";
+      const res = await fetch(`/api/export-device${qs}`, { method: "DELETE" });
       if (!res.ok) throw new Error((await readJson<{ error?: string }>(res)).error ?? "Could not forget it");
+      await qc.invalidateQueries({ queryKey: ["export-runs"] });
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  /** Done with the pre-keying shared jar, once every account has its own. */
+  async function dropLegacy() {
+    setError("");
+    try {
+      const res = await fetch("/api/export-device/legacy", { method: "DELETE" });
+      if (!res.ok) throw new Error((await readJson<{ error?: string }>(res)).error ?? "Could not drop it");
       await qc.invalidateQueries({ queryKey: ["export-runs"] });
     } catch (err) {
       setError((err as Error).message);
@@ -387,18 +457,28 @@ export function ExportRunner({
         </p>
       )}
 
-      {/* Whether Emburse still trusts this browser. Worth stating, because the
-          alternative is discovering it only when a run stops to ask for a
-          code — and because a jar that has gone stale needs a way out. */}
+      {/* Whether Emburse trusts this browser FOR THIS TAB'S ACCOUNT. Worth
+          stating, because the alternative is discovering it only when a run
+          stops to ask for a code — and because a jar that has gone stale
+          needs a way out. It names the account: one browser holds three
+          accounts' sessions, so "this browser" on its own said nothing, and
+          when it reported the primary connection on a personal tab it said
+          something untrue. */}
       <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        {q.data?.deviceRememberedAt ? (
+        {!q.data ? null : !q.data.device.linked ? (
+          <>
+            <ShieldQuestion className="h-3.5 w-3.5" aria-hidden />
+            No Emburse account is linked to this tab yet, so there is no device to remember.
+          </>
+        ) : q.data.device.rememberedAt ? (
           <>
             <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" aria-hidden />
-            Emburse trusts this browser — remembered {new Date(q.data.deviceRememberedAt).toLocaleString()}.
+            Emburse trusts this browser for <strong>{q.data.device.loginEmail}</strong> —
+            remembered {new Date(q.data.device.rememberedAt).toLocaleString()}.
             {isAdmin && (
               <button
                 type="button"
-                onClick={() => void forgetDevice()}
+                onClick={() => void forgetDevice(q.data!.device.loginEmail)}
                 className="underline underline-offset-2 hover:text-foreground"
               >
                 Forget it
@@ -408,7 +488,10 @@ export function ExportRunner({
         ) : (
           <>
             <ShieldQuestion className="h-3.5 w-3.5" aria-hidden />
-            Emburse does not know this browser yet, so the next run may ask for a verification code.
+            Emburse does not know this browser as{" "}
+            <strong>{q.data.device.loginEmail}</strong> yet, so the next run on this tab will ask
+            for a verification code. Each Emburse account is trusted separately — a code given
+            for another account does not cover this one.
           </>
         )}
       </p>
@@ -417,29 +500,65 @@ export function ExportRunner({
           somebody's, the app cannot know whose, and until that is said the
           person it belongs to would be asked for a code they have already
           given — which for a reviewer who is not the admin means
-          interrupting them to read one out. */}
-      {isAdmin && q.data?.legacyDeviceAt && !q.data?.deviceRememberedAt && (
+          interrupting them to read one out.
+          Shown while ANY account still lacks its own trust, not just while
+          the tab on screen does: it used to hide the moment the tab you
+          happened to be looking at was trusted, which on a three-tab page
+          is most of the time — so the offer was invisible to the accounts
+          that needed it. */}
+      {isAdmin && q.data?.legacyDeviceAt
+        && (q.data.deviceChoices ?? []).some((c) => !c.rememberedAt) && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
           <p>
             Emburse already trusts this browser from{" "}
             {new Date(q.data.legacyDeviceAt).toLocaleString()}, from before the app kept a
-            separate sign-in per account. Say whose it is and they keep it — no new
-            verification code.
+            separate sign-in per account. Say which <strong>Emburse account</strong> it is and
+            that account keeps it — no new verification code. The others are asked once each,
+            because Emburse trusts them separately.
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            {(q.data.people ?? []).map((who) => (
+            {(q.data.deviceChoices ?? []).map((c) => (
               <button
-                key={who}
+                key={c.loginEmail}
                 type="button"
-                disabled={working}
-                onClick={() => void adopt(who)}
-                className="rounded-lg border border-border bg-background px-3 py-1 text-xs font-semibold disabled:opacity-50"
+                disabled={working || Boolean(c.rememberedAt)}
+                onClick={() => void adopt(c.loginEmail)}
+                title={c.rememberedAt
+                  // Not offered where it would overwrite a live trust with an
+                  // older jar — which is a code spent to go backwards.
+                  ? `Already remembered ${new Date(c.rememberedAt).toLocaleString()}`
+                  : `Signs in as ${c.loginEmail}`}
+                className="rounded-lg border border-border bg-background px-3 py-1 text-left text-xs font-semibold disabled:opacity-50"
               >
-                It is {who}&rsquo;s
+                It is {c.label}&rsquo;s
+                <span className="block font-normal text-muted-foreground">
+                  {c.loginEmail}
+                  {c.rememberedAt ? " · already remembered" : ""}
+                </span>
               </button>
             ))}
           </div>
         </div>
+      )}
+
+      {/* Nothing left waiting for it. Adoption COPIES, so the shared row
+          outlives being given away — right while another account may still
+          want it, clutter once none does. Dropping it throws away no
+          account's trust: the copies already handed out are untouched. */}
+      {isAdmin && q.data?.legacyDeviceAt
+        && (q.data.deviceChoices ?? []).length > 0
+        && (q.data.deviceChoices ?? []).every((c) => c.rememberedAt) && (
+        <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          Every Emburse account has its own remembered device now, so the shared one from{" "}
+          {new Date(q.data.legacyDeviceAt).toLocaleString()} is no longer used.
+          <button
+            type="button"
+            onClick={() => void dropLegacy()}
+            className="underline underline-offset-2 hover:text-foreground"
+          >
+            Drop it
+          </button>
+        </p>
       )}
 
       {isAdmin && <WatchBrowser live={working} />}
