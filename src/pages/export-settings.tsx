@@ -470,6 +470,21 @@ function ReviewerPanel({
           <div className="mt-2 space-y-2">
             {lists.map((l) => {
               const on = mineLists.includes(l.key);
+              /*
+               * THE PATH THIS TAB WILL ACTUALLY READ, not the shared one.
+               *
+               * `l.path` is the deployment-wide setting for the list, and
+               * printing it here read "Transactions /transactions/team" on a
+               * personal tab whose Scope above said Personal queue — two
+               * controls on one screen flatly contradicting each other, and
+               * the one in smaller type was the one that looked like the
+               * fault. It is not: `gridPathFor` gives the TAB's path
+               * precedence for the main list, which is what this mirrors.
+               * Only a separately-keyed list (Reimbursements) has a page of
+               * its own that Scope does not move.
+               */
+              const path = l.key ? l.path : (row.gridPath ?? l.path);
+              const fromTab = path !== l.path;
               return (
                 <label key={l.key} className="flex items-start gap-3 text-sm">
                   <input
@@ -485,11 +500,12 @@ function ReviewerPanel({
                   />
                   <span>
                     <span className="font-semibold">{l.label}</span>
-                    <span className="ml-2 font-mono text-xs text-muted-foreground">{l.path}</span>
+                    <span className="ml-2 font-mono text-xs text-muted-foreground">{path}</span>
                     <span className="mt-0.5 block text-xs text-muted-foreground">
                       {l.key === ""
                         ? "Card transactions — the main queue."
                         : "A separate page in Emburse, with its own queue and its own timeline."}
+                      {fromTab && " Path from Scope above, not the shared default."}
                     </span>
                   </span>
                 </label>

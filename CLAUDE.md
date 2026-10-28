@@ -2545,6 +2545,15 @@ queue. Two separate causes, and either one alone reproduces it.
   stored and the path fell through to the source default, because it tests
   the RESOLVED path. Section 10 of `test-lanes.ts`, which asserts no browser
   is opened — the point is milliseconds rather than a 60-second timeout.
+- **"Which Emburse lists" shows the path THE TAB will read, not the shared
+  one.** `l.path` is the deployment-wide setting for a list, and printing it
+  there read "Transactions /transactions/team" on a personal tab whose Scope
+  said Personal queue — two controls on one screen contradicting each other,
+  with the small-type one looking like the fault. It is not: for the main
+  list (the EMPTY source key) `gridPathFor` gives the tab's path precedence,
+  and the label now mirrors that, saying "Path from Scope above" when it
+  differs. Only a separately-keyed list, Reimbursements, has a page of its
+  own that Scope does not move.
 - `scripts/test-personal-grid.ts` — the lane-aware lookup, plus a mock run
   per tab asserting the team tab is pressed for the manager and never for a
   personal one (`mock.state().admin`). Section 10 of `test-writeback.ts`
