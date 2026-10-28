@@ -2,6 +2,7 @@ import { db, ensureSchema } from "../db.js";
 import { GRAPH, graphToken } from "../mail.js";
 import { laneTag } from "./connections.js";
 import { matchesFor, textOf, type Evidence } from "./receipt-mail.js";
+import { readingOf } from "./receipt-link.js";
 
 /**
  * Sending a matched receipt back to the account it came from.
@@ -165,6 +166,50 @@ export function noteFrom(e: Evidence): string {
   return `Receipt: ${bits.join(" · ")}`;
 }
 
+/**
+ * The same, from THE RECEIPT ITSELF once the reader has read it.
+ *
+ * Better evidence than the email, and the reason linking comes
+ * before sending. An email's subject line says "Your receipt from
+ * Starbucks"; the receipt says what was bought, when, and for how
+ * much — and the reader has already extracted all of it for every
+ * other receipt in this app.
+ *
+ * Falls back to the email when the reader has not got there yet,
+ * or could not read it. An illegible photograph is a real
+ * outcome, and the email's own evidence is still worth
+ * something.
+ */
+export function noteFromReading(
+  reading: { legible: boolean; merchant: string | null; purchasedAt: string | null;
+    totalCents: number | null; items: string[] } | null,
+  fallback: Evidence,
+): { note: string; from: "receipt" | "email" } {
+  if (!reading || !reading.legible) {
+    return { note: noteFrom(fallback), from: "email" };
+  }
+  const bits: string[] = [];
+  if (reading.merchant) bits.push(reading.merchant);
+  if (reading.purchasedAt) bits.push(reading.purchasedAt);
+  if (reading.totalCents !== null) {
+    bits.push(`$${(reading.totalCents / 100).toFixed(2)}`);
+  }
+  /*
+   * What was bought, when the receipt lists it.
+   *
+   * Three lines, not forty: this goes in a description box
+   * somebody reads at a glance, and a twelve-item grocery list
+   * pasted into it is worse than nothing. The full list is on
+   * the receipt, which is now attached.
+   */
+  if (reading.items.length > 0) {
+    const few = reading.items.slice(0, 3).join(", ");
+    bits.push(reading.items.length > 3 ? `${few}, +${reading.items.length - 3} more` : few);
+  }
+  if (bits.length < 2) return { note: noteFrom(fallback), from: "email" };
+  return { note: `Receipt: ${bits.join(" · ")}`, from: "receipt" };
+}
+
 export type ProposeResult =
   | { ok: true; writes: Write[] }
   | { ok: false; problem: string };
@@ -209,6 +254,18 @@ export async function proposeWrites(opts: {
 
   const e = chosen.evidence;
   /*
+   * WHAT THE RECEIPT SAYS, where the reader has got to it.
+   *
+   * This is why the image is pulled in and linked before
+   * anything is sent: the reading is better evidence than the
+   * email, and it is produced by machinery that already exists.
+   * At the moment a match is first chosen the reader will not
+   * have run yet, so this is empty and the email's own evidence
+   * is used — and the proposal is recomputed below on every
+   * later read, which is how it improves once the reading lands.
+   */
+  const reading = chosen.linkedSha256 ? await readingOf(chosen.linkedSha256) : null;
+  /*
    * The attachment, when there is one. A receipt that is only in
    * the body is rendered at send time rather than here — the
    * proposal should not spend a browser on something a person may
@@ -225,7 +282,7 @@ export async function proposeWrites(opts: {
       attachment: file?.id ?? "",
     },
   ];
-  const note = noteFrom(e);
+  const { note } = noteFromReading(reading, e);
   // Only when it says more than the box already does. Overwriting
   // somebody's own description with a duller one is a change
   // nobody asked for.

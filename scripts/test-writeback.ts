@@ -23,7 +23,8 @@
  */
 import { db, ensureSchema } from "../server/db.js";
 import {
-  noteFrom, proposeWrites, queueWrite, queuedWrites, settleWrite, writesFor,
+  noteFrom, noteFromReading, proposeWrites, queueWrite, queuedWrites, settleWrite,
+  writesFor,
 } from "../server/emburse/receipt-writeback.js";
 import { recordCandidates, decideMatch } from "../server/emburse/receipt-mail.js";
 import { ensureDecisionsSchema } from "../server/emburse/decisions.js";
@@ -163,6 +164,47 @@ try {
   check("only the receipt is proposed",
     only.ok && only.writes.map((w) => w.kind).join(",") === "receipt",
     only.ok ? only.writes.map((w) => w.kind).join(",") : only.problem);
+
+  console.log("\n9. Once the receipt is READ, the fill comes from it");
+  /*
+   * The reason the image is pulled in and linked before anything
+   * is sent. The email's subject line says "Your receipt from
+   * Starbucks"; the receipt says what was bought, when, and for
+   * how much — and the reader that extracts all that already
+   * exists and runs on every other receipt in the app.
+   */
+  const fromEmail = noteFromReading(null, evidence());
+  check("with no reading, it falls back to the email",
+    fromEmail.from === "email"
+    && fromEmail.note === "Receipt: Starbucks · 2026-09-24 · ref ABC-12345",
+    `${fromEmail.from}: ${fromEmail.note}`);
+
+  const read = noteFromReading({
+    legible: true, merchant: "STARBUCKS STORE 4417", purchasedAt: "2026-09-24",
+    totalCents: 1299, items: ["Grande Latte", "Turkey Sandwich", "Tax"],
+  }, evidence());
+  check("with one, it uses the receipt", read.from === "receipt", read.note);
+  check("…naming what was bought", read.note.includes("Grande Latte"), read.note);
+  check("…and the total the receipt itself states",
+    read.note.includes("$12.99"), read.note);
+
+  const many = noteFromReading({
+    legible: true, merchant: "KROGER", purchasedAt: "2026-09-24", totalCents: 8400,
+    items: ["Milk", "Bread", "Eggs", "Coffee", "Apples", "Cheese"],
+  }, evidence());
+  check("a long list is summarised, not pasted",
+    many.note.includes("+3 more") && !many.note.includes("Cheese"), many.note);
+
+  const illegible = noteFromReading({
+    legible: false, merchant: null, purchasedAt: null, totalCents: null, items: [],
+  }, evidence());
+  check("AN ILLEGIBLE RECEIPT FALLS BACK rather than writing nothing",
+    illegible.from === "email" && illegible.note.length > 0, illegible.note);
+  const thin = noteFromReading({
+    legible: true, merchant: "KROGER", purchasedAt: null, totalCents: null, items: [],
+  }, evidence({ merchant: "", date: null, reference: "" }));
+  check("…and a reading too thin to say anything proposes nothing",
+    thin.note === "", thin.note);
 
 } finally {
   await db().query("DELETE FROM expenses WHERE dedupe_key LIKE $1", [`${TAG}%`])

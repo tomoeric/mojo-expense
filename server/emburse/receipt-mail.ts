@@ -123,6 +123,24 @@ CREATE INDEX IF NOT EXISTS receipt_mail_matches_state
   ON receipt_mail_matches (state, lane);
 CREATE INDEX IF NOT EXISTS receipt_mail_matches_message
   ON receipt_mail_matches (message_id);
+
+/**
+ * The receipt, once it is in the app.
+ *
+ * Choosing a match PULLS THE IMAGE IN and links it to the expense
+ * through the ordinary tables — receipt_blobs for the bytes,
+ * expense_receipts for the link. The hash is kept here as well so
+ * this row can say whether the pull happened without a join.
+ *
+ * Linking first, before anything goes to Emburse, is the whole
+ * order of operations: a linked receipt is read by the reader
+ * that already exists, which is what produces the merchant, date,
+ * total and line items the field fill is made of. Uploading
+ * straight to Emburse would attach a picture and learn nothing
+ * from it.
+ */
+ALTER TABLE receipt_mail_matches ADD COLUMN IF NOT EXISTS linked_sha256 text;
+ALTER TABLE receipt_mail_matches ADD COLUMN IF NOT EXISTS link_error text NOT NULL DEFAULT '';
 `;
 
 let ready: Promise<void> | null = null;
@@ -620,6 +638,10 @@ export type StoredMatch = Candidate & {
   decidedBy: string;
   decidedAt: string | null;
   foundAt: string;
+  /** The receipt, once it is in the app. Null until it is pulled in. */
+  linkedSha256: string | null;
+  /** Why the pull did not work, when it did not. */
+  linkError: string;
 };
 
 export async function matchesFor(
@@ -630,9 +652,10 @@ export async function matchesFor(
     dedupe_key: string; message_id: string; lane: string; confidence: string;
     score: number; reasons: unknown; evidence: unknown; state: string;
     decided_by: string; decided_at: Date | null; found_at: Date;
+    linked_sha256: string | null; link_error: string;
   }>(
     `SELECT dedupe_key, message_id, lane, confidence, score, reasons, evidence, state,
-            decided_by, decided_at, found_at
+            decided_by, decided_at, found_at, linked_sha256, link_error
        FROM receipt_mail_matches
       WHERE ($1::text IS NULL OR lane = $1)
         AND ($2::text IS NULL OR state = $2)
@@ -652,6 +675,8 @@ export async function matchesFor(
     decidedBy: r.decided_by,
     decidedAt: r.decided_at?.toISOString() ?? null,
     foundAt: r.found_at.toISOString(),
+    linkedSha256: r.linked_sha256,
+    linkError: r.link_error ?? "",
   }));
 }
 
@@ -691,6 +716,24 @@ export async function decideMatch(opts: {
       [opts.dedupeKey, opts.messageId, opts.by]);
   }
   return { ok: true };
+}
+
+/**
+ * Record that the receipt is now in the app, or why it is not.
+ *
+ * Kept on the match rather than only in `expense_receipts` so a
+ * failed pull has somewhere to say so. A link that silently did
+ * not happen looks exactly like one that did from a list of
+ * chosen matches.
+ */
+export async function noteLink(
+  dedupeKey: string, messageId: string, hash: string | null, error = "",
+): Promise<void> {
+  await ensure();
+  await db().query(
+    `UPDATE receipt_mail_matches SET linked_sha256 = $3, link_error = $4
+      WHERE dedupe_key = $1 AND message_id = $2`,
+    [dedupeKey, messageId, hash, error.slice(0, 400)]);
 }
 
 /** Drop a removed person's settings. Matches cascade with their expenses. */

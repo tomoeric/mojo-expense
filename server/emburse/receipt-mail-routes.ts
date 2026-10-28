@@ -4,11 +4,12 @@ import { db, isDbConfigured } from "../db.js";
 import { isGraphConfigured, mailProblem } from "../mail.js";
 import { MANAGER_LANE, laneTag, linkedLanesOf } from "./connections.js";
 import {
-  decideMatch, listFolders, mailSettings, matchAll, matchesFor, recordCandidates,
-  saveMailSettings, searchMailbox, conflicts,
+  decideMatch, listFolders, mailSettings, matchAll, matchesFor, noteLink,
+  recordCandidates, saveMailSettings, searchMailbox, conflicts,
   type Target,
 } from "./receipt-mail.js";
 import { proposeWrites, queueWrite, writesFor } from "./receipt-writeback.js";
+import { bytesFromMessage, linkReceipt, readingOf } from "./receipt-link.js";
 
 /**
  * Finding receipts in a mailbox, and offering them.
@@ -43,6 +44,29 @@ const owner = (req: Request, res: Response): string | null => {
   return email;
 };
 
+/**
+ * Recompute the proposals that nobody has approved yet.
+ *
+ * The reader runs on its own clock, so a receipt chosen a minute
+ * ago has no reading and its proposed description came from the
+ * email. Once the reading lands, the description it would write
+ * is better — and a person about to approve one should be
+ * looking at the better version.
+ *
+ * ONLY rows still in `proposed`. Anything a person has already
+ * said yes to is left exactly as they saw it: changing the text
+ * under an approval, however much better the new text is, means
+ * what gets written is not what was agreed to.
+ */
+async function refreshedProposals(me: string) {
+  const open = (await writesFor()).filter((w) => w.state === "proposed" && w.kind === "note");
+  for (const w of open.slice(0, 25)) {
+    await proposeWrites({ dedupeKey: w.dedupeKey, messageId: w.messageId, by: me })
+      .catch(() => undefined);
+  }
+  return writesFor();
+}
+
 receiptMailRouter.get("/receipt-mail", requireAuth, async (req: Request, res: Response) => {
   if (!guard(res)) return;
   const me = req.user?.email ?? "";
@@ -60,7 +84,7 @@ receiptMailRouter.get("/receipt-mail", requireAuth, async (req: Request, res: Re
       matches: await matchesFor(null),
       /* Every proposal and its state, so the page can show what
          is waiting on a click and what has already landed. */
-      writes: await writesFor(),
+      writes: await refreshedProposals(me),
     });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Could not read it." });
@@ -240,12 +264,62 @@ receiptMailRouter.post("/receipt-mail/decide", requireAuth,
     const me = owner(req, res);
     if (!me) return;
     const b = (req.body ?? {}) as Record<string, unknown>;
-    const out = await decideMatch({
-      dedupeKey: String(b.dedupeKey ?? ""),
-      messageId: String(b.messageId ?? ""),
-      choose: b.choose !== false,
-      by: me,
-    });
+    const dedupeKey = String(b.dedupeKey ?? "");
+    const messageId = String(b.messageId ?? "");
+    const choose = b.choose !== false;
+    const out = await decideMatch({ dedupeKey, messageId, choose, by: me });
     if (!out.ok) { res.status(400).json({ error: out.problem }); return; }
-    res.json({ matches: await matchesFor(null) });
+
+    /*
+     * CHOOSING PULLS THE RECEIPT IN.
+     *
+     * Before anything goes to Emburse, and that order is the
+     * point: a linked receipt is read by the reader that already
+     * exists, and that reading — merchant, date, total, line
+     * items — is what the field fill is made of. Uploading
+     * straight to Emburse would attach a picture and learn
+     * nothing from it.
+     *
+     * A failure here does not undo the choice. The match is
+     * still the right one; the pull can be retried, and the
+     * reason is recorded on the row rather than thrown away.
+     */
+    let linked: string | null = null;
+    let linkError = "";
+    if (choose) {
+      try {
+        const chosen = (await matchesFor(null, "chosen"))
+          .find((m) => m.dedupeKey === dedupeKey && m.messageId === messageId);
+        const box = await mailSettings(me);
+        if (!chosen) throw new Error("That match is no longer here.");
+        if (!box.mailbox) throw new Error("No mailbox is configured to fetch it from.");
+        const file = await bytesFromMessage({
+          mailbox: box.mailbox,
+          messageId,
+          attachmentId: chosen.evidence.attachments.find(
+            (a) => /pdf|image\//i.test(a.contentType))?.id ?? "",
+          subject: chosen.evidence.subject,
+        });
+        const got = await linkReceipt({
+          dedupeKey, bytes: file.bytes, contentType: file.contentType,
+        });
+        linked = got.sha256;
+      } catch (err) {
+        linkError = err instanceof Error ? err.message : String(err);
+      }
+      await noteLink(dedupeKey, messageId, linked, linkError).catch(() => undefined);
+      // Only propose once the image is in: the proposal is about
+      // what to send, and there is nothing to send until there is.
+      if (linked) {
+        await proposeWrites({ dedupeKey, messageId, by: me }).catch(() => undefined);
+      }
+    }
+
+    res.json({
+      matches: await matchesFor(null),
+      writes: await writesFor(),
+      linked,
+      linkError,
+      reading: linked ? await readingOf(linked) : null,
+    });
   });

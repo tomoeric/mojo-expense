@@ -101,7 +101,7 @@ were added; "it compiles" is not "the button works".
 `connections`, `decisions`, `import-as`, `unclaimed`, `run-as`,
 `reviewer-schedules`, `manager-queue`, `view-as-brian`, `two-reviewers`,
 `corrections`, `decision-trace`, `auto-approve`, `rules`, `bulk-approve`,
-`lanes`, `two-accounts`, `rule-scope`, `receipt-mail`, `signin-errors`, `writeback`. For a change to "Your Emburse login", Export
+`lanes`, `two-accounts`, `rule-scope`, `receipt-mail`, `signin-errors`, `writeback`, `receipt-link`. For a change to "Your Emburse login", Export
 settings or the review queue, also
 `test-accounts-ui.ts` and `test-lanes-ui.ts` after a build.
 
@@ -2611,6 +2611,42 @@ list and then filtered out the only rows worth having.
   description, and Category**, and nothing else. **Always ask** — even a
   strong match waits for a click; nothing reaches Emburse unattended. **Never
   submit** — matching and field updates never submit, approve or deny.
+
+## The pipeline, in order — and why the order is the design
+
+Import → search the mailbox → match → **LINK INTO THE APP** → the reader
+reads it → fill the fields from what it says → send image and fields back to
+the originating account → (next: generate rules from the pattern).
+
+**The step that is easy to skip is the fourth**, and skipping it was the
+first thing I got wrong here: it is tempting to take a matched receipt
+straight from the mailbox to Emburse, because that is the visible outcome.
+Doing that attaches a picture and learns nothing from it.
+
+`server/emburse/receipt-link.ts` puts the bytes in `receipt_blobs` and the
+link in `expense_receipts` — the tables the app already uses — so an emailed
+receipt is indistinguishable from one that arrived in the export. For free:
+
+- **The reader reads it.** `unreadReceipts` picks up any blob with no current
+  reading, so merchant, date, totals and line items come off it on the next
+  pass. **That reading is what the field fill is made of**; without it there
+  is nothing to fill from but a subject line.
+- **The queue shows it**, and the receipt-versus-claim check works on it.
+- **The upload stops depending on the mailbox.** Once the bytes are here,
+  sending them does not need the message to still exist — and a message filed
+  or deleted between matching and sending is the ordinary case.
+- **Content-addressed**, so one image across two expenses is a row, not a
+  copy, and re-linking is a no-op. A scan finds the same message every time,
+  so re-linking is the normal path.
+
+`noteFromReading` prefers the receipt over the email and falls back when the
+reader has not got there yet or could not read it. Proposals still in
+`proposed` are recomputed on every page read so the better text appears once
+the reading lands — **never one a person has already approved**, because
+changing the text under an approval means what gets written is not what was
+agreed to.
+
+`scripts/test-receipt-link.ts`, and section 9 of `test-writeback.ts`.
 
 ## Sending a matched receipt back
 

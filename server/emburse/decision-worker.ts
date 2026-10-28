@@ -9,7 +9,8 @@ import {
 import {
   queuedWrites, receiptBytes, settleWrite, type Write,
 } from "./receipt-writeback.js";
-import { mailSettings } from "./receipt-mail.js";
+import { mailSettings, matchesFor } from "./receipt-mail.js";
+import { linkedBytes } from "./receipt-link.js";
 import { applyCorrection, pendingCorrections, settleCorrection } from "./corrections.js";
 import { db } from "../db.js";
 import type { ChallengeHook } from "./auto-export.js";
@@ -515,12 +516,30 @@ async function runWritebacks(): Promise<void> {
           continue;
         }
         try {
-          file = await receiptBytes({
-            mailbox: box.mailbox,
-            messageId: receipt.messageId,
-            attachmentId: receipt.attachmentId,
-            subject: receipt.proposed.replace(/\.pdf$/i, ""),
-          });
+          /*
+           * FROM THE APP'S OWN COPY, when there is one.
+           *
+           * Choosing the match pulled the image in and linked
+           * it, so by the time anything is sent the bytes are
+           * here. Going back to the mailbox would make the
+           * upload depend on the message still existing — and a
+           * message filed or deleted between matching and
+           * sending is the ordinary case, not the rare one. The
+           * mailbox is the fallback, not the source.
+           */
+          const chosen = (await matchesFor(null, "chosen")).find(
+            (m) => m.dedupeKey === dedupeKey && m.messageId === receipt.messageId);
+          file = (chosen?.linkedSha256
+            ? await linkedBytes(chosen.linkedSha256)
+            : null) ?? undefined;
+          if (!file) {
+            file = await receiptBytes({
+              mailbox: box.mailbox,
+              messageId: receipt.messageId,
+              attachmentId: receipt.attachmentId,
+              subject: receipt.proposed.replace(/\.pdf$/i, ""),
+            });
+          }
         } catch (err) {
           await fail(err instanceof Error ? err.message : String(err));
           continue;
