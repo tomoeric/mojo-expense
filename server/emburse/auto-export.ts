@@ -230,7 +230,7 @@ export const SELECTOR_HELP: Record<SelectorKey, string> = {
   adminTab: "The team-wide tab, top left — ADMIN on some tenants, MANAGER on others. PERSONAL would export one person's own expenses.",
   grid: "The transactions table itself — used to tell the page has loaded. The item-count line is accepted instead, so this missing is not fatal.",
   itemCount: "The \u201cN items, $X\u201d line above the grid.",
-  gridPath: "Path to the transactions grid. Filters are added as query parameters.",
+  gridPath: "Path to the transactions grid. Filters are added as query parameters. SHARED BY EVERY TAB — this is the deployment default, so changing it here changes what the manager queue reads too. One tab reading a different list is set by Scope on that tab (Manager queue / Personal queue), not here.",
   gridQuery: "Any other filters, copied from Emburse\'s address bar — above all Current Reviewer, which is what separates two approvers in a chain. Use the dropdown in Emburse, copy the URL, paste it into a reviewer\'s row.",
   gridSection: "The section filter the grid is opened with — Emburse's own value, \"inbox\" for Needs Review. With a two-stage approval chain this is one of the two things that says WHOSE stage is being read.",
   exportButton: "The EXPORT button above the grid, not the one in the dialog.",

@@ -676,7 +676,8 @@ export async function attemptExport(
      */
     const mine = mineForLogin;
     const askedForAnotherList = Boolean(opts.source);
-    const chosenPath = gridPathFor(opts.source, list, mine);
+    const chose = gridPathFrom(opts.source, list, mine);
+    const chosenPath = chose.path;
     /*
      * A PERSONAL TAB POINTED AT THE TEAM LIST IS REFUSED, NOT RUN.
      *
@@ -698,8 +699,8 @@ export async function attemptExport(
       const why =
         `This tab reads ${chosenPath}, which is the approver's team-wide queue — and it is a `
         + `personal tab, so the expenses it exists to find are ${login.email}'s own and are not `
-        + `on that list. Nothing was exported. Open Export settings, pick this tab, and set `
-        + `Scope to "Personal queue". This is not a selector problem.`;
+        + `on that list. Nothing was exported. That path came from ${chose.from}. `
+        + `This is not a selector problem and not a sign-in problem — the sign-in worked.`;
       /*
        * Recorded as a STEP as well as an error, because a run with no steps
        * at all renders as a stopped run with nothing to open — and the list
@@ -1090,9 +1091,26 @@ export async function importFor(
   lane: string,
 ): Promise<ReviewerImport | undefined> {
   if (!reviewer) return undefined;
-  return (await reviewerImports().catch(() => []))
-    .find((r) => r.userEmail.toLowerCase() === reviewer.toLowerCase()
-      && r.lane === (lane || MANAGER_LANE));
+  /*
+   * A read that fails is REPORTED, not swallowed into "no settings".
+   *
+   * It used to catch to an empty list, and an empty list means every
+   * per-tab setting silently reverts to the deployment default — which for
+   * the list is the team-wide grid. So a transient database error on this
+   * one query looked exactly like a tab configured to read the approver's
+   * queue, and nothing anywhere said a read had failed. Still non-fatal,
+   * because the run can proceed on defaults for the manager queue; the
+   * personal-tab guard downstream refuses rather than reading the wrong
+   * list, and now it can say this is why.
+   */
+  const all = await reviewerImports().catch((err: unknown) => {
+    console.error(
+      `export: could not read ${reviewer}'s import settings for tab "${lane || MANAGER_LANE}" —`,
+      err);
+    return [];
+  });
+  return all.find((r) => r.userEmail.toLowerCase() === reviewer.toLowerCase()
+    && r.lane === (lane || MANAGER_LANE));
 }
 
 export function gridPathFor(
@@ -1100,10 +1118,44 @@ export function gridPathFor(
   list: { path: string } | undefined,
   mine: { gridPath: string | null } | undefined,
 ): string | undefined {
+  return gridPathFrom(source, list, mine).path;
+}
+
+/**
+ * The same, and WHERE THE ANSWER CAME FROM.
+ *
+ * Three settings can decide this and they are on three different parts of
+ * the page, so "the run opened /transactions/team" is not a diagnosis —
+ * the next question is always which of them said so, and the run could not
+ * answer it. That cost two rounds of looking at the right setting and
+ * finding it already correct.
+ *
+ * The phrase is written to be read in a failure message by somebody who is
+ * about to go and change something, so it names the control rather than
+ * the column.
+ */
+export function gridPathFrom(
+  source: string | undefined,
+  list: { path: string } | undefined,
+  mine: { gridPath: string | null } | undefined,
+): { path: string | undefined; from: string } {
   // Only a NON-EMPTY source names a different list. The empty one is the
   // default, which is not a request.
-  if (source) return list?.path;
-  return mine?.gridPath ?? list?.path;
+  if (source) {
+    return {
+      path: list?.path,
+      from: "the shared path for this list, under Defaults — asking for a named list "
+        + "takes that list's own page, so the tab's Scope does not apply to it",
+    };
+  }
+  if (mine?.gridPath) return { path: mine.gridPath, from: "this tab's Scope setting" };
+  return {
+    path: list?.path,
+    from: mine
+      ? "the shared path for this list, under Defaults, because this tab has no list of its own"
+      : "the shared path for this list, under Defaults, because this tab's import settings "
+        + "could not be read at all — which is itself worth reporting",
+  };
 }
 
 export async function reviewerImports(): Promise<ReviewerImport[]> {

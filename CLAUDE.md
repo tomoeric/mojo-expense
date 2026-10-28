@@ -2554,6 +2554,28 @@ queue. Two separate causes, and either one alone reproduces it.
   and the label now mirrors that, saying "Path from Scope above" when it
   differs. Only a separately-keyed list, Reimbursements, has a page of its
   own that Scope does not move.
+- **A failure must say WHICH of the three settings chose the path.** Three
+  can: the tab's Scope (`reviewer_imports.grid_path`), the list's shared
+  path under Defaults (`settings.sources[].path`), and a dry-run probe. They
+  sit on three different parts of the page, so "the run opened
+  /transactions/team" is not a diagnosis — and without the answer, checking
+  the right setting and finding it already correct is indistinguishable from
+  checking the wrong one. That cost two rounds. `gridPathFrom()` returns
+  `{ path, from }` and the refusal quotes `from`; `gridPathFor` is a wrapper
+  over it so existing callers are unchanged. The message also says the
+  sign-in was NOT the problem, because a stopped run reads as a login
+  failure to anybody who did not write it.
+- **`importFor` no longer swallows a failed settings read.** It caught to an
+  empty list, and an empty list means every per-tab setting reverts to the
+  deployment default — for the list, the team grid. So one transient
+  database error on that query was indistinguishable from a tab deliberately
+  pointed at the approver's queue, with nothing anywhere saying a read had
+  failed. It logs now, and `gridPathFrom` says "this tab's import settings
+  could not be read at all" instead of naming a setting that is innocent.
+- **The `gridPath` box in the step's selector panel is DEPLOYMENT-WIDE**, and
+  its help text now says so. It is offered right under this failure, and
+  typing `/transactions` into it would change what the manager queue reads.
+  One tab's list is Scope on that tab, never this box.
 - `scripts/test-personal-grid.ts` — the lane-aware lookup, plus a mock run
   per tab asserting the team tab is pressed for the manager and never for a
   personal one (`mock.state().admin`). Section 10 of `test-writeback.ts`

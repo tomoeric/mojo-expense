@@ -27,8 +27,8 @@
  *   and the other two never update.
  */
 import {
-  attemptExport, ensureSchedulerSchema, localDate, nextDue, recentRuns, reviewerImports,
-  setReviewerImport,
+  attemptExport, ensureSchedulerSchema, gridPathFrom, localDate, nextDue, recentRuns,
+  reviewerImports, setReviewerImport,
 } from "../server/emburse/export-scheduler.js";
 import {
   MANAGER_LANE, addConnection, credentialForLaneOf, lanesFor, linkedLanesOf,
@@ -224,9 +224,35 @@ try {
   check("the run does not go ahead", refused.run.ok === false);
   check("…it names the list it was pointed at",
     why.includes("/transactions/team"), why);
-  check("…and the setting that fixes it", /Personal queue/.test(why), why);
+  /*
+   * AND WHICH OF THE THREE SETTINGS CHOSE IT.
+   *
+   * "The run opened /transactions/team" is not a diagnosis: the tab's
+   * Scope, the list's shared path and a dry-run probe can each say it, and
+   * they are on three different parts of the page. Without this, looking
+   * at the right setting and finding it already correct is indistinguish-
+   * able from looking at the wrong one — which cost two rounds.
+   */
+  check("…and WHICH setting chose that path", /this tab's Scope setting/.test(why), why);
   check("…and says plainly that the selectors are not the problem",
     /not a selector problem/i.test(why), why);
+  // The sign-in step is green on every one of these runs, and reading a
+  // stopped run as "it cannot log in" is the wrong place to start looking.
+  check("…and that the sign-in was not the problem either",
+    /not a sign-in problem/i.test(why), why);
+
+  // The other way to the same path: a NAMED list brings its own page, and
+  // the tab's Scope does not apply to it. Same refusal, different sentence,
+  // because the setting to change is somewhere else entirely.
+  const named = gridPathFrom("reimbursements", { path: "/reimbursements/team" },
+    { gridPath: "/transactions" });
+  check("a named list says the path came from the shared default",
+    named.path === "/reimbursements/team" && /under Defaults/.test(named.from), named.from);
+  // And a tab whose settings could not be read at all must say THAT, rather
+  // than looking like a tab somebody pointed at the team queue.
+  const unread = gridPathFrom("", { path: "/transactions/team" }, undefined);
+  check("…and an unreadable tab says its settings could not be read",
+    /could not be read/.test(unread.from), unread.from);
   // It must not have got as far as a browser: the point is that this is
   // answered in milliseconds rather than after a 60-second timeout.
   check("…without opening Emburse at all",
@@ -240,7 +266,8 @@ try {
     refused.run.steps.map((st) => st.name).join(" → ") || "(no steps)");
   const stored = await recentRuns(5, APP, MOJO_LANE);
   check("…and the same sentence is on the run itself",
-    /Personal queue/.test(stored[0]?.error ?? ""), stored[0]?.error ?? "(no error)");
+    /this tab's Scope setting/.test(stored[0]?.error ?? ""),
+    stored[0]?.error ?? "(no error)");
 
   // And the same tab, set correctly, gets past this check — so the refusal
   // is about the path and not about personal tabs in general.
