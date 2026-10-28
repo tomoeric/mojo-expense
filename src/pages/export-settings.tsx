@@ -413,18 +413,23 @@ function ReviewerPanel({
         </div>
         <p className="mt-1 text-xs text-muted-foreground">
           {TABS.find((t) => t.path === path)?.why ?? path}
-          {/* A personal tab on the manager grid is reading the
-              approver's queue, which is the opposite of what the
-              tab is. Said here rather than silently corrected,
-              because somebody may have set it deliberately. */}
-          {row.laneKind === "personal" && path === "/transactions/team" && (
-            <span className="mt-1 block text-amber-700 dark:text-amber-400">
-              This is a personal tab, and it is pointed at the approver&rsquo;s queue.
-              Personal queue is almost certainly what you want here — it is{" "}
-              {row.laneLoginEmail || "this account"}&rsquo;s own expenses.
-            </span>
-          )}
         </p>
+
+        {/* A personal tab on the manager grid does not half-work, it fails —
+            and it fails late and misleadingly, because Emburse answers an
+            account that is not an approver of that tenant with the nav and
+            an empty page, so the run waits out its timeout and then blames
+            the four selectors it tried. The run refuses outright now; this
+            says the same thing where the one click that fixes it is. */}
+        {row.laneKind === "personal" && path === "/transactions/team" && (
+          <p className="mt-2 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm">
+            <strong>No import will work on this tab until this changes.</strong> It is a personal
+            tab pointed at the approver&rsquo;s team-wide queue, and{" "}
+            {row.laneLoginEmail || "this account"}&rsquo;s own expenses are not on that list —
+            so the run signs in, finds an empty page and stops. Pick{" "}
+            <strong>Personal queue</strong> above.
+          </p>
+        )}
 
         <div className="mt-3 divide-y divide-border overflow-hidden rounded-xl border border-border">
           {allSections.map((name) => {

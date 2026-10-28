@@ -677,6 +677,41 @@ export async function attemptExport(
     const mine = mineForLogin;
     const askedForAnotherList = Boolean(opts.source);
     const chosenPath = gridPathFor(opts.source, list, mine);
+    /*
+     * A PERSONAL TAB POINTED AT THE TEAM LIST IS REFUSED, NOT RUN.
+     *
+     * Everything else about the run is already correct by here — the right
+     * login, the team-view step skipped because this is a personal tab —
+     * and then it opened the approver's queue anyway, because the path
+     * stored on the tab says so. On an account that is not an approver of
+     * that tenant, Emburse answers with the nav and an empty main area, so
+     * the run waited out its timeout and reported "the grid did not appear,
+     * tried the grid selector and the item-count line" — sending somebody
+     * to correct four selectors that are perfectly right.
+     *
+     * Refused rather than quietly rewritten: the Scope row on that tab says
+     * "Manager queue" and would go on saying it while the run read
+     * something else, which is a worse lie than the one being fixed. One
+     * click changes it, and the sentence says which click.
+     */
+    if (personalQueue && chosenPath && /\/team\b/.test(chosenPath)) {
+      const why =
+        `This tab reads ${chosenPath}, which is the approver's team-wide queue — and it is a `
+        + `personal tab, so the expenses it exists to find are ${login.email}'s own and are not `
+        + `on that list. Nothing was exported. Open Export settings, pick this tab, and set `
+        + `Scope to "Personal queue". This is not a selector problem.`;
+      /*
+       * Recorded as a STEP as well as an error, because a run with no steps
+       * at all renders as a stopped run with nothing to open — and the list
+       * of steps is where somebody looks for the reason. This one names
+       * itself after the thing it was doing, so it reads in sequence with
+       * the steps that would have followed it.
+       */
+      run = { ...run, ok: false, steps: [
+        { name: "choose the list to read", ok: false, detail: why, ms: 0 },
+      ] };
+      throw new Error(why);
+    }
     const forThisRun = {
       ...settings.selectors,
       ...(chosenPath ? { gridPath: chosenPath } : {}),

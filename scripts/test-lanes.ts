@@ -27,7 +27,7 @@
  *   and the other two never update.
  */
 import {
-  ensureSchedulerSchema, localDate, nextDue, recentRuns, reviewerImports,
+  attemptExport, ensureSchedulerSchema, localDate, nextDue, recentRuns, reviewerImports,
   setReviewerImport,
 } from "../server/emburse/export-scheduler.js";
 import {
@@ -200,6 +200,55 @@ try {
     solo.map((r) => r.laneLabel).join(", "));
   check("…and it is on", solo[0]?.enabled === true);
   check("…and connected", solo[0]?.connected === true);
+
+  /*
+   * A PERSONAL TAB POINTED AT THE TEAM LIST IS REFUSED BEFORE A BROWSER OPENS.
+   *
+   * This is what the fault looked like from outside: the right login, the
+   * team-view step correctly skipped because the tab is personal — and then
+   * the grid opened at /transactions/team anyway, because that path was
+   * stored on the tab. Emburse answers an account that is not an approver of
+   * that tenant with the nav and an empty main area, so the run waited out
+   * its timeout and reported "the grid did not appear, tried the grid
+   * selector and the item-count line", offering to fix four selectors that
+   * were perfectly right.
+   *
+   * No browser is launched by this check, which is why it is testable here:
+   * it runs while resolving the list, before anything is opened.
+   */
+  console.log("\n10. A personal tab on the team list is refused, with the reason");
+  await setReviewerImport(APP, { lane: MOJO_LANE, gridPath: "/transactions/team" }, "test");
+  const refused = await attemptExport("manual", "test", { reviewer: APP, lane: MOJO_LANE });
+  const why = refused.run.steps.find((st) => !st.ok)?.detail
+    ?? refused.run.steps.map((st) => st.detail).join(" ");
+  check("the run does not go ahead", refused.run.ok === false);
+  check("…it names the list it was pointed at",
+    why.includes("/transactions/team"), why);
+  check("…and the setting that fixes it", /Personal queue/.test(why), why);
+  check("…and says plainly that the selectors are not the problem",
+    /not a selector problem/i.test(why), why);
+  // It must not have got as far as a browser: the point is that this is
+  // answered in milliseconds rather than after a 60-second timeout.
+  check("…without opening Emburse at all",
+    !refused.run.steps.some((st) => st.name === "open Emburse"),
+    refused.run.steps.map((st) => st.name).join(" → ") || "(no steps)");
+  // And it is a STEP, not only an error column: a run with no steps renders
+  // as a stopped run with nothing to open, and the step list is where
+  // somebody looks for the reason.
+  check("…as a step somebody can open, like every other stop",
+    refused.run.steps.length === 1 && refused.run.steps[0]!.ok === false,
+    refused.run.steps.map((st) => st.name).join(" → ") || "(no steps)");
+  const stored = await recentRuns(5, APP, MOJO_LANE);
+  check("…and the same sentence is on the run itself",
+    /Personal queue/.test(stored[0]?.error ?? ""), stored[0]?.error ?? "(no error)");
+
+  // And the same tab, set correctly, gets past this check — so the refusal
+  // is about the path and not about personal tabs in general.
+  await setReviewerImport(APP, { lane: MOJO_LANE, gridPath: "/transactions" }, "test");
+  const allowed = await attemptExport("manual", "test", { reviewer: APP, lane: MOJO_LANE });
+  const stopped = allowed.run.steps.find((st) => !st.ok)?.detail ?? "";
+  check("a correctly pointed personal tab is NOT refused",
+    !/not a selector problem/.test(stopped), stopped.slice(0, 120));
 
 } finally {
   await deleteCredential(ID).catch(() => undefined);

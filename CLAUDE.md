@@ -2526,6 +2526,25 @@ queue. Two separate causes, and either one alone reproduces it.
   primary to a personal grid would stop this testing what every approval
   does. The step now names the list it opened, since "the grid is there" did
   not say which one.
+- **A personal tab whose STORED path is the team list is refused before a
+  browser opens.** Defaults were not the end of it: `reviewer_imports.
+  grid_path` is only defaulted to `PERSONAL_GRID` when it is NULL, so a tab
+  where somebody once pressed "Manager queue" (or pasted a team URL) keeps
+  `/transactions/team` and every other fix sails straight past it — the
+  right login, the team-view step correctly skipped, and then the approver's
+  queue opened anyway. **Emburse answers an account that is not an approver
+  of that tenant with the nav and an empty main area**, so the run waited out
+  its timeout and reported "the grid did not appear … tried the grid selector
+  and the item-count line", offering to correct four selectors that were
+  perfectly right. `attemptExport` now throws on
+  `personalQueue && /\/team\b/.test(chosenPath)`, naming the list, the tab
+  setting that fixes it, and the words "this is not a selector problem".
+  **Refused, not quietly rewritten**: the Scope row would go on reading
+  "Manager queue" while the run read something else, which is a worse lie
+  than the one being fixed. The same check catches the case where nothing is
+  stored and the path fell through to the source default, because it tests
+  the RESOLVED path. Section 10 of `test-lanes.ts`, which asserts no browser
+  is opened — the point is milliseconds rather than a 60-second timeout.
 - `scripts/test-personal-grid.ts` — the lane-aware lookup, plus a mock run
   per tab asserting the team tab is pressed for the manager and never for a
   personal one (`mock.state().admin`). Section 10 of `test-writeback.ts`

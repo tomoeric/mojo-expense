@@ -215,6 +215,43 @@ try {
    * then a run stopped to ask for a code the page had just said was
    * unnecessary. Only a rendered page shows this.
    */
+  /*
+   * AND A PERSONAL TAB ON THE TEAM LIST SAYS IT IS BROKEN.
+   *
+   * The default is only applied where nothing is stored, so a tab where
+   * somebody once pressed "Manager queue" keeps the approver's list and
+   * every run on it fails — late and misleadingly, because Emburse answers
+   * an account that is not an approver of that tenant with the nav and an
+   * empty page, so the run waits out its timeout and blames the selectors.
+   * The run refuses now; this is the same sentence where the one click that
+   * fixes it is.
+   */
+  console.log("\n5bb. A personal tab on the team list says so, in red");
+  await fetch(`http://127.0.0.1:${PORT}/api/reviewer-imports`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: `mojo_sid=${payload}.${mac}` },
+    body: JSON.stringify({ email: APP, lane: "personal-mojo", gridPath: "/transactions/team" }),
+  });
+  await page.reload({ waitUntil: "networkidle" });
+  await page.waitForTimeout(1800);
+  await page.getByRole("button", { name: /^Personal Tab - MOJO/ }).click();
+  await page.waitForTimeout(600);
+  const broken = (await page.locator("body").innerText()).replace(/\s+/g, " ");
+  check("it says no import will work until it changes",
+    broken.includes("No import will work on this tab until this changes"),
+    broken.slice(-300));
+  check("…and names the control that fixes it", /Pick Personal queue above/i.test(broken));
+  // Put it back, so the sections below read a tab nothing here broke.
+  await fetch(`http://127.0.0.1:${PORT}/api/reviewer-imports`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: `mojo_sid=${payload}.${mac}` },
+    body: JSON.stringify({ email: APP, lane: "personal-mojo", gridPath: "/transactions" }),
+  });
+  await page.reload({ waitUntil: "networkidle" });
+  await page.waitForTimeout(1500);
+  check("…and the warning goes when it is corrected",
+    !(await page.locator("body").innerText()).includes("No import will work on this tab"));
+
   console.log("\n5c. The remembered-device line is about the tab's own account");
   await page.getByRole("button", { name: /^Personal Tab - MOJO/ }).click();
   await page.waitForTimeout(800);
