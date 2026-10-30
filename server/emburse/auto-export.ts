@@ -82,7 +82,7 @@ export type SelectorKey =
   | "loginEmail" | "loginPassword" | "loginSubmit" | "loggedIn"
   | "accountMenu" | "signOutPath"
   | "mfaCode" | "mfaSubmit" | "mfaRemember"
-  | "adminTab" | "grid" | "itemCount"
+  | "adminTab" | "personalTab" | "grid" | "itemCount"
   | "gridPath"
   | "gridSection"
   | "gridQuery"
@@ -149,6 +149,7 @@ export const DEFAULT_SELECTORS: Selectors = {
   // lack the team view when the tab was on screen the whole time, two
   // characters from what the selector was looking for.
   adminTab: 'text=/^\\s*(ADMIN|MANAGER)\\s*$/i',
+  personalTab: 'text=/^\\s*PERSONAL\\s*$/i',
   // Not just <table>: most data grids of this vintage are divs that announce
   // themselves through ARIA instead. Emburse's is one of them.
   grid: 'table, [role="grid"], [role="table"], [role="rowgroup"]',
@@ -205,6 +206,11 @@ export const STEP_SELECTORS: Record<string, SelectorKey[]> = {
   "sign in": ["loginEmail", "loginPassword", "loginSubmit", "loggedIn",
               "mfaCode", "mfaSubmit", "mfaRemember", "accountMenu", "signOutPath"],
   "confirm who is signed in": ["accountMenu"],
+  // Both names on purpose. The export step is "the right Emburse tab"
+  // because on a personal run the right one is PERSONAL; the decision
+  // steps in decide.ts still say "the team view", because for them it
+  // always is one, and they would otherwise lose their selector panel.
+  "switch to the right Emburse tab": ["adminTab", "personalTab"],
   "switch to the team view": ["adminTab"],
   "open the filtered grid": ["gridPath", "gridSection", "gridQuery", "grid"],
   "read the item count": ["itemCount"],
@@ -228,6 +234,7 @@ export const SELECTOR_HELP: Record<SelectorKey, string> = {
   mfaSubmit: "The button that submits that code.",
   mfaRemember: "The \u201cremember this device\u201d tick box. Ticking it is what stops the code being asked for every run.",
   adminTab: "The team-wide tab, top left — ADMIN on some tenants, MANAGER on others. PERSONAL would export one person's own expenses.",
+  personalTab: "The tab beside it for one person's OWN expenses. A personal tab presses this, and where it lands is taken as that account's list — which is how the run finds the path without anybody guessing it.",
   grid: "The transactions table itself — used to tell the page has loaded. The item-count line is accepted instead, so this missing is not fatal.",
   itemCount: "The \u201cN items, $X\u201d line above the grid.",
   gridPath: "Path to the transactions grid. Filters are added as query parameters. SHARED BY EVERY TAB — this is the deployment default, so changing it here changes what the manager queue reads too. One tab reading a different list is set by Scope on that tab (Manager queue / Personal queue), not here.",
@@ -2005,6 +2012,14 @@ async function runSteps(
 
   /** Set by the grid step, read by the two that follow it. */
   let gridEmpty = false;
+  /**
+   * Where Emburse's own PERSONAL tab went, on a personal run.
+   *
+   * The tenant's answer to "where are this account's own expenses",
+   * which beats every default, probe and typed-in path — all of which
+   * have now been wrong at least once.
+   */
+  let personalPath = "";
 
   if (!(await step("open Emburse", () => openEmburse(page, url)))) return false;
 
@@ -2055,19 +2070,47 @@ async function runSteps(
       `the password was typed this run, so the account is ${login.email}`;
   }))) return false;
 
-  if (!(await step("switch to the team view", async () => {
+  if (!(await step("switch to the right Emburse tab", async () => {
     // Not when this run is pointed somewhere else. A reviewer reading their
     // own approval stage is deliberately NOT on the team-wide tab, and
     // clicking it first would land on the wrong list before the URL below
     // corrects it — or leave Emburse remembering the wrong tab for the
     // next run.
-    //
-    // A personal tab is the clear-cut case and is checked FIRST, because
-    // the path test below cannot be trusted to catch it: a tab whose list
-    // somebody has typed by hand could still be a "/team" address, and
-    // clicking the tab then teaches Emburse to reopen there next time.
+    /*
+     * A PERSONAL TAB PRESSES **PERSONAL**. It does not skip.
+     *
+     * Skipping was half an answer. Emburse's list is a tab bar as well as
+     * a URL — MANAGER | PERSONAL, top left — and the two have to agree:
+     * the account reopens on whichever was last used, so a run that only
+     * changed the URL could still be handed the other one's view, and a
+     * run that never pressed anything left the manager tab selected for
+     * next time.
+     *
+     * And pressing it ANSWERS THE QUESTION THAT HAS COST THE MOST. Where
+     * PERSONAL lands IS this account's own list, in the tenant's own
+     * words, so the path stops being something anybody has to guess,
+     * type or probe for. Recorded here and preferred over the configured
+     * path by the step below.
+     */
     if (opts.personalQueue) {
-      return "skipped — this is a personal tab, which reads this account's own expenses";
+      const mine = page.locator(sel.personalTab).first();
+      await mine.waitFor({ state: "visible" }).catch(() => {});
+      if (await mine.isVisible().catch(() => false)) {
+        const before = page.url();
+        await mine.click().catch(() => {});
+        await page.waitForURL((u) => u.toString() !== before, { timeout: 8_000 }).catch(() => {});
+        if (page.url() !== before) {
+          personalPath = new URL(page.url()).pathname;
+          return `clicked the PERSONAL tab, which went to ${personalPath}`;
+        }
+        return "clicked the PERSONAL tab; it did not change the address, so the URL below decides";
+      }
+      // Not fatal, for the same reason the team tab is not: the grid is
+      // opened by URL next. Said plainly so a wrong selector here is not
+      // mistaken later for a wrong path.
+      return `no tab matched ${sel.personalTab}, so this account's own list has to come from `
+        + "the URL instead — worth correcting, because pressing it is the only thing that "
+        + "tells us where this tenant keeps that list";
     }
     if (sel.gridPath && !/\/team\b/.test(sel.gridPath)) {
       return `skipped — this run reads ${sel.gridPath}, which is not the team-wide list`;
@@ -2107,9 +2150,18 @@ async function runSteps(
     //
     // The filters live in the query string, so there is also no ADVANCED
     // FILTERS dialog and no toggle whose state could be misread and inverted.
+    /*
+     * EMBURSE'S OWN ANSWER FIRST, where the step above got one.
+     *
+     * A path somebody typed, a shipped default and a scheme guessed from
+     * another path have each been wrong on this tenant; the address the
+     * PERSONAL tab actually goes to cannot be. Only ever used on a
+     * personal run, and only when that tab was pressed and moved.
+     */
+    const fromTab = personalPath && personalPath !== sel.gridPath ? personalPath : "";
     const target = gridUrl(url, {
-      receiptsOnly: settings.receiptsOnly, path: sel.gridPath, section: sel.gridSection,
-      extra: sel.gridQuery,
+      receiptsOnly: settings.receiptsOnly, path: fromTab || sel.gridPath,
+      section: sel.gridSection, extra: sel.gridQuery,
     });
     await page.goto(target, { waitUntil: "domcontentloaded" });
 
@@ -2215,15 +2267,22 @@ async function runSteps(
        * queue from the one a reviewer approves out of.
        */
       //
-      // Never on a personal tab. "<list>/team" is the approver's view of
-      // the same list, so trying it there answers a failed /transactions
-      // by exporting other people's expenses — and the run says so only
-      // in a NOTE at the end of a step that passed. A personal tab whose
-      // own list does not load has nothing to fall back TO; the nav is
-      // still asked, and a "/me" link is the right answer there.
-      const sameScheme = opts.personalQueue || /\/team\b/.test(sel.gridPath)
+      // A PERSONAL TAB GETS THE MIRROR OF THIS, "<list>/me".
+      //
+      // The suffix is the whole scheme on this tenant: sign-in lands on
+      // /dashboard/me, the approver's list is /transactions/team, and
+      // /transactions on its own is a 404 — "404 Not found" with the nav
+      // beside it. The personal default was a guess at the obvious and
+      // that is what it cost. Probing for it means the next tenant that
+      // spells it differently corrects itself here instead of waiting on
+      // somebody to change a constant.
+      //
+      // "/team" is still never tried on a personal tab: it is the
+      // approver's view of the same list, so it would answer a failed
+      // personal list by exporting other people's expenses.
+      const sameScheme = /\/(team|me)\b/.test(sel.gridPath)
         ? null
-        : `${sel.gridPath.replace(/\/$/, "")}/team`;
+        : `${sel.gridPath.replace(/\/$/, "")}${opts.personalQueue ? "/me" : "/team"}`;
       let found: string | null = null;
       if (sameScheme) {
         await page.goto(gridUrl(url, {

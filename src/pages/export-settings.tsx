@@ -74,10 +74,28 @@ const ZONES = [
  * the page rather than looking at it, and outright broken for a
  * screen reader.
  */
+/*
+ * "/me", not "/transactions". The tenant's scheme is a suffix — sign-in
+ * lands on /dashboard/me and the approver's list is /transactions/team —
+ * and /transactions on its own answers 404. The first version of this
+ * button wrote that 404 into every personal tab somebody pressed it on.
+ */
 const TABS = [
   { path: "/transactions/team", label: "Manager queue", why: "Expenses waiting on them to approve." },
-  { path: "/transactions", label: "Personal queue", why: "Their own expenses, which they submit rather than approve." },
+  { path: "/transactions/me", label: "Personal queue", why: "Their own expenses, which they submit rather than approve." },
 ];
+
+/**
+ * Which button is lit, for a path that is neither literal.
+ *
+ * A tab saved before the personal path was corrected holds
+ * "/transactions", and matching on equality lit NEITHER button — so the
+ * page looked unset on a tab that was very much set, and pressing
+ * Personal queue looked like it had done nothing. Anything that is not
+ * the team list is the personal side of this control.
+ */
+const tabFor = (path: string): string =>
+  /\/team\b/.test(path) ? "/transactions/team" : "/transactions/me";
 
 /**
  * One import per person, and nothing shared between them.
@@ -404,7 +422,7 @@ function ReviewerPanel({
               disabled={!isAdmin}
               onClick={() => onPost({ gridPath: t.path })}
               className={`rounded-md px-3 py-1 text-sm font-semibold disabled:opacity-50 ${
-                path === t.path ? "bg-background shadow-sm" : "text-muted-foreground"
+                tabFor(path) === t.path ? "bg-background shadow-sm" : "text-muted-foreground"
               }`}
             >
               {t.label}
@@ -412,7 +430,10 @@ function ReviewerPanel({
           ))}
         </div>
         <p className="mt-1 text-xs text-muted-foreground">
-          {TABS.find((t) => t.path === path)?.why ?? path}
+          {TABS.find((t) => t.path === tabFor(path))?.why ?? path}
+          {path !== tabFor(path) && (
+            <span className="ml-1 font-mono text-[11px]">({path})</span>
+          )}
         </p>
 
         {/* A personal tab on the manager grid does not half-work, it fails —

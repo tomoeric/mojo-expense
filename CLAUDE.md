@@ -2582,6 +2582,46 @@ queue. Two separate causes, and either one alone reproduces it.
   covers `selectorsForLane`, section 10 of `test-connections.ts`
   `laneForAccount`.
 
+## ASK EMBURSE WHERE THE PERSONAL LIST IS. Do not guess it.
+
+`PERSONAL_GRID` was `/transactions`, which is a **404 on this tenant** —
+"404 Not found" with the nav beside it. The scheme here is a suffix:
+sign-in lands on `/dashboard/me`, the approver's list is
+`/transactions/team`, so one person's own list is `/transactions/me`. The
+nav link on Reimbursements going to `/reimbursableexpenses/me` had said
+the same thing two failures earlier and was read as a curiosity.
+
+The constant is corrected, and that is the least important part of this.
+
+- **A personal run PRESSES THE PERSONAL TAB**, and the step is called
+  "switch to the right Emburse tab" rather than "the team view". Skipping
+  it was half an answer: the list is a tab bar as well as a URL, the
+  account reopens on whichever tab was last used, so a run that only
+  changed the URL could still be handed the other view — and one that
+  pressed nothing left MANAGER selected for next time.
+- **Where PERSONAL lands IS the path**, and it beats the configured one
+  (`fromTab || sel.gridPath`). A typed path, a shipped default and a
+  scheme inferred from another path have each been wrong here; the
+  address Emburse's own tab goes to cannot be. A tab stored as the old
+  `/transactions` therefore stops mattering without anybody editing it.
+- **`sameScheme` probes `<list>/me` on a personal tab**, mirroring
+  `<list>/team` on the manager one, so a tenant spelling it differently
+  corrects itself instead of waiting on a constant. `/team` is still
+  never tried on a personal tab.
+- **The Scope buttons match by SHAPE, not equality** (`tabFor`). With
+  literal comparison a tab holding the old `/transactions` lit neither
+  button, so the page looked unset on a tab that was set and pressing
+  Personal queue looked like it had done nothing.
+- **The mock has the tenant's real shape**: `/transactions` 404s,
+  `/transactions/me` serves the grid, `/personal` navigates there. A mock
+  that served the personal list at the obvious path is what let the guess
+  pass for days.
+- Sections 2–5 of `scripts/test-personal-grid.ts`. Note sections 3 and 5
+  pass a `personalTab` selector that matches nothing: pressing it
+  overrides the configured path, so a test about a BAD path has to be a
+  tenant where the tab cannot be found, or there is no failure left to
+  test.
+
 ## A failure message must name the page the run ASKED FOR
 
 The most expensive bug in this file so far, measured in days rather than

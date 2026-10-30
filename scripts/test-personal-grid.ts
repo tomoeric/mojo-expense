@@ -117,8 +117,8 @@ try {
     settings, { ...base, gridPath: MANAGER_GRID }, LOGIN, {});
   for (const s of asManager.steps) console.log(`     ${s.ok ? "·" : "✗"} ${s.name.padEnd(30)} ${s.detail}`);
   check("the manager tab still switches to the team view",
-    /clicked the team-wide tab/.test(detailOf(asManager.steps, "switch to the team view")),
-    detailOf(asManager.steps, "switch to the team view"));
+    /clicked the team-wide tab/.test(detailOf(asManager.steps, "switch to the right Emburse tab")),
+    detailOf(asManager.steps, "switch to the right Emburse tab"));
   check("…and Emburse saw the tab pressed", mock.state().admin === true);
 
   // A personal tab: the same run, told what it is.
@@ -126,24 +126,57 @@ try {
   const asPersonal = await runAutoExport(
     settings, { ...base, gridPath: PERSONAL_GRID }, LOGIN, { personalQueue: true });
   for (const s of asPersonal.steps) console.log(`     ${s.ok ? "·" : "✗"} ${s.name.padEnd(30)} ${s.detail}`);
-  const why = detailOf(asPersonal.steps, "switch to the team view");
-  check("a personal tab skips the team view, and says why",
-    /^skipped — this is a personal tab/.test(why), why);
-  check("…and the tab was never pressed, so Emburse does not reopen there",
+  const why = detailOf(asPersonal.steps, "switch to the right Emburse tab");
+  /*
+   * IT PRESSES PERSONAL. Skipping was half an answer: the list is a tab
+   * bar as well as a URL, the account reopens on whichever was last used,
+   * and a run that never pressed anything left MANAGER selected for next
+   * time. Pressing it also answers the question that cost the most —
+   * where PERSONAL lands IS this account's list, in the tenant's words,
+   * so the path stops being guessed.
+   */
+  check("a personal tab presses PERSONAL", /clicked the PERSONAL tab/.test(why), why);
+  check("…and says where the tenant keeps that list",
+    /went to \/transactions\/me/.test(why), why);
+  check("…and the team tab was never pressed",
     mock.state().admin === false, `admin=${mock.state().admin}`);
-  check("…and the grid it opened was the person's own",
-    /\/transactions(\?|$)/.test(detailOf(asPersonal.steps, "open the filtered grid"))
+  check("…and that is the grid it opened",
+    /\/transactions\/me/.test(detailOf(asPersonal.steps, "open the filtered grid"))
     || !/team/.test(detailOf(asPersonal.steps, "open the filtered grid")),
     detailOf(asPersonal.steps, "open the filtered grid"));
+
+  /*
+   * AND IT BEATS A STORED PATH THAT IS WRONG.
+   *
+   * This is the case that took days: the tab held /transactions, which is
+   * a 404 on this tenant, and every layer downstream faithfully reported
+   * a failure about it. Emburse's own tab knows better and is believed.
+   */
+  mock.reset();
+  const stale = await runAutoExport(
+    settings, { ...base, gridPath: "/transactions" }, LOGIN, { personalQueue: true });
+  const gridOf = detailOf(stale.steps, "open the filtered grid");
+  check("a stored path that 404s is overridden by where PERSONAL went",
+    stale.steps.find((st) => st.name === "open the filtered grid")?.ok === true, gridOf);
 
   // The second reach for the team view: the "<path>/team" retry. Point the
   // run at a list the tenant does not have and the manager tab is entitled
   // to try its team-wide variant; a personal tab is not, because that
   // variant is somebody else's expenses.
+  /*
+   * Sections 3 and 5 need a tenant where PERSONAL cannot be found, or
+   * there is no failure left to test: pressing it overrides the
+   * configured path, which is the whole point of section 2. A selector
+   * that matches nothing is the real shape of that — the step has a
+   * branch for it, and these two assertions are about what happens
+   * afterwards, when the URL is all there is to go on.
+   */
+  const noTab = { ...base, personalTab: "#there-is-no-personal-tab" };
+
   console.log("\n3. A list that does not load is not answered with the team grid");
   mock.reset();
   const stray = await runAutoExport(
-    settings, { ...base, gridPath: "/nothing-here" }, LOGIN, { personalQueue: true });
+    settings, { ...noTab, gridPath: "/nothing-here" }, LOGIN, { personalQueue: true });
   const grid = detailOf(stray.steps, "open the filtered grid");
   const failed = stray.steps.find((s) => s.name === "open the filtered grid");
   check("the personal run did not fall back to a team list",
@@ -160,6 +193,10 @@ try {
    * selector. The run drops the filter and carries on, and says so, because
    * the setting and what it actually did now differ.
    */
+  check("…and a tenant with no PERSONAL tab says so rather than going quiet",
+    /no tab matched/.test(detailOf(stray.steps, "switch to the right Emburse tab")),
+    detailOf(stray.steps, "switch to the right Emburse tab"));
+
   console.log("\n4. A section the list does not have is dropped, not blamed on a selector");
   mock.reset();
   await fetch(`${mock.url}/__hang-on-section/on`, { method: "POST" }).catch(() => {});
@@ -189,7 +226,7 @@ try {
   console.log("\n5. A failure names the page the run asked for");
   mock.reset();
   const lost = await runAutoExport(
-    settings, { ...base, gridPath: "/nowhere-at-all" }, LOGIN, { personalQueue: true });
+    settings, { ...noTab, gridPath: "/nowhere-at-all" }, LOGIN, { personalQueue: true });
   const said = lost.steps.find((st) => st.name === "open the filtered grid")?.detail ?? "";
   check("the asked-for path is the one named", said.includes("/nowhere-at-all"), said);
   check("…and no team list is reported as what it read",

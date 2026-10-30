@@ -780,10 +780,23 @@ app.post("/verify", (req, res) => {
 
 app.get("/admin", (_req, res) => {
   state.admin = true;
-  res.redirect("/transactions");
+  res.redirect("/transactions/team");
 });
 
-app.get(["/transactions", "/transactions/team"], (req, res) => {
+/*
+ * The PERSONAL tab, and the suffix that goes with it.
+ *
+ * Not invented: this tenant's own expenses are at /transactions/me, its
+ * sign-in lands on /dashboard/me, and plain /transactions is a 404 with
+ * the nav beside it. A mock that served the personal list at the obvious
+ * path would let that guess pass for ever, which is exactly what it did.
+ */
+app.get("/personal", (_req, res) => {
+  state.admin = false;
+  res.redirect("/transactions/me");
+});
+
+app.get(["/transactions/team", "/transactions/me"], (req, res) => {
   // Filters arrive in the query string, as Emburse's own URLs do:
   //   /transactions/team?filters[section]=inbox&filters[receipt]=true
   const q = req.query as Record<string, string>;
@@ -858,6 +871,12 @@ app.get(["/transactions", "/transactions/team"], (req, res) => {
     ${grid(state.search)}`));
 });
 
+// Plain /transactions is a 404 here, as it is on the real tenant.
+app.get("/transactions", (_req, res) => {
+  res.status(404).send(page(`<a href="/admin">MANAGER</a> <a href="/personal">PERSONAL</a>
+    <p>404 Not found</p>`));
+});
+
 app.get("/filters", (_req, res) => {
   res.send(page(`
     <a href="/transactions">back</a>
@@ -869,12 +888,12 @@ app.get("/filters", (_req, res) => {
 
 app.post("/apply", (req, res) => {
   state.receiptsFilter = Boolean((req.body as { receipts?: string }).receipts);
-  res.redirect("/transactions");
+  res.redirect("/transactions/team");
 });
 
 app.post("/tick", (_req, res) => {
   state.rowsTicked++;
-  res.redirect("/transactions");
+  res.redirect("/transactions/team");
 });
 
 app.get("/dialog", (_req, res) => {

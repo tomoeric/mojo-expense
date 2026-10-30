@@ -1069,8 +1069,19 @@ export const MANAGER_GRID = "/transactions/team";
  * defaulted there because the shared default is the team grid and
  * a lane with nothing stored inherited it — so the first personal
  * tab anybody set up pulled other people's expenses.
+ *
+ * "/me", NOT "/transactions". The first version of this was a
+ * guess at the obvious and it is a 404 on this tenant: the page
+ * answers "404 Not found" with the nav beside it. The tenant's
+ * scheme is a suffix — sign-in lands on /dashboard/me, the
+ * approver's list is /transactions/team — so the personal list is
+ * /transactions/me, and the nav link on Reimbursements going to
+ * /reimbursableexpenses/me said the same thing two failures
+ * earlier. The run also probes for the "/me" variant now, so a
+ * tenant that spells it differently corrects itself rather than
+ * waiting on this constant.
  */
-export const PERSONAL_GRID = "/transactions";
+export const PERSONAL_GRID = "/transactions/me";
 
 /**
  * One person's import settings FOR ONE TAB.

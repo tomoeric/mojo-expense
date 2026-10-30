@@ -27,8 +27,8 @@
  *   and the other two never update.
  */
 import {
-  attemptExport, ensureSchedulerSchema, gridPathFrom, localDate, nextDue, recentRuns,
-  reviewerImports, setReviewerImport,
+  PERSONAL_GRID, attemptExport, ensureSchedulerSchema, gridPathFrom, localDate, nextDue,
+  recentRuns, reviewerImports, setReviewerImport,
 } from "../server/emburse/export-scheduler.js";
 import {
   MANAGER_LANE, addConnection, credentialForLaneOf, lanesFor, linkedLanesOf,
@@ -89,10 +89,14 @@ try {
    * none attached, so the filter removes precisely the rows the
    * mailbox search exists to serve.
    */
+  // Against the constant, not a literal. This said "/transactions" and
+  // that turned out to be a 404 on the real tenant — the personal list is
+  // "/transactions/me" — so a literal here just has to be chased every
+  // time the truth about a tenant changes.
   check("a personal tab reads the person's own expenses",
-    got(MOJO_LANE).gridPath === "/transactions", String(got(MOJO_LANE).gridPath));
+    got(MOJO_LANE).gridPath === PERSONAL_GRID, String(got(MOJO_LANE).gridPath));
   check("…and so does the other one",
-    got(MAM_LANE).gridPath === "/transactions", String(got(MAM_LANE).gridPath));
+    got(MAM_LANE).gridPath === PERSONAL_GRID, String(got(MAM_LANE).gridPath));
   check("THE MANAGER TAB STILL INHERITS, as it always did",
     got(MANAGER_LANE).gridPath === null, String(got(MANAGER_LANE).gridPath));
   check("a personal tab does NOT filter out receiptless expenses",
