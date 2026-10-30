@@ -154,6 +154,11 @@ CREATE TABLE IF NOT EXISTS receipt_blobs (
 );
 -- Which renderer produced the image, so a re-import can upgrade older ones.
 ALTER TABLE receipt_blobs ADD COLUMN IF NOT EXISTS render_version integer NOT NULL DEFAULT 1;
+-- WHERE THE IMAGE CAME FROM. Export-rendered pages are superseded by a
+-- better renderer and the old link is swept away; an emailed original is
+-- not a render at all and must survive that sweep. Defaults to export,
+-- which is what every row written before this was.
+ALTER TABLE receipt_blobs ADD COLUMN IF NOT EXISTS origin text NOT NULL DEFAULT 'export';
 
 -- Which Emburse section a row came from.
 --

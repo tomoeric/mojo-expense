@@ -2827,6 +2827,37 @@ agreed to.
 
 `scripts/test-receipt-link.ts`, and section 9 of `test-writeback.ts`.
 
+## An emailed receipt is not a render, and the sweep must not take it
+
+`storeReceipts` links the receipt pages it renders out of the export and
+then deletes every other image on that expense whose blob came from an
+OLDER renderer — `render_version < RENDER_VERSION`. That is right for what
+it was written for and wrong for everything else, because `render_version`
+defaults to 1 and an emailed receipt was inserted without one.
+
+So the pipeline destroyed its own work on the round trip it exists to do:
+image matched from email → saved back to Emburse → expense sits there
+unsubmitted → next export carries that receipt as a page → the rendered
+copy is linked at the current version and the email original is unlinked,
+then deleted outright as an orphan by the next purge. What survived was a
+JPEG of a PDF page instead of the file the merchant sent, with its AI
+reading orphaned beside it (so the reader pays again, on a worse copy) and
+`receipt_mail_matches.linked_sha256` pointing at nothing.
+
+- **`receipt_blobs.origin`** says where an image came from: `'export'` (the
+  default, which is what every pre-existing row is) or `'email'`.
+  `linkReceipt` writes `'email'`; the sweep is scoped to
+  `b.origin = 'export'`, so a stale export render is still replaced exactly
+  as before.
+- **Do not reuse `render_version` to mean this.** It is the renderer's
+  version and nothing else; an emailed original has no renderer and giving
+  it a number would make the next bump sweep it away again.
+- Section 7 of `scripts/test-receipt-link.ts` runs the sweep statement as
+  the importer runs it and asserts the emailed receipt keeps its link while
+  a stale export render loses its own. Note `linkedBytes` reads the blob by
+  hash, not the link, so a test about the SWEEP has to query
+  `expense_receipts` — asserting on `linkedBytes` passes either way.
+
 ## Sending a matched receipt back
 
 `server/emburse/receipt-writeback.ts` (the model) and `attachAndAnnotate` in

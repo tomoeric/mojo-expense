@@ -141,8 +141,19 @@ export async function linkReceipt(opts: {
   await ensureSchema();
   const hash = sha256(opts.bytes);
   await db().query(
-    `INSERT INTO receipt_blobs (sha256, content_type, byte_size, bytes)
-          VALUES ($1,$2,$3,$4) ON CONFLICT (sha256) DO NOTHING`,
+    /*
+     * Marked as EMAIL, which keeps it out of the export's render sweep.
+     *
+     * `storeReceipts` replaces an expense's images whenever it holds one
+     * from an older renderer, and a blob with no origin counted as an
+     * export render at version 1. So the moment this receipt was saved
+     * back to Emburse, the next export carried it as a page, rendered it
+     * at the current version and deleted this link — and the next purge
+     * deleted the bytes as an orphan. The app ended up holding a JPEG of
+     * a PDF page instead of the file the merchant sent.
+     */
+    `INSERT INTO receipt_blobs (sha256, content_type, byte_size, bytes, origin)
+          VALUES ($1,$2,$3,$4,'email') ON CONFLICT (sha256) DO NOTHING`,
     [hash, opts.contentType, opts.bytes.length, opts.bytes]);
   const link = await db().query(
     `INSERT INTO expense_receipts (dedupe_key, sha256) VALUES ($1,$2)

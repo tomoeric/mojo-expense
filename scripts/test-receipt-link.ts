@@ -129,6 +129,66 @@ try {
   check("…and the image stays, because another expense still has it",
     (await linkedBytes(hash)) !== null);
 
+  /*
+   * AND THE NEXT IMPORT DOES NOT THROW IT AWAY.
+   *
+   * This is the round trip the whole pipeline does: the image goes back to
+   * Emburse, the expense sits there until it is submitted, and the next
+   * export therefore carries that receipt as a page of its own.
+   * `storeReceipts` renders it, links the rendered copy, and then deletes
+   * every link for that expense whose blob came from an OLDER renderer —
+   * and a blob with no origin counted as an export render at version 1. So
+   * the emailed original was unlinked and deleted as an orphan by the next
+   * purge, leaving a JPEG of a PDF page in place of the file the merchant
+   * sent, its AI reading orphaned with it, and the match's record of which
+   * email it came from pointing at nothing.
+   */
+  console.log("\n7. The export's render sweep does not take an emailed receipt");
+  const { rows: origin } = await db().query<{ origin: string }>(
+    "SELECT origin FROM receipt_blobs WHERE sha256 = $1", [hash]);
+  check("an emailed receipt is marked as one", origin[0]?.origin === "email",
+    origin[0]?.origin ?? "(none)");
+  // The sweep, exactly as storeReceipts runs it once the receipt comes back
+  // in the export at the current render version.
+  const { RENDER_VERSION } = await import("../server/import/ingest.js");
+  await db().query(
+    `DELETE FROM expense_receipts er USING receipt_blobs b
+      WHERE er.sha256 = b.sha256 AND er.dedupe_key = $1
+        AND b.origin = 'export' AND b.render_version < $2`,
+    [A, RENDER_VERSION]);
+  // The LINK, not the blob: `linkedBytes` reads the bytes by hash and
+  // answers whether the image exists, which it does either way. What the
+  // sweep takes is the row in expense_receipts.
+  const isLinked = async (key: string, h: string): Promise<boolean> =>
+    (await db().query("SELECT 1 FROM expense_receipts WHERE dedupe_key = $1 AND sha256 = $2",
+      [key, h])).rowCount === 1;
+  check("THE EMAILED RECEIPT IS STILL LINKED", await isLinked(A, hash));
+  const { rows: survived } = await db().query<{ n: string }>(
+    "SELECT count(*)::text AS n FROM expense_receipts WHERE dedupe_key = $1 AND sha256 = $2",
+    [A, hash]);
+  check("…to the expense it was matched to", survived[0]?.n === "1");
+  // And an export-rendered one from an older renderer still IS swept, which
+  // is what that statement is for.
+  const OLD = Buffer.from(`old render for ${TAG}`);
+  const { sha256: oldHash } = await import("../server/import/key.js")
+    .then((m) => ({ sha256: m.sha256(OLD) }));
+  await db().query(
+    `INSERT INTO receipt_blobs (sha256, content_type, byte_size, bytes, render_version, origin)
+     VALUES ($1,'image/jpeg',$2,$3,1,'export') ON CONFLICT (sha256) DO NOTHING`,
+    [oldHash, OLD.length, OLD]);
+  await db().query(
+    `INSERT INTO expense_receipts (dedupe_key, sha256) VALUES ($1,$2)
+     ON CONFLICT (dedupe_key, sha256) DO NOTHING`, [A, oldHash]);
+  await db().query(
+    `DELETE FROM expense_receipts er USING receipt_blobs b
+      WHERE er.sha256 = b.sha256 AND er.dedupe_key = $1
+        AND b.origin = 'export' AND b.render_version < $2`,
+    [A, RENDER_VERSION]);
+  check("…while a stale EXPORT render is still swept, as before",
+    !(await isLinked(A, oldHash)));
+  await db().query("DELETE FROM receipt_blobs WHERE sha256 = $1", [oldHash])
+    .catch(() => undefined);
+
 } finally {
   await db().query("DELETE FROM expenses WHERE dedupe_key LIKE $1", [`${TAG}%`])
     .catch(() => undefined);

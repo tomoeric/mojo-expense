@@ -678,9 +678,21 @@ async function storeReceipts(
       if (link.rowCount) added++;
       // Replace, don't accumulate: an expense that already had an image from
       // an older renderer would otherwise end up showing two receipts.
+      //
+      // EXPORT-RENDERED IMAGES ONLY. An emailed receipt that the matcher
+      // pulled in is not a render of anything, and it was being swept away
+      // by this: once its image had been saved back to Emburse, the next
+      // export carried that receipt as a page, this linked the rendered
+      // copy at the current version and deleted every link below it — so
+      // the email original was unlinked and then deleted outright as an
+      // orphan by the next purge. What survived was a JPEG of a PDF page
+      // instead of the file the merchant sent, its AI reading orphaned with
+      // it, and the match's record of which email it came from pointing at
+      // nothing. Exactly the round trip this pipeline is built to do.
       await client.query(
         `DELETE FROM expense_receipts er USING receipt_blobs b
-          WHERE er.sha256 = b.sha256 AND er.dedupe_key = $1 AND b.render_version < $2`,
+          WHERE er.sha256 = b.sha256 AND er.dedupe_key = $1
+            AND b.origin = 'export' AND b.render_version < $2`,
         [key, RENDER_VERSION],
       );
     }
