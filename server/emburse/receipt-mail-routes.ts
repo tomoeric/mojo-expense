@@ -148,7 +148,32 @@ receiptMailRouter.post("/receipt-mail/scan", requireAuth,
     const me = owner(req, res);
     if (!me) return;
     const b = (req.body ?? {}) as { lane?: unknown };
-    const lane = laneTag(typeof b.lane === "string" ? b.lane : MANAGER_LANE);
+    const asked = typeof b.lane === "string" ? b.lane : MANAGER_LANE;
+    /*
+     * ONE MAILBOX FEEDS BOTH PERSONAL ACCOUNTS, so one scan can serve
+     * both. A receipt belongs to an account because it matches an
+     * expense in it, never because of where it arrived — so scanning
+     * per account meant reading the same mailbox twice and deciding in
+     * advance which half of the answer to look at.
+     *
+     * "all" is the personal accounts only. The manager queue is other
+     * people's expenses and write-back refuses it outright, so pulling
+     * it into a receipt scan would only offer matches nothing can act
+     * on.
+     */
+    const everyPersonal = asked === "all";
+    const lanes = everyPersonal
+      ? (await linkedLanesOf(me).catch(() => []))
+        .filter((l) => l.kind === "personal").map((l) => laneTag(l.key))
+      : [laneTag(asked)];
+    if (lanes.length === 0) {
+      res.status(400).json({
+        error: "No personal Emburse account is linked, so there is nothing to match "
+          + "receipts against.",
+      });
+      return;
+    }
+    const lane = lanes[0]!;
 
     try {
       const settings = await mailSettings(me);
@@ -166,10 +191,10 @@ receiptMailRouter.post("/receipt-mail/scan", requireAuth,
       }>(
         `SELECT dedupe_key, lane, merchant, expense_date, amount_cents
            FROM expenses
-          WHERE in_inbox AND lower(reviewer) = lower($1) AND lane = $2
+          WHERE in_inbox AND lower(reviewer) = lower($1) AND lane = ANY($2::text[])
           ORDER BY expense_date DESC NULLS LAST
           LIMIT 500`,
-        [me, lane]);
+        [me, lanes]);
       const targets: Target[] = rows.map((r) => ({
         dedupeKey: r.dedupe_key,
         lane: r.lane,
@@ -198,14 +223,43 @@ receiptMailRouter.post("/receipt-mail/scan", requireAuth,
         candidates: candidates.length,
         recorded: written,
         needsReview: clash.byMessage.size + clash.byExpense.size,
-        matches: await matchesFor(lane),
+        // Every lane that was scanned, not just the first. `matchesFor`
+        // takes null for "all", which is right here because the targets
+        // above were already limited to the personal accounts.
+        matches: await matchesFor(everyPersonal ? null : lane),
+        lanes,
       });
     } catch (err) {
       res.status(400).json({
-        error: err instanceof Error ? err.message : "The scan could not run.",
+        error: explainGraph(err, (await mailSettings(me).catch(() => null))?.mailbox ?? "", me),
       });
     }
   });
+
+/**
+ * A Graph refusal, with the reason this deployment actually hits.
+ *
+ * The token is app-only and belongs to ONE tenant, so a mailbox in
+ * another domain is not a permissions problem that can be granted — it
+ * cannot be read with these credentials at all. The generic 403 text
+ * offers two causes and not that one, so somebody reading it goes to
+ * check a consent that is already fine. Said only when the domains
+ * actually differ, because a same-domain 403 really is consent or an
+ * application access policy.
+ */
+function explainGraph(err: unknown, mailbox: string, me: string): string {
+  const text = err instanceof Error ? err.message : "The scan could not run.";
+  if (!/\b40[34]\b/.test(text) || !mailbox) return text;
+  const at = (s: string) => s.split("@")[1]?.toLowerCase() ?? "";
+  if (at(mailbox) && at(me) && at(mailbox) !== at(me)) {
+    return `${text}\n\n${mailbox} is on ${at(mailbox)} and you sign in as ${me} on `
+      + `${at(me)}. The app reads mail with credentials that belong to ONE Microsoft `
+      + `tenant, so a mailbox on another domain cannot be read with them whatever is `
+      + `consented. If the receipts you want are in your ${at(me)} mailbox, put that `
+      + `address here instead.`;
+  }
+  return text;
+}
 
 /* ------------------------------------------------------------------ *
  * Sending it back

@@ -264,6 +264,26 @@ export function ReceiptMailPage() {
         <div className="space-y-3 rounded-xl border border-border p-3.5">
           <p className="text-sm font-semibold">Match against</p>
           <div className="flex flex-wrap gap-2">
+            {/* ONE SCAN FOR BOTH, because one mailbox feeds both. A
+                receipt belongs to an account because it matches an
+                expense in it, never because of where it arrived — so
+                picking an account before scanning meant reading the
+                same mailbox twice and deciding in advance which half of
+                the answer to look at. Offered only when there are two
+                to combine. */}
+            {accounts.filter((a) => a.connected).length > 1 && (
+              <button
+                type="button"
+                onClick={() => { setLane("all"); setScan(null); }}
+                title="Search once and match against every personal account"
+                className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+                  chosen === "all"
+                    ? "border-foreground bg-foreground text-background"
+                    : "border-border text-muted-foreground hover:text-foreground"}`}
+              >
+                Both accounts
+              </button>
+            )}
             {accounts.map((a) => (
               <button
                 key={a.lane}
@@ -284,8 +304,10 @@ export function ReceiptMailPage() {
             ))}
           </div>
           <p className="text-xs text-muted-foreground">
-            A receipt belongs to this account because it matches an expense in it — never
-            because it arrived in this mailbox. One mailbox holds receipts for both.
+            A receipt belongs to an account because it matches an expense in it — never
+            because it arrived in this mailbox. One mailbox holds receipts for both, so
+            <strong> Both accounts</strong> reads it once and offers each receipt to
+            whichever account it actually fits.
           </p>
           <button
             type="button"

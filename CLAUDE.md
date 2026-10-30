@@ -2861,6 +2861,26 @@ list and then filtered out the only rows worth having.
   on, each get a line saying what it will do. Somebody may mean it.
 - Section 2 of `scripts/test-lanes.ts`.
 
+## The mailbox is one tenant's, and one mailbox feeds both tabs
+
+- **A Graph 403 on a mailbox in ANOTHER DOMAIN is not a consent problem.**
+  The token is app-only and belongs to one Microsoft tenant, so a mailbox
+  on another domain cannot be read with it whatever is granted. The
+  generic 403 text names consent and application access policies and not
+  that, which sends somebody to check a grant that is already fine.
+  `explainGraph` compares the mailbox's domain to the signed-in user's and
+  says so when they differ. A SAME-domain 403 really is consent or a
+  policy, so the extra sentence is withheld there.
+- **The mailbox setting is per PERSON, not per tab**, and one scan now
+  covers every personal account: `lane: "all"` on the scan, "Both
+  accounts" on the page. A receipt belongs to an account because it
+  matches an expense in it, never because of where it arrived — so
+  scanning per account meant reading the same mailbox twice and deciding
+  in advance which half of the answer to look at.
+- **"all" is the personal accounts only.** The manager queue is other
+  people's expenses and write-back refuses it outright, so including it
+  would offer matches nothing can act on.
+
 ## Receipts that arrive as email
 
 `server/emburse/receipt-mail.ts`, page under the user menu.
