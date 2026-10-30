@@ -251,12 +251,21 @@ function explainGraph(err: unknown, mailbox: string, me: string): string {
   const text = err instanceof Error ? err.message : "The scan could not run.";
   if (!/\b40[34]\b/.test(text) || !mailbox) return text;
   const at = (s: string) => s.split("@")[1]?.toLowerCase() ?? "";
+  /*
+   * The domain note goes FIRST, not appended after a wall of Graph JSON.
+   *
+   * It was last, and it was read last — past the sentence about consent,
+   * which is the cause this check makes less likely. A second domain CAN
+   * sit on one tenant (Mammoth Holdings and MOJO plausibly do), so it is
+   * phrased as the thing to rule out rather than as the answer.
+   */
   if (at(mailbox) && at(me) && at(mailbox) !== at(me)) {
-    return `${text}\n\n${mailbox} is on ${at(mailbox)} and you sign in as ${me} on `
-      + `${at(me)}. The app reads mail with credentials that belong to ONE Microsoft `
-      + `tenant, so a mailbox on another domain cannot be read with them whatever is `
-      + `consented. If the receipts you want are in your ${at(me)} mailbox, put that `
-      + `address here instead.`;
+    return `${mailbox} is on ${at(mailbox)} and you sign in as ${me} on ${at(me)}. `
+      + `Rule that out first: the app reads mail with credentials belonging to ONE `
+      + `Microsoft tenant, so a mailbox in another tenant cannot be read whatever is `
+      + `consented. Two domains CAN share one tenant, in which case this is fine and `
+      + `the reason is below. If the receipts you want are in your ${at(me)} mailbox, `
+      + `put that address here instead.\n\n${text}`;
   }
   return text;
 }

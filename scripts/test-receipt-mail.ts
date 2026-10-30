@@ -33,6 +33,7 @@
 import {
   conflicts, dateIn, matchAll, merchantOf, scoreMatch, textOf, totalIn,
   type Evidence, type Target,
+  graphWhy,
 } from "../server/emburse/receipt-mail.js";
 
 let failures = 0;
@@ -175,6 +176,38 @@ try {
     `${inBody.score} / ${attached.score}`);
   check("…and the attachment is recorded for later",
     attached.evidence.attachments.length === 1);
+
+  /*
+   * A 403 IS TWO DIFFERENT PROBLEMS and the old message named both every
+   * time, consent first. Consent first is the wrong order on this
+   * deployment: Exchange only gets to refuse after Entra has allowed,
+   * so an Exchange refusal PROVES Mail.Read is consented. Being told to
+   * go and check it anyway sent somebody to the Azure portal twice.
+   */
+  console.log("\nA Graph refusal names the cause that fits, not both");
+  const exchange = graphWhy(403, '{"error":{"code":"ErrorAccessDenied","message":"Access is '
+    + 'denied.","innererror":{"type":"Microsoft.Exchange.Services.OData.'
+    + 'ODataAuthorizationException"}}}');
+  check("an Exchange refusal says Mail.Read IS consented",
+    /Mail\.Read IS consented/.test(exchange), exchange.slice(0, 120));
+  check("…and names the policy to test",
+    /Test-ApplicationAccessPolicy/.test(exchange));
+  check("…and does NOT send somebody to grant a permission they have",
+    !/does not hold Mail\.Read/.test(exchange));
+
+  const entra = graphWhy(403, '{"error":{"code":"Authorization_RequestDenied","message":'
+    + '"Insufficient privileges to complete the operation."}}');
+  check("an Entra refusal says the permission is missing",
+    /does not hold Mail\.Read/.test(entra), entra.slice(0, 120));
+  check("…and says an application permission, not a delegated one",
+    /Delegated Mail\.Read is not enough/.test(entra));
+  check("…and does NOT blame a mailbox policy",
+    !/Test-ApplicationAccessPolicy/.test(entra));
+
+  const gone = graphWhy(404, '{"error":{"code":"ErrorItemNotFound"}}');
+  check("a 404 is a wrong address, not a permission", /no such mailbox or folder/.test(gone));
+  // The raw body is the least useful part and used to come first.
+  check("the raw body comes last", exchange.indexOf("Graph said:") > 80, String(exchange.indexOf("Graph said:")));
 
 } finally {
   console.log(failures === 0 ? "\nPASS" : `\n${failures} FAILED`);

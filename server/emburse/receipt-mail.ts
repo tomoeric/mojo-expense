@@ -212,14 +212,69 @@ const get = async <T>(path: string): Promise<T> => {
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
-    const hint = res.status === 403
-      ? " — Mail.Read has not been consented for this app, or an application access "
-        + "policy excludes this mailbox."
-      : res.status === 404 ? " — no such mailbox or folder." : "";
-    throw new Error(`Graph refused the read (${res.status})${hint} ${detail.slice(0, 300)}`);
+    throw new Error(graphWhy(res.status, detail));
   }
   return (await res.json()) as T;
 };
+
+/**
+ * WHY Graph refused, with the likeliest cause FIRST.
+ *
+ * The old text said "Mail.Read has not been consented for this app, or an
+ * application access policy excludes this mailbox" for every 403, with
+ * the raw Graph JSON after it. Those are two different problems with two
+ * different fixes, and leading with the wrong one sends somebody to the
+ * Azure portal to check a grant that is already there — which is exactly
+ * what happened, twice.
+ *
+ * The two are distinguishable, and Graph says which:
+ *
+ *   `Authorization_RequestDenied`, "Insufficient privileges" — ENTRA
+ *   refused. The application permission is missing or not admin-
+ *   consented. That is the Azure portal.
+ *
+ *   `ErrorAccessDenied` with `ODataAuthorizationException` — EXCHANGE
+ *   refused, which it can only do once Entra has already allowed it. So
+ *   Mail.Read IS consented and something on the mailbox side is saying
+ *   no: an application access policy restricting which mailboxes this app
+ *   may touch, which this deployment is told to create. That is
+ *   PowerShell, not the portal.
+ *
+ * The raw body goes last and short. It was first, and it is the least
+ * useful part.
+ */
+export function graphWhy(status: number, body: string): string {
+  const brief = body.replace(/\s+/g, " ").slice(0, 200);
+  const entra = /Authorization_RequestDenied|Insufficient privileges/i.test(body);
+  const exchange = /ErrorAccessDenied|ODataAuthorizationException/i.test(body);
+
+  if (status === 404) {
+    return `Graph has no such mailbox or folder (404). Check the address is exactly right `
+      + `and that the folder name matches. Graph said: ${brief}`;
+  }
+  if (status === 403 && exchange && !entra) {
+    return "Exchange refused this mailbox (403), not Entra — which means Mail.Read IS "
+      + "consented and the block is on the mailbox side. The usual cause is an "
+      + "application access policy restricting which mailboxes this app may touch; this "
+      + "deployment is set up to have one. Check it with "
+      + "`Test-ApplicationAccessPolicy -Identity <mailbox> -AppId <AZURE_CLIENT_ID>` and, "
+      + "if it says Denied, add the mailbox to the policy's group. A mailbox in a "
+      + "DIFFERENT Microsoft tenant answers the same way and cannot be granted at all. "
+      + `Graph said: ${brief}`;
+  }
+  if (status === 403 && entra) {
+    return "Entra refused (403): the app registration does not hold Mail.Read as an "
+      + "APPLICATION permission with admin consent. Delegated Mail.Read is not enough — "
+      + "there is no signed-in user on a scheduled scan. "
+      + `Graph said: ${brief}`;
+  }
+  if (status === 403) {
+    return `Graph refused the read (403). Either Mail.Read is not consented as an `
+      + `application permission, or an application access policy excludes this mailbox — `
+      + `the body below says which. Graph said: ${brief}`;
+  }
+  return `Graph refused the read (${status}). Graph said: ${brief}`;
+}
 
 /** The folders in a mailbox, so the picker offers real ones. */
 export async function listFolders(

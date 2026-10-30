@@ -2863,6 +2863,19 @@ list and then filtered out the only rows worth having.
 
 ## The mailbox is one tenant's, and one mailbox feeds both tabs
 
+- **A 403 FROM EXCHANGE PROVES Mail.Read IS CONSENTED.** Exchange only
+  gets to refuse after Entra has allowed the call, so the two are
+  distinguishable and `graphWhy` says only the one that fits:
+  `Authorization_RequestDenied` / "Insufficient privileges" is ENTRA — the
+  application permission is missing or unconsented, and that is the Azure
+  portal. `ErrorAccessDenied` with `ODataAuthorizationException` is
+  EXCHANGE — the grant is fine and something on the mailbox side says no,
+  almost always the application access policy this deployment is told to
+  create in `server/mail.ts`. That is PowerShell
+  (`Test-ApplicationAccessPolicy`), not the portal. **The old message
+  named both on every 403, consent first, with the raw JSON between them,
+  and sent somebody to check a grant they already had — twice.** The raw
+  body goes last and short; it is the least useful part.
 - **A Graph 403 on a mailbox in ANOTHER DOMAIN is not a consent problem.**
   The token is app-only and belongs to one Microsoft tenant, so a mailbox
   on another domain cannot be read with it whatever is granted. The
