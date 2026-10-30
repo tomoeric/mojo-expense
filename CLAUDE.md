@@ -2582,6 +2582,55 @@ queue. Two separate causes, and either one alone reproduces it.
   covers `selectorsForLane`, section 10 of `test-connections.ts`
   `laneForAccount`.
 
+## A failure message must name the page the run ASKED FOR
+
+The most expensive bug in this file so far, measured in days rather than
+in rows. The grid step reported `safeUrl(page.url())` — wherever the
+browser happened to be standing when it gave up — and the two recovery
+probes above it NAVIGATE. So a run that asked for `/transactions`, found
+no grid, and then followed Emburse's nav by name to look for the list
+reported **"the grid did not appear at /transactions/team"**, and the
+screenshot beside it was of that page too.
+
+The setting was right the whole time. Three rounds went into "it is still
+opening the manager tab": check Scope, find it already correct, change
+nothing, run again, read the same sentence.
+
+- **Capture the target up front and report THAT.** `target` is built before
+  the first `goto`; every branch of the throw uses it. Where a probe moved
+  the browser, the run goes back to `target` before reading the page or
+  taking the screenshot, and names where the probe went in its own
+  parenthesis, labelled as the probe.
+- **A diagnostic that navigates is a diagnostic that can lie.** On a
+  personal tab `askTheNav` now reads an anchor's `href` and never presses
+  anything: pressing is the only way to learn where a single-page nav item
+  goes, and on this tenant pressing "Transactions" goes to
+  `/transactions/team` because the account has manager rights.
+- **"Still rendering" is not a selector problem.** `gridLoaded` already
+  gives a page saying "Loading" a second full budget, so arriving at the
+  throw with the word still on screen means it never finished — listing
+  the two selectors that were tried sends somebody to correct markup they
+  have not seen. It says so instead.
+
+## A section the list does not have leaves Emburse spinning
+
+`filters[section]=inbox` is Emburse's value for Needs Review **on the team
+list**. Asked of a personal list that has no such section it does not 404
+and does not come back empty — the nav renders, the middle of the page
+never does, for ever. Every outward sign then points at the path and the
+grid selector, which are both right.
+
+- The grid step **drops the section filter and retries once**. If that
+  works the run carries on, because the stages exported come from the
+  export dialog's chips and not from this filter, and the step says on
+  success which filter it had to drop and what to clear.
+- The page warns about it **next to Scope**, not inside the collapsed
+  Advanced block where the first version of the warning lived and where
+  nobody found it.
+- `scripts/mock-emburse.ts` can reproduce it: `POST /__hang-on-section/on`
+  serves a nav and the word "Loading" for any request carrying a section.
+  Sections 4 and 5 of `test-personal-grid.ts`.
+
 ## A remembered device belongs to ONE EMBURSE ACCOUNT
 
 Emburse issues "remember this device" against the account that signed in, so

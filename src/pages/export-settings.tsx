@@ -421,6 +421,25 @@ function ReviewerPanel({
             an empty page, so the run waits out its timeout and then blames
             the four selectors it tried. The run refuses outright now; this
             says the same thing where the one click that fixes it is. */}
+        {/* A SECTION FILTER, which is the other way this tab reads nothing —
+            and the one nobody finds, because it used to live inside the
+            collapsed Advanced block. "inbox" is Emburse's value for Needs
+            Review on the TEAM list; asked of a personal list that has no
+            such section it does not 404 and does not come back empty, it
+            leaves the page spinning on "Loading…" for ever. Every outward
+            sign then points at the path and the grid selector, which are
+            both right. The run drops the filter and carries on now, but
+            the setting should be corrected so the two agree. */}
+        {row.laneKind === "personal" && row.gridSection && (
+          <p className="mt-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+            <strong>This tab asks for one stage: <code>{row.gridSection}</code>.</strong> That is
+            the approver&rsquo;s section on the team list, and your own list may not have it — in
+            which case Emburse never finishes loading the page and the import reads nothing.
+            Open <strong>Advanced</strong> below and press <strong>Clear the filters</strong>
+            {" "}unless you pasted that URL on purpose.
+          </p>
+        )}
+
         {row.laneKind === "personal" && path === "/transactions/team" && (
           <p className="mt-2 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm">
             <strong>No import will work on this tab until this changes.</strong> It is a personal
@@ -671,20 +690,6 @@ function ReviewerPanel({
               {row.gridSection ? `filters[section]=${row.gridSection}` : ""}
               {row.gridSection && row.gridQuery ? " · " : ""}
               {row.gridQuery ?? ""}
-            </p>
-          )}
-          {/* A section filter on a personal tab is the approver's stage
-              applied to the person's own list. On a tenant that has no
-              such section on the personal view the page comes back with
-              no grid on it at all, which reads as "the list did not
-              load". Said rather than overridden: a pasted URL is an
-              explicit choice and somebody may have meant it. */}
-          {row.laneKind === "personal" && row.gridSection && (
-            <p className="mt-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
-              <strong>This tab is filtered to one stage.</strong> On a personal tab that is the
-              approver&rsquo;s slice of your own list — most of your expenses, including the ones
-              still missing a receipt, are not in it. Clear the filters unless you pasted this
-              URL on purpose.
             </p>
           )}
 

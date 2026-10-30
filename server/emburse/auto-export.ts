@@ -2120,6 +2120,31 @@ async function runSteps(
     let how = await gridLoaded(page, sel);
 
     /*
+     * THE SECTION FILTER IS THE LIKELIEST THING TO BE WRONG, so it is the
+     * first thing dropped.
+     *
+     * "inbox" is Emburse's value for Needs Review on the TEAM list. A
+     * personal list has its own sections and may well not have that one —
+     * and asking for a section that does not exist does not 404 and does
+     * not come back empty, it leaves the app spinning on "Loading…"
+     * forever. From the outside that is indistinguishable from a wrong
+     * path or a wrong selector, which is exactly how it was read.
+     *
+     * So: one more go without it. If that works the run carries on — the
+     * stages it exports are set by the dialog's chips, not by this filter,
+     * so nothing wider is pulled — and it says what to clear.
+     */
+    let droppedSection = "";
+    if (!how && sel.gridSection) {
+      await page.goto(gridUrl(url, {
+        receiptsOnly: settings.receiptsOnly, path: sel.gridPath, section: "",
+        extra: sel.gridQuery,
+      }), { waitUntil: "domcontentloaded" }).catch(() => {});
+      how = await gridLoaded(page, sel);
+      if (how) droppedSection = sel.gridSection;
+    }
+
+    /*
      * The configured path is not where this tenant keeps that list.
      *
      * /reimbursements is a 404 here — "404 Not found" with the nav beside
@@ -2152,6 +2177,21 @@ async function runSteps(
           if (!(await item.isVisible().catch(() => false))) continue;
           const href = await item.getAttribute("href").catch(() => null);
           if (href && !href.startsWith("#")) return new URL(href, page.url()).pathname;
+          /*
+           * PRESSING IT IS NOT WORTH IT ON A PERSONAL TAB.
+           *
+           * Emburse's nav is a single-page app, so pressing an item is the
+           * only way to learn where it goes — and on this tenant pressing
+           * "Transactions" goes to /transactions/team, because the account
+           * has manager rights. The destination is then correctly refused
+           * below, but the browser has already moved: the failure was
+           * reported against the page it had wandered to rather than the
+           * one the run asked for, the screenshot showed that page too, and
+           * three rounds went into "it is still opening the manager tab"
+           * about a run that had asked for /transactions all along. An
+           * anchor's href costs nothing and is still read.
+           */
+          if (opts.personalQueue) continue;
           const before = page.url();
           await item.click({ timeout: 5_000 }).catch(() => {});
           await page.waitForURL((u) => u.toString() !== before, { timeout: 8_000 }).catch(() => {});
@@ -2212,26 +2252,77 @@ async function runSteps(
     }
 
     if (!how) {
+      /*
+       * REPORT THE PAGE THE RUN ASKED FOR, NOT WHEREVER IT ENDED UP.
+       *
+       * This said `page.url()`, and the probes above NAVIGATE — so a run
+       * that asked for /transactions, failed, and then followed the nav
+       * link reported "the grid did not appear at /transactions/team".
+       * Three rounds and several days went into "it is still opening the
+       * manager tab", about a run whose setting was right the whole time
+       * and whose own message was describing a page it had wandered to
+       * while looking for a diagnosis.
+       *
+       * The browser is put back first, so the screenshot beside the
+       * message is of the page being complained about rather than of the
+       * last place a probe looked.
+       */
+      const asked = safeUrl(target);
+      const landed = new URL(page.url()).pathname !== new URL(target).pathname
+        ? safeUrl(page.url()) : "";
+      if (landed) await page.goto(target, { waitUntil: "domcontentloaded" }).catch(() => {});
+      const chased = landed
+        ? ` (After that, this followed the nav by name to find where the tenant keeps the list ` +
+          `and ended up at ${landed}. That is where the PROBE went; it is not what the import ` +
+          `is set to read.)`
+        : "";
+
       // A 404 is not a selector problem, and reporting it as one sends
       // somebody to fix the thing that is right. /reimbursements was a
       // guessed path that this tenant does not have; the page says so in
       // as many words, and the fix is one setting, not a selector.
       const text = await pageText(page);
       const missing = /\b404\b|not found/i.test(text);
+      /*
+       * And "still rendering" is not a selector problem either.
+       *
+       * `gridLoaded` already gives a page that says "Loading" a second
+       * full budget before giving up, so arriving here with the word still
+       * on screen means it never finished — and listing the two selectors
+       * that were tried sends somebody to correct markup they have not
+       * seen yet.
+       */
+      const loading = /\bloading\b/i.test(text) || text.trim() === "";
       throw new Error(
         missing
-          ? `${safeUrl(page.url())} does not exist on this tenant — the page says 404. This is ` +
+          ? `${asked} does not exist on this tenant — the page says 404. This is ` +
             `the wrong path for that list, not a selector problem. Open the list in Emburse, ` +
-            `copy the address, and put its path into that list under Export settings. ` +
+            `copy the address, and put its path into that list under Export settings.${chased} ` +
             `The page reads: "${snippet(text)}"`
-          : `the grid did not appear at ${safeUrl(page.url())}. Tried the grid selector ` +
-            `(${sel.grid}) and the item-count line (${sel.itemCount}); neither matched anything ` +
-            `visible. The page reads: "${snippet(text)}"`,
+          : loading
+            ? `${asked} never finished rendering — Emburse was still showing "Loading" after ` +
+              `two full waits, so there was no grid to find. This is NOT a selector problem ` +
+              `and not a sign-in problem. Open that exact address in a browser yourself: if it ` +
+              `sits there loading for you too, the filters in it are asking Emburse for ` +
+              `something this list does not have.${chased} The page reads: "${snippet(text)}"`
+            : `the grid did not appear at ${asked}. Tried the grid selector ` +
+              `(${sel.grid}) and the item-count line (${sel.itemCount}); neither matched anything ` +
+              `visible.${chased} The page reads: "${snippet(text)}"`,
       );
     }
     const scope = settings.receiptsOnly ? "receipts only, via the URL" : "unfiltered, via the URL";
     gridEmpty = /empty/.test(how);
     return `${scope} — ${how}` +
+      // Said on a step that PASSED, because the run is now reading a
+      // slightly wider list than the settings describe and nobody should
+      // have to infer that from a count.
+      (droppedSection
+        ? ` — NOTE: it only loaded once the section filter was dropped. This list has no `
+          + `"${droppedSection}" section, and asking for one it does not have leaves Emburse `
+          + `spinning rather than erroring. Clear the filters on this tab so the setting matches `
+          + `what the run actually does. The stages exported are the dialog's chips, which are `
+          + `unchanged.`
+        : "") +
       (!viaNav
         ? ""
         // An empty fallback list is NOT a path to adopt.

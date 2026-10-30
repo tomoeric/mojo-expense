@@ -150,6 +150,51 @@ try {
     !/\/team\b/.test(grid), grid || "(the step failed, which is the honest outcome)");
   check("…and it failed rather than exporting the wrong queue",
     failed?.ok === false, `ok=${failed?.ok}`);
+  /*
+   * 4. A SECTION THIS LIST DOES NOT HAVE.
+   *
+   * "inbox" is the TEAM list's value for Needs Review. Asked of a personal
+   * list that has no such section, Emburse does not 404 and does not come
+   * back empty — it sits on "Loading…" for ever. Every outward sign then
+   * points at the two things that are right: the path and the grid
+   * selector. The run drops the filter and carries on, and says so, because
+   * the setting and what it actually did now differ.
+   */
+  console.log("\n4. A section the list does not have is dropped, not blamed on a selector");
+  mock.reset();
+  await fetch(`${mock.url}/__hang-on-section/on`, { method: "POST" }).catch(() => {});
+  const hung = await runAutoExport(
+    settings, { ...base, gridPath: PERSONAL_GRID, gridSection: "inbox" }, LOGIN,
+    { personalQueue: true });
+  for (const st of hung.steps) console.log(`     ${st.ok ? "·" : "✗"} ${st.name.padEnd(30)} ${st.detail}`);
+  const gridStep = hung.steps.find((st) => st.name === "open the filtered grid");
+  check("the grid step passes anyway", gridStep?.ok === true, gridStep?.detail);
+  check("…and says the section filter was what stopped it",
+    /only loaded once the section filter was dropped/.test(gridStep?.detail ?? ""),
+    gridStep?.detail);
+  check("…naming the section to clear", /"inbox"/.test(gridStep?.detail ?? ""), gridStep?.detail);
+  await fetch(`${mock.url}/__hang-on-section/off`, { method: "POST" }).catch(() => {});
+
+  /*
+   * 5. THE FAILURE NAMES THE PAGE THE RUN ASKED FOR.
+   *
+   * It used to report `page.url()`, and the probes that look for a
+   * misconfigured path NAVIGATE — so a run that asked for /transactions,
+   * failed, and then followed the nav link reported "the grid did not
+   * appear at /transactions/team". Days went into "it is still opening the
+   * manager tab", about a run whose setting had been right all along and
+   * whose own message was describing a page it had wandered to while
+   * looking for the answer.
+   */
+  console.log("\n5. A failure names the page the run asked for");
+  mock.reset();
+  const lost = await runAutoExport(
+    settings, { ...base, gridPath: "/nowhere-at-all" }, LOGIN, { personalQueue: true });
+  const said = lost.steps.find((st) => st.name === "open the filtered grid")?.detail ?? "";
+  check("the asked-for path is the one named", said.includes("/nowhere-at-all"), said);
+  check("…and no team list is reported as what it read",
+    !/did not appear at \S*\/team/.test(said), said);
+
 } finally {
   await mock.close();
 }

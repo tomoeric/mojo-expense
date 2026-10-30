@@ -63,6 +63,16 @@ type State = {
    * the screenshot taken a second later showed the app fully loaded.
    */
   appPaintMs: number;
+  /**
+   * A section this list does not have leaves the app spinning.
+   *
+   * Not invented: asking the personal transactions list for
+   * `filters[section]=inbox`, which is the TEAM list's value for Needs
+   * Review, does not 404 and does not come back empty — Emburse sits on
+   * "Loading…" indefinitely. From the outside that is indistinguishable
+   * from a wrong path or a wrong grid selector, and it was read as both.
+   */
+  hangOnSection: boolean;
   /** When false, the signed-in app contains nothing the loggedIn selector matches. */
   showNavLabel: boolean;
   /**
@@ -235,6 +245,7 @@ const state: State = {
   codeAttempts: 0,
   rememberedDevice: false,
   appPaintMs: 0,
+  hangOnSection: false,
   showNavLabel: true,
   gridShape: "table",
   padRows: 0,
@@ -782,6 +793,15 @@ app.get(["/transactions", "/transactions/team"], (req, res) => {
   const uid = (req.query as Record<string, unknown>)["filters[user_id][]"];
   state.userFilter = typeof uid === "string" ? (USER_IDS.get(uid) ?? "") : "";
 
+  // Still rendering, for ever, because the section asked for is not one
+  // this list has. The nav is drawn; the middle of the page never is.
+  if (state.hangOnSection && q["filters[section]"]) {
+    res.send(page(`
+      <a href="/admin">ADMIN</a> <a href="/transactions">Transactions</a>
+      <div>Loading...</div>`));
+    return;
+  }
+
   const count = state.receiptsFilter ? 193 : 275;
   const total = state.receiptsFilter ? "39,706.03" : "52,110.44";
   res.send(page(`
@@ -1102,6 +1122,11 @@ app.post("/__whoami/:email", (req, res) => {
   res.json({ ok: true, whoami: state.whoami });
 });
 
+app.post("/__hang-on-section/:on", (req, res) => {
+  state.hangOnSection = req.params.on === "on";
+  res.json({ ok: true, hangOnSection: state.hangOnSection });
+});
+
 app.post("/__reset", (_req, res) => {
   state.whoami = "";
   reset();
@@ -1110,7 +1135,7 @@ app.post("/__reset", (_req, res) => {
 
 const reset = () =>
   Object.assign(state, {
-    signedIn: false, admin: false, receiptsFilter: false, rowsTicked: 0,
+    signedIn: false, admin: false, receiptsFilter: false, rowsTicked: 0, hangOnSection: false,
     pendingUser: "", loginOutcome: "ok", search: "", format: "CSV", requestedAt: null,
     // The SHAPE of the page resets too. It did not, so a test that switched
     // the grid to divs left every later test running against divs — and the
