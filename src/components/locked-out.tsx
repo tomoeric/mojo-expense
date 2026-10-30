@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { KeyRound, Loader2 } from "lucide-react";
+import { ChevronDown, ChevronRight, KeyRound, Loader2 } from "lucide-react";
 import type { CodeAsked } from "@/lib/decisions";
 
 /**
@@ -21,11 +21,43 @@ import type { CodeAsked } from "@/lib/decisions";
  * already polls for a parked challenge; this component deliberately does
  * not grow its own copy of that.
  */
+/**
+ * Whether the detail is showing, remembered per browser.
+ *
+ * This banner stays up until somebody is at a keyboard to answer a code,
+ * which on a scheduled import has meant a fortnight — four lines of
+ * explanation above every page, every day, saying the same thing. So it
+ * folds, and it remembers being folded. Still never hidden outright: the
+ * headline and the button that fixes it are always on screen, because a
+ * dismissable warning about an import that is doing nothing is a warning
+ * nobody sees.
+ *
+ * localStorage can throw in a private window and come back empty with
+ * cleared site data, so every read and write is guarded and the default
+ * is OPEN — a first sighting explains itself.
+ */
+const FOLD_KEY = "mojo.lockedOut.folded";
+const readFolded = (): boolean => {
+  try {
+    return window.localStorage.getItem(FOLD_KEY) === "1";
+  } catch {
+    return false;
+  }
+};
+
 export function LockedOut({ rows }: { rows: CodeAsked[] }) {
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState("");
+  const [folded, setFolded] = useState(readFolded);
 
   if (rows.length === 0) return null;
+
+  const fold = (next: boolean) => {
+    setFolded(next);
+    try {
+      window.localStorage.setItem(FOLD_KEY, next ? "1" : "0");
+    } catch { /* a browser that will not remember is not a reason to fail */ }
+  };
 
   const signInNow = async () => {
     setBusy(true);
@@ -45,10 +77,28 @@ export function LockedOut({ rows }: { rows: CodeAsked[] }) {
       <div className="flex items-start gap-2">
         <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
         <div className="min-w-0 flex-1 space-y-1.5">
-          <p className="text-sm font-semibold">
-            Emburse is asking for a verification code, and nothing can sign in until it gets one
-          </p>
-          {rows.map((r) => (
+          {/* The headline is the toggle. A separate chevron to one side is
+              a smaller target for the same job, and this row is already
+              the thing somebody reaches for. */}
+          <button
+            type="button"
+            onClick={() => fold(!folded)}
+            aria-expanded={!folded}
+            className="flex w-full items-start gap-1.5 text-left text-sm font-semibold"
+          >
+            {folded
+              ? <ChevronRight className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+              : <ChevronDown className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />}
+            <span>
+              Emburse is asking for a verification code, and nothing can sign in until it gets one
+              {folded && rows.length > 0 && (
+                <span className="ml-1 font-normal text-muted-foreground">
+                  — {rows.length === 1 ? rows[0]!.loginEmail : `${rows.length} accounts`}
+                </span>
+              )}
+            </span>
+          </button>
+          {!folded && rows.map((r) => (
             <p key={r.id} className="text-xs text-muted-foreground">
               It asked during <strong className="text-foreground">{r.during}</strong> and there was
               nobody to answer, so that run stopped and did nothing.{" "}
@@ -60,10 +110,12 @@ export function LockedOut({ rows }: { rows: CodeAsked[] }) {
               there is nothing to type from it.
             </p>
           ))}
-          <p className="text-xs text-muted-foreground">
-            Start a sign-in now and Emburse will send a fresh code. Answer it once and this device
-            stays trusted, so the scheduled runs go through on their own again.
-          </p>
+          {!folded && (
+            <p className="text-xs text-muted-foreground">
+              Start a sign-in now and Emburse will send a fresh code. Answer it once and this
+              device stays trusted, so the scheduled runs go through on their own again.
+            </p>
+          )}
           {problem && <p className="text-xs font-semibold text-red-600">{problem}</p>}
         </div>
         <button

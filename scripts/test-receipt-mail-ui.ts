@@ -112,8 +112,25 @@ try {
   page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
   page.on("pageerror", (e) => errors.push(e.message));
 
+  /*
+   * REACHED THE WAY A PERSON REACHES IT, not by typing the hash.
+   *
+   * This went straight to #/receipt-mail, so it proved the room and
+   * never checked there was a door — and there was not one. The route
+   * was declared in MENU_PAGES with a label and a description, the user
+   * menu is written out by hand and never read that list, and the page
+   * sat finished and unreachable while its owner was told where to find
+   * a menu entry that did not exist.
+   */
   console.log("\n1. The page, and what it says about the mailbox");
-  await page.goto(`http://127.0.0.1:${PORT}/#/receipt-mail`, { waitUntil: "networkidle" });
+  await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: "networkidle" });
+  await page.waitForTimeout(1500);
+  await page.getByRole("button", { name: /Eric|Schlicht|@/ }).first().click();
+  await page.waitForTimeout(400);
+  const door = page.getByRole("link", { name: "Receipts in email" });
+  check("THE USER MENU HAS A WAY IN", await door.count() > 0,
+    (await page.locator("body").innerText()).replace(/\n/g, " | ").slice(-300));
+  await door.first().click();
   await page.waitForTimeout(2000);
   let text = await page.locator("body").innerText();
   check("it renders", text.includes("Receipts in email"), text.slice(0, 120));

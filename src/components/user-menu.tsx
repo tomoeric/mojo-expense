@@ -1,6 +1,6 @@
 import { useState } from "react";
 import {
-  Crown, KeyRound, ListChecks, LogOut, ScrollText, Shield, SlidersHorizontal,
+  Crown, KeyRound, ListChecks, LogOut, Receipt, ScrollText, Shield, SlidersHorizontal,
   UserRound, Users,
 } from "lucide-react";
 import { APP_LABEL, type AppKey, type SessionUser } from "@/lib/api";
@@ -97,6 +97,29 @@ export function UserMenu({
                 >
                   <KeyRound className="h-4 w-4" />
                   Your Emburse login
+                </a>
+                {/*
+                  * THE DOOR TO THE PAGE, which did not exist.
+                  *
+                  * `MENU_PAGES` in App.tsx declared this route with a label
+                  * and a description and nothing read it: the menu is
+                  * written out by hand here, so the page was built,
+                  * routable and tested, and unreachable by anybody who did
+                  * not know to type the hash. The UI test navigated
+                  * straight to #/receipt-mail, so it proved the room and
+                  * never checked there was a way in.
+                  *
+                  * Beside the Emburse login rather than behind `isAdmin`:
+                  * it searches YOUR mailbox and matches YOUR personal
+                  * expenses, so it belongs with the other personal entry.
+                  */}
+                <a
+                  href="#/receipt-mail"
+                  onClick={() => setOpen(false)}
+                  className="flex items-center gap-2 border-b border-border px-3 py-2.5 text-sm transition-colors hover:bg-muted"
+                >
+                  <Receipt className="h-4 w-4" />
+                  Receipts in email
                 </a>
                 {isAdmin && (
                   <a

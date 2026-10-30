@@ -54,7 +54,26 @@ export function RulesPage({ isAdmin }: { isAdmin: boolean }) {
   const [ran, setRan] = useState<string | null>(null);
   const [showWho, setShowWho] = useState(false);
 
-  const rules = list.data?.rules ?? [];
+  const all = list.data?.rules ?? [];
+
+  /*
+   * ONE TAB PER QUEUE, because a rule belongs to one.
+   *
+   * Every rule on this page was written for the manager queue — "$1000+",
+   * "Meal Count > 3", "Location Corp PM" — and they have nothing to say
+   * about somebody's own unsubmitted expenses. Listed together they read
+   * as rules that apply to all three queues, which is the opposite of
+   * what `scope` was added for, and the only way to tell was to open each
+   * one. The tabs are the same three as the Review Queue, so the question
+   * "what is judging THIS queue" has the same answer in both places.
+   *
+   * A rule with no scope is the manager queue's: that is what every rule
+   * written before scopes existed is, and the server says the same.
+   */
+  const scopes = options.data?.scopes ?? [{ lane: "", label: "Manager queue", loginEmail: "" }];
+  const [tab, setTab] = useState("");
+  const inTab = (r: { scope?: string[] | null }) => (r.scope ?? [""]).includes(tab);
+  const rules = all.filter(inTab);
 
   if (list.isPending) {
     return (
@@ -84,6 +103,33 @@ export function RulesPage({ isAdmin }: { isAdmin: boolean }) {
 
   return (
     <div className="space-y-4">
+      {/* The same three tabs as the Review Queue, and only when there is
+          more than one queue to choose between — a deployment with a
+          single Emburse account should not grow a selector with one
+          option in it. The count beside each is that queue's rules, so
+          an empty personal tab says so before anybody opens it. */}
+      {scopes.length > 1 && (
+        <div className="flex flex-wrap gap-1 rounded-lg bg-muted p-1">
+          {scopes.map((sc) => {
+            const n = all.filter((r) => (r.scope ?? [""]).includes(sc.lane)).length;
+            return (
+              <button
+                key={sc.lane}
+                type="button"
+                onClick={() => setTab(sc.lane)}
+                title={sc.loginEmail || "The team-wide approval queue"}
+                className={`rounded-md px-3 py-1 text-sm font-semibold ${
+                  tab === sc.lane ? "bg-background shadow-sm" : "text-muted-foreground"
+                }`}
+              >
+                {sc.label}
+                <span className="ml-1.5 font-normal text-muted-foreground">{n}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <StatChipRow>
         <StatChip value={rules.length} label="rules" />
         <StatChip value={rules.filter((r) => r.enabled).length} label="enabled" tone="emerald" />
@@ -120,7 +166,10 @@ export function RulesPage({ isAdmin }: { isAdmin: boolean }) {
             </button>
             <button
               type="button"
-              onClick={() => setEditing({ body: BLANK })}
+              // Scoped to the tab it was started from. A rule written
+              // while reading the MOJO tab and silently filed against
+              // the manager queue would vanish the moment it was saved.
+              onClick={() => setEditing({ body: { ...BLANK, scope: [tab] } })}
               className="inline-flex items-center gap-1.5 rounded-lg bg-foreground px-2.5 py-1.5 text-xs font-semibold text-background"
             >
               <Plus className="h-3.5 w-3.5" /> New rule
@@ -183,7 +232,11 @@ export function RulesPage({ isAdmin }: { isAdmin: boolean }) {
 
       {rules.length === 0 && !editing ? (
         <Empty>
-          <p className="font-semibold">No rules yet</p>
+          <p className="font-semibold">
+            {scopes.length > 1 && all.length > 0
+              ? `No rules for ${scopes.find((sc) => sc.lane === tab)?.label ?? "this queue"} yet`
+              : "No rules yet"}
+          </p>
           <p className="mt-1">
             A rule says what an expense has to look like — “when the note mentions gas, the category must be
             Auto Fee &amp; Fuel”. Anything that does not match is flagged in the queue, and every import is
