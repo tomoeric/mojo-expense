@@ -1,4 +1,4 @@
-import { GRAPH, graphToken, isGraphConfigured } from "../mail.js";
+import { GRAPH, forgetGraphToken, graphToken, isGraphConfigured } from "../mail.js";
 import { db, ensureSchema } from "../db.js";
 
 /**
@@ -207,9 +207,26 @@ type GraphMessage = {
 };
 
 const get = async <T>(path: string): Promise<T> => {
-  const res = await fetch(`${GRAPH}${path}`, {
+  let res = await fetch(`${GRAPH}${path}`, {
     headers: { authorization: `Bearer ${await graphToken()}` },
   });
+  /*
+   * ONE RETRY ON A FRESH TOKEN, because a 403 can be an hour out of date.
+   *
+   * The token carries the app's roles as claims, frozen when it was
+   * issued, and it is cached for most of an hour. So granting Mail.Read
+   * to a running app changes nothing until that hour is up: the next
+   * press fails with exactly the 403 it failed with before the grant,
+   * and the obvious conclusion — "the permission did not take" — is
+   * wrong. That cost a round of checking a consent that was already
+   * there. Minting a new one is a single cheap call and settles it.
+   */
+  if (res.status === 403) {
+    forgetGraphToken();
+    res = await fetch(`${GRAPH}${path}`, {
+      headers: { authorization: `Bearer ${await graphToken()}` },
+    });
+  }
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
     throw new Error(graphWhy(res.status, detail));

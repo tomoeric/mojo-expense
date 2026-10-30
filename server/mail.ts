@@ -111,6 +111,21 @@ let token: { value: string; expiresAt: number } | null = null;
  * here rather than copied: two token caches would mean two sets
  * of expiry arithmetic and one of them going stale unnoticed.
  */
+/**
+ * Throw the cached token away, so the next call mints a fresh one.
+ *
+ * A token carries the app's ROLES as claims, frozen at the moment it was
+ * issued, and this one is cached for most of an hour. So granting
+ * Mail.Read to a running app changes nothing until that hour is up: every
+ * call keeps failing with the same 403 it failed with before the grant,
+ * and the obvious conclusion — "the permission did not take" — is wrong.
+ * Called on a 403 so a grant takes effect on the next press instead of
+ * on the next restart.
+ */
+export function forgetGraphToken(): void {
+  token = null;
+}
+
 export async function graphToken(): Promise<string> {
   if (token && Date.now() < token.expiresAt) return token.value;
   const res = await fetch(

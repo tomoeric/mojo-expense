@@ -2863,6 +2863,14 @@ list and then filtered out the only rows worth having.
 
 ## The mailbox is one tenant's, and one mailbox feeds both tabs
 
+- **A 403 CAN BE AN HOUR OUT OF DATE.** The app-only token carries the
+  app's roles as claims, frozen when it was issued, and `graphToken`
+  caches it for most of an hour. So granting Mail.Read to a RUNNING app
+  changes nothing until that hour is up: the next press fails with
+  exactly the 403 it failed with before the grant, and the obvious
+  conclusion — "the permission did not take" — is wrong. A 403 now drops
+  the cached token and retries once, so a grant takes effect on the next
+  press rather than the next restart. `forgetGraphToken()` in `mail.ts`.
 - **A 403 FROM EXCHANGE PROVES Mail.Read IS CONSENTED.** Exchange only
   gets to refuse after Entra has allowed the call, so the two are
   distinguishable and `graphWhy` says only the one that fits:
