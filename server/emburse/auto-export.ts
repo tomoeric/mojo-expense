@@ -108,6 +108,11 @@ export const SUPERSEDED_SELECTORS: Record<string, string[]> = {
   // who saved the old default before it was corrected would keep it for
   // ever, because a stored value beats the compiled one.
   denyConfirm: ['button:has-text("Deny")'],
+  // The count line is "N items, $X" above the TEAM grid and a pagination
+  // range — "1 - 10 of 14" — on the personal one. The old default knew
+  // only the first, so a personal run spent the whole step budget timing
+  // out on it and went red over a cross-check that is not fatal.
+  itemCount: ['text=/\\d[\\d,]* items?, \\$[\\d,]+\\.\\d{2}/'],
 };
 
 export const DEFAULT_SELECTORS: Selectors = {
@@ -154,7 +159,11 @@ export const DEFAULT_SELECTORS: Selectors = {
   // themselves through ARIA instead. Emburse's is one of them.
   grid: 'table, [role="grid"], [role="table"], [role="rowgroup"]',
   // The "34 items, $42,249.94" line above the grid.
-  itemCount: 'text=/\\d[\\d,]* items?, \\$[\\d,]+\\.\\d{2}/',
+  // Two shapes, one regex. The team grid prints "34 items, $42,249.94"
+  // above itself; the personal one prints no total at all and paginates —
+  // "1 - 10 of 14" bottom right. One alternation rather than a union of
+  // two `text=` selectors, because that is one engine and one match.
+  itemCount: 'text=/(\\d[\\d,]* items?, \\$[\\d,]+\\.\\d{2})|(\\d+\\s*[-\u2013]\\s*\\d+\\s+of\\s+[\\d,]+)/',
 
   // A path, not a selector: the grid's filters live in the query string.
   gridPath: "/transactions/team",
@@ -236,7 +245,7 @@ export const SELECTOR_HELP: Record<SelectorKey, string> = {
   adminTab: "The team-wide tab, top left — ADMIN on some tenants, MANAGER on others. PERSONAL would export one person's own expenses.",
   personalTab: "The tab beside it for one person's OWN expenses. A personal tab presses this, and where it lands is taken as that account's list — which is how the run finds the path without anybody guessing it.",
   grid: "The transactions table itself — used to tell the page has loaded. The item-count line is accepted instead, so this missing is not fatal.",
-  itemCount: "The \u201cN items, $X\u201d line above the grid.",
+  itemCount: "Emburse's own count of what the grid is showing \u2014 the \u201cN items, $X\u201d line above the team grid, or the \u201c1 - 10 of 14\u201d range the personal one paginates with. A cross-check only; a run still exports without it.",
   gridPath: "Path to the transactions grid. Filters are added as query parameters. SHARED BY EVERY TAB — this is the deployment default, so changing it here changes what the manager queue reads too. One tab reading a different list is set by Scope on that tab (Manager queue / Personal queue), not here.",
   gridQuery: "Any other filters, copied from Emburse\'s address bar — above all Current Reviewer, which is what separates two approvers in a chain. Use the dropdown in Emburse, copy the URL, paste it into a reviewer\'s row.",
   gridSection: "The section filter the grid is opened with — Emburse's own value, \"inbox\" for Needs Review. With a two-stage approval chain this is one of the two things that says WHOSE stage is being read.",
@@ -2414,9 +2423,28 @@ async function runSteps(
       setItemLine("");
       return "skipped — the grid is empty, so there is no count line to read";
     }
-    const line = (await page.locator(sel.itemCount).first().innerText()).trim();
+    /*
+     * A SHORT LOOK, and no failure when it is not there.
+     *
+     * This read `innerText()` straight off the locator, so a tenant whose
+     * count line has another shape spent the full 30-second step budget
+     * throwing a Playwright timeout — and the step went red, in a run
+     * that had just loaded the grid and was about to export it fine. A
+     * cross-check that is explicitly not fatal must not cost half a
+     * minute, and must not look like a failure, or the one red row that
+     * matters stops standing out.
+     */
+    const found = await firstVisible(page, sel.itemCount, Math.min(
+      env.emburseLogin.stepTimeoutMs, 8_000));
+    if (!found) {
+      setItemLine("");
+      return `no count line matched ${sel.itemCount}. Not fatal — it is a cross-check against `
+        + "what the export brings back, and the export does not depend on it. Worth correcting "
+        + "if this tenant prints one.";
+    }
+    const line = (await found.innerText().catch(() => "")).trim();
     setItemLine(line);
-    return line;
+    return line || "the count line is there but reads empty";
   });
 
   /*

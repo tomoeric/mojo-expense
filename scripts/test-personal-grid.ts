@@ -156,6 +156,19 @@ try {
   const stale = await runAutoExport(
     settings, { ...base, gridPath: "/transactions" }, LOGIN, { personalQueue: true });
   const gridOf = detailOf(stale.steps, "open the filtered grid");
+  /*
+   * And the count line, which the personal list spells differently: a
+   * pagination range rather than "N items, $X". It is a cross-check and
+   * explicitly not fatal, so the cost of missing it used to be the whole
+   * step budget spent on a Playwright timeout and a red row on a run that
+   * went on to export perfectly well.
+   */
+  const counted = detailOf(asPersonal.steps, "read the item count");
+  check("the personal list's own count line is read",
+    /1 - 10 of \d+/.test(counted), counted);
+  check("…as a step that passed",
+    asPersonal.steps.find((st) => st.name === "read the item count")?.ok === true, counted);
+
   check("a stored path that 404s is overridden by where PERSONAL went",
     stale.steps.find((st) => st.name === "open the filtered grid")?.ok === true, gridOf);
 

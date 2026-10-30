@@ -817,9 +817,20 @@ app.get(["/transactions/team", "/transactions/me"], (req, res) => {
 
   const count = state.receiptsFilter ? 193 : 275;
   const total = state.receiptsFilter ? "39,706.03" : "52,110.44";
+  /*
+   * THE TWO LISTS COUNT THEMSELVES DIFFERENTLY.
+   *
+   * The team grid prints "275 items, $52,110.44" above itself. The
+   * personal one prints no total at all and paginates — "1 - 10 of 14",
+   * bottom right. The shipped selector knew only the first shape, so a
+   * personal run spent its whole step budget timing out on a cross-check
+   * that is not fatal and went red over it.
+   */
+  const personal = req.path.endsWith("/me");
+  const counted = personal ? `1 - 10 of ${count}` : `${count} items, $${total}`;
   res.send(page(`
     <a href="/admin">ADMIN</a> <a href="/transactions">Transactions</a>
-    ${gridIsEmpty(state.search) ? "" : `<p>${count} items, $${total}</p>`}
+    ${gridIsEmpty(state.search) ? "" : `<p>${counted}</p>`}
     <div>
       <input id="pagesearch" type="text" placeholder="Search" />
       <!-- The decoy, and it is not invented: the real tenant has a saved-filters

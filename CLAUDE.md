@@ -2582,6 +2582,28 @@ queue. Two separate causes, and either one alone reproduces it.
   covers `selectorsForLane`, section 10 of `test-connections.ts`
   `laneForAccount`.
 
+## The two lists count themselves differently
+
+The team grid prints "275 items, $52,110.44" above itself. The personal
+one prints no total at all and paginates — "1 - 10 of 14", bottom right.
+The shipped `itemCount` knew only the first shape.
+
+- **One regex with an alternation**, not a union of two `text=` selectors:
+  one engine, one match.
+- **A miss is cheap and is not a failure.** The step read `innerText()`
+  straight off the locator, so a tenant with the other shape spent the
+  full 30-second budget on a Playwright timeout and went red — on a run
+  that had just loaded the grid and went on to export fine. It is a
+  cross-check that the code itself calls not fatal; it now looks for 8
+  seconds, passes either way, and says what did not match. **A non-fatal
+  check that renders as a failure makes the one red row that matters stop
+  standing out.**
+- **The old default is in `SUPERSEDED_SELECTORS`.** A stored selector
+  beats the compiled one by design, so a replaced default has to be
+  retired explicitly or anybody holding a copy keeps it for ever. Every
+  corrected default needs this; it is the second time it has been missed.
+- The mock serves the two shapes on the two lists.
+
 ## ASK EMBURSE WHERE THE PERSONAL LIST IS. Do not guess it.
 
 `PERSONAL_GRID` was `/transactions`, which is a **404 on this tenant** —
