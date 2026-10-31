@@ -2861,6 +2861,34 @@ list and then filtered out the only rows worth having.
   on, each get a line saying what it will do. Somebody may mean it.
 - Section 2 of `scripts/test-lanes.ts`.
 
+## Match results belong IN THE QUEUE, not only on the matching page
+
+The brief asks for them twice — §4 "display the account and email in the
+queue, expense detail, **match results** and activity history", and §3
+names the states: "queued, uploaded, failed, already attached, and
+needs-review". They were built into the Receipts-in-email page and never
+carried across, so the queue's Receipt column showed `hasReceipt` and
+Emburse's own `receipt_label` and said **"none"** for an expense whose
+receipt had been found, pulled in and queued. True about Emburse, silent
+about everything this app had done, and indistinguishable from an expense
+nobody had touched.
+
+- **`matchState(writeback, match)`** in `neon.ts` is the one place that
+  decides the word. **The write-back wins over the match**, because both
+  exist on every sent receipt — choosing records a match, sending records
+  a write-back — so reading the match would say "matched" for ever on
+  something sent days ago. The subselects order the unhappy states first
+  so nothing reads as a success while the other half wants a person, and
+  `stale` (Emburse changed underneath) reads as **needs review**, not as
+  anything softer.
+- **A bare candidate is not a match.** Nobody has said it is the right
+  one, so it does not count toward the tab and the column says
+  "candidate".
+- **The "Receipt matched" tab holds what still wants something** —
+  matched, queued, failed. Sent and already-attached drop out. Only shown
+  when there are any, so the manager queue never grows it.
+- `scripts/test-match-tab.ts`.
+
 ## A match can be looked at before it is believed
 
 `GET /api/receipt-mail/preview?message=<id>` shows the receipt on a

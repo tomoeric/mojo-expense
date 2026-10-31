@@ -178,16 +178,47 @@ const COLUMNS: Column[] = [
       r.line.note
         ? <span className="[overflow-wrap:anywhere]">{r.line.note}</span>
         : <span className="text-muted-foreground">—</span> },
-  { key: "receipt", label: "Receipt", pct: 6,
-    value: (r) => (r.line.hasReceipt ? 1 : 0),
-    render: (r) =>
-      r.line.hasReceipt ? (
-        <span className="inline-flex items-center gap-1 text-xs text-emerald-600">
-          <Receipt className="h-3.5 w-3.5" /> yes
+  /*
+   * WHAT THIS APP KNOWS, not only what Emburse said.
+   *
+   * This read `hasReceipt` and printed "none", which is Emburse's answer
+   * and true about Emburse — and said nothing at all about a receipt
+   * found in email, pulled in and waiting to be sent. So an expense that
+   * had been matched, previewed and queued still showed "none", which is
+   * the one thing it was not. The brief asks for match results in the
+   * queue and names the states, so those are the words used.
+   */
+  { key: "receipt", label: "Receipt", pct: 7,
+    value: (r) => (r.line.hasReceipt ? 2 : r.line.matchState ? 1 : 0),
+    render: (r) => {
+      const m = r.line.matchState ?? null;
+      if (m && m !== "candidate") {
+        const [text, tone] = m === "sent" ? ["sent", "text-emerald-600"]
+          : m === "already" ? ["already there", "text-emerald-600"]
+            : m === "queued" ? ["queued", "text-sky-600"]
+              : m === "failed" ? ["needs review", "text-red-600"]
+                : ["matched", "text-amber-600"];
+        return (
+          <span className={`inline-flex items-center gap-1 text-xs ${tone}`}>
+            <Receipt className="h-3.5 w-3.5" /> {text}
+          </span>
+        );
+      }
+      if (r.line.hasReceipt) {
+        return (
+          <span className="inline-flex items-center gap-1 text-xs text-emerald-600">
+            <Receipt className="h-3.5 w-3.5" /> yes
+          </span>
+        );
+      }
+      // A candidate is not a receipt yet — nobody has said it is the
+      // right one — so it reads as what it is rather than as progress.
+      return (
+        <span className="text-xs text-muted-foreground">
+          {m === "candidate" ? "candidate" : "none"}
         </span>
-      ) : (
-        <span className="text-xs text-muted-foreground">none</span>
-      ) },
+      );
+    } },
   { key: "changed", label: "Updated", pct: 9,
     value: (r) => r.line.changes.length,
     render: (r) =>
@@ -535,7 +566,7 @@ function BandRows({
   );
 }
 
-export type Tab = "all" | "reading" | "flagged" | "clean" | "sent" | "approved" | "denied";
+export type Tab = "all" | "reading" | "matched" | "flagged" | "clean" | "sent" | "approved" | "denied";
 
 /**
  * Still waiting for its receipt to be read.
@@ -622,6 +653,18 @@ function FlagTabs({
   // dropping it the moment it is approved would empty the tab of its
   // successes and leave only what has not finished.
   const sent = rows.filter(correcting);
+  /*
+   * A receipt matched from email that is not finished with.
+   *
+   * "sent" and "already there" are done and drop out; a bare candidate
+   * is not a match yet, because nobody has said it is the right one.
+   * What is left is the set that still wants something: matched and
+   * waiting on a press, queued, or failed and wanting a look.
+   */
+  const matched = rows.filter((r) => {
+    const m = r.line.matchState;
+    return m === "matched" || m === "queued" || m === "failed";
+  });
   const groups = useMemo(() => {
     const counts = new Map<string, number>();
     for (const r of flagged) for (const g of r.flagGroups) counts.set(g, (counts.get(g) ?? 0) + 1);
@@ -634,6 +677,22 @@ function FlagTabs({
     // through them, and a permanently empty tab is furniture.
     ...(reading.length > 0
       ? [{ key: "reading" as const, label: "Receipt being read", n: reading.length }]
+      : []),
+    /*
+     * RECEIPTS FOUND IN EMAIL, in their own tab.
+     *
+     * The brief asks the personal queues to show match results, and
+     * scattered through the Unflagged list they were invisible — the
+     * Receipt column said "none" and nothing grouped them. A matched
+     * receipt is a thing waiting on a person (press Send) or on the
+     * app (queued), and both belong somewhere you can find them.
+     *
+     * Only while there are any, like the other conditional tabs: on the
+     * manager queue, where nothing is matched from email, it never
+     * appears.
+     */
+    ...(matched.length > 0
+      ? [{ key: "matched" as const, label: "Receipt matched", n: matched.length }]
       : []),
     { key: "flagged" as const, label: "Flagged", n: flagged.length },
     // Unflagged means judged and clean. An expense nobody has read the
@@ -1015,6 +1074,12 @@ export function ExpenseTable({
     } else {
       base = base.filter((r) => !isDone(r));
       if (tab === "reading") base = base.filter(beingRead);
+      if (tab === "matched") {
+        base = base.filter((r) => {
+          const m = r.line.matchState;
+          return m === "matched" || m === "queued" || m === "failed";
+        });
+      }
       if (tab === "flagged") base = base.filter((r) => r.flags.length > 0);
       if (tab === "clean") base = base.filter((r) => r.flags.length === 0 && !beingRead(r));
     }

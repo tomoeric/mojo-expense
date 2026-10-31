@@ -43,6 +43,8 @@ export type ExpenseLine = {
   receiptUnread?: boolean;
   /** Emburse's own Receipt column — "Receipt 1 of 2". */
   receiptLabel?: string;
+  /** Where an email-matched receipt has got to; null if none was matched. */
+  matchState?: "sent" | "already" | "queued" | "failed" | "matched" | "candidate" | null;
   /** How many receipt images we actually hold for it. */
   receiptCount?: number;
   /** When this expense first appeared in an import. */

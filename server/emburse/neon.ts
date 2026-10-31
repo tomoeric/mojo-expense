@@ -38,6 +38,8 @@ type Row = {
   share_peers: string | null;
   share_total_cents: string | null;
   receipt_unread: boolean;
+  writeback_state: string | null;
+  match_state: string | null;
   changes: { field: string; before_value: string | null; after_value: string | null }[] | null;
 };
 
@@ -93,6 +95,27 @@ export class NeonProvider implements EmburseProvider {
               e.category, e.department, e.location, e.note, e.method,
               e.in_inbox, e.first_seen_at, e.left_inbox_at, e.section, e.receipt_label,
               (SELECT count(*) FROM expense_receipts r WHERE r.dedupe_key = e.dedupe_key) AS receipt_count,
+              -- WHERE AN EMAIL-MATCHED RECEIPT HAS GOT TO, in the queue.
+              --
+              -- The brief asks for match results in the queue and names the
+              -- states: queued, uploaded, failed, already attached, needs
+              -- review. Without this the queue said "Receipt: none" for an
+              -- expense whose receipt had been found, pulled in and was
+              -- waiting to be sent — Emburse's own column, true about
+              -- Emburse and silent about everything this app had done.
+              --
+              -- The write-back is further along than the match, so it wins
+              -- where both exist. Ordered worst-last within each so a row
+              -- that needs a person shows that rather than an older
+              -- success.
+              (SELECT w.state FROM receipt_writebacks w
+                WHERE w.dedupe_key = e.dedupe_key AND w.kind = 'receipt'
+                ORDER BY (w.state IN ('failed','stale')) DESC, w.proposed_at DESC
+                LIMIT 1) AS writeback_state,
+              (SELECT m.state FROM receipt_mail_matches m
+                WHERE m.dedupe_key = e.dedupe_key
+                ORDER BY (m.state = 'chosen') DESC, (m.state = 'candidate') DESC
+                LIMIT 1) AS match_state,
               -- One receipt divided across expenses, and whether the shares
               -- add up to it. Identified by content hash, so this is proven
               -- rather than inferred from a matching merchant and date.
@@ -196,6 +219,36 @@ export class NeonProvider implements EmburseProvider {
   }
 }
 
+/**
+ * One word for where an email-matched receipt has got to.
+ *
+ * The write-back's own states are about the SEND; the match's are about
+ * the CHOICE. A send that has started is further along, so it wins —
+ * except that neither is reported as a success while the other is
+ * asking for a person, which is why the query orders the unhappy states
+ * first.
+ */
+export function matchState(
+  writeback: string | null, match: string | null,
+): "sent" | "already" | "queued" | "failed" | "matched" | "candidate" | null {
+  switch (writeback) {
+    case "applied": return "sent";
+    case "already": return "already";
+    case "queued": case "proposed": return "queued";
+    case "failed": case "stale": return "failed";
+    default: break;
+  }
+  switch (match) {
+    // Chosen and not yet queued: the receipt is in the app and the
+    // person has not pressed Send.
+    case "chosen": return "matched";
+    case "attached": return "sent";
+    case "failed": return "failed";
+    case "candidate": return "candidate";
+    default: return null;
+  }
+}
+
 function toReport(key: string, group: Row[], hits: Map<string, Hit[]>): ExpenseReport {
   const first = group[0]!;
   const date = iso(first.expense_date);
@@ -218,6 +271,15 @@ function toReport(key: string, group: Row[], hits: Map<string, Hit[]>): ExpenseR
     // own count, and an expense whose receipt column says 2 while we hold
     // one image is a different problem from one with none.
     receiptLabel: r.receipt_label ?? "",
+    /*
+     * The match, in the five words the brief uses.
+     *
+     * Emburse's own Receipt column is about Emburse and says nothing
+     * about a receipt this app has found and is holding — so an expense
+     * whose receipt was matched, pulled in and queued still read
+     * "none", which is the one thing it was not.
+     */
+    matchState: matchState(r.writeback_state, r.match_state),
     receiptCount: Number(r.receipt_count),
     firstSeenAt: r.first_seen_at instanceof Date ? r.first_seen_at.toISOString() : null,
     sharedWith: Number(r.share_peers ?? 1),
