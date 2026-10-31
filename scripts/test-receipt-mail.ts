@@ -31,7 +31,8 @@
  * that every call in that file is a GET.
  */
 import {
-  conflicts, dateIn, matchAll, merchantOf, scoreMatch, textOf, totalIn,
+  conflicts, dateIn, matchAll, merchantOf, resolveOneToOne, scoreMatch, textOf,
+  totalIn,
   type Evidence, type Target,
   graphWhy,
 } from "../server/emburse/receipt-mail.js";
@@ -246,6 +247,73 @@ try {
     guess.cents === 425 && guess.labelled === false, JSON.stringify(guess));
   check("and nothing money-shaped reads as nothing",
     totalIn("thanks for your order").cents === null);
+
+  /*
+   * ONE RECEIPT, ONE EXPENSE — the rule the owner stated:
+   * "most receipts should only match 1 entry. Same price, same
+   * date, same name."
+   *
+   * Scoring every pair is right and it is not an answer: 26
+   * expenses and a few dozen receipts made 417 cards, nearly all
+   * of them a $106.60 Replit receipt offered against every other
+   * $106.60 Replit expense. What was missing is the step after
+   * scoring.
+   */
+  console.log("\n14. A receipt that plainly belongs to one expense is offered to one");
+  const sure = matchAll([
+    expense({ dedupeKey: "same-day" }),
+    expense({ dedupeKey: "a-month-later", date: "2026-10-24" }),
+    expense({ dedupeKey: "a-month-earlier", date: "2026-08-24" }),
+  ], [message()]);
+  check("scoring alone offers it to all three", sure.length === 3, String(sure.length));
+  const settled = resolveOneToOne(sure);
+  check("ONE-TO-ONE LEAVES ONE", settled.length === 1,
+    settled.map((c) => c.dedupeKey).join(", "));
+  check("…and it is the one that agrees on price, date and name",
+    settled[0]!.dedupeKey === "same-day", settled[0]!.dedupeKey);
+  check("…and says so, in the reasons the person reads",
+    settled[0]!.reasons.some((r) => r.includes("Price, date and merchant all agree")),
+    settled[0]!.reasons.join(" / "));
+
+  console.log("\n15. Two identical expenses and two identical receipts pair off");
+  const pairs = resolveOneToOne(matchAll(
+    [expense({ dedupeKey: "x" }), expense({ dedupeKey: "y" })],
+    [message({ messageId: "m1" }), message({ messageId: "m2" })]));
+  check("each expense gets one", pairs.length === 2,
+    pairs.map((c) => `${c.dedupeKey}:${c.messageId}`).join(", "));
+  check("…and no receipt is used twice",
+    new Set(pairs.map((c) => c.messageId)).size === 2,
+    pairs.map((c) => c.messageId).join(", "));
+  check("…nor any expense claimed twice",
+    new Set(pairs.map((c) => c.dedupeKey)).size === 2);
+
+  console.log("\n16. A real question is still asked");
+  /*
+   * The one-to-one pass must not swallow the case this page
+   * exists for. Two receipts that each agree on only SOME of the
+   * three are a question for a person, and both survive.
+   */
+  const unsure = resolveOneToOne(matchAll([expense()], [
+    message({ messageId: "m1", date: "2026-09-22" }),
+    message({ messageId: "m2", date: "2026-09-23" }),
+  ]));
+  check("both near-misses are still offered", unsure.length === 2,
+    unsure.map((c) => `${c.messageId}:${c.score}`).join(", "));
+  check("…and they are still a conflict for the expense",
+    conflicts(unsure).byExpense.get("e1")?.length === 2);
+
+  console.log("\n17. A split purchase is NOT settled away");
+  /*
+   * One receipt for $12.99 against two expenses of $6.50 and
+   * $6.49: the totals differ, so nothing is exact, so nothing
+   * claims, and the person still gets to see both.
+   */
+  const split = resolveOneToOne(matchAll([
+    expense({ dedupeKey: "half-1", amountCents: 650 }),
+    expense({ dedupeKey: "half-2", amountCents: 649 }),
+  ], [message()]));
+  check("both halves keep their candidate", split.length === 2,
+    split.map((c) => c.dedupeKey).join(", "));
 
 } finally {
   console.log(failures === 0 ? "\nPASS" : `\n${failures} FAILED`);

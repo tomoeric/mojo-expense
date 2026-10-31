@@ -5,8 +5,9 @@ import { isGraphConfigured, mailProblem } from "../mail.js";
 import { MANAGER_LANE, laneTag, linkedLanesOf } from "./connections.js";
 import {
   decideMatch, listFolders, mailSettings, matchAll, matchesFor, noteLink,
-  recordCandidates, saveMailSettings, searchMailbox, conflicts,
-  type Target,
+  pruneCandidates, recordCandidates, resolveOneToOne, saveMailSettings,
+  searchMailbox, conflicts,
+  type Candidate, type Target,
 } from "./receipt-mail.js";
 import { proposeWrites, queueWrite, receiptBytes, writesFor } from "./receipt-writeback.js";
 import { bytesFromMessage, linkReceipt, readingOf } from "./receipt-link.js";
@@ -67,11 +68,54 @@ async function refreshedProposals(me: string) {
   return writesFor();
 }
 
+/**
+ * The expenses behind a set of dedupe keys.
+ *
+ * The page used to identify an expense by the first sixteen
+ * characters of its hash, which is not an expense — it is a
+ * string. A person deciding whether a receipt belongs to
+ * something needs the something: who it is from, when, and how
+ * much. One query for every key on the page, not one per card.
+ */
+export type ExpenseFact = {
+  dedupeKey: string; lane: string; merchant: string; date: string | null;
+  amountCents: number; currency: string; category: string; note: string;
+  hasReceipt: boolean;
+};
+
+async function expenseFacts(keys: string[]): Promise<ExpenseFact[]> {
+  if (keys.length === 0) return [];
+  const { rows } = await db().query<{
+    dedupe_key: string; lane: string; merchant: string; expense_date: Date | null;
+    amount_cents: string; category: string; note: string; receipts: string;
+  }>(
+    `SELECT e.dedupe_key, e.lane, e.merchant, e.expense_date, e.amount_cents,
+            coalesce(e.category, '') AS category, coalesce(e.note, '') AS note,
+            (SELECT count(*) FROM expense_receipts r WHERE r.dedupe_key = e.dedupe_key)
+              AS receipts
+       FROM expenses e
+      WHERE e.dedupe_key = ANY($1::text[])`,
+    [keys]);
+  return rows.map((r) => ({
+    dedupeKey: r.dedupe_key,
+    lane: r.lane,
+    merchant: r.merchant || "—",
+    date: r.expense_date ? r.expense_date.toISOString().slice(0, 10) : null,
+    amountCents: Number(r.amount_cents),
+    currency: "USD",
+    category: r.category,
+    note: r.note,
+    hasReceipt: Number(r.receipts) > 0,
+  }));
+}
+
 receiptMailRouter.get("/receipt-mail", requireAuth, async (req: Request, res: Response) => {
   if (!guard(res)) return;
   const me = req.user?.email ?? "";
   try {
     const lanes = await linkedLanesOf(me).catch(() => []);
+    const matches = await matchesFor(null);
+    const writes = await refreshedProposals(me);
     res.json({
       settings: await mailSettings(me),
       /** The accounts whose expenses a scan can match against. */
@@ -81,10 +125,14 @@ receiptMailRouter.get("/receipt-mail", requireAuth, async (req: Request, res: Re
       })),
       graphConfigured: isGraphConfigured(),
       graphProblem: isGraphConfigured() ? "" : mailProblem(),
-      matches: await matchesFor(null),
+      matches,
       /* Every proposal and its state, so the page can show what
          is waiting on a click and what has already landed. */
-      writes: await refreshedProposals(me),
+      writes,
+      /* The expenses those are about, named rather than hashed. */
+      expenses: await expenseFacts([...new Set([
+        ...matches.map((m) => m.dedupeKey), ...writes.map((w) => w.dedupeKey),
+      ])]),
     });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Could not read it." });
@@ -207,7 +255,22 @@ receiptMailRouter.post("/receipt-mail/scan", requireAuth,
       const found = await searchMailbox({
         mailbox: settings.mailbox, folders: settings.folders, days: settings.days,
       });
-      const candidates = matchAll(targets, found.messages);
+      /*
+       * SCORED, THEN RESOLVED, THEN THE OLD ANSWER REMOVED.
+       *
+       * Scoring alone produced 417 cards for 26 expenses, almost
+       * all of them a receipt being offered against every other
+       * expense that happened to cost the same. `resolveOneToOne`
+       * settles the pairs where price, date and merchant all
+       * agree and drops the rest of those two's pairings; the
+       * prune then deletes the candidates a previous, looser scan
+       * left behind, which is why pressing Search again now
+       * changes the number instead of writing a smaller answer on
+       * top of a bigger one.
+       */
+      const scored = matchAll(targets, found.messages);
+      const candidates: Candidate[] = resolveOneToOne(scored);
+      const removed = await pruneCandidates(lanes, candidates);
       const written = await recordCandidates(candidates);
       const clash = conflicts(candidates);
 
@@ -221,6 +284,11 @@ receiptMailRouter.post("/receipt-mail/scan", requireAuth,
         messages: found.messages.length,
         expenses: targets.length,
         candidates: candidates.length,
+        /* Said out loud, because "it found fewer" and "it found
+           nothing" look the same from a shorter list. */
+        scored: scored.length,
+        ruledOut: scored.length - candidates.length,
+        removed,
         recorded: written,
         needsReview: clash.byMessage.size + clash.byExpense.size,
         // Every lane that was scanned, not just the first. `matchesFor`

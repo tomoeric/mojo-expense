@@ -109,7 +109,18 @@ try {
   }]);
   const page = await ctx.newPage();
   const errors: string[] = [];
-  page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
+  /*
+   * The receipt preview 400s here on purpose — there is no
+   * mailbox in this container and `msg-1` is not a Graph id — and
+   * the browser logs every non-2xx fetch. That one is the
+   * condition section 3 asserts the page HANDLES, so counting it
+   * as an unhandled error would fail the test for passing.
+   */
+  page.on("console", (m) => {
+    if (m.type() !== "error") return;
+    if (/receipt-mail\/preview|status of 400/.test(m.text())) return;
+    errors.push(m.text());
+  });
   page.on("pageerror", (e) => errors.push(e.message));
 
   /*
@@ -134,6 +145,19 @@ try {
   await page.waitForTimeout(2000);
   let text = await page.locator("body").innerText();
   check("it renders", text.includes("Receipts in email"), text.slice(0, 120));
+  /*
+   * THE SETTINGS ARE FOLDED AWAY, and that is the point: they were
+   * the first screenful of a page somebody opens to work through a
+   * list, and they are set once a year. What must still be true is
+   * that the mailbox is NAMED without opening them, and that what
+   * it is — not the Emburse login — is said the moment they are.
+   */
+  check("the mailbox is named without opening anything",
+    text.includes("@") && text.includes("days"),
+    text.replace(/\n/g, " | ").slice(0, 300));
+  await page.getByRole("button", { name: "Mailbox settings" }).click();
+  await page.waitForTimeout(400);
+  text = await page.locator("body").innerText();
   check("THE MAILBOX IS SAID TO BE SEPARATE from the Emburse login",
     text.includes("not") && text.includes("Emburse login")
     && text.includes("different addresses"),
@@ -162,18 +186,35 @@ try {
    * rendered to PDF by a real browser on the server, so an eager preview
    * would start 272 of them.
    */
-  check("THE RECEIPT CAN BE LOOKED AT, without choosing it first",
-    (await page.getByRole("button", { name: /Show the receipt/ }).count()) > 0,
-    (await page.locator("body").innerText()).replace(/\n/g, " | ").slice(-240));
-  check("…and nothing is fetched until it is pressed",
-    (await page.locator("object[data*='receipt-mail/preview']").count()) === 0);
+  await page.waitForTimeout(1200);
+  text = await page.locator("body").innerText();
+  /*
+   * The frame is on screen whatever the fetch did: the picture
+   * when it worked, and the REASON when it did not. In this
+   * container there is no mailbox, so the fetch 400s — and that
+   * is the case worth pinning, because the version before this
+   * one answered a failed fetch with a broken-image icon and no
+   * words at all.
+   */
+  check("THE RECEIPT FRAME IS ON SCREEN, without choosing it first",
+    (await page.locator("[data-receipt]").count()) === 1,
+    `${await page.locator("[data-receipt]").count()} frames`);
+  check("…and a fetch that fails SAYS SO, rather than drawing a broken image",
+    (await page.locator("[data-receipt='error'], [data-receipt='ok']").count()) === 1,
+    (await page.locator("[data-receipt]").first().innerText()).slice(0, 160));
+  check("…and only ONE is fetched, not one per pairing",
+    (await page.locator("[data-receipt]").count()) === 1);
 
   check("the candidate is shown", text.includes("Your Starbucks receipt"));
   check("…with its confidence", text.includes("strong"));
   check("…and its reasons", text.includes("The total matches exactly: $12.99."));
   check("THE CONFLICT IS NAMED — one receipt, two expenses",
-    text.includes("also matches 1 other expense"),
-    text.slice(text.indexOf("also matches"), text.indexOf("also matches") + 120));
+    /also matches 1 other expense/i.test(text),
+    text.slice(text.toLowerCase().indexOf("also matches"),
+      text.toLowerCase().indexOf("also matches") + 120));
+  check("…and the EXPENSE is named, not its hash",
+    text.includes("STARBUCKS #4417") && text.includes("12.99"),
+    text.replace(/\n/g, " | ").slice(0, 400));
 
   console.log("\n4. A person chooses one expense's receipt");
   await page.getByRole("button", { name: "This is the receipt" }).first().click();
@@ -197,12 +238,28 @@ try {
   check("…and nothing was attached by any of this",
     (byState.get("attached") ?? 0) === 0);
   text = await page.locator("body").innerText();
+  /*
+   * THE PANEL STAYS ON WHAT WAS JUST DECIDED. It leaves the "to
+   * decide" list in the same breath, and following it would answer
+   * the press with a blank column — exactly when somebody wants to
+   * see what their press did.
+   */
+  check("the panel stays on the expense that was just decided",
+    text.includes("Ready to send to Emburse"),
+    text.replace(/\n/g, " | ").slice(-300));
+  check("…and the other one is still in the list to decide",
+    /To decide 1/.test(text), text.replace(/\n/g, " | ").slice(0, 400));
+  await page.getByRole("button", { name: /To decide 1/ }).click();
+  await page.waitForTimeout(300);
+  await page.locator("aside button").last().click();
+  await page.waitForTimeout(1500);
+  text = await page.locator("body").innerText();
   check("the page still offers it to the other expense",
     text.includes("This is the receipt"),
     text.slice(-200).replace(/\n/g, " | "));
-  // And the conflict banner is gone, because there is no longer
+  // And the conflict pill is gone, because there is no longer
   // a conflict: one candidate is left waiting, not two.
-  check("…without still claiming a conflict", !text.includes("also matches"));
+  check("…without still claiming a conflict", !/also matches/i.test(text));
   check("…and says nothing reaches Emburse without a press",
     text.includes("Nothing reaches Emburse until you press Send"));
 
@@ -212,6 +269,11 @@ try {
    * commits them to: the current value, the proposed value, and
    * a button that has not been pressed.
    */
+  await page.getByRole("button", { name: /Ready to send 1/ }).click();
+  await page.waitForTimeout(300);
+  await page.locator("aside button").last().click();
+  await page.waitForTimeout(1200);
+  text = await page.locator("body").innerText();
   check("the proposal appears", text.includes("Ready to send to Emburse"),
     text.slice(-300).replace(/\n/g, " | "));
   check("…naming the receipt it would attach", text.includes("Receipt image"));

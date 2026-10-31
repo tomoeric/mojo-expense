@@ -102,7 +102,8 @@ were added; "it compiles" is not "the button works".
 `reviewer-schedules`, `manager-queue`, `view-as-brian`, `two-reviewers`,
 `corrections`, `decision-trace`, `auto-approve`, `rules`, `bulk-approve`,
 `lanes`, `two-accounts`, `rule-scope`, `receipt-mail`, `signin-errors`, `writeback`, `receipt-link`,
-`personal-grid`, `cookie-jars`, `device-trust` (needs a build). For a change to "Your Emburse login", Export
+`personal-grid`, `cookie-jars`, `device-trust`, `match-prune`,
+`matched-tab-ui` (needs a build). For a change to "Your Emburse login", Export
 settings or the review queue, also
 `test-accounts-ui.ts` and `test-lanes-ui.ts` after a build.
 
@@ -2884,10 +2885,101 @@ nobody had touched.
 - **A bare candidate is not a match.** Nobody has said it is the right
   one, so it does not count toward the tab and the column says
   "candidate".
-- **The "Receipt matched" tab holds what still wants something** —
-  matched, queued, failed. Sent and already-attached drop out. Only shown
-  when there are any, so the manager queue never grows it.
-- `scripts/test-match-tab.ts`.
+- **The "Receipt matched" tab holds every settled match** — matched,
+  queued, failed, sent, already attached. The finished ones were dropped
+  at first, on the reasoning that the tab is a worklist; they are back,
+  because a tab that loses a row the moment it succeeds is a tab you
+  cannot check your work in. Only shown when there are any, so the
+  manager queue never grows it.
+- **AND IT IS NOT A TABLE.** This was asked for three times and
+  delivered wrong twice: once as an empty tab, once as the same columns
+  as every other tab with the word "matched" in the Receipt cell. The
+  question the tab exists for — *is this the right receipt for this
+  expense* — is answered by LOOKING at the receipt, and no column shows
+  a picture. `MatchedReceipts` in `expense-table.tsx` renders a card per
+  expense: the expense's merchant, date, amount, category, note and
+  flags on the left, the receipt itself on the right. Twelve at a time
+  with a "Show more", because an unbounded list of frames is how a page
+  that works at four stops working at four hundred.
+- `scripts/test-match-tab.ts` (the word) and
+  `scripts/test-matched-tab-ui.ts` (the picture, needs a build).
+
+## ONE RECEIPT, ONE EXPENSE — scoring is not an answer
+
+The owner's rule, in their words: *"most receipts should only match 1
+entry. Same price, same date, same name."* Before it, 26 expenses and a
+few dozen receipts produced **417 candidate cards**, because scoring is
+every-pair by design: a $106.60 Replit receipt scores against every
+$106.60 Replit expense in the window, and each of those scores against
+every such receipt. Every-pair scoring is right — it is what makes a
+real ambiguity visible — and on its own it is a pile, not an answer.
+
+- **`resolveOneToOne(candidates)`** in `receipt-mail.ts` runs between
+  `matchAll` and `recordCandidates`. Best-first, a candidate whose
+  **price, date AND merchant** all agree claims its receipt and its
+  expense, and every other pairing involving either is DROPPED. Best
+  first is what makes two identical expenses facing two identical
+  receipts pair off instead of both chasing the same one.
+- **`scoreMatch` records `signals`** ({merchant,total,date,reference})
+  alongside the score, because two candidates reach the same number by
+  different routes and "did the three agree" is a different question
+  from "how good is it". Not persisted: a match read back out of the
+  database has only the receipt's side.
+- **What it deliberately does NOT settle:** a candidate agreeing on two
+  of the three (the genuine "which of these is it"), and a split
+  purchase, where the receipt's total is the whole and the expense is a
+  share — the totals differ, so nothing claims, and the person still
+  sees both.
+- **`pruneCandidates(lanes, keep)` is half the fix.** Without it a
+  re-scan can only ADD: the matcher was tightened, Search was pressed
+  again, and the number did not move, because the new smaller answer was
+  written on top of a list nothing ever removed from. It deletes
+  `candidate` rows in those lanes that the fresh scan does not stand
+  behind — and ONLY `candidate` rows. A chosen, rejected, attached or
+  failed row is somebody's decision, and a re-scan is not an argument
+  against it.
+- The scan reports `scored`, `ruledOut` and `removed` so the page can
+  say why the list got shorter. "It found fewer" and "it found nothing"
+  look identical from a shorter list.
+- `scripts/test-receipt-mail.ts` §14–17, `scripts/test-match-prune.ts`.
+
+## The matching page is a LIST AND A PANEL, not a column of cards
+
+*"So confusing to use. Need a better layout."* / *"This page is hard to
+navigate, very linear and thus not friendly at all for detail."*
+
+It was one full-height card per (expense × receipt) pair, stacked. At
+417 pairs that is a page you scroll rather than a page you work: the
+same receipt appears under a dozen expenses, every card repeats the same
+two amber paragraphs until nobody reads either, and the detail that
+settles the question — the receipt — is behind a press on every one.
+
+- **The unit on screen is the EXPENSE**, because that is the unit of the
+  decision. Left column is the queue of expenses (merchant · date ·
+  amount · where it has got to); the panel is one expense.
+- **The receipt shows by default** in the panel. That is affordable only
+  because one is mounted at a time — the old page needed a press per
+  card because showing them all would have been 417 Graph calls, and a
+  body-only receipt starts a browser on the server.
+- **The expense is NAMED.** It was identified by the first sixteen
+  characters of its dedupe hash, which is not an expense, it is a
+  string. `expenseFacts()` in `receipt-mail-routes.ts` carries merchant,
+  date, amount, category and note for every key on the page, in one
+  query.
+- **Deciding does not move the ground.** The panel pins to the expense
+  being decided (`setPicked` before the mutation) — without that, the
+  row left the "to decide" filter, the first row became a different
+  expense, and the panel jumped: the press answered by changing the
+  subject. There is a **Next** button for moving on deliberately.
+- **What would be written sits under the expense it is about**, not in a
+  separate list keyed by hash.
+- The conflicts are pills with the sentence in the title attribute, and
+  the mailbox settings are behind a button: they are set once a year and
+  they were the first screenful every time.
+- `ReceiptFrame` (`components/receipt-frame.tsx`) is shared with the
+  queue's matched tab. It carries `data-receipt="loading|ok|error"` so a
+  browser test can assert the frame is there whatever the fetch did.
+- `scripts/test-receipt-mail-ui.ts` (needs a build).
 
 ## Three ways a receipt lied about itself
 

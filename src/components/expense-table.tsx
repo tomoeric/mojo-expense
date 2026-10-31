@@ -8,6 +8,7 @@ import { moneyExact, shortDate, daysAgo } from "@/lib/format";
 import { useQuery } from "@tanstack/react-query";
 import { Empty } from "@/components/ui";
 import { failureGroups } from "@/lib/decisions";
+import { ReceiptFrame } from "@/components/receipt-frame";
 
 /**
  * Set by the table so a flag chip can filter to the set it belongs to.
@@ -566,6 +567,22 @@ function BandRows({
   );
 }
 
+/**
+ * An expense whose receipt was found in email and SETTLED on.
+ *
+ * A bare candidate is not a match: nobody has said it is the
+ * right one, and putting it here would make a tab of guesses.
+ * Everything past that point belongs, the finished ones
+ * included — "sent" is still a matched receipt, and a tab that
+ * drops a row the moment it succeeds is a tab you cannot check
+ * your work in.
+ */
+const hasMatchedReceipt = (r: Row): boolean => {
+  const m = r.line.matchState;
+  return m === "matched" || m === "queued" || m === "failed"
+    || m === "sent" || m === "already";
+};
+
 export type Tab = "all" | "reading" | "matched" | "flagged" | "clean" | "sent" | "approved" | "denied";
 
 /**
@@ -653,18 +670,9 @@ function FlagTabs({
   // dropping it the moment it is approved would empty the tab of its
   // successes and leave only what has not finished.
   const sent = rows.filter(correcting);
-  /*
-   * A receipt matched from email that is not finished with.
-   *
-   * "sent" and "already there" are done and drop out; a bare candidate
-   * is not a match yet, because nobody has said it is the right one.
-   * What is left is the set that still wants something: matched and
-   * waiting on a press, queued, or failed and wanting a look.
-   */
-  const matched = rows.filter((r) => {
-    const m = r.line.matchState;
-    return m === "matched" || m === "queued" || m === "failed";
-  });
+  // The same base as the other undecided tabs, so the number on the
+  // tab is the number of cards behind it.
+  const matched = waiting.filter(hasMatchedReceipt);
   const groups = useMemo(() => {
     const counts = new Map<string, number>();
     for (const r of flagged) for (const g of r.flagGroups) counts.set(g, (counts.get(g) ?? 0) + 1);
@@ -1077,12 +1085,7 @@ export function ExpenseTable({
     } else {
       base = base.filter((r) => !isDone(r));
       if (tab === "reading") base = base.filter(beingRead);
-      if (tab === "matched") {
-        base = base.filter((r) => {
-          const m = r.line.matchState;
-          return m === "matched" || m === "queued" || m === "failed";
-        });
-      }
+      if (tab === "matched") base = base.filter(hasMatchedReceipt);
       if (tab === "flagged") base = base.filter((r) => r.flags.length > 0);
       if (tab === "clean") base = base.filter((r) => r.flags.length === 0 && !beingRead(r));
     }
@@ -1319,6 +1322,18 @@ export function ExpenseTable({
 
       {sorted.length === 0 ? (
         <Empty>{rows.length === 0 ? emptyMessage : `Nothing matches “${query}”.`}</Empty>
+      ) : tab === "matched" ? (
+        /*
+         * THE MATCHED TAB IS NOT ANOTHER TABLE.
+         *
+         * It was: the same columns as every other tab, with the word
+         * "matched" in the Receipt cell. But the question this tab
+         * exists to answer is "is this the right receipt for this
+         * expense", and no column answers it — the receipt is a
+         * picture, and the picture was the one thing not on screen.
+         * It was asked for three times.
+         */
+        <MatchedReceipts rows={sorted} onOpen={onOpen} />
       ) : (
         <div className="overflow-x-auto rounded-xl border border-border">
           <table className="w-full table-fixed text-xs">
@@ -1502,6 +1517,121 @@ function ChangeDialog({ row, onClose }: { row: Row; onClose: () => void }) {
           Close
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The matched tab: every expense whose receipt was found in email,
+ * with the receipt on screen.
+ *
+ * WHY A CARD AND NOT A ROW. A row can say "matched". It cannot
+ * answer the question somebody opens this tab to answer, which is
+ * whether the thing that was matched is right — and that is read
+ * off the picture: the merchant on the receipt, the date on the
+ * receipt, the total on the receipt, against the three the
+ * expense claims. Both sides are on the card, side by side, so
+ * checking one is a glance rather than two screens and a memory.
+ *
+ * The images come from this app's own database, not from Graph —
+ * the bytes were pulled in when the match was chosen — so a
+ * screenful of them is a screenful of local reads. Twelve at a
+ * time all the same, because an unbounded list of frames is how a
+ * page that works at four stops working at four hundred.
+ */
+function MatchedReceipts({ rows, onOpen }: { rows: Row[]; onOpen: (r: Row) => void }) {
+  const [limit, setLimit] = useState(12);
+  const shown = rows.slice(0, limit);
+
+  return (
+    <div className="space-y-3">
+      {shown.map((r) => {
+        const state = r.line.matchState;
+        const [label, tone] =
+          state === "sent" ? ["sent to Emburse", "bg-emerald-600/15 text-emerald-700"]
+            : state === "already" ? ["already on the expense", "bg-emerald-600/15 text-emerald-700"]
+              : state === "queued" ? ["waiting to be sent", "bg-sky-600/15 text-sky-700"]
+                : state === "failed" ? ["the send failed", "bg-red-500/15 text-red-700"]
+                  : ["matched, not sent yet", "bg-amber-500/15 text-amber-700"];
+        return (
+          <div key={r.line.id} className="grid gap-3 rounded-xl border border-border p-3
+                                          md:grid-cols-[minmax(0,1fr)_22rem]">
+            <div className="min-w-0 space-y-1.5 text-sm">
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                <button
+                  type="button"
+                  onClick={() => onOpen(r)}
+                  className="font-semibold hover:underline"
+                >
+                  {r.line.merchant}
+                </button>
+                <span className="tnum">{moneyExact(r.line.amount)}</span>
+                <span className="text-xs text-muted-foreground">
+                  {shortDate(r.line.date)} · {r.employee}
+                </span>
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${tone}`}>
+                  {label}
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {r.line.category}
+                {r.department ? ` · ${r.department}` : ""}
+                {r.line.location ? ` · ${r.line.location}` : ""}
+                {r.line.method ? ` · ${r.line.method}` : ""}
+              </p>
+              {r.line.note && (
+                <p className="text-xs break-words text-muted-foreground">
+                  Note: {r.line.note}
+                </p>
+              )}
+              {r.flags.length > 0 && (
+                <ul className="space-y-0.5 text-xs text-amber-700 dark:text-amber-400">
+                  {r.flags.map((f) => (
+                    <li key={f} className="flex items-start gap-1">
+                      <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                      {f}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {state === "failed" && (
+                <p className="text-xs text-red-700 dark:text-red-400">
+                  The receipt is held here but Emburse did not take it. Try it again from
+                  Receipts in email.
+                </p>
+              )}
+              <button
+                type="button"
+                onClick={() => onOpen(r)}
+                className="inline-flex items-center gap-1 rounded-lg border border-border
+                           px-2.5 py-1 text-xs font-semibold hover:bg-muted"
+              >
+                <Receipt className="h-3.5 w-3.5" />
+                Open the expense
+              </button>
+            </div>
+            <ReceiptFrame
+              src={`/api/receipts/${encodeURIComponent(r.line.id)}`}
+              alt={`The receipt matched to ${r.line.merchant}`}
+              height="h-72"
+              loading="Loading the receipt that was matched to this expense."
+            />
+          </div>
+        );
+      })}
+      {rows.length > shown.length && (
+        <button
+          type="button"
+          onClick={() => setLimit((n) => n + 12)}
+          className="w-full rounded-lg border border-border py-2 text-sm font-semibold
+                     hover:bg-muted"
+        >
+          Show {Math.min(12, rows.length - shown.length)} more
+          <span className="ml-1 font-normal text-muted-foreground">
+            ({rows.length - shown.length} left)
+          </span>
+        </button>
+      )}
     </div>
   );
 }

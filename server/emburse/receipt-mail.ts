@@ -545,6 +545,28 @@ export type Candidate = {
   score: number;
   reasons: string[];
   evidence: Evidence;
+  /**
+   * WHAT ACTUALLY AGREED, separately from how much it is worth.
+   *
+   * The score answers "how good is this", and two candidates can
+   * reach the same number by different routes. One-to-one
+   * resolution needs the other question — did the price, the date
+   * AND the name all agree — because that, and not a total, is
+   * what makes a receipt belong to one expense and no other.
+   *
+   * Optional because a match read back out of the database has
+   * only the receipt's side stored; the expense it was scored
+   * against is long gone by then.
+   */
+  signals?: MatchSignals;
+};
+
+/** The three things a person checks, as booleans. */
+export type MatchSignals = {
+  merchant: boolean;
+  total: boolean;
+  date: boolean;
+  reference: boolean;
 };
 
 /** The expense, as matching sees it. */
@@ -584,12 +606,15 @@ function merchantAgrees(a: string, b: string): boolean {
  */
 export function scoreMatch(expense: Target, e: Evidence): Candidate | null {
   const reasons: string[] = [];
+  const signals: MatchSignals =
+    { merchant: false, total: false, date: false, reference: false };
   let score = 0;
 
   // A reference number that appears in both is the one signal
   // worth more than everything else together.
   if (e.reference && normalise(expense.merchant).includes(normalise(e.reference))) {
     score += 60;
+    signals.reference = true;
     reasons.push(`The order number ${e.reference} is in the expense's merchant field.`);
   }
 
@@ -597,12 +622,14 @@ export function scoreMatch(expense: Target, e: Evidence): Candidate | null {
     || merchantAgrees(expense.merchant, e.subject);
   if (sameMerchant) {
     score += 30;
+    signals.merchant = true;
     reasons.push(`The merchant matches: “${expense.merchant}” and “${e.merchant}”.`);
   }
 
   if (e.totalCents !== null) {
     if (e.totalCents === expense.amountCents) {
       score += 30;
+      signals.total = true;
       reasons.push(`The total matches exactly: $${(e.totalCents / 100).toFixed(2)}.`);
     } else if (Math.abs(e.totalCents) === Math.abs(expense.amountCents)
       && Math.sign(e.totalCents) !== Math.sign(expense.amountCents)) {
@@ -630,7 +657,7 @@ export function scoreMatch(expense: Target, e: Evidence): Candidate | null {
   if (expense.date && e.date) {
     const apart = Math.round(
       Math.abs(Date.parse(e.date) - Date.parse(expense.date)) / DAY);
-    if (apart === 0) { score += 20; reasons.push("Same date."); }
+    if (apart === 0) { score += 20; signals.date = true; reasons.push("Same date."); }
     else if (apart <= 3) {
       score += 8;
       reasons.push(`${apart} day${apart === 1 ? "" : "s"} apart — a card posts a day or `
@@ -664,7 +691,66 @@ export function scoreMatch(expense: Target, e: Evidence): Candidate | null {
     score,
     reasons,
     evidence: e,
+    signals,
   };
+}
+
+/* ------------------------------------------------------------------ *
+ * One receipt, one expense
+ * ------------------------------------------------------------------ */
+
+/** The line added to a candidate that settles its own pair. */
+export const SURE_REASON =
+  "Price, date and merchant all agree — so this receipt is this expense's and "
+  + "no other, and the pairs it would otherwise have been offered against are "
+  + "not shown.";
+
+/** Did the price, the date and the name all agree? */
+export const isSure = (c: Candidate): boolean =>
+  Boolean(c.signals && c.signals.merchant && c.signals.total && c.signals.date);
+
+/**
+ * ONE RECEIPT MATCHES ONE EXPENSE, when it plainly does.
+ *
+ * Scoring every pair is what makes a real ambiguity visible, and
+ * it is also what buried the page: 26 expenses and a few dozen
+ * receipts produced 417 cards, because a $106.60 Replit receipt
+ * scores against EVERY $106.60 Replit expense in the window, and
+ * each of those scores against every such receipt. The pile was
+ * almost entirely pairs nobody would ever pick.
+ *
+ * So: a candidate whose price, date AND merchant all agree is
+ * taken as settled. It claims its receipt and its expense, and
+ * every other pair involving either is dropped — not weakened,
+ * dropped, because a receipt already spoken for by an exact match
+ * is not a plausible second answer, it is noise.
+ *
+ * Deliberately NOT dropped:
+ *   · a candidate that agrees on only two of the three, which is
+ *     the genuine "which of these is it" question;
+ *   · a split purchase, where the receipt's total is the whole
+ *     and the expense is a share — the totals differ, so it never
+ *     claims, and the conflict still reaches a person.
+ *
+ * Best-first, so when two identical expenses face two identical
+ * receipts each takes one rather than both chasing the same.
+ */
+export function resolveOneToOne(found: Candidate[]): Candidate[] {
+  const ranked = [...found].sort((a, b) =>
+    b.score - a.score
+    || a.dedupeKey.localeCompare(b.dedupeKey)
+    || a.messageId.localeCompare(b.messageId));
+  const claimedMessage = new Set<string>();
+  const claimedExpense = new Set<string>();
+  const kept: Candidate[] = [];
+  for (const c of ranked) {
+    if (claimedMessage.has(c.messageId) || claimedExpense.has(c.dedupeKey)) continue;
+    if (!isSure(c)) { kept.push(c); continue; }
+    claimedMessage.add(c.messageId);
+    claimedExpense.add(c.dedupeKey);
+    kept.push({ ...c, reasons: [...c.reasons, SURE_REASON] });
+  }
+  return kept;
 }
 
 /**
@@ -736,6 +822,40 @@ export async function recordCandidates(found: Candidate[]): Promise<number> {
     written += rowCount ?? 0;
   }
   return written;
+}
+
+/**
+ * Candidates that a fresh scan no longer stands behind.
+ *
+ * Without this a re-scan can only ever ADD. The user pressed
+ * Search again after the matcher was tightened and the count did
+ * not move, because every one of the old pairs was still sitting
+ * in the table in state `candidate` — the new, smaller answer was
+ * written on top of a list nothing ever removed from.
+ *
+ * Only `candidate` rows go. A chosen, rejected, attached or
+ * failed row is somebody's decision or an attempt that happened,
+ * and a re-scan is not an argument against either.
+ */
+export async function pruneCandidates(
+  lanes: string[], keep: Candidate[],
+): Promise<number> {
+  await ensure();
+  if (lanes.length === 0) return 0;
+  // Two parallel arrays rather than a joined-up key: Postgres text
+  // cannot hold a NUL, and any printable separator is a separator
+  // that could turn up inside a Graph message id.
+  const keys = keep.map((c) => c.dedupeKey);
+  const ids = keep.map((c) => c.messageId);
+  const { rowCount } = await db().query(
+    `DELETE FROM receipt_mail_matches m
+      WHERE m.lane = ANY($1::text[])
+        AND m.state = 'candidate'
+        AND NOT EXISTS (
+              SELECT 1 FROM unnest($2::text[], $3::text[]) AS k(dedupe_key, message_id)
+               WHERE k.dedupe_key = m.dedupe_key AND k.message_id = m.message_id)`,
+    [lanes, keys, ids]);
+  return rowCount ?? 0;
 }
 
 export type StoredMatch = Candidate & {
