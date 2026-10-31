@@ -388,6 +388,47 @@ importRouter.get("/export-settings", requireAuth, async (_req: Request, res: Res
   }
 });
 
+/**
+ * How long a sign-in lasts before it times out.
+ *
+ * Admin-only and app-wide: it governs everybody who signs into
+ * this deployment, not one reviewer's import. Served beside the
+ * export settings because that is the admin settings page, which
+ * is a placement rather than a claim that it belongs to the
+ * export.
+ */
+importRouter.get("/session-policy", requireAuth, requireAdmin,
+  async (_req: Request, res: Response) => {
+    const { sessionTtlMs, MIN_SESSION_TTL_MS, MAX_SESSION_TTL_MS, DEFAULT_SESSION_TTL_MS } =
+      await import("../auth/session-policy.js");
+    res.json({
+      ttlMs: await sessionTtlMs(),
+      minMs: MIN_SESSION_TTL_MS,
+      maxMs: MAX_SESSION_TTL_MS,
+      defaultMs: DEFAULT_SESSION_TTL_MS,
+    });
+  });
+
+importRouter.put("/session-policy", requireAuth, requireAdmin,
+  async (req: Request, res: Response) => {
+    if (!guard(res)) return;
+    if (req.viewingAs) {
+      res.status(403).json({ error: "You are viewing as somebody else; this is read-only." });
+      return;
+    }
+    const { setSessionTtlMs } = await import("../auth/session-policy.js");
+    try {
+      const ttlMs = await setSessionTtlMs(
+        Number((req.body as { ttlMs?: unknown }).ttlMs),
+        req.user?.email ?? "unknown");
+      res.json({ ttlMs });
+    } catch (err) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : "Could not save it.",
+      });
+    }
+  });
+
 importRouter.put("/export-settings", requireAuth, requireAdmin, async (req: Request, res: Response) => {
   if (!guard(res)) return;
 

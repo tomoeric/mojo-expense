@@ -3184,6 +3184,40 @@ table: `queued` is a state name, **sending** is what is happening.
 | already | already there |
 | failed | needs a look |
 
+## Automatic sign-out is a setting, and it is an IDLE timeout
+
+`SESSION_TTL_MS = 8 * 60 * 60 * 1000`, commented "a working day" — a
+reasonable guess that nobody could change without a deploy. A finance
+console is exactly the screen somebody wants timed out sooner, or left
+alone longer, depending on the machine it runs on.
+
+**Export settings → Automatic sign-out**, in minutes, admin-only,
+app-wide. Stored in `app_settings` (`session_ttl_ms`) — a small
+key-value table, because `app_flags` is boolean-only.
+
+- **IDLE, not absolute.** `authMiddleware` re-issues the cookie when less
+  than a third of the window is left, so the number means "untouched for
+  this long" rather than "thrown out mid-sentence N hours after signing
+  in". That is what people mean by automatic sign-out.
+- **It applies at the NEXT sign-in.** The expiry is signed into the
+  cookie, so a session already open keeps the length it was given; the
+  page says so.
+- **A LINK SESSION CAN ONLY BE SHORTENED BY IT.** Dealer staff are
+  invited from outside, the setting goes to thirty days, and nobody
+  decided that about dealer access — `dealer-auth.ts` takes
+  `Math.min(configured, SESSION_TTL_MS)` and the middleware does not
+  slide link sessions at all.
+- **Out of range is refused, not clamped**, by one `clean()` both ends
+  share. Below 5 minutes, above 30 days.
+- **The default survives a failed read**: signing in must not depend on
+  this query, so `sessionTtlMs()` swallows and returns 8 hours.
+- Cached for 10s, because the middleware runs on every request and this
+  is one integer that changes twice a year.
+- `setSessionCookie` takes the life from the session it is given, so the
+  cookie's `maxAge` and the payload's `exp` cannot disagree — they were
+  worked out separately before.
+- `scripts/test-session-timeout.ts`.
+
 ## The browser step timeout is a SETTING, not a redeploy
 
 Every wait in the automation is bounded by one number — finding the row,

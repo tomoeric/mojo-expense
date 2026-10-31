@@ -10,6 +10,7 @@ import {
   type SessionUser,
 } from "./session.js";
 import { isDbConfigured } from "../db.js";
+import { sessionTtlMs, sessionTtlNow } from "./session-policy.js";
 import { noteVisit, whileAway } from "../visits.js";
 import { VIEW_AS_COOKIE, formatViewAs } from "./view-as.js";
 import { listCredentials } from "../emburse/credentials.js";
@@ -207,10 +208,37 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
   }
 
   req.user = user;
+
+  /*
+   * AN IDLE TIMEOUT, NOT A SESSION LENGTH.
+   *
+   * The cookie is re-issued while somebody is working, so the
+   * configured number means "log out after this long without
+   * touching it" — which is what people mean by automatic
+   * sign-out. Without this, an eight-hour session ended eight
+   * hours after sign-in whether or not you were mid-sentence.
+   *
+   * Only in the last third of the window, so an active page is
+   * not re-signing a cookie on every poll — and only for the
+   * Microsoft door: a link session's life is the invitation's,
+   * and sliding it would quietly extend an access somebody
+   * granted once.
+   */
+  const ttl = sessionTtlNow();
+  const left = user.exp - Date.now();
+  if (left > 0 && left < ttl / 3) {
+    const slid = { ...user, exp: Date.now() + ttl };
+    setSessionCookie(res, slid, ttl);
+    req.user = slid;
+  }
+
   // "Still here", for the while-you-were-away count. Not awaited: it is a
   // note in the margin, throttled to once a minute per person, and no page
   // should wait on it or fail because of it.
   if (isDbConfigured() && user.email) void noteVisit(user.email);
+  // Keeps the cached timeout warm for the branch above, which
+  // cannot await. Not awaited for the same reason.
+  void sessionTtlMs();
   next();
 }
 
@@ -308,6 +336,9 @@ authRouter.post("/auth/app", (req: Request, res: Response) => {
     return;
   }
   res.cookie(APP_COOKIE, want, {
+    // Which app you prefer is not a session. It outlives one on
+    // purpose, so signing back in does not land you in the other
+    // product.
     httpOnly: false, sameSite: "lax", secure: true, path: "/",
     maxAge: SESSION_TTL_MS,
   });
@@ -613,7 +644,7 @@ authRouter.get("/callback", async (req: Request, res: Response) => {
       id: String(claims.oid ?? claims.sub),
       email,
       name: String(claims.name ?? email),
-      exp: Date.now() + SESSION_TTL_MS,
+      exp: Date.now() + await sessionTtlMs(),
       // Which door. Everything that asks "is this one of ours" reads it;
       // an address alone stopped being an answer once outside people
       // could be invited by email.

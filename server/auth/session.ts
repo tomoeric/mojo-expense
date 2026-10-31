@@ -15,6 +15,12 @@ import type { Request, Response } from "express";
  */
 
 export const SESSION_COOKIE = "mojo_sid";
+/**
+ * The fallback only. The live value is a setting — see
+ * `session-policy.ts` — and this is what a deployment with no
+ * database, or a read that failed, falls back to. It was the
+ * whole policy until it became configurable.
+ */
 export const SESSION_TTL_MS = 8 * 60 * 60 * 1000; // 8h — a working day.
 
 export type SessionUser = {
@@ -113,7 +119,17 @@ export function deserialize(raw: unknown): SessionUser | null {
   }
 }
 
-export function setSessionCookie(res: Response, user: SessionUser): void {
+export function setSessionCookie(res: Response, user: SessionUser, ttlMs?: number): void {
+  /*
+   * The cookie dies with the session it carries.
+   *
+   * `maxAge` was the constant while `exp` inside the payload was
+   * worked out separately, so a configured timeout had to be
+   * applied in two places or the browser would keep a cookie the
+   * server had already stopped honouring. Taken from the session
+   * itself when it can be, which cannot disagree with itself.
+   */
+  const life = ttlMs ?? Math.max(user.exp - Date.now(), 60_000);
   res.cookie(SESSION_COOKIE, serialize(user), {
     httpOnly: true,
     // Replit terminates TLS in front of the app, so cookies are always https
@@ -121,7 +137,7 @@ export function setSessionCookie(res: Response, user: SessionUser): void {
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
-    maxAge: SESSION_TTL_MS,
+    maxAge: life,
   });
 }
 

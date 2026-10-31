@@ -325,6 +325,7 @@ export function ExportSettingsPage({ isAdmin }: { isAdmin: boolean }) {
           lists somewhere else needs it — but it is not mixed in with
           somebody's import any more. */}
       {isAdmin && settings.data && <SharedDefaults data={settings.data} viewingAs={viewingAs} />}
+      {isAdmin && <AutoSignOut isAdmin={isAdmin && !viewingAs} />}
     </div>
   );
 }
@@ -860,6 +861,109 @@ function ReviewerSchedule({
  * whole fault this page had was that these sat above somebody's name and
  * read as theirs.
  */
+/**
+ * How long a sign-in lasts before it times out.
+ *
+ * App-wide and admin-only — it governs everybody who signs into
+ * this deployment, which is why it says so rather than sitting
+ * quietly among the export's own settings. It is here because
+ * this is the admin settings page, not because it belongs to the
+ * export.
+ *
+ * Said as an IDLE timeout because that is what it is: the cookie
+ * is re-issued while somebody is working, so the number is how
+ * long a screen can sit untouched, not how long a day can last.
+ */
+function AutoSignOut({ isAdmin }: { isAdmin: boolean }) {
+  const qc = useQueryClient();
+  const q = useQuery({
+    queryKey: ["session-policy"],
+    queryFn: async () => {
+      const res = await fetch("/api/session-policy");
+      if (!res.ok) throw new Error("Could not read it.");
+      return (await res.json()) as
+        { ttlMs: number; minMs: number; maxMs: number; defaultMs: number };
+    },
+  });
+  const [minutes, setMinutes] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    if (q.data) setMinutes(String(Math.round(q.data.ttlMs / 60_000)));
+  }, [q.data?.ttlMs]);
+
+  if (!q.data) return null;
+  const current = Math.round(q.data.ttlMs / 60_000);
+  const dirty = Number(minutes) !== current;
+
+  const save = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const res = await fetch("/api/session-policy", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ttlMs: Math.round(Number(minutes) * 60_000) }),
+      });
+      const body = await res.json() as { ttlMs?: number; error?: string };
+      if (!res.ok) throw new Error(body.error ?? "Could not save it.");
+      await qc.invalidateQueries({ queryKey: ["session-policy"] });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const hours = (ms: number) => Math.round(ms / 3_600_000);
+
+  return (
+    <section className="rounded-xl border border-border p-3.5">
+      <p className="text-sm font-semibold">Automatic sign-out</p>
+      <p className="mt-0.5 text-xs text-muted-foreground">
+        Everybody who signs into this deployment, not one reviewer&rsquo;s import.
+      </p>
+      <label className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+        <span className="font-semibold">Sign out after</span>
+        <input
+          type="number"
+          min={Math.round(q.data.minMs / 60_000)}
+          max={Math.round(q.data.maxMs / 60_000)}
+          value={minutes}
+          disabled={!isAdmin}
+          onChange={(e) => setMinutes(e.target.value)}
+          className="w-24 rounded border border-border bg-background px-1.5 py-1
+                     disabled:opacity-60"
+        />
+        <span className="text-muted-foreground">minutes without activity</span>
+        <button
+          type="button"
+          disabled={!isAdmin || busy || !dirty}
+          onClick={() => void save()}
+          className="rounded-lg bg-foreground px-3 py-1.5 font-semibold text-background
+                     disabled:opacity-40"
+        >
+          {busy ? "Saving…" : "Save"}
+        </button>
+        {saved && <span className="text-emerald-600">Saved</span>}
+      </label>
+      {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
+      <p className="mt-1.5 text-[11px] text-muted-foreground">
+        <strong>Without activity</strong>, not from signing in: the session is renewed
+        while somebody is working, so nobody is thrown out mid-sentence. Between{" "}
+        {Math.round(q.data.minMs / 60_000)} minutes and {hours(q.data.maxMs) / 24} days;
+        the default is {hours(q.data.defaultMs)} hours. It applies to the NEXT sign-in —
+        a session already open keeps the length it was given. Dealer sign-in links can
+        only be shortened by this, never lengthened past {hours(q.data.defaultMs)} hours.
+      </p>
+    </section>
+  );
+}
+
 function SharedDefaults({ data, viewingAs }: { data: Settings; viewingAs: string | null }) {
   const qc = useQueryClient();
   const [sections, setSections] = useState<string[]>(data.sections);

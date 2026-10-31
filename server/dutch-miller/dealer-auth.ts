@@ -4,6 +4,7 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { env } from "../env.js";
 import { publicOrigin } from "../origin.js";
 import { SESSION_TTL_MS, setSessionCookie, type SessionUser } from "../auth/session.js";
+import { sessionTtlMs } from "../auth/session-policy.js";
 import { button, isMailConfigured, layout, sendMail } from "../mail.js";
 import { LOCKOUT, audit, lockState, minutesLeft, requestMeta } from "./audit.js";
 import {
@@ -160,7 +161,18 @@ async function signIn(res: Response, email: string): Promise<SessionUser | null>
     id: row.email,
     email: row.email,
     name,
-    exp: Date.now() + SESSION_TTL_MS,
+    /*
+     * THE SETTING CAN ONLY SHORTEN THIS, never lengthen it.
+     *
+     * A link session belongs to somebody an admin invited from
+     * outside, and the configured sign-out goes up to thirty
+     * days — which is a reasonable thing to want for staff on
+     * their own machines and not a decision anybody made about
+     * dealer access. So shortening reaches everyone, and the
+     * eight-hour default stays the ceiling here. The middleware
+     * does not slide these either.
+     */
+    exp: Date.now() + Math.min(await sessionTtlMs(), SESSION_TTL_MS),
     via: "link",
     epoch: row.sessionEpoch,
   };
