@@ -3083,6 +3083,15 @@ because the expense drawer prints the reader's error.
   Most Compatible, and that is worth saying once rather than 400-ing.
 - **The zoom is for photographs only** — a PDF is already typeset and
   there is nothing to enlarge.
+- **THE BUMP IS HALF THE FIX.** `unreadReceipts` excludes a receipt whose
+  reading failed `MAX_ATTEMPTS` times **at the same reader version**, so
+  every receipt already stored had the 400 recorded against it for ever
+  and the fix would have reached new ones only — the old error would have
+  stayed on screen in the expense drawer indefinitely. `READER_VERSION`
+  is 8. An older version's reading does not count as read, which is
+  exactly the mechanism for this, and it costs one model call per stored
+  receipt, once. `test-alcohol.ts` pins the number so a bump stays
+  deliberate.
 - `scripts/test-receipt-kind.ts`.
 
 **The matching cast to watch for:** `editReceipt`'s file input may not
@@ -3124,6 +3133,12 @@ sixteen after half had been sent.
   see that it landed.
 - Not to be confused with **Queued**, which is the same idea for
   approve/deny decisions. Different stage, different word.
+- **And the card says what is being sent.** "How to tell details on
+  sending?" — it showed the picture and the expense and nothing about
+  the send, while every line was already stored and reachable only from
+  the other page. `SendDetail` lists each write, its value, its state,
+  and the browser's step-by-step log behind "What it did". When a send
+  fails, "failed" is not an answer and the steps are.
 
 ## A submitted expense leaves the queue the moment it is pressed
 

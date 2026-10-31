@@ -1758,6 +1758,12 @@ function MatchedReceipts({ rows, onOpen }: { rows: Row[]; onOpen: (r: Row) => vo
                   Receipts in email.
                 </p>
               )}
+              {/* WHAT IS BEING SENT, on the tab about sending.
+                  The card showed the picture and the expense and
+                  nothing about the send — "how to tell details on
+                  sending?" — while every line of it was stored and
+                  reachable only from the other page. */}
+              {isSendingReceipt(r) && <SendDetail id={r.line.id} />}
               <button
                 type="button"
                 onClick={() => onOpen(r)}
@@ -1849,6 +1855,11 @@ function MatchedReceipts({ rows, onOpen }: { rows: Row[]; onOpen: (r: Row) => vo
  */
 function Candidates({ id, merchant }: { id: string; merchant: string }) {
   const qc = useQueryClient();
+  type Write = {
+    kind: string; proposed: string; was: string; state: string;
+    attempts: number; error: string; settledAt: string | null;
+    steps?: { name: string; ok: boolean; detail: string }[];
+  };
   type Cand = {
     dedupeKey: string; messageId: string; confidence: string; score: number;
     reasons: string[];
@@ -1858,8 +1869,8 @@ function Candidates({ id, merchant }: { id: string; merchant: string }) {
     };
   };
   const [state, setState] = useState<
-    { kind: "loading" } | { kind: "error"; why: string } | { kind: "ok"; list: Cand[] }>(
-    { kind: "loading" });
+    { kind: "loading" } | { kind: "error"; why: string }
+    | { kind: "ok"; list: Cand[]; writes: Write[] }>({ kind: "loading" });
   const [which, setWhich] = useState(0);
   const [busy, setBusy] = useState(false);
 
@@ -1869,10 +1880,11 @@ function Candidates({ id, merchant }: { id: string; merchant: string }) {
       try {
         const res = await fetch(
           `/api/receipt-mail/for-expense?dedupeKey=${encodeURIComponent(id)}`);
-        const out = await res.json() as { candidates?: Cand[]; error?: string };
+        const out = await res.json() as
+          { candidates?: Cand[]; writes?: Write[]; error?: string };
         if (dropped) return;
         if (!res.ok) { setState({ kind: "error", why: out.error ?? "Could not read it." }); return; }
-        setState({ kind: "ok", list: out.candidates ?? [] });
+        setState({ kind: "ok", list: out.candidates ?? [], writes: out.writes ?? [] });
       } catch (e) {
         if (!dropped) setState({ kind: "error", why: (e as Error).message });
       }
@@ -1995,6 +2007,102 @@ function Candidates({ id, merchant }: { id: string; merchant: string }) {
         Choosing pulls the image into the app. Nothing reaches Emburse until you press
         Send, on Receipts in email.
       </p>
+    </div>
+  );
+}
+
+/**
+ * What is on its way to Emburse for one expense, and how far it got.
+ *
+ * Asked for as *"how to tell details on sending?"* — the Sending
+ * tab had the receipt and the expense on it and said nothing
+ * about the send, while all of this was already stored: what
+ * each line will set, the state it reached, how many attempts it
+ * took, and the browser's own step-by-step log of the visit.
+ *
+ * The log is the part worth having. When a send fails, "failed"
+ * is not an answer and the steps are: signed in, found the row,
+ * opened the edit form, and then whichever step stopped, with
+ * the reason it stopped on it.
+ */
+function SendDetail({ id }: { id: string }) {
+  type W = {
+    kind: string; proposed: string; was: string; state: string;
+    attempts: number; error: string; settledAt: string | null;
+    steps?: { name: string; ok: boolean; detail: string }[];
+  };
+  const [writes, setWrites] = useState<W[] | null>(null);
+
+  useEffect(() => {
+    let dropped = false;
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/receipt-mail/for-expense?dedupeKey=${encodeURIComponent(id)}`);
+        const out = await res.json() as { writes?: W[] };
+        if (!dropped && res.ok) setWrites(out.writes ?? []);
+      } catch { /* the card is still useful without it */ }
+    })();
+    return () => { dropped = true; };
+  }, [id]);
+
+  if (!writes || writes.length === 0) return null;
+
+  const LABEL: Record<string, string> = {
+    receipt: "Attach", note: "Description", category: "Category",
+    purpose: "Business Purpose", location: "Location / Site",
+    department: "Department", comment: "Comment",
+  };
+
+  return (
+    <div className="space-y-1.5 rounded-lg border border-border bg-muted/20 p-2.5 text-xs">
+      <p className="font-semibold">Sent to Emburse under your own login</p>
+      <ul className="space-y-1">
+        {writes.map((w) => (
+          <li key={w.kind} className="flex flex-wrap items-start gap-x-2 gap-y-0.5">
+            <span className="font-semibold">{LABEL[w.kind] ?? w.kind}</span>
+            <span className="min-w-32 flex-1 break-words text-muted-foreground">
+              {w.proposed}
+            </span>
+            <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+              w.state === "applied" || w.state === "already"
+                ? "bg-emerald-600/15 text-emerald-700 dark:text-emerald-400"
+                : w.state === "failed" || w.state === "stale"
+                  ? "bg-red-500/15 text-red-700 dark:text-red-400"
+                  : "bg-sky-600/15 text-sky-700 dark:text-sky-400"}`}
+            >
+              {w.state === "applied" ? "done"
+                : w.state === "already" ? "already there"
+                  : w.state === "queued" ? "sending"
+                    : w.state === "proposed" ? "not sent yet" : w.state}
+            </span>
+            {w.error && (
+              <span className="w-full text-red-700 dark:text-red-400">{w.error}</span>
+            )}
+            {(w.steps ?? []).length > 0 && (
+              <details className="w-full">
+                <summary className="cursor-pointer text-[11px] text-muted-foreground">
+                  What it did{w.attempts > 1 ? ` · attempt ${w.attempts}` : ""}
+                  {w.settledAt ? ` · ${new Date(w.settledAt).toLocaleString()}` : ""}
+                </summary>
+                <ol className="mt-1 space-y-0.5">
+                  {(w.steps ?? []).map((st, i) => (
+                    <li key={`${st.name}-${i}`} className="flex items-start gap-1.5">
+                      <span className={st.ok
+                        ? "text-emerald-700 dark:text-emerald-400"
+                        : "text-red-700 dark:text-red-400"}>{st.ok ? "✓" : "✗"}</span>
+                      <span className="font-semibold">{st.name}</span>
+                      <span className="min-w-0 flex-1 break-words text-muted-foreground">
+                        {st.detail}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              </details>
+            )}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

@@ -214,7 +214,15 @@ try {
   }
 
   console.log("\n7. The reader was bumped, so stored readings are done again");
-  check("reader version is 7", items.READER_VERSION === 7, String(items.READER_VERSION));
+  /*
+   * Pinned so a bump is deliberate: it costs one model call per
+   * stored receipt. Raised to 8 when PDFs started going up as
+   * document blocks — every emailed receipt had failed at 7 with
+   * attempts spent, and a failure at the same version is excluded
+   * for ever, so without the bump the fix would have reached new
+   * receipts only.
+   */
+  check("reader version is 8", items.READER_VERSION === 8, String(items.READER_VERSION));
 } finally {
   await clean();
   await db().end();

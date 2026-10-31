@@ -318,8 +318,16 @@ export const ensureReceiptItems = ensure;
  *       receipt is sent again enlarged so the pen is legible.
  *   5 — an energy drink is not alcohol. Every Red Bull on a fuel-stop
  *       receipt was coming back flagged as a drink.
+ *   8 — A PDF IS SENT AS A DOCUMENT. Until this, the declared content
+ *       type was cast to the four an image block accepts, so every
+ *       emailed receipt — all of which are PDFs — came back 400 and was
+ *       recorded as a failed reading. Those rows are the reason this is
+ *       bumped rather than left: a failure at the same reader version
+ *       with `attempts >= MAX_ATTEMPTS` is excluded for ever, so without
+ *       a bump the fix would reach new receipts only and every receipt
+ *       already here would stay unread with the old error on screen.
  */
-export const READER_VERSION = 7;
+export const READER_VERSION = 8;
 
 /**
  * Lines that are never alcohol, whatever the model decides.

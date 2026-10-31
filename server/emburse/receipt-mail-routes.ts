@@ -631,6 +631,17 @@ receiptMailRouter.get("/receipt-mail/for-expense", requireAuth,
         candidates: mine.filter((m) => m.state === "candidate")
           .sort((a, b) => b.score - a.score),
         chosen: mine.find((m) => m.state === "chosen" || m.state === "attached") ?? null,
+        /*
+         * WHAT IS BEING SENT, AND HOW FAR IT HAS GOT.
+         *
+         * The Sending tab showed the picture and the expense and
+         * nothing about the send itself — "how to tell details on
+         * sending?". Each write carries its proposed value, its
+         * state, the attempt count and the browser's step-by-step
+         * log, all of which were already stored and reachable
+         * only from the other page.
+         */
+        writes: await writesFor(dedupeKey),
       });
     } catch (err) {
       res.status(500).json({
