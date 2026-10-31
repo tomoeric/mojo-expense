@@ -24,6 +24,8 @@ type Settings = {
   defaultSelectors: Record<string, string>;
   receiptsOnly: boolean;
   schedule: Schedule;
+  /** How long one browser step may take, in milliseconds. */
+  stepTimeoutMs: number;
   updatedAt: string | null;
   updatedBy: string | null;
   allSections: string[];
@@ -864,6 +866,8 @@ function SharedDefaults({ data, viewingAs }: { data: Settings; viewingAs: string
   const [receiptsOnly, setReceiptsOnly] = useState(data.receiptsOnly);
   const [schedule, setSchedule] = useState<Schedule>(data.schedule);
   const [sources, setSources] = useState<ImportSource[]>(data.sources ?? []);
+  const [stepSeconds, setStepSeconds] = useState(
+    String(Math.round((data.stepTimeoutMs ?? 30_000) / 1000)));
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
@@ -876,6 +880,7 @@ function SharedDefaults({ data, viewingAs }: { data: Settings; viewingAs: string
     setReceiptsOnly(data.receiptsOnly);
     setSchedule(data.schedule);
     setSources(data.sources ?? []);
+    setStepSeconds(String(Math.round((data.stepTimeoutMs ?? 30_000) / 1000)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.updatedAt]);
 
@@ -883,7 +888,8 @@ function SharedDefaults({ data, viewingAs }: { data: Settings; viewingAs: string
     JSON.stringify(sections) !== JSON.stringify(data.sections) ||
     receiptsOnly !== data.receiptsOnly ||
     JSON.stringify(schedule) !== JSON.stringify(data.schedule) ||
-    JSON.stringify(sources) !== JSON.stringify(data.sources);
+    JSON.stringify(sources) !== JSON.stringify(data.sources) ||
+    Number(stepSeconds) * 1000 !== data.stepTimeoutMs;
 
   async function save() {
     setSaving(true);
@@ -892,7 +898,10 @@ function SharedDefaults({ data, viewingAs }: { data: Settings; viewingAs: string
       const res = await fetch("/api/export-settings", {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ sections, receiptsOnly, schedule, sources }),
+        body: JSON.stringify({
+          sections, receiptsOnly, schedule, sources,
+          stepTimeoutMs: Math.round(Number(stepSeconds) * 1000),
+        }),
       });
       const body = (await res.json()) as Settings & { error?: string };
       if (!res.ok) throw new Error(body.error ?? `Save failed (${res.status})`);
@@ -962,6 +971,40 @@ function SharedDefaults({ data, viewingAs }: { data: Settings; viewingAs: string
         />
         <span>
           <strong>Receipts: true</strong> — only expenses with a receipt attached.
+        </span>
+      </label>
+
+      {/*
+        * HOW LONG ONE STEP MAY WAIT.
+        *
+        * It was EMBURSE_STEP_TIMEOUT_MS and nothing else, so
+        * giving a slow tenant longer meant a secret and a
+        * redeploy — the same reason the selectors and the URL
+        * are stored rather than compiled in.
+        *
+        * Said in both directions, because it cuts both ways:
+        * too short kills a sound run mid-save, too long holds
+        * the browser on a page that was never going to load.
+        */}
+      <label className="mt-3 block text-xs">
+        <span className="font-semibold">How long one browser step may take</span>
+        <span className="mt-0.5 flex items-center gap-2">
+          <input
+            type="number"
+            min={5}
+            max={600}
+            value={stepSeconds}
+            onChange={(e) => setStepSeconds(e.target.value)}
+            className="w-20 rounded border border-border bg-background px-1.5 py-1"
+          />
+          <span className="text-muted-foreground">seconds</span>
+        </span>
+        <span className="mt-0.5 block text-[11px] text-muted-foreground">
+          Every wait in the automation is bounded by this — finding the row, opening the
+          edit form, typing into a box, pressing Save. Too short and a sound run dies
+          mid-save; too long and a page that was never going to load holds the browser
+          before it says so. Between 5 and 600 seconds; anything else falls back to the
+          deployment&rsquo;s own default rather than a number nobody chose.
         </span>
       </label>
 

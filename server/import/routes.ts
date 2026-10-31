@@ -391,7 +391,10 @@ importRouter.get("/export-settings", requireAuth, async (_req: Request, res: Res
 importRouter.put("/export-settings", requireAuth, requireAdmin, async (req: Request, res: Response) => {
   if (!guard(res)) return;
 
-  const body = req.body as { sections?: unknown; receiptsOnly?: unknown; schedule?: unknown; selectors?: unknown; emburseUrl?: unknown; sources?: unknown };
+  const body = req.body as {
+    sections?: unknown; receiptsOnly?: unknown; schedule?: unknown; selectors?: unknown;
+    emburseUrl?: unknown; sources?: unknown; stepTimeoutMs?: unknown;
+  };
   const sent = Array.isArray(body.sections)
     ? body.sections.filter((s): s is string => typeof s === "string") : null;
   if (sent) {
@@ -421,6 +424,9 @@ importRouter.put("/export-settings", requireAuth, requireAdmin, async (req: Requ
       (body.emburseUrl as string) ?? current.emburseUrl,
       req.user?.email ?? "unknown",
       (body.sources as never) ?? current.sources,
+      // Out of range falls back to the env default rather than
+      // being clamped to a number nobody chose — see cleanTimeout.
+      typeof body.stepTimeoutMs === "number" ? body.stepTimeoutMs : current.stepTimeoutMs,
     );
     res.json({ ...saved, allSections: ALL_SECTIONS, selectorHelp: SELECTOR_HELP,
       stepSelectors: STEP_SELECTORS, defaultSelectors: DEFAULT_SELECTORS });

@@ -72,6 +72,30 @@ export type DecisionSelectorKey =
   | "editPurpose" | "editLocation" | "editDepartment" | "editComment"
   | "editReceiptOpen";
 
+/**
+ * HOW LONG ONE STEP MAY TAKE, and where that number comes from.
+ *
+ * `EMBURSE_STEP_TIMEOUT_MS` is the default and the stored
+ * Export setting overrides it, so giving a slow tenant longer is
+ * a field on a page rather than a secret and a redeploy — the
+ * same reasoning as the selectors and the Emburse URL, which are
+ * stored for exactly that reason.
+ *
+ * Set from `readSettings()`, which every path that opens a
+ * browser already calls, so no caller has to remember.
+ */
+let stepOverrideMs: number | null = null;
+
+export function setStepTimeoutMs(ms: number | null | undefined): void {
+  stepOverrideMs = typeof ms === "number" && Number.isFinite(ms) && ms > 0
+    ? Math.round(ms)
+    : null;
+}
+
+export function stepTimeoutMs(): number {
+  return stepOverrideMs ?? env.emburseLogin.stepTimeoutMs;
+}
+
 export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
   // Both grid shapes, because Emburse uses the second one.
   //
@@ -561,7 +585,7 @@ export async function runDecision(
     const opened = await openBrowser(login.email);
     close = opened.close;
     page = await opened.context.newPage();
-    page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
+    page.setDefaultTimeout(stepTimeoutMs());
 
     const ok = await drive(page, decision, target, reason, sel, emburseUrl, login, step, opts, (t) => (matchedRow = t));
     // Whatever the decision itself did, a sign-in that got through is worth
@@ -643,7 +667,7 @@ export async function runDecisions(
       let opened = await openBrowser(login.email);
       close = opened.close;
       page = await opened.context.newPage();
-      page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
+      page.setDefaultTimeout(stepTimeoutMs());
 
       // Once, for the whole batch.
       const shared: StepResult[] = [];
@@ -671,7 +695,7 @@ export async function runDecisions(
         opened = await openBrowser(login.email);
         close = opened.close;
         page = await opened.context.newPage();
-        page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
+        page.setDefaultTimeout(stepTimeoutMs());
         signedIn = await signInOnce(page, sel, emburseUrl, login, makeStepper(shared), opts.onChallenge);
       }
 
@@ -1647,7 +1671,7 @@ export async function inspectEditForm(
       const opened = await openBrowser(login.email);
       close = opened.close;
       page = await opened.context.newPage();
-      page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
+      page.setDefaultTimeout(stepTimeoutMs());
 
       if (!(await signInOnce(page, sel, emburseUrl, login, step, opts.onChallenge))) {
         return { ok: false, steps, matchedRow: null, screenshot: null };
@@ -1655,7 +1679,7 @@ export async function inspectEditForm(
       await keepTrust(opened.context, login.email);
 
       let row: Locator | null = null;
-      const ms = env.emburseLogin.stepTimeoutMs;
+      const ms = stepTimeoutMs();
 
       if (!(await step("find the expense", async () => {
         // The same ladder as the decision path: one term is not enough on a
@@ -1773,7 +1797,7 @@ export async function testConnection(
       close = opened.close;
       const sheet = await opened.context.newPage();
       page = sheet;
-      sheet.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
+      sheet.setDefaultTimeout(stepTimeoutMs());
 
       let ok = await signInOnce(sheet, sel, emburseUrl, login, step, opts.onChallenge);
       if (ok) await keepTrust(opened.context, login.email);
@@ -2484,7 +2508,7 @@ async function applyOne(
       // the row would fail on a page where approving works, which is worse
       // than not testing at all: it is a test that disagrees with the thing
       // it tests.
-      const ms = env.emburseLogin.stepTimeoutMs;
+      const ms = stepTimeoutMs();
       if (decision === "approve") {
         await controlForRow(page, row!, sel.approveButton!, "APPROVE button", ms);
         return "found the row and its APPROVE button; stopped without approving";
@@ -2512,7 +2536,7 @@ async function applyOne(
     });
   }
 
-  const ms = env.emburseLogin.stepTimeoutMs;
+  const ms = stepTimeoutMs();
 
   if (decision === "approve") {
     return step("approve", async () => {
@@ -2761,14 +2785,14 @@ export async function correctCategory(
       const opened = await openBrowser(login.email);
       close = opened.close;
       page = await opened.context.newPage();
-      page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
+      page.setDefaultTimeout(stepTimeoutMs());
 
       if (!(await signInOnce(page, sel, emburseUrl, login, step, opts.onChallenge))) {
         return { ok: false, steps, matchedRow: null, screenshot: null };
       }
       await keepTrust(opened.context, login.email);
 
-      const ms = env.emburseLogin.stepTimeoutMs;
+      const ms = stepTimeoutMs();
       let row: Locator | null = null;
 
       if (!(await step("find the expense", async () => {
@@ -3192,14 +3216,14 @@ export async function attachAndAnnotate(
       const opened = await openBrowser(login.email);
       close = opened.close;
       page = await opened.context.newPage();
-      page.setDefaultTimeout(env.emburseLogin.stepTimeoutMs);
+      page.setDefaultTimeout(stepTimeoutMs());
 
       if (!(await signInOnce(page, sel, emburseUrl, login, step, opts.onChallenge))) {
         return { ok: false, steps, matchedRow: null, screenshot: null };
       }
       await keepTrust(opened.context, login.email);
 
-      const ms = env.emburseLogin.stepTimeoutMs;
+      const ms = stepTimeoutMs();
       let row: Locator | null = null;
 
       if (!(await step("find the expense", async () => {

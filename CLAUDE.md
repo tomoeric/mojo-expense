@@ -3184,6 +3184,31 @@ table: `queued` is a state name, **sending** is what is happening.
 | already | already there |
 | failed | needs a look |
 
+## The browser step timeout is a SETTING, not a redeploy
+
+Every wait in the automation is bounded by one number — finding the row,
+opening the edit form, typing into a box, pressing Save. It was
+`EMBURSE_STEP_TIMEOUT_MS` and nothing else, so giving a slow tenant
+longer meant a secret and a redeploy. The selectors and the Emburse URL
+are stored for exactly that reason; this is the same argument.
+
+- **Export settings → "How long one browser step may take"**, in seconds.
+  Stored in `export_settings.step_timeout_ms`; null means the env var,
+  so a deployment that never touches it behaves as it did.
+- **`readSettings()` applies it**, via `setStepTimeoutMs()` in
+  `decide.ts`. Every path that opens a browser reads the settings first —
+  scheduler, decision worker, write-back, connection test — so that is
+  the one place none of them can forget. Per call site is how the fifth
+  one, added later, silently keeps the old default.
+- **Out of range falls back; it is not clamped.** Below 5s would fail
+  every run, above 10 minutes is a browser nobody is watching holding a
+  lock. Either way the deployment's own default stands rather than a
+  number the person did not choose.
+- It cuts both ways and the page says so: too short kills a sound run
+  mid-save, too long holds the browser on a page that was never going to
+  load.
+- `scripts/test-step-timeout.ts`.
+
 ## There is ONE way to start a browser: `launchChromium()`
 
 A bare `chromium.launch()` takes Playwright's bundled browser, which this

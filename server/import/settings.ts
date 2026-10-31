@@ -50,6 +50,22 @@ export type ExportSettings = {
   schedule: Schedule;
   /** Which Emburse lists to import, and where each one lives. */
   sources: ImportSource[];
+  /**
+   * HOW LONG ONE BROWSER STEP MAY TAKE, in milliseconds.
+   *
+   * Every wait in the automation is bounded by this: finding the
+   * row, opening the edit form, typing into a box, pressing
+   * Save. It was `EMBURSE_STEP_TIMEOUT_MS` and nothing else, so
+   * the only way to give a slow tenant longer was a secret and a
+   * redeploy — the same reason the selectors and the URL are
+   * stored rather than compiled in.
+   *
+   * It cuts both ways and that is the point. Too short and a
+   * sound run dies mid-save; too long and a page that is never
+   * going to load holds the browser for minutes before saying
+   * so.
+   */
+  stepTimeoutMs: number;
   updatedAt: string | null;
   updatedBy: string | null;
 };
@@ -159,6 +175,10 @@ ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS grace_minutes   integer;
 ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS selectors       jsonb;
 ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS emburse_url     text;
 ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS sources         jsonb;
+-- How long one browser step may take. Null means "whatever
+-- EMBURSE_STEP_TIMEOUT_MS says", which is what every deployment did
+-- before this column existed.
+ALTER TABLE export_settings ADD COLUMN IF NOT EXISTS step_timeout_ms integer;
 
 -- Turning the import from "once a day, retry until it works" into "keep up
 -- with Emburse all day", for a database that already has a schedule in it.
@@ -221,21 +241,36 @@ export async function readSettings(): Promise<ExportSettings> {
     retry_hours: number | null; attempts_per_day: number | null; grace_minutes: number | null;
     selectors: Record<string, string> | null; emburse_url: string | null;
     all_day: boolean | null; sources: ImportSource[] | null;
+    step_timeout_ms: number | null;
   }>(`SELECT sections, receipts_only, updated_at, updated_by,
              timezone, first_run, retry_hours, attempts_per_day, grace_minutes, selectors,
-             emburse_url, all_day, sources
+             emburse_url, all_day, sources, step_timeout_ms
         FROM export_settings WHERE id`);
 
   const row = rows[0];
   const fallback = envSchedule();
+  /*
+   * Applied HERE rather than at each call site.
+   *
+   * Every path that opens a browser reads the settings first —
+   * the scheduler, the decision worker, the write-back, the
+   * connection test — so setting it once on the read is the one
+   * place none of them can forget. Doing it per caller is how
+   * the fifth one, added later, silently keeps the old default.
+   */
+  const { setStepTimeoutMs } = await import("../emburse/decide.js");
   if (!row) {
+    setStepTimeoutMs(null);
     return {
       sections: DEFAULT_SECTIONS, receiptsOnly: true, schedule: fallback,
       sources: DEFAULT_SOURCES.map((x) => ({ ...x })),
       selectors: { ...DEFAULT_SELECTORS }, emburseUrl: env.emburseLogin.url,
+      stepTimeoutMs: env.emburseLogin.stepTimeoutMs,
       updatedAt: null, updatedBy: null,
     };
   }
+  const stepMs = cleanTimeout(row.step_timeout_ms);
+  setStepTimeoutMs(stepMs);
   return {
     sections: usableSections(row.sections),
     receiptsOnly: row.receipts_only,
@@ -257,9 +292,33 @@ export async function readSettings(): Promise<ExportSettings> {
     // Defaults first, so a list added in a later release appears for
     // everybody rather than only on a fresh database.
     sources: mergeSources(row.sources),
+    // The env var remains the default, so a deployment that never
+    // touches this behaves exactly as it did.
+    stepTimeoutMs: stepMs,
     updatedAt: row.updated_at.toISOString(),
     updatedBy: row.updated_by,
   };
+}
+
+/**
+ * A timeout somebody typed, made safe.
+ *
+ * Bounded at both ends rather than trusted: five seconds is
+ * below the time Emburse's grid takes to paint on a good day and
+ * would fail every run, and ten minutes is a browser nobody is
+ * watching holding a lock. Anything outside falls back to the
+ * env default rather than being clamped silently to a number the
+ * person did not choose.
+ */
+export const MIN_STEP_TIMEOUT_MS = 5_000;
+export const MAX_STEP_TIMEOUT_MS = 600_000;
+
+function cleanTimeout(given: number | null | undefined): number {
+  const n = Number(given);
+  if (!Number.isFinite(n) || n < MIN_STEP_TIMEOUT_MS || n > MAX_STEP_TIMEOUT_MS) {
+    return env.emburseLogin.stepTimeoutMs;
+  }
+  return Math.round(n);
 }
 
 export async function writeSettings(
@@ -270,6 +329,7 @@ export async function writeSettings(
   emburseUrl: string,
   updatedBy: string,
   sources?: ImportSource[],
+  stepTimeoutMs?: number,
 ): Promise<ExportSettings> {
   await ensure();
   // Store in the dialog's own order so a round-trip never reshuffles the UI.
@@ -282,20 +342,21 @@ export async function writeSettings(
   await db().query(
     `INSERT INTO export_settings (id, sections, receipts_only, timezone, first_run,
                                   retry_hours, attempts_per_day, grace_minutes, selectors,
-                                  emburse_url, all_day, sources, updated_at, updated_by)
-     VALUES (true, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), $12)
+                                  emburse_url, all_day, sources, step_timeout_ms,
+                                  updated_at, updated_by)
+     VALUES (true, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $13, now(), $12)
      ON CONFLICT (id) DO UPDATE SET
        sections = EXCLUDED.sections, receipts_only = EXCLUDED.receipts_only,
        timezone = EXCLUDED.timezone, first_run = EXCLUDED.first_run,
        retry_hours = EXCLUDED.retry_hours, attempts_per_day = EXCLUDED.attempts_per_day,
        grace_minutes = EXCLUDED.grace_minutes, selectors = EXCLUDED.selectors,
        emburse_url = EXCLUDED.emburse_url, all_day = EXCLUDED.all_day,
-       sources = EXCLUDED.sources,
+       sources = EXCLUDED.sources, step_timeout_ms = EXCLUDED.step_timeout_ms,
        updated_at = now(), updated_by = EXCLUDED.updated_by`,
     [ordered, receiptsOnly, schedule.timezone, schedule.firstRun, schedule.retryHours,
      schedule.attemptsPerDay, schedule.graceMinutes, JSON.stringify(overrides),
      cleanUrl(emburseUrl, env.emburseLogin.url), schedule.allDay,
-     JSON.stringify(cleanSources(sources)), updatedBy],
+     JSON.stringify(cleanSources(sources)), updatedBy, cleanTimeout(stepTimeoutMs)],
   );
   return readSettings();
 }
