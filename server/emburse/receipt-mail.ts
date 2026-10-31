@@ -1,4 +1,5 @@
-import { GRAPH, forgetGraphToken, graphToken, isGraphConfigured } from "../mail.js";
+import { isGraphConfigured } from "../mail.js";
+import { graphRead } from "../graph-read.js";
 import { db, ensureSchema } from "../db.js";
 
 /**
@@ -141,6 +142,26 @@ CREATE INDEX IF NOT EXISTS receipt_mail_matches_message
  */
 ALTER TABLE receipt_mail_matches ADD COLUMN IF NOT EXISTS linked_sha256 text;
 ALTER TABLE receipt_mail_matches ADD COLUMN IF NOT EXISTS link_error text NOT NULL DEFAULT '';
+
+/**
+ * The preview's bytes, once, so looking at a card is not a Graph call.
+ *
+ * The card shows the receipt. Twelve cards on screen were twelve
+ * message reads in a second from one app registration, and Graph
+ * answered the way it answers that: 429. Each preview is now stored in
+ * the receipt_blobs table the first time it is fetched and served from
+ * there afterwards, so a page of cards costs one read per receipt in
+ * its whole life rather than one per look.
+ *
+ * The same bytes the upload sends, and the same bytes choosing the
+ * match links, so a chosen preview is already in the app.
+ *
+ * A CACHE, not a record: the import's orphan purge reclaims blobs that
+ * no expense links, which includes previews of matches nobody chose.
+ * A miss here falls through to the mailbox, which is the behaviour this
+ * replaced.
+ */
+ALTER TABLE receipt_mail_matches ADD COLUMN IF NOT EXISTS preview_sha256 text;
 `;
 
 let ready: Promise<void> | null = null;
@@ -207,26 +228,18 @@ type GraphMessage = {
 };
 
 const get = async <T>(path: string): Promise<T> => {
-  let res = await fetch(`${GRAPH}${path}`, {
-    headers: { authorization: `Bearer ${await graphToken()}` },
-  });
   /*
-   * ONE RETRY ON A FRESH TOKEN, because a 403 can be an hour out of date.
+   * THROUGH THE ONE DOOR, which handles both the 403 token refresh this
+   * used to do itself and the throttling it did not.
    *
-   * The token carries the app's roles as claims, frozen when it was
-   * issued, and it is cached for most of an hour. So granting Mail.Read
-   * to a running app changes nothing until that hour is up: the next
-   * press fails with exactly the 403 it failed with before the grant,
-   * and the obvious conclusion — "the permission did not take" — is
-   * wrong. That cost a round of checking a consent that was already
-   * there. Minting a new one is a single cheap call and settles it.
+   * The fresh-token retry on a 403 is unchanged in effect — a token
+   * carries the app's roles frozen at issue and is cached for most of an
+   * hour, so a grant made five minutes ago fails with exactly the 403 it
+   * failed with before, and "the permission did not take" is the wrong
+   * conclusion. It now lives in `graphRead`, with the 429 handling, so
+   * the attachment and body reads get both as well.
    */
-  if (res.status === 403) {
-    forgetGraphToken();
-    res = await fetch(`${GRAPH}${path}`, {
-      headers: { authorization: `Bearer ${await graphToken()}` },
-    });
-  }
+  const res = await graphRead(path);
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
     throw new Error(graphWhy(res.status, detail));
@@ -265,6 +278,21 @@ export function graphWhy(status: number, body: string): string {
   const entra = /Authorization_RequestDenied|Insufficient privileges/i.test(body);
   const exchange = /ErrorAccessDenied|ODataAuthorizationException/i.test(body);
 
+  /*
+   * THROTTLED, not refused. Worth its own words because the two read
+   * the same from a card and have opposite remedies: a 403 is a grant
+   * to go and fix, a 429 is Microsoft asking for a moment. `graphRead`
+   * already waited out `Retry-After` several times over before this
+   * text can be reached, so by the time it is shown the mailbox really
+   * is busy.
+   */
+  if (status === 429) {
+    return "Microsoft is rate-limiting this app (429) and kept doing so through "
+      + "several waits. Nothing is wrong with the mailbox or the permissions — the "
+      + "app simply asked for too much at once. It will work on the next press; a "
+      + "scan of a smaller window, or fewer days, asks for less. "
+      + `Graph said: ${brief}`;
+  }
   if (status === 404) {
     return `Graph has no such mailbox or folder (404). Check the address is exactly right `
       + `and that the folder name matches. Graph said: ${brief}`;

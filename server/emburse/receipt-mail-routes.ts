@@ -16,7 +16,9 @@ import {
   deleteRule, FIELD_LABEL, FILL_FIELDS, pick as pickRule, rulesFor, saveRule,
   suggestions,
 } from "./fill-rules.js";
-import { bytesFromMessage, linkReceipt, readingOf } from "./receipt-link.js";
+import {
+  bytesFromMessage, linkReceipt, linkedBytes, readingOf, storeBlob,
+} from "./receipt-link.js";
 /*
  * THE QUEUE IS CACHED, AND THESE ROUTES CHANGE WHAT IT SAYS.
  *
@@ -400,6 +402,20 @@ function explainGraph(err: unknown, mailbox: string, me: string): string {
   return text;
 }
 
+/** One place the preview's headers are set, wherever the bytes came from. */
+function serve(
+  res: Response, file: { name: string; contentType: string; bytes: Buffer },
+): void {
+  res.setHeader("content-type", file.contentType);
+  // Inline, and named, so a browser shows it rather than saving it.
+  res.setHeader("content-disposition",
+    `inline; filename="${file.name.replace(/[^\w.\- ]+/g, "_")}"`);
+  // A receipt is somebody's own spending, so private; and briefly, because
+  // the app's own copy is now the fast path and the browser's adds little.
+  res.setHeader("cache-control", "private, max-age=300");
+  res.send(file.bytes);
+}
+
 /**
  * THE RECEIPT ITSELF, so a match can be looked at before it is believed.
  *
@@ -432,11 +448,15 @@ receiptMailRouter.get("/receipt-mail/preview", requireAuth,
       return;
     }
     try {
-      const { rows } = await db().query<{ evidence: unknown }>(
-        `SELECT m.evidence
+      const { rows } = await db().query<{
+        evidence: unknown; dedupe_key: string; have: string | null;
+      }>(
+        `SELECT m.evidence, m.dedupe_key,
+                coalesce(m.linked_sha256, m.preview_sha256) AS have
            FROM receipt_mail_matches m
            JOIN expenses e ON e.dedupe_key = m.dedupe_key
           WHERE m.message_id = $1 AND lower(e.reviewer) = lower($2)
+          ORDER BY coalesce(m.linked_sha256, m.preview_sha256) IS NULL
           LIMIT 1`,
         [messageId, me]);
       if (rows.length === 0) {
@@ -445,6 +465,31 @@ receiptMailRouter.get("/receipt-mail/preview", requireAuth,
         });
         return;
       }
+      /*
+       * FROM THE APP, IF THE BYTES ARE ALREADY HERE.
+       *
+       * Every look at a card used to be a Graph call, and twelve cards
+       * on screen are twelve reads in one second from one app
+       * registration — which is how *"Graph would not hand over the
+       * message (429)"* started appearing. The first fetch is kept
+       * below; after that this is a database read, Graph is not
+       * touched, and a message that has since been filed or deleted
+       * still previews.
+       *
+       * `linked_sha256` first: a chosen match already holds the file.
+       * `preview_sha256` is the same bytes kept for a match nobody has
+       * decided yet.
+       */
+      const have = rows[0]!.have;
+      if (have) {
+        const held = await linkedBytes(have);
+        if (held) {
+          serve(res, held);
+          return;
+        }
+        // The purge reclaimed it. Fetch it again, below.
+      }
+
       const ev = (rows[0]!.evidence ?? {}) as {
         subject?: string;
         attachments?: { id: string; name: string; contentType: string }[];
@@ -465,14 +510,20 @@ receiptMailRouter.get("/receipt-mail/preview", requireAuth,
         attachmentId: file?.id ?? "",
         subject: ev.subject ?? "receipt",
       });
-      res.setHeader("content-type", got.contentType);
-      // Inline, and named, so a browser shows it rather than saving it.
-      res.setHeader("content-disposition",
-        `inline; filename="${got.name.replace(/[^\w.\- ]+/g, "_")}"`);
-      // A receipt is somebody's own spending. Private, and short, because
-      // the message can be deleted or moved out from under this.
-      res.setHeader("cache-control", "private, max-age=300");
-      res.send(got.bytes);
+      /*
+       * Kept, so this is the last time the mailbox is asked for it.
+       * Stored WITHOUT linking it to the expense — a look is not a
+       * decision, and the receipt must not appear on the claim because
+       * somebody scrolled past it.
+       */
+      const sha = await storeBlob(got.bytes, got.contentType).catch(() => "");
+      if (sha) {
+        await db().query(
+          `UPDATE receipt_mail_matches SET preview_sha256 = $2
+            WHERE message_id = $1 AND preview_sha256 IS NULL`,
+          [messageId, sha]).catch(() => undefined);
+      }
+      serve(res, got);
     } catch (err) {
       res.status(400).json({
         error: err instanceof Error ? err.message : "That receipt could not be fetched.",

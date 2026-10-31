@@ -3625,6 +3625,50 @@ candidate card, behind a "Show the receipt" press.
   which an `<img>` shows a broken icon, and an image attachment falls
   through to the `<img>` and displays properly.
 
+## Every Graph READ goes through `graphRead` (`server/graph-read.ts`)
+
+- **Graph rate-limits, and 429 is not an error to show somebody.** It
+  means "ask again in N seconds" and says how long in `Retry-After`.
+  Three call sites used bare `fetch` and read that header in none of
+  their code, so the first throttled call put *"Graph would not hand over
+  the message (429)"* in red on a card about a perfectly good receipt.
+  `graphRead` waits exactly as long as Graph asks (capped at 20s), up to
+  four attempts, and retries 429/503/504.
+- **One 429 holds back every Graph read in the process.** A module-level
+  gate: whoever gets throttled sets it, everyone else waits behind it
+  rather than spending their own retry budget discovering the same thing.
+  Twelve cards back off once, together.
+- **It also carries the 403 fresh-token retry**, so the attachment and
+  body reads get it too — they never had it, and a grant made minutes ago
+  failed there for an hour with no explanation.
+- **Why it started:** the Receipts tab shows the picture on every card
+  and the photo reader fetches one attachment per photograph. A screen of
+  twelve cards was twelve message reads in one second from one app
+  registration; Graph's per-app budget is measured over ten-second
+  windows. The old version read one message per press.
+- **NEW GRAPH READS GO THROUGH IT.** A bare `fetch` to `GRAPH` anywhere
+  reintroduces all of the above. `graphWhy` has words for a 429 as a last
+  resort, reached only when the whole budget is spent.
+
+## A preview is fetched once, then served from the app
+
+- **`receipt_mail_matches.preview_sha256`** points at the same
+  `receipt_blobs` row every other receipt lives in. First look fetches
+  from the mailbox and keeps the bytes; every look after that is a
+  database read, Graph is untouched, and a message filed or deleted since
+  the match still previews.
+- **Stored WITHOUT linking it to the expense.** Scrolling past a
+  candidate is not a decision that it is the right receipt, so
+  `storeBlob` (the storing half of `linkReceipt`) is what the preview
+  calls. `linked_sha256` is preferred when the match HAS been chosen.
+- **A cache, not a record.** The import's orphan purge reclaims blobs no
+  expense links, previews included; a miss falls through to the mailbox,
+  which is what this replaced. Don't "fix" that by teaching the purge to
+  keep them — it is also what reclaims the space.
+- Covered by `scripts/test-preview-cache.ts`, which proves it by deleting
+  the Microsoft credentials: a preview that answers at all can only have
+  come from the app's own copy.
+
 ## The mailbox is one tenant's, and one mailbox feeds both tabs
 
 - **A 403 CAN BE AN HOUR OUT OF DATE.** The app-only token carries the

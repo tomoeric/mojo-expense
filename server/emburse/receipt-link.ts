@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { db, ensureSchema } from "../db.js";
-import { GRAPH, graphToken } from "../mail.js";
+import { graphRead } from "../graph-read.js";
 import { textOf, baseMessageId } from "./receipt-mail.js";
 
 /**
@@ -63,13 +63,10 @@ export type Linked = {
 export async function bytesFromMessage(opts: {
   mailbox: string; messageId: string; attachmentId: string; subject: string;
 }): Promise<{ name: string; contentType: string; bytes: Buffer }> {
-  const head = { authorization: `Bearer ${await graphToken()}` };
-
   if (opts.attachmentId) {
-    const res = await fetch(
-      `${GRAPH}/users/${encodeURIComponent(opts.mailbox)}/messages/`
-      + `${baseMessageId(opts.messageId)}/attachments/${opts.attachmentId}`,
-      { headers: head });
+    const res = await graphRead(
+      `/users/${encodeURIComponent(opts.mailbox)}/messages/`
+      + `${baseMessageId(opts.messageId)}/attachments/${opts.attachmentId}`);
     if (!res.ok) {
       throw new Error(`Graph would not hand over the attachment (${res.status}). `
         + "The message may have been moved or deleted since it was matched.");
@@ -87,10 +84,9 @@ export async function bytesFromMessage(opts: {
     };
   }
 
-  const res = await fetch(
-    `${GRAPH}/users/${encodeURIComponent(opts.mailbox)}/messages/${baseMessageId(opts.messageId)}`
-    + `?${new URLSearchParams({ "$select": "subject,body" }).toString()}`,
-    { headers: head });
+  const res = await graphRead(
+    `/users/${encodeURIComponent(opts.mailbox)}/messages/${baseMessageId(opts.messageId)}`
+    + `?${new URLSearchParams({ "$select": "subject,body" }).toString()}`);
   if (!res.ok) {
     throw new Error(`Graph would not hand over the message (${res.status}). `
       + "It may have been moved or deleted since it was matched.");
@@ -143,8 +139,31 @@ export async function bytesFromMessage(opts: {
 export async function linkReceipt(opts: {
   dedupeKey: string; bytes: Buffer; contentType: string;
 }): Promise<Linked> {
+  const hash = await storeBlob(opts.bytes, opts.contentType);
+  const link = await db().query(
+    `INSERT INTO expense_receipts (dedupe_key, sha256) VALUES ($1,$2)
+     ON CONFLICT (dedupe_key, sha256) DO NOTHING`,
+    [opts.dedupeKey, hash]);
+  return {
+    sha256: hash,
+    bytes: opts.bytes.length,
+    contentType: opts.contentType,
+    added: (link.rowCount ?? 0) > 0,
+  };
+}
+
+/**
+ * Keep the bytes, without saying whose expense they belong to.
+ *
+ * Split out of `linkReceipt` for the preview, which wants the storing
+ * half and not the linking half: looking at a candidate is not a claim
+ * that it is the right receipt, so it must not put a receipt on an
+ * expense. Content-addressed, so the preview and the later link are one
+ * copy and the second call is a no-op.
+ */
+export async function storeBlob(bytes: Buffer, contentType: string): Promise<string> {
   await ensureSchema();
-  const hash = sha256(opts.bytes);
+  const hash = sha256(bytes);
   await db().query(
     /*
      * Marked as EMAIL, which keeps it out of the export's render sweep.
@@ -159,17 +178,8 @@ export async function linkReceipt(opts: {
      */
     `INSERT INTO receipt_blobs (sha256, content_type, byte_size, bytes, origin)
           VALUES ($1,$2,$3,$4,'email') ON CONFLICT (sha256) DO NOTHING`,
-    [hash, opts.contentType, opts.bytes.length, opts.bytes]);
-  const link = await db().query(
-    `INSERT INTO expense_receipts (dedupe_key, sha256) VALUES ($1,$2)
-     ON CONFLICT (dedupe_key, sha256) DO NOTHING`,
-    [opts.dedupeKey, hash]);
-  return {
-    sha256: hash,
-    bytes: opts.bytes.length,
-    contentType: opts.contentType,
-    added: (link.rowCount ?? 0) > 0,
-  };
+    [hash, contentType, bytes.length, bytes]);
+  return hash;
 }
 
 /** The bytes of a receipt already in the app, for sending on to Emburse. */

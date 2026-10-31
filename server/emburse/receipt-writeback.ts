@@ -1,5 +1,5 @@
 import { db, ensureSchema } from "../db.js";
-import { GRAPH, graphToken } from "../mail.js";
+import { graphRead } from "../graph-read.js";
 import { laneTag } from "./connections.js";
 import { matchesFor, textOf, type Evidence, baseMessageId } from "./receipt-mail.js";
 import { readingOf } from "./receipt-link.js";
@@ -514,14 +514,10 @@ export async function settleWrite(
 export async function receiptBytes(opts: {
   mailbox: string; messageId: string; attachmentId: string; subject: string;
 }): Promise<{ name: string; contentType: string; bytes: Buffer }> {
-  const token = await graphToken();
-  const head = { authorization: `Bearer ${token}` };
-
   if (opts.attachmentId) {
-    const res = await fetch(
-      `${GRAPH}/users/${encodeURIComponent(opts.mailbox)}/messages/`
-      + `${baseMessageId(opts.messageId)}/attachments/${opts.attachmentId}`,
-      { headers: head });
+    const res = await graphRead(
+      `/users/${encodeURIComponent(opts.mailbox)}/messages/`
+      + `${baseMessageId(opts.messageId)}/attachments/${opts.attachmentId}`);
     if (!res.ok) {
       throw new Error(`Graph would not hand over the attachment (${res.status}). `
         + "The message may have been deleted or moved since it was matched.");
@@ -541,10 +537,9 @@ export async function receiptBytes(opts: {
   }
 
   // Body-only: render what the merchant sent.
-  const res = await fetch(
-    `${GRAPH}/users/${encodeURIComponent(opts.mailbox)}/messages/${baseMessageId(opts.messageId)}`
-    + `?${new URLSearchParams({ "$select": "subject,body" }).toString()}`,
-    { headers: head });
+  const res = await graphRead(
+    `/users/${encodeURIComponent(opts.mailbox)}/messages/${baseMessageId(opts.messageId)}`
+    + `?${new URLSearchParams({ "$select": "subject,body" }).toString()}`);
   if (!res.ok) {
     throw new Error(`Graph would not hand over the message (${res.status}). `
       + "It may have been deleted or moved since it was matched.");

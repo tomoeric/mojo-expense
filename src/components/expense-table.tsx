@@ -1754,10 +1754,20 @@ function MatchedReceipts({ rows, onOpen }: { rows: Row[]; onOpen: (r: Row) => vo
                   ))}
                 </ul>
               )}
+              {/* THE ADVICE WAS STALE.
+                  This said "try it again from Receipts in email",
+                  from when the send lived on that page. It is here
+                  now: the panel below lists every line, the state
+                  it reached, the browser's own step-by-step log
+                  under "What it did", and a press that re-runs
+                  just the parts that failed. Sending somebody to
+                  another page to find a button that is on this one
+                  is worse than saying nothing. */}
               {state === "failed" && (
                 <p className="text-xs text-red-700 dark:text-red-400">
-                  The receipt is held here but Emburse did not take it. Try it again from
-                  Receipts in email.
+                  Emburse did not take at least one of these changes. What the browser
+                  tried, step by step, is under “What it did” below — and “Try that part
+                  again” re-runs only what failed.
                 </p>
               )}
               {/* WHAT IS BEING SENT, on the tab about sending.
@@ -1768,7 +1778,14 @@ function MatchedReceipts({ rows, onOpen }: { rows: Row[]; onOpen: (r: Row) => vo
               {/* On both tabs: a chosen receipt shows what WILL
                   change and the press that sends it; a sent one
                   shows what did change and how it went. */}
-              {(isSendingReceipt(r) || state === "matched")
+              {/* FAILED BELONGS HERE TOO.
+                  A failed send is the one state where the detail
+                  matters most and it was the one state that did not
+                  render it — so the card said "needs a look" and
+                  gave nothing to look at. `SendDetail` renders
+                  nothing when there are no writes, so a candidate
+                  is unaffected. */}
+              {(isSendingReceipt(r) || state === "matched" || state === "failed")
                 && <SendDetail id={r.line.id} />}
               <button
                 type="button"
@@ -2131,10 +2148,17 @@ function SendDetail({ id }: { id: string }) {
   return (
     <div className="space-y-1.5 rounded-lg border border-border bg-muted/20 p-2.5 text-xs">
       <div className="flex flex-wrap items-center gap-2">
+        {/* A FAILURE IS NOT A SEND.
+            With nothing left unsent this read "Sent to Emburse
+            under your own login" over a line reading "failed",
+            which is the same mistake as the pill that said
+            "sending" over "not sent yet". */}
         <p className="font-semibold">
           {unsent.length > 0
             ? "This is what will change on the expense in Emburse"
-            : "Sent to Emburse under your own login"}
+            : broken.length > 0
+              ? "Emburse refused part of this"
+              : "Sent to Emburse under your own login"}
         </p>
         {unsent.length > 0 && (
           <button
