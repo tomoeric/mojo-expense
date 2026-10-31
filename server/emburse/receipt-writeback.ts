@@ -84,6 +84,8 @@ export type Write = {
   proposedBy: string;
   proposedAt: string;
   settledAt: string | null;
+  /** What the browser did on the last attempt, step by step. */
+  steps: { name: string; ok: boolean; detail: string }[];
 };
 
 const SCHEMA = `
@@ -131,10 +133,21 @@ type Row = {
   dedupe_key: string; kind: string; lane: string; proposed: string; was: string;
   message_id: string; attachment_id: string; state: string; attempts: number;
   error: string; proposed_by: string; proposed_at: Date; settled_at: Date | null;
+  steps: unknown;
 };
 
+/*
+ * `steps` is selected now, and it was not.
+ *
+ * Every attempt has written a step-by-step log of what the
+ * browser did — opened Emburse, signed in, found the row, opened
+ * the edit form, typed, saved — straight into this column since
+ * the write-back existed, and nothing has ever read it back out.
+ * It is the only answer to "what happened", and it was sitting in
+ * the table while the page showed one word.
+ */
 const W_COLS = `dedupe_key, kind, lane, proposed, was, message_id, attachment_id,
-                state, attempts, error, proposed_by, proposed_at, settled_at`;
+                state, attempts, error, proposed_by, proposed_at, settled_at, steps`;
 
 const STATES: WriteState[] =
   ["proposed", "queued", "applied", "already", "stale", "failed"];
@@ -161,6 +174,13 @@ const shape = (r: Row): Write => ({
   proposedBy: r.proposed_by,
   proposedAt: r.proposed_at.toISOString(),
   settledAt: r.settled_at?.toISOString() ?? null,
+  steps: Array.isArray(r.steps)
+    ? (r.steps as { name?: unknown; ok?: unknown; detail?: unknown }[]).map((x) => ({
+      name: String(x.name ?? ""),
+      ok: x.ok === true,
+      detail: String(x.detail ?? ""),
+    }))
+    : [],
 });
 
 /**

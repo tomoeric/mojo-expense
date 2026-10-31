@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  ListChecks, FileText, BarChart3, Loader2, Upload, Tags, MapPin, Building2, Scale, BookOpen,
+  ListChecks, FileText, BarChart3, Loader2, Upload, Tag, Tags, MapPin, Building2, Scale, BookOpen,
   SlidersHorizontal, ChevronRight, ChevronDown, type LucideIcon,
 } from "lucide-react";
 import {
@@ -37,7 +37,10 @@ import { timeOfDay } from "@/lib/format";
 
 type PageKey =
   | "queue" | "reports" | "analytics" | "rules" | "import"
-  | "configuration" | "categories" | "locations" | "departments" | "how-emburse-works";
+  | "configuration" | "categories" | "locations" | "departments" | "how-emburse-works"
+  // Rules has two kinds under it: the flagging rules that judge an
+  // expense, and the vendor rules that say what one should say.
+  | "vendor-rules" | "fill-rules";
 
 type RailItem = {
   key: PageKey;
@@ -60,7 +63,27 @@ const RAIL: RailItem[] = [
   { key: "queue", label: "Review Queue", Icon: ListChecks, description: "Expense reports waiting on a decision, oldest first." },
   { key: "reports", label: "All Reports", Icon: FileText, description: "Every report in the window, filterable by status and department." },
   { key: "analytics", label: "Analytics", Icon: BarChart3, description: "Where the money went — by category, department and month." },
-  { key: "rules", label: "Rules", Icon: Scale, description: "What an expense has to look like — and what happens to the ones that do not." },
+  {
+    key: "rules",
+    label: "Rules",
+    Icon: Scale,
+    description: "What an expense has to look like — and what happens to the ones that do not.",
+    children: [
+      /*
+       * IN THE RAIL, UNDER RULES, because that is where somebody
+       * who wants a rule goes.
+       *
+       * This shipped reachable only from the avatar menu, beside
+       * the mailbox settings, on the reasoning that it is a
+       * personal setting rather than a place to work. The owner
+       * clicked Rules, found flagging rules, and asked "I want a
+       * rule section, don't see one — how do I create the rules?".
+       * They are rules. They live under Rules.
+       */
+      { key: "vendor-rules", label: "Flagging rules", Icon: Scale, description: "What an expense has to look like — and what happens to the ones that do not." },
+      { key: "fill-rules", label: "Vendor rules", Icon: Tag, description: "What an expense from a vendor should say — category, business purpose, location and department — filled in when a receipt is matched to it." },
+    ],
+  },
   { key: "import", label: "Import", Icon: Upload, description: "What the daily export brought in, and a way to load one by hand." },
   {
     key: "configuration",
@@ -111,13 +134,6 @@ const MENU_PAGES = [
     label: "Receipts in email",
     description: "Search a mailbox for receipts and match them to your personal expenses.",
   },
-  {
-    key: "fill-rules",
-    label: "Vendor rules",
-    description:
-      "What an expense from a vendor should say — category, business purpose, location "
-      + "and department — filled in when a receipt is matched to it.",
-  },
 ] as const;
 
 type RailKey = PageKey | (typeof MENU_PAGES)[number]["key"];
@@ -139,7 +155,7 @@ const isStandalone = (k: RailKey) =>
    * how to use them.
    */
   || k === "emburse-login"
-  || k === "receipt-mail" || k === "fill-rules" || k in LISTS;
+  || k === "receipt-mail" || k === "fill-rules" || k === "vendor-rules" || k in LISTS;
 
 /**
  * How far back to load, with no selector to change it.
@@ -575,7 +591,8 @@ export function App() {
           )}
           {route in LISTS && <TaxonomyPage kind={LISTS[route as keyof typeof LISTS]} />}
           {route === "how-emburse-works" && <HowEmburseWorksPage />}
-          {route === "rules" && <RulesPage isAdmin={auth.data?.isAdmin ?? false} />}
+          {(route === "rules" || route === "vendor-rules")
+            && <RulesPage isAdmin={auth.data?.isAdmin ?? false} />}
           {route === "settings" && <ExportSettingsPage isAdmin={auth.data?.isAdmin ?? false} />}
           {route === "emburse-login" && <MyEmburseLoginPage />}
           {route === "receipt-mail" && <ReceiptMailPage />}

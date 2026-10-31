@@ -11,7 +11,8 @@ import {
 } from "./receipt-mail.js";
 import { proposeWrites, queueWrite, receiptBytes, writesFor } from "./receipt-writeback.js";
 import {
-  deleteRule, FIELD_LABEL, FILL_FIELDS, rulesFor, saveRule, suggestions,
+  deleteRule, FIELD_LABEL, FILL_FIELDS, pick as pickRule, rulesFor, saveRule,
+  suggestions,
 } from "./fill-rules.js";
 import { bytesFromMessage, linkReceipt, readingOf } from "./receipt-link.js";
 
@@ -63,8 +64,29 @@ const owner = (req: Request, res: Response): string | null => {
  * what gets written is not what was agreed to.
  */
 async function refreshedProposals(me: string) {
-  const open = (await writesFor()).filter((w) => w.state === "proposed" && w.kind === "note");
-  for (const w of open.slice(0, 25)) {
+  /*
+   * ANY proposed write, not just a description — and one pass per
+   * EXPENSE, not per row.
+   *
+   * This filtered on `kind === "note"` and took the first 25, from
+   * a list of every write in the system newest-first. Two things
+   * followed, and the owner hit both: a vendor rule written AFTER
+   * a receipt was chosen never reached that expense, because
+   * nothing recomputed its proposal; and with more than 25 open
+   * writes about, the older ones were never revisited at all.
+   *
+   * Recomputing is cheap and idempotent — `proposeWrites` only
+   * ever rewrites rows still in `proposed`, and never touches one
+   * that has landed — so the useful cap is "enough to cover a real
+   * backlog" rather than 25.
+   */
+  const open = (await writesFor()).filter((w) => w.state === "proposed");
+  const once = new Map<string, { dedupeKey: string; messageId: string }>();
+  for (const w of open) {
+    const key = `${w.dedupeKey}:${w.messageId}`;
+    if (!once.has(key)) once.set(key, { dedupeKey: w.dedupeKey, messageId: w.messageId });
+  }
+  for (const w of [...once.values()].slice(0, 120)) {
     await proposeWrites({ dedupeKey: w.dedupeKey, messageId: w.messageId, by: me })
       .catch(() => undefined);
   }
@@ -84,10 +106,23 @@ export type ExpenseFact = {
   dedupeKey: string; lane: string; merchant: string; date: string | null;
   amountCents: number; currency: string; category: string; note: string;
   hasReceipt: boolean;
+  /*
+   * WHICH VENDOR RULE APPLIES, or none.
+   *
+   * On screen the absence of a rule and the absence of a RULES
+   * FEATURE look identical: the panel simply lists a receipt and
+   * a description, and the owner asked "where are my rules?".
+   * Saying which rule filled the fields — or that none matched
+   * this merchant — is the difference between a page that is
+   * quiet and a page that is broken.
+   */
+  ruleVendor: string;
+  ruleFills: string[];
 };
 
-async function expenseFacts(keys: string[]): Promise<ExpenseFact[]> {
+async function expenseFacts(keys: string[], owner: string): Promise<ExpenseFact[]> {
   if (keys.length === 0) return [];
+  const rules = await rulesFor(owner).catch(() => []);
   const { rows } = await db().query<{
     dedupe_key: string; lane: string; merchant: string; expense_date: Date | null;
     amount_cents: string; category: string; note: string; receipts: string;
@@ -99,17 +134,24 @@ async function expenseFacts(keys: string[]): Promise<ExpenseFact[]> {
        FROM expenses e
       WHERE e.dedupe_key = ANY($1::text[])`,
     [keys]);
-  return rows.map((r) => ({
-    dedupeKey: r.dedupe_key,
-    lane: r.lane,
-    merchant: r.merchant || "—",
-    date: r.expense_date ? r.expense_date.toISOString().slice(0, 10) : null,
-    amountCents: Number(r.amount_cents),
-    currency: "USD",
-    category: r.category,
-    note: r.note,
-    hasReceipt: Number(r.receipts) > 0,
-  }));
+  return rows.map((r) => {
+    const rule = pickRule(rules, r.merchant || "", r.lane);
+    return {
+      dedupeKey: r.dedupe_key,
+      lane: r.lane,
+      merchant: r.merchant || "—",
+      date: r.expense_date ? r.expense_date.toISOString().slice(0, 10) : null,
+      amountCents: Number(r.amount_cents),
+      currency: "USD",
+      category: r.category,
+      note: r.note,
+      hasReceipt: Number(r.receipts) > 0,
+      ruleVendor: rule?.vendor ?? "",
+      ruleFills: rule
+        ? FILL_FIELDS.filter((f) => rule[f].trim()).map((f) => FIELD_LABEL[f])
+        : [],
+    };
+  });
 }
 
 receiptMailRouter.get("/receipt-mail", requireAuth, async (req: Request, res: Response) => {
@@ -135,7 +177,7 @@ receiptMailRouter.get("/receipt-mail", requireAuth, async (req: Request, res: Re
       /* The expenses those are about, named rather than hashed. */
       expenses: await expenseFacts([...new Set([
         ...matches.map((m) => m.dedupeKey), ...writes.map((w) => w.dedupeKey),
-      ])]),
+      ])], me),
     });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Could not read it." });

@@ -2996,6 +2996,54 @@ whole problem.
   picture.
 - `scripts/test-photo-receipts.ts`.
 
+## Where a rule LIVES, and what happens after "queued"
+
+Two follow-ups on the vendor rules, both of them the interface being
+quiet rather than the feature being absent.
+
+**"I want a rule section, don't see one."** Vendor rules shipped reachable
+only from the avatar menu, beside the mailbox settings, on the reasoning
+that it is a personal setting rather than a place to work. The owner
+clicked **Rules** in the left nav, found the flagging rules, and could not
+find it. They are rules; they live under Rules. The rail item now has two
+children — **Flagging rules** (the existing page) and **Vendor rules** —
+and the avatar-menu link stays. `test-fill-rules-ui.ts` reaches it through
+the rail, not the menu.
+
+**"Where are my rules?" on a panel that listed only a receipt and a
+description.** The absence of a matching rule and the absence of the whole
+feature look identical on that panel. `expenseFacts` now carries
+`ruleVendor` and `ruleFills`, and the panel says either *Vendor rule
+"REPLIT" · Category, Business Purpose* or *No vendor rule for "Anthropic,
+PBC" — add one*, linking to the page.
+
+**A rule written AFTER a receipt was chosen never reached that expense.**
+`refreshedProposals` recomputed only writes whose `kind` was `note`, and
+only the first 25 across the whole system. So a rule added later applied
+to nothing already chosen, and with a backlog past 25 the older ones were
+never revisited at all. It now recomputes every expense with any write
+still `proposed`, one pass per expense, up to 120 — `proposeWrites` is
+idempotent and never touches a row that has landed, so the only real cost
+is the query.
+
+**"What happens after queue? How to tell status."** Sending sets the write
+to `queued` and hands it to the decision worker, which ticks every 5
+minutes, signs into Emburse with that lane's own login, and settles each
+write to `applied` / `already` / `stale` / `failed`. Three things were
+missing on the screen, all of them already in the database:
+
+- **The page never refetched**, so `queued` stayed on screen forever and
+  the only way to learn the outcome was to reload. It now polls every 10
+  seconds **while, and only while, something is queued**.
+- **The pill said `queued`**, a state name. It says **"sending…"**, and a
+  line explains the work happens on the server and the tab can be closed.
+- **`steps` was written on every attempt and never read.** Each attempt
+  stores the browser's step-by-step log — opened Emburse, signed in, found
+  the row, opened the edit form, typed, saved — straight into the table,
+  and `W_COLS` did not select it. One word on screen and the whole story
+  in a column nobody looked at. It is now a "What it did" disclosure under
+  each line, with the attempt number and when it settled.
+
 ## Vendor rules: what an expense from this merchant should say
 
 The owner's ask, 2026-10-31, with a photograph of Emburse's **Edit Expense

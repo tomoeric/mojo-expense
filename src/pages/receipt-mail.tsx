@@ -87,12 +87,17 @@ type Write = {
   proposedBy: string;
   proposedAt: string;
   settledAt: string | null;
+  /** What the browser did on the last attempt, step by step. */
+  steps?: { name: string; ok: boolean; detail: string }[];
 };
 /** The expense itself, so a card names one instead of a hash. */
 type ExpenseFact = {
   dedupeKey: string; lane: string; merchant: string; date: string | null;
   amountCents: number; currency: string; category: string; note: string;
   hasReceipt: boolean;
+  /** The vendor rule filling this expense's fields, or "" for none. */
+  ruleVendor?: string;
+  ruleFills?: string[];
 };
 type Answer = {
   settings: Settings;
@@ -161,6 +166,19 @@ export function ReceiptMailPage() {
       if (!res.ok) throw new Error(((await res.json()) as { error?: string }).error ?? "Failed");
       return (await res.json()) as Answer;
     },
+    /*
+     * WHILE SOMETHING IS IN FLIGHT, WATCH IT.
+     *
+     * Sending puts a write in `queued` and hands it to the worker,
+     * which signs into Emburse in its own time — up to about five
+     * minutes. The page then said "queued" and never changed
+     * again, because nothing refetched: the work finished, the
+     * screen did not, and the only way to find out was to reload.
+     * Polling only while there IS something queued, so an idle
+     * page is still idle.
+     */
+    refetchInterval: (query) =>
+      (query.state.data?.writes ?? []).some((w) => w.state === "queued") ? 10_000 : false,
   });
 
   const settings = q.data?.settings;
@@ -938,6 +956,27 @@ function ExpensePanel({
                   ? "Sent to Emburse"
                   : "This is what will change on the expense in Emburse"}
               </p>
+              {/* WHICH RULE, OR THAT THERE IS NONE.
+                  A panel listing a receipt and a description looks
+                  exactly the same whether no rule matched this
+                  merchant or the whole rules feature is missing —
+                  which is what "where are my rules?" was asking. */}
+              {f?.ruleVendor ? (
+                <span className="rounded-full bg-emerald-600/15 px-2 py-0.5 text-[11px]
+                                 font-semibold text-emerald-700 dark:text-emerald-400">
+                  Vendor rule “{f.ruleVendor}”
+                  {(f.ruleFills ?? []).length > 0
+                    && ` · ${(f.ruleFills ?? []).join(", ")}`}
+                </span>
+              ) : (
+                <a
+                  href="#/fill-rules"
+                  className="rounded-full border border-border px-2 py-0.5 text-[11px]
+                             text-muted-foreground hover:text-foreground"
+                >
+                  No vendor rule for “{f?.merchant ?? "this merchant"}” — add one
+                </a>
+              )}
               {/* ONE button for the whole expense. */}
               {unsent.length > 0 && (
                 <button
@@ -980,10 +1019,44 @@ function ExpensePanel({
                         : "bg-muted text-muted-foreground"}`}
                   >
                     {w.state === "already" ? "already there"
-                      : w.state === "proposed" ? "not sent yet" : w.state}
+                      : w.state === "proposed" ? "not sent yet"
+                        : w.state === "queued" ? "sending…" : w.state}
                   </span>
                   {w.error && (
                     <span className="w-full text-red-700 dark:text-red-400">{w.error}</span>
+                  )}
+                  {/* WHAT THE ATTEMPT ACTUALLY DID.
+                      The browser has written a step-by-step log of
+                      every attempt — opened Emburse, signed in,
+                      found the row, opened the edit form, typed,
+                      saved — into the table since the write-back
+                      existed, and nothing ever read it back out.
+                      One word on screen, the whole story in a
+                      column nobody looked at. */}
+                  {(w.steps ?? []).length > 0 && (
+                    <details className="w-full">
+                      <summary className="cursor-pointer text-[11px] text-muted-foreground">
+                        What it did {w.attempts > 1 ? `· attempt ${w.attempts}` : ""}
+                        {w.settledAt
+                          ? ` · ${new Date(w.settledAt).toLocaleString()}`
+                          : ""}
+                      </summary>
+                      <ol className="mt-1 space-y-0.5">
+                        {(w.steps ?? []).map((st, i) => (
+                          <li key={`${st.name}-${i}`} className="flex items-start gap-1.5">
+                            <span className={st.ok
+                              ? "text-emerald-700 dark:text-emerald-400"
+                              : "text-red-700 dark:text-red-400"}>
+                              {st.ok ? "✓" : "✗"}
+                            </span>
+                            <span className="font-semibold">{st.name}</span>
+                            <span className="min-w-0 flex-1 break-words text-muted-foreground">
+                              {st.detail}
+                            </span>
+                          </li>
+                        ))}
+                      </ol>
+                    </details>
                   )}
                 </li>
               ))}
@@ -1014,6 +1087,14 @@ function ExpensePanel({
               </div>
             )}
 
+            {group.writes.some((w) => w.state === "queued") && (
+              <p className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
+                <Loader2 className="mt-0.5 h-3 w-3 shrink-0 animate-spin" />
+                Sending happens on the server, not in this tab: it signs into Emburse
+                with its own browser, which takes a few minutes. This page is watching
+                and will say what happened — you can close it and come back.
+              </p>
+            )}
             <p className="text-[11px] text-muted-foreground">
               Sent under {group.writes[0]!.lane.replace(/^personal-/, "")}&rsquo;s own
               Emburse login — every line above is one edit to this one expense, done in

@@ -90,14 +90,21 @@ try {
   page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
   page.on("pageerror", (e) => errors.push(e.message));
 
-  console.log("1. There is a way in");
+  console.log("1. There is a way in, WHERE SOMEBODY LOOKS FOR IT");
+  /*
+   * In the rail, under Rules. This shipped reachable only from
+   * the avatar menu — a defensible place for a setting, and the
+   * wrong one for this: the owner clicked Rules in the left nav,
+   * found the flagging rules, and asked "I want a rule section,
+   * don't see one". They are rules.
+   */
   await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: "networkidle" });
   await page.waitForTimeout(1500);
-  await page.getByRole("button", { name: /Eric|Schlicht|@/ }).first().click();
-  await page.waitForTimeout(400);
-  const door = page.getByRole("link", { name: "Vendor rules" });
-  check("THE USER MENU HAS ONE", await door.count() > 0,
-    (await page.locator("body").innerText()).replace(/\n/g, " | ").slice(-250));
+  await page.getByRole("button", { name: "Rules" }).first().click();
+  await page.waitForTimeout(800);
+  const door = page.getByRole("button", { name: "Vendor rules" });
+  check("RULES IN THE LEFT NAV LEADS TO IT", await door.count() > 0,
+    (await page.locator("body").innerText()).replace(/\n/g, " | ").slice(0, 300));
   await door.first().click();
   await page.waitForTimeout(2000);
 
