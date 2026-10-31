@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Loader2, Plus, Sparkles, Tag, Trash2 } from "lucide-react";
+import { Loader2, Pencil, Plus, Sparkles, Tag, Trash2 } from "lucide-react";
 
 /**
  * VENDOR RULES: what an expense from this merchant should say.
@@ -161,8 +161,11 @@ export function FillRulesPage() {
       {rules.length === 0 && !draft ? (
         <p className="rounded-lg border border-border bg-muted/40 p-3 text-sm
                       text-muted-foreground">
-          No vendor rules yet. Add one above, or take one of the suggestions below —
-          those are read out of expenses you have already filled in by hand.
+          <strong>No vendor rules yet, so there is nothing to edit.</strong> Press{" "}
+          <em>Edit and save</em> on one of the suggestions below — that opens it as a
+          form with all five fields to change before anything is stored — or{" "}
+          <em>Add a vendor</em> above to start from blank. Once a rule is saved it
+          appears in a table here, with its own <em>Edit</em> button.
         </p>
       ) : (
         <div className="overflow-x-auto rounded-xl border border-border">
@@ -229,8 +232,11 @@ export function FillRulesPage() {
           </h3>
           <p className="text-xs text-muted-foreground">
             The commonest value on each vendor&rsquo;s own expenses, with how many said it.
-            Business Purpose is not here — it is not in the Emburse export, so there is no
-            history to read, and it is the one field only you can write.
+            Pressing <strong>Edit and save</strong> opens it as a form — category, business
+            purpose, location / site, department and comment, all changeable — and nothing
+            is stored until you save. Business Purpose and Comment are not suggested: they
+            are not in the Emburse export, so there is no history to read, and they are the
+            two fields only you can write.
           </p>
           <div className="space-y-1.5">
             {suggested.map((s) => (
@@ -261,8 +267,11 @@ export function FillRulesPage() {
                              border-emerald-600/50 px-2.5 py-1 font-semibold
                              disabled:opacity-50"
                 >
-                  <Check className="h-3.5 w-3.5" />
-                  Make this a rule
+                  {/* "Make this a rule" read as "save it now", and the
+                      owner — looking for a way to EDIT the values —
+                      did not press it. It opens the form. Say that. */}
+                  <Pencil className="h-3.5 w-3.5" />
+                  Edit and save
                 </button>
               </div>
             ))}
@@ -356,8 +365,10 @@ function RuleForm({ draft, accounts, busy, onChange, onCancel, onSave }: {
       </div>
       <p className="text-[11px] text-muted-foreground">
         Leave a field empty and the rule says nothing about it — it is left exactly as
-        Emburse has it. Nothing here is written on its own: a rule only ever adds lines
-        to what a matched receipt proposes.
+        Emburse has it, and emptying one later is how you stop a rule touching that box.
+        Nothing here is written on its own: a rule only ever adds lines to what a matched
+        receipt proposes, behind the same press.
+        {!draft.id && " Once saved, this rule gets its own Edit button in the table above."}
       </p>
       <div className="flex items-center gap-2">
         <button

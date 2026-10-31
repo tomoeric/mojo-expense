@@ -120,10 +120,10 @@ try {
     text.includes("REPLIT"), text.replace(/\n/g, " | ").slice(-400));
   check("…with the count that makes it checkable", /\(3 of 3\)/.test(text),
     text.replace(/\n/g, " | ").slice(-400));
-  await page.getByRole("button", { name: "Make this a rule" }).first().click();
+  await page.getByRole("button", { name: "Edit and save" }).first().click();
   await page.waitForTimeout(400);
   text = await page.locator("body").innerText();
-  check("…and pressing it fills the form rather than saving behind your back",
+  check("…and pressing EDIT AND SAVE fills the form rather than saving behind your back",
     text.includes("A new vendor rule"), text.replace(/\n/g, " | ").slice(-300));
   // The four boxes on Emburse's own Edit Expense Details form,
   // named as that form names them — this is checked on the FORM
@@ -153,7 +153,7 @@ try {
   check("…and it is in the table now", /1 vendor rule/.test(text),
     text.replace(/\n/g, " | ").slice(0, 300));
   check("…and no longer offered as a suggestion",
-    !text.includes("Make this a rule"));
+    !text.includes("Edit and save"));
 
   console.log("\n5. EDITING IT — every field, Comment included");
   await page.getByRole("button", { name: "Edit" }).first().click();
