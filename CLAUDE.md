@@ -103,7 +103,8 @@ were added; "it compiles" is not "the button works".
 `corrections`, `decision-trace`, `auto-approve`, `rules`, `bulk-approve`,
 `lanes`, `two-accounts`, `rule-scope`, `receipt-mail`, `signin-errors`, `writeback`, `receipt-link`,
 `personal-grid`, `cookie-jars`, `device-trust`, `match-prune`,
-`matched-tab-ui`, `fill-rules`, `fill-rules-ui` (needs a build). For a change to "Your Emburse login", Export
+`matched-tab-ui`, `fill-rules`, `fill-rules-ui`, `photo-receipts`
+(needs a build). For a change to "Your Emburse login", Export
 settings or the review queue, also
 `test-accounts-ui.ts` and `test-lanes-ui.ts` after a build.
 
@@ -2942,6 +2943,50 @@ real ambiguity visible — and on its own it is a pile, not an answer.
   say why the list got shorter. "It found fewer" and "it found nothing"
   look identical from a shorter list.
 - `scripts/test-receipt-mail.ts` §14–17, `scripts/test-match-prune.ts`.
+
+## Several receipts in ONE email: a candidate per photograph
+
+The owner forwards a batch of till receipts from a phone — one message,
+subject "Receipts", **eight JPEGs**, and a body reading "Sent via the
+Samsung Galaxy S24 Ultra" and nothing else. Asked whether the app could
+read them. It could not, for three stacked reasons, and all three are
+fixed:
+
+1. **One message made one candidate**, so seven of the eight receipts were
+   invisible and the send step would have attached the first image to
+   whatever that one candidate matched.
+2. **Nothing was read off the pictures at matching time.** The matcher
+   reads the message TEXT; a photographed till receipt has none of it
+   there. Merchant came out as "mojocarwash" — off the sender's own
+   address — and the total as null.
+3. So after the date-proximity rule, **it was silently skipped entirely**.
+
+The vision reader (`readReceipt`) already read exactly these images; it
+just ran AFTER a receipt was linked to an expense. That ordering was the
+whole problem.
+
+- **`photoEvidence()`** turns a photo-only message into one Evidence per
+  photograph, each with the merchant, date and total the reader got off
+  the picture, and **its own single attachment** — so the preview shows
+  that photo and the upload sends that photo.
+- **The id is `<message id>#<attachment id>`.** `baseMessageId()` is
+  applied inside `receiptBytes` and `bytesFromMessage`, the only two
+  places that ask Graph for a message, so nothing else has to know. Miss
+  one and every preview and upload of a photo candidate 404s.
+- **It is reached only when the body gave no total.** An email from a
+  merchant states its own total; spending a vision call to confirm what is
+  already in the text is paying to learn nothing.
+- **Only attachments ≥ 20 KB that are images.** A signature logo and a
+  tracking pixel are not receipts, and a PDF invoice is read as text.
+- **A scan-wide budget** (`photoBudget`, default 40) so one forwarded album
+  cannot turn a search into a hundred vision calls. The scan reports
+  `photosRead` and `photosSkipped`, and the page says both — "search again
+  to take the next batch".
+- **A photo the reader cannot make sense of is DROPPED**, not offered. A
+  candidate with no merchant and no total is the noise this scan already
+  refuses from an email body; it does not become evidence by having been a
+  picture.
+- `scripts/test-photo-receipts.ts`.
 
 ## Vendor rules: what an expense from this merchant should say
 

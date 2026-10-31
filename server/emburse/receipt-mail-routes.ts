@@ -285,6 +285,10 @@ receiptMailRouter.post("/receipt-mail/scan", requireAuth,
         searched: found.searched,
         missingFolders: found.missing,
         messages: found.messages.length,
+        /* Vision calls spent reading photographed receipts, said
+           out loud: it is the one part of a scan that costs. */
+        photosRead: found.photosRead,
+        photosSkipped: found.photosSkipped,
         expenses: targets.length,
         candidates: candidates.length,
         /* Said out loud, because "it found fewer" and "it found

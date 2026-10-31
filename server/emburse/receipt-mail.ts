@@ -324,7 +324,21 @@ export async function searchMailbox(opts: {
   days?: number;
   /** A cap, so an unbounded mailbox cannot become an unbounded read. */
   limit?: number;
-}): Promise<{ messages: Evidence[]; searched: string[]; missing: string[] }> {
+  /**
+   * How many photographs this whole scan may read, in all.
+   *
+   * Each is a vision call, so this is the difference between a
+   * search and a bill. Zero turns the reading off entirely, which
+   * is what the tests use.
+   */
+  photoBudget?: number;
+}): Promise<{
+  messages: Evidence[]; searched: string[]; missing: string[];
+  /** Photographs the reader was spent on, so the page can say so. */
+  photosRead: number;
+  /** Photographs left unread because the budget ran out. */
+  photosSkipped: number;
+}> {
   if (!isGraphConfigured()) throw new Error("The Microsoft app credentials are not set.");
   const mailbox = opts.mailbox.trim();
   if (!mailbox) throw new Error("No mailbox is configured to search.");
@@ -347,13 +361,16 @@ export async function searchMailbox(opts: {
         `/users/${encodeURIComponent(mailbox)}/mailFolders/${found.id}/messages`);
     }
     if (paths.length === 0) {
-      return { messages: [], searched, missing };
+      return { messages: [], searched, missing, photosRead: 0, photosSkipped: 0 };
     }
   } else {
     searched.push("the whole mailbox");
   }
 
   const seen = new Map<string, Evidence>();
+  const budget = { left: Math.max(opts.photoBudget ?? 40, 0) };
+  let photosRead = 0;
+  let photosSkipped = 0;
   for (const path of paths) {
     /*
      * Built with URLSearchParams rather than string concatenation
@@ -369,10 +386,38 @@ export async function searchMailbox(opts: {
     const page = await get<{ value: GraphMessage[] }>(`${path}?${qs.toString()}`);
     for (const m of page.value) {
       if (seen.has(m.id)) continue;
-      seen.set(m.id, await evidenceOf(mailbox, m, searched[0] ?? ""));
+      const base = await evidenceOf(mailbox, m, searched[0] ?? "");
+      seen.set(m.id, base);
+
+      /*
+       * A MESSAGE THAT SAYS NOTHING, CARRYING PICTURES THAT DO.
+       *
+       * Only when the body yielded no total: an email from a
+       * merchant states its own total, and spending a vision call
+       * to confirm what is already written in the text would be
+       * paying to learn nothing. A phone forwarding eight
+       * photographed till receipts states nothing at all, and
+       * every fact worth matching on is inside the images.
+       */
+      if (base.totalCents !== null) continue;
+      const photos = base.attachments.filter(isPhoto);
+      if (photos.length === 0) continue;
+      if (budget.left <= 0) { photosSkipped += photos.length; continue; }
+
+      const before = budget.left;
+      const each = await photoEvidence(mailbox, base, budget);
+      photosRead += before - budget.left;
+      photosSkipped += photos.length - (before - budget.left);
+      if (each.length > 0) {
+        // The message's own evidence is replaced, not joined: it
+        // has no merchant, no date and no total, so it can only
+        // ever be the noise this scan already refuses.
+        seen.delete(m.id);
+        for (const e of each) seen.set(e.messageId, e);
+      }
     }
   }
-  return { messages: [...seen.values()], searched, missing };
+  return { messages: [...seen.values()], searched, missing, photosRead, photosSkipped };
 }
 
 /* ------------------------------------------------------------------ *
@@ -539,6 +584,40 @@ export function merchantOf(from: string, subject: string): string {
   return (generic || named === "" ? stem : named).trim();
 }
 
+/* ------------------------------------------------------------------ *
+ * Several receipts in one email
+ * ------------------------------------------------------------------ */
+
+/**
+ * A candidate's id: the message, or ONE PHOTO INSIDE IT.
+ *
+ * Eight photographed till receipts arrive in one email, forwarded
+ * from a phone, with a body that says "Sent via the Samsung
+ * Galaxy S24 Ultra" and nothing else. One Evidence per message
+ * makes that one candidate — so seven of the eight receipts are
+ * invisible, and the one that is offered has no merchant, no
+ * date and no total, because none of those are in the body. They
+ * are in the pictures.
+ *
+ * So a photo-only message becomes one candidate PER PHOTO, and
+ * each needs its own id. `<message id>#<attachment id>`: the part
+ * before the separator is what Graph understands, and
+ * `baseMessageId` is applied at the two places that ask Graph for
+ * a message, so nothing else has to know.
+ */
+export const PHOTO_SEP = "#";
+
+/** The Graph message id inside a candidate's id. */
+export const baseMessageId = (id: string): string =>
+  id.includes(PHOTO_SEP) ? id.slice(0, id.indexOf(PHOTO_SEP)) : id;
+
+/** Is this attachment a photograph of a receipt rather than a logo? */
+export const isPhoto = (a: { name: string; contentType: string; size: number }): boolean =>
+  (/^image\//i.test(a.contentType) || /\.(jpe?g|png|heic|heif|webp)$/i.test(a.name))
+  // A signature image or a tracking pixel is not a receipt. A
+  // photographed till receipt off a phone is hundreds of KB.
+  && a.size >= 20_000;
+
 async function evidenceOf(
   mailbox: string, m: GraphMessage, folder: string,
 ): Promise<Evidence> {
@@ -572,6 +651,69 @@ async function evidenceOf(
     attachments,
     excerpt: text.slice(0, 600),
   };
+}
+
+/**
+ * One candidate per photograph, read by the receipt reader.
+ *
+ * The expensive half of this app is a vision call, so this is
+ * reached only when the message gives the matcher nothing to work
+ * with — no total in the body — and only for attachments big
+ * enough to be a photographed receipt. The caller holds a budget
+ * across the whole scan so one forwarded album cannot turn a
+ * search into a hundred calls.
+ *
+ * A photo the reader cannot make sense of is DROPPED rather than
+ * offered: a candidate with no merchant and no total is the noise
+ * this scan already refuses from an email body, and it does not
+ * become evidence by having been a picture.
+ */
+export async function photoEvidence(
+  mailbox: string, base: Evidence, budget: { left: number },
+): Promise<Evidence[]> {
+  const photos = base.attachments.filter(isPhoto);
+  if (photos.length === 0) return [];
+
+  const { canReadReceipts, readReceipt } = await import("./receipt-items.js");
+  if (!canReadReceipts()) return [];
+
+  const out: Evidence[] = [];
+  for (const a of photos) {
+    if (budget.left <= 0) break;
+    budget.left -= 1;
+    try {
+      const got = await get<{ contentBytes?: string; contentType?: string }>(
+        `/users/${encodeURIComponent(mailbox)}/messages/${base.messageId}`
+        + `/attachments/${a.id}`);
+      if (!got.contentBytes) continue;
+      const bytes = Buffer.from(got.contentBytes, "base64");
+      const read = await readReceipt(bytes, got.contentType || a.contentType);
+      const cents = read.total ?? read.paid ?? null;
+      // Nothing identifying came out of it, so it is not evidence.
+      if (!read.merchant && cents === null) continue;
+      out.push({
+        ...base,
+        messageId: `${base.messageId}${PHOTO_SEP}${a.id}`,
+        merchant: read.merchant ?? base.merchant,
+        date: read.purchasedAt ?? base.date,
+        totalCents: cents === null ? null : Math.round(cents * 100),
+        currency: read.currency || base.currency,
+        // The ONE photo this candidate is about, so the preview
+        // shows it and the upload sends it — not the first image
+        // in an email of eight.
+        attachments: [a],
+        excerpt: `Read from the photograph ${a.name}: `
+          + `${read.merchant ?? "no merchant"}`
+          + `${read.purchasedAt ? ` on ${read.purchasedAt}` : ""}`
+          + `${cents === null ? "" : ` for ${cents.toFixed(2)}`}.`
+          + `${read.notes ? ` ${read.notes}` : ""}`,
+      });
+    } catch {
+      // One unreadable photo costs that photo, not the scan.
+      continue;
+    }
+  }
+  return out;
 }
 
 /* ------------------------------------------------------------------ *

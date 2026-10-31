@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { db, ensureSchema } from "../db.js";
 import { GRAPH, graphToken } from "../mail.js";
-import { textOf } from "./receipt-mail.js";
+import { textOf, baseMessageId } from "./receipt-mail.js";
 
 /**
  * Pulling a matched receipt INTO the app, and linking it.
@@ -68,7 +68,7 @@ export async function bytesFromMessage(opts: {
   if (opts.attachmentId) {
     const res = await fetch(
       `${GRAPH}/users/${encodeURIComponent(opts.mailbox)}/messages/`
-      + `${opts.messageId}/attachments/${opts.attachmentId}`,
+      + `${baseMessageId(opts.messageId)}/attachments/${opts.attachmentId}`,
       { headers: head });
     if (!res.ok) {
       throw new Error(`Graph would not hand over the attachment (${res.status}). `
@@ -88,7 +88,7 @@ export async function bytesFromMessage(opts: {
   }
 
   const res = await fetch(
-    `${GRAPH}/users/${encodeURIComponent(opts.mailbox)}/messages/${opts.messageId}`
+    `${GRAPH}/users/${encodeURIComponent(opts.mailbox)}/messages/${baseMessageId(opts.messageId)}`
     + `?${new URLSearchParams({ "$select": "subject,body" }).toString()}`,
     { headers: head });
   if (!res.ok) {

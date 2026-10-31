@@ -112,6 +112,9 @@ type ScanResult = {
   ruledOut?: number;
   /** Candidates a previous, looser scan left behind and this one removed. */
   removed?: number;
+  /** Photographed receipts the reader was spent on. */
+  photosRead?: number;
+  photosSkipped?: number;
 };
 
 const money = (c: number | null) =>
@@ -526,6 +529,14 @@ export function ReceiptMailPage() {
             {typeof scan.ruledOut === "number" && scan.ruledOut > 0 && (
               <> · {scan.ruledOut} pairing{scan.ruledOut === 1 ? "" : "s"} ruled out because
                 price, date and merchant already settled those receipts</>
+            )}
+            {typeof scan.photosRead === "number" && scan.photosRead > 0 && (
+              <> · {scan.photosRead} photographed receipt
+                {scan.photosRead === 1 ? "" : "s"} read out of their pictures</>
+            )}
+            {typeof scan.photosSkipped === "number" && scan.photosSkipped > 0 && (
+              <> · {scan.photosSkipped} more left unread, because one search only reads so
+                many — search again to take the next batch</>
             )}
             {typeof scan.removed === "number" && scan.removed > 0 && (
               <> · {scan.removed} left over from an earlier search removed</>

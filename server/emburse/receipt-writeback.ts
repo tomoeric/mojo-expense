@@ -1,7 +1,7 @@
 import { db, ensureSchema } from "../db.js";
 import { GRAPH, graphToken } from "../mail.js";
 import { laneTag } from "./connections.js";
-import { matchesFor, textOf, type Evidence } from "./receipt-mail.js";
+import { matchesFor, textOf, type Evidence, baseMessageId } from "./receipt-mail.js";
 import { readingOf } from "./receipt-link.js";
 import {
   FIELD_LABEL, FILL_FIELDS, pick as pickRule, rulesFor, setsOf, type FillField,
@@ -490,7 +490,7 @@ export async function receiptBytes(opts: {
   if (opts.attachmentId) {
     const res = await fetch(
       `${GRAPH}/users/${encodeURIComponent(opts.mailbox)}/messages/`
-      + `${opts.messageId}/attachments/${opts.attachmentId}`,
+      + `${baseMessageId(opts.messageId)}/attachments/${opts.attachmentId}`,
       { headers: head });
     if (!res.ok) {
       throw new Error(`Graph would not hand over the attachment (${res.status}). `
@@ -512,7 +512,7 @@ export async function receiptBytes(opts: {
 
   // Body-only: render what the merchant sent.
   const res = await fetch(
-    `${GRAPH}/users/${encodeURIComponent(opts.mailbox)}/messages/${opts.messageId}`
+    `${GRAPH}/users/${encodeURIComponent(opts.mailbox)}/messages/${baseMessageId(opts.messageId)}`
     + `?${new URLSearchParams({ "$select": "subject,body" }).toString()}`,
     { headers: head });
   if (!res.ok) {
