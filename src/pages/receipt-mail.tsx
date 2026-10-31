@@ -580,12 +580,57 @@ export function ReceiptMailPage() {
  */
 function ReceiptPeek({ messageId }: { messageId: string }) {
   const [open, setOpen] = useState(false);
-  const src = `/api/receipt-mail/preview?message=${encodeURIComponent(messageId)}`;
+  const [state, setState] = useState<
+    { kind: "idle" } | { kind: "loading" }
+    | { kind: "ok"; url: string; type: string } | { kind: "error"; why: string }>(
+    { kind: "idle" });
+
+  /*
+   * FETCHED, not handed to an <object> to figure out.
+   *
+   * The first version pointed an <object> at the route with an <img>
+   * inside it as a fallback. When the route FAILED — and for a
+   * body-only receipt it always did, because the renderer launched
+   * Chromium without the flags a container needs — the browser got a
+   * JSON error body, could not display it, fell through to the <img>,
+   * which could not display it either, and drew a broken-image icon.
+   * No message, no status, nothing to act on: the one failure mode this
+   * whole page exists to avoid, reproduced in a corner of it.
+   *
+   * So the fetch is explicit: a bad response is read and SHOWN, and a
+   * good one is turned into a blob URL whose type decides the element.
+   */
+  const show = async () => {
+    setOpen(true);
+    setState({ kind: "loading" });
+    try {
+      const res = await fetch(
+        `/api/receipt-mail/preview?message=${encodeURIComponent(messageId)}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        setState({ kind: "error", why: body.error ?? `The receipt could not be fetched (${res.status}).` });
+        return;
+      }
+      const blob = await res.blob();
+      setState({ kind: "ok", url: URL.createObjectURL(blob), type: blob.type });
+    } catch (e) {
+      setState({ kind: "error", why: (e as Error).message });
+    }
+  };
+
+  const hide = () => {
+    setOpen(false);
+    // Each open makes a new object URL; without this they accumulate for
+    // the life of the page, and on a list of 272 that is not nothing.
+    if (state.kind === "ok") URL.revokeObjectURL(state.url);
+    setState({ kind: "idle" });
+  };
+
   return (
     <div className="text-xs">
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => (open ? hide() : void show())}
         className="inline-flex items-center gap-1.5 text-muted-foreground hover:text-foreground"
       >
         <ImageIcon className="h-3.5 w-3.5" aria-hidden />
@@ -593,21 +638,38 @@ function ReceiptPeek({ messageId }: { messageId: string }) {
       </button>
       {open && (
         <div className="mt-1.5 space-y-1">
-          <object
-            data={src}
-            type="application/pdf"
-            className="h-80 w-full rounded-md border border-border bg-muted/30"
-            aria-label="The receipt this match is about"
-          >
-            {/* Reached when the browser will not display the type inline.
-                An image attachment lands here and shows properly. */}
-            <img src={src} alt="The receipt this match is about"
-                 className="max-h-80 rounded-md border border-border" />
-          </object>
-          <a href={src} target="_blank" rel="noreferrer"
-             className="text-muted-foreground underline underline-offset-2">
-            Open it in a new tab
-          </a>
+          {state.kind === "loading" && (
+            <p className="flex items-center gap-1.5 text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Fetching it. A receipt that is only in the message body is rendered first,
+              which takes a moment.
+            </p>
+          )}
+          {state.kind === "error" && (
+            <p className="rounded-md border border-red-500/40 bg-red-500/10 p-2 text-red-700
+                          dark:text-red-300">
+              {state.why}
+            </p>
+          )}
+          {state.kind === "ok" && (
+            <>
+              {/* An image shows as one; everything else — the usual case,
+                  a PDF — goes in an object. Decided by what came back
+                  rather than guessed from the filename. */}
+              {state.type.startsWith("image/") ? (
+                <img src={state.url} alt="The receipt this match is about"
+                     className="max-h-80 rounded-md border border-border" />
+              ) : (
+                <object data={state.url} type={state.type || "application/pdf"}
+                        className="h-80 w-full rounded-md border border-border bg-muted/30"
+                        aria-label="The receipt this match is about" />
+              )}
+              <a href={state.url} target="_blank" rel="noreferrer"
+                 className="text-muted-foreground underline underline-offset-2">
+                Open it in a new tab
+              </a>
+            </>
+          )}
         </div>
       )}
     </div>

@@ -380,8 +380,34 @@ export async function searchMailbox(opts: {
  * ------------------------------------------------------------------ */
 
 const MONEY = /(?:(?:US)?\$|USD\s*)\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?|\d+\.\d{2})/gi;
+/**
+ * WHAT THE RECEIPT SAYS IS DUE, which is not the first "total" on it.
+ *
+ * Two faults, one real receipt. A Replit invoice reads
+ *
+ *   Subtotal              $100.00
+ *   Total excluding tax   $100.00
+ *   Sales Tax - Texas     $6.60
+ *   Total                $106.60
+ *   Amount due           $106.60 USD
+ *
+ * and this read **$100.00**. "Subtotal" CONTAINS the word total and
+ * there was no word boundary, so the first thing the pattern hit was
+ * the subtotal — and `exec` takes the first match, so the real total
+ * four lines below was never looked at. The expense was $106.60, so a
+ * perfect match was reported as "the totals differ" and scored down to
+ * `likely`.
+ *
+ * So: a boundary, the strong labels separated out, and the LARGEST of
+ * whichever set matched rather than the first. Tax and tips only ever
+ * push the true total up, so the largest labelled figure is the one
+ * that is due; taking the first is just taking whichever the merchant
+ * happened to print highest up the page.
+ */
+const DUE_LINE =
+  /(?:amount\s+due|balance\s+due|total\s+due|amount\s+paid|grand\s+total|order\s+total|total\s+charged|amount\s+charged|total\s+paid)\s*[:\-]?\s*(?:US)?\$?\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?|\d+\.\d{2})/gi;
 const TOTAL_LINE =
-  /(?:order\s+total|grand\s+total|total\s+charged|amount\s+charged|total\s+paid|total)\s*[:\-]?\s*(?:US)?\$?\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?|\d+\.\d{2})/i;
+  /\btotal\b\s*[:\-]?\s*(?:US)?\$?\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?|\d+\.\d{2})/gi;
 const REFERENCE =
   /(?:order|transaction|confirmation|receipt|invoice)\s*(?:#|no\.?|number|id)?\s*[:\-#]?\s*([A-Z0-9][A-Z0-9-]{4,24})/i;
 const DATE_ISO = /\b(20\d{2})-(\d{2})-(\d{2})\b/;
@@ -445,8 +471,15 @@ export function dateIn(text: string): string | null {
  * evidence and the candidate has to say so.
  */
 export function totalIn(text: string): { cents: number | null; labelled: boolean } {
-  const labelled = TOTAL_LINE.exec(text);
-  if (labelled) return { cents: cents(labelled[1]!), labelled: true };
+  // "Amount due" and its kin first: a receipt that states one has
+  // stated the answer, and nothing else on it needs weighing.
+  const due = [...text.matchAll(DUE_LINE)].map((m) => cents(m[1]!)).filter((n) => n > 0);
+  if (due.length > 0) return { cents: Math.max(...due), labelled: true };
+  // Then plain "Total" — with a boundary, so Subtotal is not one, and
+  // taking the largest, so "Total excluding tax" cannot win over the
+  // total that includes it.
+  const totals = [...text.matchAll(TOTAL_LINE)].map((m) => cents(m[1]!)).filter((n) => n > 0);
+  if (totals.length > 0) return { cents: Math.max(...totals), labelled: true };
   const all = [...text.matchAll(MONEY)].map((m) => cents(m[1]!)).filter((n) => n > 0);
   if (all.length === 0) return { cents: null, labelled: false };
   return { cents: Math.max(...all), labelled: false };

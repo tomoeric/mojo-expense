@@ -2889,6 +2889,34 @@ nobody had touched.
   when there are any, so the manager queue never grows it.
 - `scripts/test-match-tab.ts`.
 
+## Three ways a receipt lied about itself
+
+All three found by LOOKING at a real receipt next to what the app said
+about it, which is the argument for the preview existing at all.
+
+- **"Subtotal" contains the word "total".** `TOTAL_LINE` had no word
+  boundary and `exec` takes the FIRST match, so a Replit invoice reading
+  Subtotal $100.00 … Amount due $106.60 was read as $100.00 and the real
+  total four lines below was never looked at. An exact match became "the
+  totals differ" and scored down to `likely`. Now: `DUE_LINE` (amount
+  due, balance due, grand total, …) first; then `\btotal\b`, which
+  Subtotal cannot satisfy; and the LARGEST of whichever set matched, not
+  the first, because tax and tips only push the true total up and
+  "Total excluding tax" is otherwise a trap one step along.
+- **`receiptBytes` launched Chromium bare** — no `--no-sandbox`, no
+  `--disable-dev-shm-usage`, no `systemChromium()` path — while every
+  other launch in the app has all three. In a container that fails
+  outright, so a BODY-ONLY receipt could never be rendered: the ones
+  with a real attachment worked and the rest died, in the preview AND in
+  the upload, since both go through this function. **Any new browser
+  launch copies `openBrowser`'s arguments.**
+- **The preview showed a broken-image icon instead of the reason.** An
+  `<object>` pointed at the route with an `<img>` fallback: a JSON error
+  body cannot be displayed by either, so a failed fetch drew a broken
+  icon with no status and nothing to act on. It fetches explicitly now,
+  renders the server's error text, and picks `<img>` or `<object>` from
+  the content type that actually came back.
+
 ## A match can be looked at before it is believed
 
 `GET /api/receipt-mail/preview?message=<id>` shows the receipt on a

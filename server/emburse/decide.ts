@@ -2841,6 +2841,8 @@ async function findRow(
   target: Target,
   emburseUrl: string,
   login: Login,
+  /** A personal list: every row is already this account's own. */
+  opts: { personalQueue?: boolean } = {},
 ): Promise<{ row: Locator; text: string; detail: string }> {
   /*
    * The cardholder's own queue, not a text search — the same route the
@@ -2862,7 +2864,23 @@ async function findRow(
   await page.goto(gridUrl(emburseUrl, { path: sel.gridPath }), {
     waitUntil: "domcontentloaded", timeout: env.emburseLogin.openTimeoutMs,
   });
-  await filterToCardholder(page, sel, target.employee, emburseUrl, sel.gridPath);
+  /*
+   * NOT ON A PERSONAL LIST. There is no cardholder filter there, and
+   * nothing for one to do.
+   *
+   * `/transactions/me` is one person's own expenses — every row on it
+   * is already theirs — so Emburse draws no users dropdown at all. This
+   * looked for one anyway, and the first real write-back died on it:
+   * "none of the 1 control(s) matching input[role=combobox]
+   * [aria-label*=user] … is a users filter holding 'States'". Both
+   * halves true, and about a control that should never have been
+   * sought: the one combobox on that page is the saved-filters decoy,
+   * and the run was being sent to narrow a list that needs no
+   * narrowing.
+   */
+  if (!opts.personalQueue) {
+    await filterToCardholder(page, sel, target.employee, emburseUrl, sel.gridPath);
+  }
   if (!(await gridLoaded(page, sel as never))) throw await asError(whyNoGrid(page, sel, login.email));
   const rows = page.locator(sel.resultRow!);
   const count = await rows.count();
@@ -2992,7 +3010,17 @@ export async function attachAndAnnotate(
   selectors: Record<string, string>,
   emburseUrl: string,
   login: Login,
-  opts: { onChallenge?: ChallengeHook } = {},
+  opts: {
+    onChallenge?: ChallengeHook;
+    /**
+     * A personal list, where every row is already this account's own.
+     *
+     * It decides whether the row is hunted for behind a cardholder
+     * filter. There is no such control on `/transactions/me`, and
+     * looking for one is how the first real write-back failed.
+     */
+    personalQueue?: boolean;
+  } = {},
 ): Promise<DecisionRun & {
   /** The receipt was already on the expense, so none was uploaded. */
   alreadyAttached: boolean;
@@ -3026,7 +3054,7 @@ export async function attachAndAnnotate(
       let row: Locator | null = null;
 
       if (!(await step("find the expense", async () => {
-        const found = await findRow(page!, sel, target, emburseUrl, login);
+        const found = await findRow(page!, sel, target, emburseUrl, login, { personalQueue: opts.personalQueue });
         row = found.row;
         return found.detail;
       }))) return { ok: false, steps, matchedRow: null, screenshot: null };
@@ -3138,7 +3166,7 @@ export async function attachAndAnnotate(
         if (!(await gridLoaded(page!, sel as never))) {
           return "saved, but the grid did not come back to check it — look in Emburse";
         }
-        const again = await findRow(page!, sel, target, emburseUrl, login).catch(() => null);
+        const again = await findRow(page!, sel, target, emburseUrl, login, { personalQueue: opts.personalQueue }).catch(() => null);
         if (!again) return "saved; the row is no longer in this view to check against";
         if (want.note && again.text.toLowerCase().includes(want.note.toLowerCase().slice(0, 20))) {
           return "the row now shows the new description";

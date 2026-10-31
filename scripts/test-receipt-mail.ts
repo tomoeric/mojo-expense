@@ -209,6 +209,44 @@ try {
   // The raw body is the least useful part and used to come first.
   check("the raw body comes last", exchange.indexOf("Graph said:") > 80, String(exchange.indexOf("Graph said:")));
 
+  /*
+   * THE TOTAL IS WHAT IS DUE, not the first "total" on the page.
+   *
+   * A real Replit invoice, read off the preview: Subtotal $100.00,
+   * Total excluding tax $100.00, Sales Tax $6.60, Total $106.60,
+   * Amount due $106.60. This read $100.00 — "Subtotal" CONTAINS the
+   * word total and the pattern had no word boundary, and `exec` takes
+   * the first match, so the real total four lines below was never
+   * looked at. The expense was $106.60, so an exact match was reported
+   * as "the totals differ" and scored down to likely.
+   */
+  console.log("\nThe total is what the receipt says is due");
+  const REPLIT = [
+    "Subtotal $100.00",
+    "Total excluding tax $100.00",
+    "Sales Tax - Texas (8.25% on $80.00) $6.60",
+    "Total $106.60",
+    "Amount due $106.60 USD",
+  ].join("\n");
+  check("SUBTOTAL IS NOT THE TOTAL", totalIn(REPLIT).cents === 10660,
+    String(totalIn(REPLIT).cents));
+  check("…and it counts as a labelled total", totalIn(REPLIT).labelled === true);
+  // "Total excluding tax" is the trap one step along: it is a real
+  // "total" and it is the wrong number.
+  check("a total EXCLUDING tax does not win over the one including it",
+    totalIn("Total excluding tax $100.00\nTotal $106.60").cents === 10660);
+  check("amount due is taken on its own",
+    totalIn("Items $80.00\nAmount due $86.60").cents === 8660);
+  check("a plain total still works", totalIn("Total: $42.00").cents === 4200);
+  check("…and so does Order total", totalIn("Order total $9.99").cents === 999);
+  // Unlabelled is still a guess and must still say so, because the
+  // candidate's confidence depends on knowing the difference.
+  const guess = totalIn("Coffee $3.50\nPastry $4.25");
+  check("with no label at all it guesses the largest, and says it guessed",
+    guess.cents === 425 && guess.labelled === false, JSON.stringify(guess));
+  check("and nothing money-shaped reads as nothing",
+    totalIn("thanks for your order").cents === null);
+
 } finally {
   console.log(failures === 0 ? "\nPASS" : `\n${failures} FAILED`);
   process.exit(failures === 0 ? 0 : 1);

@@ -466,8 +466,24 @@ export async function receiptBytes(opts: {
     ? (m.body.content ?? "")
     : `<pre>${escapeHtml(textOf(m.body?.content ?? ""))}</pre>`;
 
+  /*
+   * LAUNCHED THE WAY EVERY OTHER BROWSER HERE IS.
+   *
+   * This was a bare `chromium.launch()` — no `--no-sandbox`, no
+   * `--disable-dev-shm-usage`, and none of the system Chromium path the
+   * rest of the app resolves. In a container that fails outright, so a
+   * BODY-ONLY receipt could never be rendered: the ones with a real
+   * attachment previewed and uploaded fine and the ones without — which
+   * is most of them — died here, showing a broken frame with no reason
+   * beside it.
+   */
   const { chromium } = await import("playwright");
-  const browser = await chromium.launch();
+  const { systemChromium } = await import("./auto-export.js");
+  const executablePath = (await systemChromium()) ?? undefined;
+  const browser = await chromium.launch({
+    ...(executablePath ? { executablePath } : {}),
+    args: ["--no-sandbox", "--disable-dev-shm-usage"],
+  });
   try {
     const page = await browser.newPage();
     // No network: a receipt email is full of tracking pixels and

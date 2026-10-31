@@ -683,9 +683,12 @@ function FlagTabs({
      *
      * The brief asks the personal queues to show match results, and
      * scattered through the Unflagged list they were invisible — the
-     * Receipt column said "none" and nothing grouped them. A matched
-     * receipt is a thing waiting on a person (press Send) or on the
-     * app (queued), and both belong somewhere you can find them.
+     * Receipt column said "none" and nothing grouped them.
+     *
+     * EVERY stage counts, candidates included. Excluding unconfirmed
+     * ones, as the first version did, left the tab empty and so
+     * unrendered — while the Receipt column beside it read "candidate"
+     * on dozens of rows. The app contradicting itself on one screen.
      *
      * Only while there are any, like the other conditional tabs: on the
      * manager queue, where nothing is matched from email, it never

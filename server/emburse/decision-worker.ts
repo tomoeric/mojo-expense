@@ -586,6 +586,10 @@ async function runWritebacks(): Promise<void> {
         await selectorsForLane(who, lane, settings.selectors),
         settings.emburseUrl,
         { userId: "", email: got.email, password: got.password },
+        // A non-empty lane IS a personal account, so the row is on that
+        // person's own list and there is no cardholder filter to narrow
+        // it with. Looking for one is how the first real write-back died.
+        { personalQueue: Boolean(lane) },
       );
 
       const why = run.steps.filter((s) => !s.ok).map((s) => s.detail).join(" ");
