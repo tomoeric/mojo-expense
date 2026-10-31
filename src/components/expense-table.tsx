@@ -5,7 +5,7 @@ import {
 } from "lucide-react";
 import type { ExpenseReport, ExpenseLine, ReportsResponse } from "@/lib/api";
 import { moneyExact, shortDate, daysAgo } from "@/lib/format";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Empty } from "@/components/ui";
 import { failureGroups } from "@/lib/decisions";
 import { ReceiptFrame } from "@/components/receipt-frame";
@@ -617,10 +617,28 @@ function BandRows({
  * drops a row the moment it succeeds is a tab you cannot check
  * your work in.
  */
+/**
+ * SUBMITTED TO EMBURSE, and therefore not your problem now.
+ *
+ * Pressing Send hands the receipt to the worker, which signs
+ * into Emburse and attaches it minutes later. Asked for by name:
+ * *"a Sending button (queue, tab) for all receipts submitted to
+ * emburse to be put into"*. Until this they stayed in the
+ * Receipts list with a small "sending" beside them, so a list of
+ * sixteen still read sixteen after you had sent half of them.
+ *
+ * `sent` and `already there` stay here rather than vanishing:
+ * this is where you look to see that it landed.
+ */
+const isSendingReceipt = (r: Row): boolean => {
+  const m = r.line.matchState;
+  return m === "queued" || m === "sent" || m === "already";
+};
+
+/** A receipt that still wants something FROM YOU. */
 const hasMatchedReceipt = (r: Row): boolean => {
   const m = r.line.matchState;
-  return m === "matched" || m === "queued" || m === "failed"
-    || m === "sent" || m === "already"
+  return m === "matched" || m === "failed"
     /*
      * CANDIDATES BELONG HERE TOO, now that the card can decide.
      *
@@ -634,7 +652,7 @@ const hasMatchedReceipt = (r: Row): boolean => {
 };
 
 export type Tab =
-  | "all" | "reading" | "matched" | "flagged" | "clean" | "sent"
+  | "all" | "reading" | "matched" | "sending" | "flagged" | "clean" | "sent"
   | "queued" | "approved" | "denied";
 
 /**
@@ -745,6 +763,9 @@ function FlagTabs({
   // The same base as the other undecided tabs, so the number on the
   // tab is the number of cards behind it.
   const matched = waiting.filter(hasMatchedReceipt);
+  // Receipts you have pressed Send on. Their own tab, because
+  // they are no longer a thing to do.
+  const sending = waiting.filter(isSendingReceipt);
   const groups = useMemo(() => {
     const counts = new Map<string, number>();
     for (const r of flagged) for (const g of r.flagGroups) counts.set(g, (counts.get(g) ?? 0) + 1);
@@ -776,6 +797,14 @@ function FlagTabs({
      */
     ...(matched.length > 0
       ? [{ key: "matched" as const, label: "Receipts", n: matched.length }]
+      : []),
+    /*
+     * Receipts on their way to Emburse, or already there. The
+     * same shape as Queued is for decisions: out of the list of
+     * things to do the moment you press Send.
+     */
+    ...(sending.length > 0
+      ? [{ key: "sending" as const, label: "Sending", n: sending.length }]
       : []),
     { key: "flagged" as const, label: "Flagged", n: flagged.length },
     // Unflagged means judged and clean. An expense nobody has read the
@@ -1171,6 +1200,7 @@ export function ExpenseTable({
       base = base.filter((r) => !isDone(r) && !isQueued(r));
       if (tab === "reading") base = base.filter(beingRead);
       if (tab === "matched") base = base.filter(hasMatchedReceipt);
+      if (tab === "sending") base = base.filter(isSendingReceipt);
       if (tab === "flagged") base = base.filter((r) => r.flags.length > 0);
       if (tab === "clean") base = base.filter((r) => r.flags.length === 0 && !beingRead(r));
     }
@@ -1407,7 +1437,7 @@ export function ExpenseTable({
 
       {sorted.length === 0 ? (
         <Empty>{rows.length === 0 ? emptyMessage : `Nothing matches “${query}”.`}</Empty>
-      ) : tab === "matched" ? (
+      ) : tab === "matched" || tab === "sending" ? (
         /*
          * THE MATCHED TAB IS NOT ANOTHER TABLE.
          *
@@ -1625,6 +1655,7 @@ function ChangeDialog({ row, onClose }: { row: Row; onClose: () => void }) {
  * page that works at four stops working at four hundred.
  */
 function MatchedReceipts({ rows, onOpen }: { rows: Row[]; onOpen: (r: Row) => void }) {
+  const qc = useQueryClient();
   const [limit, setLimit] = useState(12);
   const [pulling, setPulling] = useState("");
   const [pullNote, setPullNote] = useState<Record<string, string>>({});
@@ -1652,9 +1683,17 @@ function MatchedReceipts({ rows, onOpen }: { rows: Row[]; onOpen: (r: Row) => vo
       });
       const out = await res.json() as { error?: string };
       if (!res.ok) throw new Error(out.error ?? "That did not work.");
-      // The frame reads the image by URL, so a reload is the
-      // honest way to show one that has only just arrived.
-      window.location.reload();
+      /*
+       * REFETCH, NOT RELOAD.
+       *
+       * `window.location.reload()` threw away which queue and
+       * which tab you were looking at: press Pull the receipt in
+       * again on the MOJO tab and the page came back on the
+       * Manager queue, with the work you were doing nowhere in
+       * sight. The route clears the server's report cache, so an
+       * invalidate is enough and keeps you where you are.
+       */
+      await qc.invalidateQueries({ queryKey: ["reports"] });
     } catch (e) {
       setPullNote((n) => ({ ...n, [id]: (e as Error).message }));
     } finally {
@@ -1809,6 +1848,7 @@ function MatchedReceipts({ rows, onOpen }: { rows: Row[]; onOpen: (r: Row) => vo
  * is on screen.
  */
 function Candidates({ id, merchant }: { id: string; merchant: string }) {
+  const qc = useQueryClient();
   type Cand = {
     dedupeKey: string; messageId: string; confidence: string; score: number;
     reasons: string[];
@@ -1854,7 +1894,9 @@ function Candidates({ id, merchant }: { id: string; merchant: string }) {
       // still stands and the reason is worth seeing rather than a
       // silent success.
       if (choose && !out.linked && out.linkError) throw new Error(out.linkError);
-      window.location.reload();
+      // Refetch rather than reload: a reload loses the tab and
+      // the queue you were working in.
+      await qc.invalidateQueries({ queryKey: ["reports"] });
     } catch (e) {
       setState({ kind: "error", why: (e as Error).message });
     } finally {

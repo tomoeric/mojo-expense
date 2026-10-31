@@ -601,15 +601,79 @@ export function chargedTotal(r: ReceiptReading): ReceiptReading {
   return r;
 }
 
+/**
+ * WHAT THESE BYTES ACTUALLY ARE.
+ *
+ * The reader took the declared content type and CAST it to the
+ * four types the image block accepts:
+ *
+ *   media_type: contentType as "image/jpeg" | "image/png" | …
+ *
+ * A cast is not a check. Every emailed receipt is a PDF — the
+ * merchant's own attachment, or the message body rendered — so
+ * every one of them went up as an image block and came back
+ * `400 … media_type: Input should be 'image/jpeg', 'image/png',
+ * 'image/gif' or 'image/webp'`. Which means NO emailed receipt
+ * has ever been read, and everything downstream of the reading
+ * has been running on the email text alone.
+ *
+ * Sniffed from the bytes rather than trusted, because an
+ * attachment's declared type is whatever the sending client felt
+ * like — the same reason the preview frame sniffs.
+ */
+export function receiptKind(bytes: Buffer, declared: string): {
+  block: "image" | "document";
+  mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp" | "application/pdf";
+} | { block: "unreadable"; why: string } {
+  const head = bytes.subarray(0, 12);
+  const ascii = head.toString("latin1");
+  if (ascii.startsWith("%PDF-")) {
+    return { block: "document", mediaType: "application/pdf" };
+  }
+  if (head[0] === 0x89 && ascii.slice(1, 4) === "PNG") {
+    return { block: "image", mediaType: "image/png" };
+  }
+  if (head[0] === 0xff && head[1] === 0xd8) {
+    return { block: "image", mediaType: "image/jpeg" };
+  }
+  if (ascii.startsWith("GIF8")) return { block: "image", mediaType: "image/gif" };
+  if (ascii.startsWith("RIFF") && ascii.slice(8, 12) === "WEBP") {
+    return { block: "image", mediaType: "image/webp" };
+  }
+  /*
+   * A phone photo forwarded from an iPhone is HEIC, which the
+   * API does not take either. Said plainly rather than sent and
+   * rejected: the 400 names a field, this names the file.
+   */
+  if (ascii.slice(4, 12).includes("ftyphei") || /heic|heif/i.test(declared)) {
+    return {
+      block: "unreadable",
+      why: "This receipt is a HEIC photo, which the reader cannot read. An iPhone sends "
+        + "HEIC unless it is set to Most Compatible; forwarding the picture as a JPEG, "
+        + "or sending the merchant's own emailed receipt instead, both work.",
+    };
+  }
+  return {
+    block: "unreadable",
+    why: `This receipt is ${declared || "of an unknown type"}, which the reader cannot `
+      + "read. It reads PDFs, JPEG, PNG, GIF and WebP.",
+  };
+}
+
 /** Read one receipt image. Throws only for a failure worth retrying. */
 export async function readReceipt(image: Buffer, contentType = "image/jpeg"): Promise<ReceiptReading> {
+  const kind = receiptKind(image, contentType);
+  if (kind.block === "unreadable") throw new Error(kind.why);
   // The same receipt again, lower part enlarged. The figures that matter are
   // in the smallest type on the page; the item lines read fine and the
   // totals are four smudges. Null when the image is too small to enlarge or
   // could not be decoded — a second look is an improvement, not a
   // requirement.
+  // The zoom crops and enlarges a PHOTOGRAPH. There is nothing to
+  // crop on a PDF — it is already typeset, and the figures are
+  // sharp at any size.
   const { enlargeTotals } = await import("./receipt-zoom.js");
-  const zoom = enlargeTotals(image);
+  const zoom = kind.block === "image" ? enlargeTotals(image) : null;
 
   const response = await callAnthropic((c) => c.messages.parse({
     model: env.audit.model,
@@ -630,14 +694,29 @@ export async function readReceipt(image: Buffer, contentType = "image/jpeg"): Pr
       {
         role: "user",
         content: [
-          {
-            type: "image",
-            source: {
-              type: "base64",
-              media_type: contentType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
-              data: image.toString("base64"),
+          /*
+           * A PDF goes up as a DOCUMENT, not an image. Same
+           * model, different block: the API takes
+           * application/pdf only under `document`, and an image
+           * block carrying one is the 400 above.
+           */
+          kind.mediaType === "application/pdf"
+            ? {
+              type: "document" as const,
+              source: {
+                type: "base64" as const,
+                media_type: "application/pdf" as const,
+                data: image.toString("base64"),
+              },
+            }
+            : {
+              type: "image" as const,
+              source: {
+                type: "base64" as const,
+                media_type: kind.mediaType,
+                data: image.toString("base64"),
+              },
             },
-          },
           ...(zoom
             ? [
                 {

@@ -69,7 +69,8 @@ export type DecisionSelectorKey =
   | "userFilter" | "userFilterInput" | "userFilterOption" | "nextPage"
   | "editMenuItem" | "editCategory" | "editCategoryOption" | "editSave"
   | "editNote" | "editReceipt" | "editReceiptPresent"
-  | "editPurpose" | "editLocation" | "editDepartment" | "editComment";
+  | "editPurpose" | "editLocation" | "editDepartment" | "editComment"
+  | "editReceiptOpen";
 
 export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
   // Both grid shapes, because Emburse uses the second one.
@@ -204,6 +205,22 @@ export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
   editNote: 'textarea, input[name*="description" i], input[name*="memo" i], '
     + '[aria-label*="description" i], [aria-label*="memo" i], [placeholder*="description" i]',
   editReceipt: 'input[type="file"]',
+  /*
+   * The button that OPENS the upload, for a form that has no file
+   * input until it is pressed.
+   *
+   * From a photograph of the real dialog: the receipt panel reads
+   * "There are no receipts attached to this expense. Add from
+   * gallery, upload from your computer, or drag and drop…" above
+   * BROWSE GALLERY and UPLOAD A RECEIPT. If the input only exists
+   * once that is pressed, an attach step that goes straight for
+   * `input[type=file]` finds nothing and reports a missing
+   * selector — when the truth is that it never opened the thing
+   * holding it.
+   */
+  editReceiptOpen:
+    'button:has-text("UPLOAD A RECEIPT"), button:has-text("Upload a receipt"), '
+    + '[aria-label*="upload" i], button:has-text("Add receipt")',
   editReceiptPresent: '[data-testid*="receipt" i], img[alt*="receipt" i], '
     + 'a[href*="receipt" i], [class*="receipt" i]',
   /*
@@ -241,6 +258,9 @@ export const DECISION_SELECTOR_HELP: Record<DecisionSelectorKey, string> = {
   editLocation: "The Location / Site control on the edit form.",
   editDepartment: "The Department control on the edit form.",
   editComment: "The Comment box on the edit form.",
+  editReceiptOpen:
+    "The button that opens the upload — UPLOAD A RECEIPT on this tenant. Only needed "
+    + "when the form has no file input until it is pressed.",
   editReceipt: "The file input the edit form uploads a receipt through.",
   editReceiptPresent: "Anything shown on the form when a receipt is already attached.",
   resultRow: "One row of the results table.",
@@ -3244,8 +3264,26 @@ export async function attachAndAnnotate(
 
       if (want.receipt && !alreadyAttached) {
         if (!(await step("attach the receipt", async () => {
-          const input = page!.locator(sel.editReceipt!).first();
-          const there = await input.count().catch(() => 0);
+          let input = page!.locator(sel.editReceipt!).first();
+          let there = await input.count().catch(() => 0);
+          /*
+           * NO FILE INPUT YET IS NOT NO FILE INPUT.
+           *
+           * This tenant's form shows a receipt panel with UPLOAD
+           * A RECEIPT on it, and the input may only exist once
+           * that is pressed. Going straight for the input and
+           * reporting a missing selector would blame the
+           * selector for a dialog nobody opened.
+           */
+          if (there === 0 && sel.editReceiptOpen) {
+            const opener = await firstVisible(page!, sel.editReceiptOpen, 2500);
+            if (opener) {
+              await opener.click().catch(() => undefined);
+              await page!.waitForTimeout(1200);
+              input = page!.locator(sel.editReceipt!).first();
+              there = await input.count().catch(() => 0);
+            }
+          }
           if (there === 0) {
             throw await asError(whatIsOnTheForm(page!, sel.editReceipt!, "a file input"));
           }

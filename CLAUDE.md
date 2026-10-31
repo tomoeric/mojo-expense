@@ -3049,6 +3049,82 @@ this a rule" — which read as *save it now*, so somebody looking for a way
 to change the values before saving did not press the one thing that opens
 them.
 
+## A CAST IS NOT A CHECK: no emailed receipt had ever been read
+
+The reader took the declared content type and cast it to the four an
+image block accepts:
+
+```ts
+media_type: contentType as "image/jpeg" | "image/png" | "image/gif" | "image/webp"
+```
+
+Every emailed receipt is a PDF — the merchant's own attachment, or the
+message body rendered by us — so every one went up as an **image** block
+and came back:
+
+```
+400 … messages.0.content.0.image.source.base64.media_type:
+Input should be 'image/jpeg', 'image/png', 'image/gif' or 'image/webp'
+```
+
+Which means **no emailed receipt had ever been read**, and everything
+downstream of the reading — the field fill, the total check, the
+description — had been running on the email text alone. It surfaced only
+because the expense drawer prints the reader's error.
+
+- **A PDF goes up as a `document` block.** Same model, different block;
+  the API takes `application/pdf` only there.
+- **The type is sniffed from the bytes**, not the header, for the same
+  reason the preview frame sniffs: an attachment's declared type is
+  whatever the sending client felt like putting there. `receiptKind()`
+  returns `{block, mediaType}` or `{block: "unreadable", why}`.
+- **HEIC is refused with a sentence about the iPhone setting**, not an
+  API field name. A forwarded phone photo is HEIC unless the phone is on
+  Most Compatible, and that is worth saying once rather than 400-ing.
+- **The zoom is for photographs only** — a PDF is already typeset and
+  there is nothing to enlarge.
+- `scripts/test-receipt-kind.ts`.
+
+**The matching cast to watch for:** `editReceipt`'s file input may not
+exist until **UPLOAD A RECEIPT** is pressed — the real dialog reads "There
+are no receipts attached to this expense… BROWSE GALLERY · UPLOAD A
+RECEIPT". The attach step presses `editReceiptOpen` first when it finds no
+input, so a missing dialog is not reported as a missing selector.
+
+## Mutations must call `reportsChanged()`, and the UI must not reload
+
+Two faults behind "clicking pull receipt doesn't pull receipt and it
+refreshes back to manager queue tab":
+
+- **The queue is cached server-side** (`reportsCache`, TTL from
+  `env.emburse.cacheTtlSec`) and `reportsChanged()` existed for exactly
+  this. The receipt routes never called it, so pulling an image in — or
+  choosing a receipt at all — left the queue serving the answer it had
+  computed before: "pulling the image in failed" above a receipt that had
+  just arrived. **Any route that changes what the queue says must call
+  it.**
+- **`window.location.reload()` throws away where you were.** The queue
+  opens on the Manager tab, so a reload after pressing a button on a
+  personal tab came back on the wrong queue with the work out of sight.
+  Invalidate `["reports"]` instead; the cache clear above is what makes
+  that enough.
+
+## Receipts sent to Emburse have their own tab
+
+*"I asked for a Sending button (queue, tab) for all receipts submitted to
+emburse to be put into."* Pressing Send hands the receipt to the worker,
+which attaches it in Emburse minutes later; until then the row stayed in
+the Receipts list with a small "sending" beside it, so sixteen still read
+sixteen after half had been sent.
+
+- **Receipts** holds what still wants something FROM YOU: `candidate`,
+  `matched`, `failed`.
+- **Sending** holds what has been submitted: `queued`, `sent`,
+  `already`. The finished ones stay because this is where you look to
+  see that it landed.
+- Not to be confused with **Queued**, which is the same idea for
+  approve/deny decisions. Different stage, different word.
+
 ## A submitted expense leaves the queue the moment it is pressed
 
 Pressing Approve queues the decision for the worker, which signs into

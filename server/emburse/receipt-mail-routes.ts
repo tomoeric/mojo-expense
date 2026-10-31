@@ -15,6 +15,17 @@ import {
   suggestions,
 } from "./fill-rules.js";
 import { bytesFromMessage, linkReceipt, readingOf } from "./receipt-link.js";
+/*
+ * THE QUEUE IS CACHED, AND THESE ROUTES CHANGE WHAT IT SAYS.
+ *
+ * `reportsChanged()` existed for exactly this and nothing here
+ * called it. So pulling a receipt in, or choosing one, left the
+ * review queue serving the answer it had computed before —
+ * "pulling the image in failed" above a receipt that had just
+ * arrived — until the TTL ran out. The page looked broken
+ * because the page WAS stale.
+ */
+import { reportsChanged } from "../reports-cache.js";
 
 /**
  * Finding receipts in a mailbox, and offering them.
@@ -575,6 +586,9 @@ receiptMailRouter.post("/receipt-mail/decide", requireAuth,
       }
     }
 
+    // Choosing or rejecting changes the Receipt column, the
+    // Receipts tab and the link error the card prints.
+    reportsChanged();
     res.json({
       matches: await matchesFor(null),
       writes: await writesFor(),
@@ -670,10 +684,14 @@ receiptMailRouter.post("/receipt-mail/relink", requireAuth,
       // Now there is something to send, so the proposal can be made.
       await proposeWrites({ dedupeKey, messageId: chosen.messageId, by: me })
         .catch(() => undefined);
+      reportsChanged();
       res.json({ linked: got.sha256, writes: await writesFor(dedupeKey) });
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err);
       await noteLink(dedupeKey, "", null, why).catch(() => undefined);
+      // The recorded reason changed even though the pull did not
+      // work, and the queue shows that reason.
+      reportsChanged();
       res.status(400).json({ error: why });
     }
   });

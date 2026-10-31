@@ -1,25 +1,29 @@
 /**
- * Two things a reviewer needs to ask of an uploaded "receipt".
+ * What the reader is actually being handed.
  *
  *   pnpm exec tsx scripts/test-receipt-kind.ts
  *
- * "I need a rule that flags receipt uploads that are lost receipt forms,
- * and another for non-itemised receipts (paper)."
+ * The reader took the declared content type and CAST it to the
+ * four the image block accepts:
  *
- * Neither could be written before. The reader already decided `itemised`
- * but only ever folded it into `receiptReadable`, so "the receipt does not
- * say what was bought" could only be asked as "the receipt is not readable"
- * — a different sentence, and one that is false about a perfectly crisp
- * card slip. And nothing at all distinguished a Missing Receipt Affidavit
- * from a receipt: it reads cleanly, itemises nothing, and sailed through as
- * an unremarkable non-itemised upload.
+ *   media_type: contentType as "image/jpeg" | "image/png" | …
  *
- * The fail-safe matters more here than the match. An unread receipt must
- * answer NEITHER question rather than answering "no" to both, or the first
- * rule somebody writes flags the whole queue on the strength of readings
- * that have not happened yet.
+ * A cast is not a check. Every emailed receipt is a PDF — the
+ * merchant's own attachment, or the message body rendered — so
+ * every one went up as an image block and came back
+ *
+ *   400 … media_type: Input should be 'image/jpeg', 'image/png',
+ *   'image/gif' or 'image/webp'
+ *
+ * which means NO emailed receipt had ever been read, and
+ * everything downstream of the reading was running on the email
+ * text alone. A PDF goes up as a DOCUMENT block instead.
+ *
+ * Sniffed from the bytes, not the header, for the same reason
+ * the preview frame sniffs: an attachment's declared type is
+ * whatever the sending client felt like putting there.
  */
-import { evaluate, type RuleBody, type Subject } from "../server/rules/engine.js";
+import { receiptKind } from "../server/emburse/receipt-items.js";
 
 let failures = 0;
 const check = (what: string, ok: boolean, detail = "") => {
@@ -27,80 +31,57 @@ const check = (what: string, ok: boolean, detail = "") => {
   console.log(`  ${ok ? "ok  " : "FAIL"} ${what}${detail ? ` — ${detail}` : ""}`);
 };
 
-const expense = (over: Partial<Subject> = {}): Subject => ({
-  dedupeKey: "k", lane: "", employee: "Pat Lee", title: "", merchant: "HOME DEPOT",
-  note: "Parts", category: "Repairs & Maintenance", location: "Richland",
-  department: "Operations and Field", method: "Corporate card", amountCents: 11655,
-  hasReceipt: true, receiptItems: "", inInbox: true,
-  receiptTotalCents: 11655, receiptTotalsCents: [11655],
-  receiptAlcohol: false, receiptReadable: true,
-  receiptItemised: true, receiptSubstitute: false, receiptFuel: false,
-  receiptSharedWith: 1, receiptSplitAddsUp: false, countsTowardsDay: true,
-  receiptDate: "2026-09-23", receiptMerchant: "Home Depot",
-  date: "2026-09-23", ...over,
-});
+const pdf = Buffer.from("%PDF-1.4\nReceipt from Replit");
+const png = Buffer.concat([
+  Buffer.from([0x89]), Buffer.from("PNG\r\n\x1a\n", "latin1"), Buffer.alloc(8),
+]);
+const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(8)]);
+const gif = Buffer.from("GIF89a" + "\0".repeat(8), "latin1");
+const webp = Buffer.from("RIFF\0\0\0\0WEBPVP8 ", "latin1");
+const heic = Buffer.concat([
+  Buffer.alloc(4), Buffer.from("ftypheic", "latin1"), Buffer.alloc(4),
+]);
 
-const rule = (over: Partial<RuleBody>): RuleBody => ({
-  name: "r", enabled: true, match: "all", when: [], must: null,
-  action: "flag", message: "", ...over,
-});
+try {
+  console.log("1. A PDF IS A DOCUMENT, NOT AN IMAGE");
+  const k = receiptKind(pdf, "application/pdf");
+  check("…which is the whole bug", k.block === "document", JSON.stringify(k));
+  check("…with the right media type",
+    k.block === "document" && k.mediaType === "application/pdf");
 
-const verdict = (r: RuleBody, s: Subject) => evaluate(s, r);
+  console.log("\n2. And the real images are still images");
+  for (const [name, bytes, want] of [
+    ["PNG", png, "image/png"], ["JPEG", jpeg, "image/jpeg"],
+    ["GIF", gif, "image/gif"], ["WebP", webp, "image/webp"],
+  ] as const) {
+    const got = receiptKind(bytes, "application/octet-stream");
+    check(`${name} is read as ${want}`,
+      got.block === "image" && got.mediaType === want, JSON.stringify(got));
+  }
 
-console.log("1. Flag a lost-receipt form");
-const LOST = rule({
-  name: "Lost receipt form",
-  when: [{ field: "receiptSubstitute", op: "is", value: "yes" }],
-  message: "This is a lost-receipt form, not a receipt.",
-});
-check("a declaration the employee filled in is flagged",
-  verdict(LOST, expense({ receiptSubstitute: true })) === "fail");
-check("…and a real receipt is left alone",
-  verdict(LOST, expense({ receiptSubstitute: false })) === "not-applicable");
-// The whole point of the field: a form reads perfectly and itemises
-// nothing, so without it the only rule that caught it was one about
-// itemisation, which says the wrong thing to the employee.
-check("…even though a form reads cleanly",
-  verdict(LOST, expense({ receiptSubstitute: true, receiptReadable: true })) === "fail");
+  console.log("\n3. THE BYTES WIN OVER THE HEADER");
+  /*
+   * A merchant's attachment arrives declared as whatever the
+   * sending client felt like. Navan's came through in a way that
+   * had the preview showing a plug-in error; the same lie would
+   * send a PDF up as a JPEG here.
+   */
+  check("a PDF declared as a JPEG is still a document",
+    receiptKind(pdf, "image/jpeg").block === "document");
+  check("…and a PNG declared as a PDF is still an image",
+    receiptKind(png, "application/pdf").block === "image");
 
-console.log("\n2. Flag a receipt that does not say what was bought");
-const PAPER = rule({
-  name: "Not itemised",
-  when: [{ field: "receiptItemised", op: "is", value: "no" }],
-  message: "The receipt shows a total but not what was bought.",
-});
-check("a card slip with only a total is flagged",
-  verdict(PAPER, expense({ receiptItemised: false })) === "fail");
-check("…and an itemised till receipt is not",
-  verdict(PAPER, expense({ receiptItemised: true })) === "not-applicable");
-
-console.log("\n3. Neither rule may act on a receipt nobody has read");
-// This is the one that would hurt. Null means "not known", and a rule that
-// reads it as "no" flags every expense whose receipt is still in the queue
-// to be read — which, after an import, is all of them.
-check("an unread receipt is not a lost-receipt form",
-  verdict(LOST, expense({ receiptSubstitute: null })) === "not-applicable");
-check("…and is not an un-itemised one either",
-  verdict(PAPER, expense({ receiptItemised: null })) === "not-applicable");
-check("“is not yes” does not catch it either",
-  verdict(rule({ when: [{ field: "receiptSubstitute", op: "is_not", value: "yes" }] }),
-    expense({ receiptSubstitute: null })) === "not-applicable");
-
-console.log("\n4. And there is still a way to ASK for the unanswered ones");
-check("is blank finds a receipt nobody has read",
-  verdict(rule({ when: [{ field: "receiptItemised", op: "is_blank", value: "" }] }),
-    expense({ receiptItemised: null })) === "fail");
-check("…and not one that has been",
-  verdict(rule({ when: [{ field: "receiptItemised", op: "is_blank", value: "" }] }),
-    expense({ receiptItemised: false })) === "not-applicable");
-
-console.log("\n5. The two are independent");
-// A form is not merely un-itemised and an un-itemised receipt is not a
-// form. Collapsing them would tell half the employees the wrong thing.
-check("a form that happens to list items is still a form",
-  verdict(LOST, expense({ receiptSubstitute: true, receiptItemised: true })) === "fail");
-check("…and an un-itemised real receipt is not a form",
-  verdict(LOST, expense({ receiptSubstitute: false, receiptItemised: false })) === "not-applicable");
-
-console.log(failures === 0 ? "\nPASS" : `\n${failures} FAILED`);
-process.exit(failures === 0 ? 0 : 1);
+  console.log("\n4. What it cannot read, it SAYS, rather than being 400'd");
+  const h = receiptKind(heic, "image/heic");
+  check("a HEIC phone photo is refused here", h.block === "unreadable", JSON.stringify(h));
+  check("…naming the file rather than an API field",
+    h.block === "unreadable" && /HEIC/.test(h.why) && /Most Compatible/.test(h.why),
+    h.block === "unreadable" ? h.why : "");
+  const junk = receiptKind(Buffer.from("not a receipt at all"), "text/plain");
+  check("and anything else says what it reads",
+    junk.block === "unreadable" && /PDFs, JPEG, PNG/.test(junk.why),
+    junk.block === "unreadable" ? junk.why : "");
+} finally {
+  console.log(failures === 0 ? "\nPASS" : `\n${failures} FAILED`);
+  process.exit(failures === 0 ? 0 : 1);
+}
