@@ -27,8 +27,17 @@ console.log("1. The send, once there is one, is what the queue reports");
 check("applied reads as sent", matchState("applied", "chosen") === "sent");
 check("already attached says so", matchState("already", "chosen") === "already");
 check("queued reads as queued", matchState("queued", "chosen") === "queued");
-check("proposed is queued too — it is on its way",
-  matchState("proposed", "chosen") === "queued");
+/*
+ * PROPOSED IS NOT QUEUED. `queued` means a person pressed Send
+ * and the worker has it; `proposed` means it is written out and
+ * waiting on that press. Folding them together put a pill
+ * reading "sending" above lines each reading "not sent yet", on
+ * a tab called Sending — an expense needing one more press,
+ * dressed as one already on its way.
+ */
+check("PROPOSED IS READY TO SEND, not sending",
+  matchState("proposed", "chosen") === "matched",
+  String(matchState("proposed", "chosen")));
 check("a failed send needs review", matchState("failed", "chosen") === "failed");
 // Stale is a conflict: Emburse moved under us. It wants a person, and
 // calling it anything softer would hide the one row that needs looking at.

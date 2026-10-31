@@ -632,6 +632,8 @@ function BandRows({
  */
 const isSendingReceipt = (r: Row): boolean => {
   const m = r.line.matchState;
+  // `matched` is NOT here: that is a receipt chosen and written
+  // out, waiting on a press. It is work, so it stays in Receipts.
   return m === "queued" || m === "sent" || m === "already";
 };
 
@@ -1763,7 +1765,11 @@ function MatchedReceipts({ rows, onOpen }: { rows: Row[]; onOpen: (r: Row) => vo
                   nothing about the send — "how to tell details on
                   sending?" — while every line of it was stored and
                   reachable only from the other page. */}
-              {isSendingReceipt(r) && <SendDetail id={r.line.id} />}
+              {/* On both tabs: a chosen receipt shows what WILL
+                  change and the press that sends it; a sent one
+                  shows what did change and how it went. */}
+              {(isSendingReceipt(r) || state === "matched")
+                && <SendDetail id={r.line.id} />}
               <button
                 type="button"
                 onClick={() => onOpen(r)}
@@ -2031,7 +2037,10 @@ function SendDetail({ id }: { id: string }) {
     attempts: number; error: string; settledAt: string | null;
     steps?: { name: string; ok: boolean; detail: string }[];
   };
+  const qc = useQueryClient();
   const [writes, setWrites] = useState<W[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     let dropped = false;
@@ -2048,6 +2057,42 @@ function SendDetail({ id }: { id: string }) {
 
   if (!writes || writes.length === 0) return null;
 
+  /*
+   * THE PRESS BELONGS HERE TOO.
+   *
+   * Every line read "not sent yet" and the only Send button was
+   * on another page, so the honest reading of this card was
+   * "just wait now?" — and waiting would never have sent
+   * anything. Nothing is queued without a press; this is that
+   * press, in the place the work is.
+   */
+  const unsent = writes.filter((w) => w.state === "proposed").map((w) => w.kind);
+  const broken = writes.filter((w) => w.state === "failed" || w.state === "stale");
+
+  const send = async (kinds: string[]) => {
+    setBusy(true);
+    setError("");
+    try {
+      for (const kind of kinds) {
+        const res = await fetch("/api/receipt-mail/send", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ dedupeKey: id, kind }),
+        });
+        const out = await res.json() as { error?: string };
+        if (!res.ok) throw new Error(out.error ?? "That did not work.");
+      }
+      await qc.invalidateQueries({ queryKey: ["reports"] });
+      const again = await fetch(
+        `/api/receipt-mail/for-expense?dedupeKey=${encodeURIComponent(id)}`);
+      if (again.ok) setWrites(((await again.json()) as { writes?: W[] }).writes ?? []);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const LABEL: Record<string, string> = {
     receipt: "Attach", note: "Description", category: "Category",
     purpose: "Business Purpose", location: "Location / Site",
@@ -2056,7 +2101,26 @@ function SendDetail({ id }: { id: string }) {
 
   return (
     <div className="space-y-1.5 rounded-lg border border-border bg-muted/20 p-2.5 text-xs">
-      <p className="font-semibold">Sent to Emburse under your own login</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="font-semibold">
+          {unsent.length > 0
+            ? "This is what will change on the expense in Emburse"
+            : "Sent to Emburse under your own login"}
+        </p>
+        {unsent.length > 0 && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void send(unsent)}
+            className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-sky-600
+                       px-3 py-1 font-semibold text-white disabled:opacity-50"
+          >
+            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Send to Emburse
+          </button>
+        )}
+      </div>
+      {error && <p className="text-red-700 dark:text-red-400">{error}</p>}
       <ul className="space-y-1">
         {writes.map((w) => (
           <li key={w.kind} className="flex flex-wrap items-start gap-x-2 gap-y-0.5">
@@ -2103,6 +2167,25 @@ function SendDetail({ id }: { id: string }) {
           </li>
         ))}
       </ul>
+      {/* The split only matters when half of it fails. */}
+      {broken.length > 0 && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void send(broken.map((w) => w.kind))}
+          className="rounded-lg border border-sky-600/50 px-3 py-1 font-semibold
+                     disabled:opacity-50"
+        >
+          Try that part again
+        </button>
+      )}
+      {unsent.length > 0 && (
+        <p className="text-[11px] text-muted-foreground">
+          Nothing has reached Emburse yet. One press sends every line above, under
+          your own Emburse login; it attaches and edits, and never submits, approves
+          or denies.
+        </p>
+      )}
     </div>
   );
 }

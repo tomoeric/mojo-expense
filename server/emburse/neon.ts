@@ -247,7 +247,20 @@ export function matchState(
   switch (writeback) {
     case "applied": return "sent";
     case "already": return "already";
-    case "queued": case "proposed": return "queued";
+    /*
+     * PROPOSED IS NOT QUEUED, and folding them together said the
+     * opposite of the truth.
+     *
+     * `queued` means a person pressed Send and the worker has it.
+     * `proposed` means the opposite: it is written out, waiting
+     * on that press. Together they drove a pill reading "sending"
+     * above a list of lines each reading "not sent yet", on a tab
+     * called Sending — so an expense that needed one more press
+     * looked like one already on its way, and the honest question
+     * back was "just wait now?". No: press Send.
+     */
+    case "queued": return "queued";
+    case "proposed": return "matched";
     case "failed": case "stale": return "failed";
     default: break;
   }

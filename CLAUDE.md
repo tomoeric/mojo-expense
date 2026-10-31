@@ -3127,7 +3127,18 @@ the Receipts list with a small "sending" beside it, so sixteen still read
 sixteen after half had been sent.
 
 - **Receipts** holds what still wants something FROM YOU: `candidate`,
-  `matched`, `failed`.
+  `matched` (chosen and written out, waiting on the press), `failed`.
+- **PROPOSED IS NOT QUEUED.** `matchState()` folded them together, so a
+  pill reading "sending" sat above a list of lines each reading "not
+  sent yet", on a tab called Sending — an expense needing one more press
+  dressed as one already on its way. `queued` means a person pressed
+  Send and the worker has it; `proposed` means the opposite. The honest
+  question back was *"just wait now?"*, and waiting would never have
+  sent anything.
+- **The press is on the card.** The only Send button was on the matching
+  page, which is what made waiting look like the answer. One press sends
+  every line, and the card says "Nothing has reached Emburse yet" until
+  it happens.
 - **Sending** holds what has been submitted: `queued`, `sent`,
   `already`. The finished ones stay because this is where you look to
   see that it landed.

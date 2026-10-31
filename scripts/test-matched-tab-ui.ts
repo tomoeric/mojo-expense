@@ -101,6 +101,10 @@ try {
   }]);
   await decideMatch({ dedupeKey: KEY, messageId: "mt-msg-1", choose: true, by: APP });
   await linkReceipt({ dedupeKey: KEY, bytes: PNG, contentType: "image/png" });
+  // Chosen and written out, waiting on a press — the state the
+  // pill used to call "sending".
+  const { proposeWrites } = await import("../server/emburse/receipt-writeback.js");
+  await proposeWrites({ dedupeKey: KEY, messageId: "mt-msg-1", by: APP });
 
   /*
    * AND ONE WHOSE IMAGE PULL FAILED.
@@ -200,7 +204,7 @@ try {
   const text = await page.locator("body").innerText();
   check("the expense is named", text.includes("REPLIT"), text.slice(0, 200));
   check("…with its amount", text.includes("106.60"));
-  check("…and where the match has got to", /matched, not sent yet|waiting to be sent|sent to Emburse/.test(text),
+  check("…and where the match has got to", /ready to send|sending|sent/.test(text),
     text.replace(/\n/g, " | ").slice(0, 400));
   check("THE RECEIPT IMAGE IS ON SCREEN",
     await page.locator("img[alt*='receipt matched to']").count() > 0,
@@ -220,6 +224,25 @@ try {
   check("…while the one that worked still shows its picture",
     (await page.locator("img[alt*='receipt matched to']").count()) > 0,
     `${await page.locator("img[alt*='receipt matched to']").count()} images`);
+
+  console.log("\n3b. A RECEIPT WAITING ON A PRESS SAYS SO, and offers the press");
+  /*
+   * The pill read "sending" above lines each reading "not sent
+   * yet", on a tab called Sending — because `proposed` was
+   * folded into `queued`. An expense needing one more press,
+   * dressed as one already on its way, and the only Send button
+   * was on another page. The honest question back was "just wait
+   * now?".
+   */
+  const ready = await page.locator("body").innerText();
+  check("THE WORD IS 'ready to send', not 'sending'",
+    ready.includes("ready to send") && !/\bsending\b/.test(ready),
+    ready.replace(/\n/g, " | ").slice(0, 400));
+  check("…and the press is on the card",
+    (await page.getByRole("button", { name: "Send to Emburse" }).count()) > 0,
+    ready.replace(/\n/g, " | ").slice(-400));
+  check("…saying nothing has reached Emburse yet",
+    ready.includes("Nothing has reached Emburse yet"));
 
   console.log("\n4. A CANDIDATE CAN BE DECIDED FROM THE QUEUE");
   /*
