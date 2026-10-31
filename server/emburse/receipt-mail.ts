@@ -611,8 +611,18 @@ export const PHOTO_SEP = "#";
 export const baseMessageId = (id: string): string =>
   id.includes(PHOTO_SEP) ? id.slice(0, id.indexOf(PHOTO_SEP)) : id;
 
-/** Is this attachment a photograph of a receipt rather than a logo? */
-export const isPhoto = (a: { name: string; contentType: string; size: number }): boolean =>
+/** One file hanging off a message, as Graph describes it. */
+export type MailAttachment = Evidence["attachments"][number];
+
+/**
+ * Is this attachment a photograph of a receipt rather than a logo?
+ *
+ * Takes the whole attachment rather than three of its fields, so
+ * `attachments.filter(isPhoto)` works and so a caller handing it
+ * a real attachment is not refused for the `id` being there —
+ * which is exactly how this shipped with a type error in it.
+ */
+export const isPhoto = (a: MailAttachment): boolean =>
   (/^image\//i.test(a.contentType) || /\.(jpe?g|png|heic|heif|webp)$/i.test(a.name))
   // A signature image or a tracking pixel is not a receipt. A
   // photographed till receipt off a phone is hundreds of KB.

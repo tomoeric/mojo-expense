@@ -43,10 +43,18 @@ the blocks.
 Seven steps. Not a style guide — every one of them is here because
 skipping it shipped something broken, and the note under each says which.
 
-**1. `pnpm run typecheck` and `pnpm run build`, both clean.**
+**1. `pnpm run typecheck` and `pnpm run build`, both clean — AND RUN AFTER
+THE LAST FILE IS WRITTEN, TEST SCRIPTS INCLUDED.**
 Typecheck runs `scripts/check-sql-templates.mjs` first, which refuses a
 backtick inside a SQL template literal — that has broken the build three
 times and the error always lands dozens of lines from the cause.
+`tsc` covers `scripts/` too, and a test script is written LAST, after the
+typecheck that was run on the source. That shipped a build-breaking
+`TS2353` to the deployment with "typecheck and build clean" in the commit
+message: the typecheck was clean, and it was run before the file that
+broke it existed. Running the suite is not a substitute — `tsx` executes
+without typechecking, so a test can pass and still fail the build.
+**The last command before committing is the typecheck, every time.**
 
 **2. Run every affected suite against a real database, and say which in the
 reply, with the count.** Not "tests pass": `25 suites pass` and the names of
