@@ -363,6 +363,35 @@ try {
     referenceIn("Receipt Download\nOrder #A1B2C3D4") === "A1B2C3D4",
     referenceIn("Receipt Download\nOrder #A1B2C3D4"));
 
+  console.log("\n21. A SHARED WORD IS NOT A SHARED MERCHANT");
+  /*
+   * The real one: a $34.81 hotel incidental was offered six
+   * receipts — Navan travel mails for $172.32, $153.55, $116.07
+   * and some with no total at all — because the expense name and
+   * the subject both contain the word "hotel".
+   */
+  const hotel = expense({
+    merchant: "DALLAS PARK CENTRAL WESTIAWH DALLAS PC HOTEL, LLC",
+    amountCents: 3481, date: "2026-08-26",
+  });
+  const navan = message({
+    messageId: "navan", subject: "Your Aug 25 stay at the Park Central Hotel",
+    from: "no-reply@navan.com", merchant: "navan",
+    date: "2026-08-25", totalCents: 17232,
+  });
+  check("“hotel” in both names does not make them the same merchant",
+    scoreMatch(hotel, navan) === null,
+    JSON.stringify(scoreMatch(hotel, navan)?.reasons ?? []));
+  check("…nor does a shared “llc”, “inc” or “central”",
+    scoreMatch(expense({ merchant: "ACME CENTRAL LLC", amountCents: 500 }),
+      message({ subject: "Zebra Central LLC order", merchant: "Zebra", totalCents: 999 }))
+      === null);
+  check("BUT A REAL SHARED NAME STILL MATCHES",
+    scoreMatch(expense({ merchant: "DALLAS WESTIAWH HOTEL, LLC", amountCents: 17232 }),
+      message({ ...navan, subject: "Your stay at WESTIAWH" })) !== null);
+  check("…and a one-word vendor is untouched",
+    scoreMatch(expense(), message()) !== null);
+
 } finally {
   console.log(failures === 0 ? "\nPASS" : `\n${failures} FAILED`);
   process.exit(failures === 0 ? 0 : 1);

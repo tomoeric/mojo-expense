@@ -69,7 +69,7 @@ export type DecisionSelectorKey =
   | "userFilter" | "userFilterInput" | "userFilterOption" | "nextPage"
   | "editMenuItem" | "editCategory" | "editCategoryOption" | "editSave"
   | "editNote" | "editReceipt" | "editReceiptPresent"
-  | "editPurpose" | "editLocation" | "editDepartment";
+  | "editPurpose" | "editLocation" | "editDepartment" | "editComment";
 
 export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
   // Both grid shapes, because Emburse uses the second one.
@@ -229,6 +229,10 @@ export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
     '[role="combobox"][aria-label*="department" i], input[aria-label*="department" i], '
     + 'select[name*="department" i], input[name*="department" i], '
     + '[data-testid*="department" i]',
+  editComment:
+    'textarea[aria-label*="comment" i], input[aria-label*="comment" i], '
+    + 'textarea[name*="comment" i], input[name*="comment" i], '
+    + 'input[id*="comment" i], [data-testid*="comment" i]',
 };
 
 export const DECISION_SELECTOR_HELP: Record<DecisionSelectorKey, string> = {
@@ -236,6 +240,7 @@ export const DECISION_SELECTOR_HELP: Record<DecisionSelectorKey, string> = {
   editPurpose: "The Business Purpose box on the edit form.",
   editLocation: "The Location / Site control on the edit form.",
   editDepartment: "The Department control on the edit form.",
+  editComment: "The Comment box on the edit form.",
   editReceipt: "The file input the edit form uploads a receipt through.",
   editReceiptPresent: "Anything shown on the form when a receipt is already attached.",
   resultRow: "One row of the results table.",
@@ -3126,7 +3131,10 @@ export async function attachAndAnnotate(
      * press. A separate trip per field would be four sign-ins
      * and four saves for one expense.
      */
-    fields?: { field: "category" | "purpose" | "location" | "department"; value: string }[];
+    fields?: {
+      field: "category" | "purpose" | "location" | "department" | "comment";
+      value: string;
+    }[];
   },
   selectors: Record<string, string>,
   emburseUrl: string,
@@ -3279,6 +3287,7 @@ export async function attachAndAnnotate(
           purpose: { sel: sel.editPurpose, label: "Business Purpose" },
           location: { sel: sel.editLocation, label: "Location / Site" },
           department: { sel: sel.editDepartment, label: "Department" },
+          comment: { sel: sel.editComment, label: "Comment" },
         }[f.field];
         if (!(await step(`set ${where.label}`, () =>
           setFormField(page!, where.sel, sel.editCategoryOption!, where.label, f.value, ms),

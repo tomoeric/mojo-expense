@@ -631,6 +631,7 @@ receiptMailRouter.post("/fill-rules", requireAuth, async (req: Request, res: Res
       purpose: str("purpose"),
       location: str("location"),
       department: str("department"),
+      comment: str("comment"),
       enabled: b.enabled === undefined ? true : b.enabled === true,
       by: me,
     });

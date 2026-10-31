@@ -33,6 +33,7 @@ import { Check, Loader2, Plus, Sparkles, Tag, Trash2 } from "lucide-react";
 type Rule = {
   id: number; owner: string; lane: string; vendor: string;
   category: string; purpose: string; location: string; department: string;
+  comment: string;
   enabled: boolean; updatedAt: string; updatedBy: string;
 };
 type Suggestion = {
@@ -45,16 +46,21 @@ type Answer = {
   rules: Rule[];
   suggestions: Suggestion[];
   accounts: { lane: string; label: string }[];
-  fields: { key: "category" | "purpose" | "location" | "department"; label: string }[];
+  fields: { key: FieldKey; label: string }[];
 };
+
+/** The five boxes on Emburse's Edit Expense Details form. */
+type FieldKey = "category" | "purpose" | "location" | "department" | "comment";
 
 type Draft = {
   id?: number; lane: string; vendor: string;
   category: string; purpose: string; location: string; department: string;
+  comment: string;
 };
 
 const EMPTY: Draft = {
   lane: "", vendor: "", category: "", purpose: "", location: "", department: "",
+  comment: "",
 };
 
 export function FillRulesPage() {
@@ -168,6 +174,7 @@ export function FillRulesPage() {
                 <th className="px-2 py-2 font-semibold">Business Purpose</th>
                 <th className="px-2 py-2 font-semibold">Location / Site</th>
                 <th className="px-2 py-2 font-semibold">Department</th>
+                <th className="px-2 py-2 font-semibold">Comment</th>
                 <th className="px-2 py-2 font-semibold">Applies to</th>
                 <th className="w-20 px-2 py-2" />
               </tr>
@@ -180,6 +187,7 @@ export function FillRulesPage() {
                   <td className="px-2 py-2">{r.purpose || <Unset />}</td>
                   <td className="px-2 py-2">{r.location || <Unset />}</td>
                   <td className="px-2 py-2">{r.department || <Unset />}</td>
+                  <td className="px-2 py-2">{r.comment || <Unset />}</td>
                   <td className="px-2 py-2 text-muted-foreground">{laneName(r.lane)}</td>
                   <td className="px-2 py-2">
                     <div className="flex items-center justify-end gap-1">
@@ -188,6 +196,7 @@ export function FillRulesPage() {
                         onClick={() => setDraft({
                           id: r.id, lane: r.lane, vendor: r.vendor, category: r.category,
                           purpose: r.purpose, location: r.location, department: r.department,
+                          comment: r.comment,
                         })}
                         className="rounded-md border border-border px-2 py-1 font-semibold
                                    hover:bg-muted"
@@ -246,6 +255,7 @@ export function FillRulesPage() {
                   onClick={() => setDraft({
                     lane: "", vendor: s.vendor, category: s.category.value,
                     purpose: "", location: s.location.value, department: s.department.value,
+                    comment: "",
                   })}
                   className="ml-auto inline-flex items-center gap-1 rounded-lg border
                              border-emerald-600/50 px-2.5 py-1 font-semibold
@@ -294,7 +304,7 @@ function RuleForm({ draft, accounts, busy, onChange, onCancel, onSave }: {
   onSave: () => void;
 }) {
   const field = (
-    key: "vendor" | "category" | "purpose" | "location" | "department",
+    key: "vendor" | FieldKey,
     label: string, hint?: string,
   ) => (
     <label className="block">
@@ -324,6 +334,8 @@ function RuleForm({ draft, accounts, busy, onChange, onCancel, onSave }: {
           "The sentence about why — “AI Development and Use”.")}
         {field("location", "Location / Site")}
         {field("department", "Department")}
+        {field("comment", "Comment",
+          "The free-text Comment box at the foot of Emburse's edit form.")}
         <label className="block">
           <span className="text-xs font-semibold">Applies to</span>
           <select

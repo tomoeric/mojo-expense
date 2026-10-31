@@ -75,7 +75,8 @@ type Write = {
   /* "receipt" and "note" come from the matched email; the four
      field kinds come from a vendor rule and are named for the
      boxes on Emburse's own edit form. */
-  kind: "receipt" | "note" | "category" | "purpose" | "location" | "department";
+  kind: "receipt" | "note" | "category" | "purpose" | "location" | "department"
+    | "comment";
   lane: string;
   proposed: string;
   was: string;
@@ -704,6 +705,7 @@ const WRITE_LABEL: Record<Write["kind"], string> = {
   purpose: "Business Purpose",
   location: "Location / Site",
   department: "Department",
+  comment: "Comment",
 };
 
 /** Where a row has got to, in four words and a colour. */

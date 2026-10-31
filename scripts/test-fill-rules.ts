@@ -43,7 +43,7 @@ const OTHER = "personal-mammoth";
 
 const rule = (over: Partial<FillRule> = {}): FillRule => ({
   id: 1, owner: ERIC, lane: "", vendor: "REPLIT", category: "Software",
-  purpose: "", location: "", department: "", enabled: true,
+  purpose: "", location: "", department: "", comment: "", enabled: true,
   updatedAt: "", updatedBy: "", ...over,
 });
 
@@ -118,12 +118,50 @@ try {
   check("somebody else's rule cannot be deleted",
     (await deleteRule("brian.c@mojocarwash.com", saved.id)) === false);
 
+  console.log("\n4b. EDITING ONE, field by field, Comment included");
+  /*
+   * Five boxes on Emburse's edit form, and a rule has to be able
+   * to set every one of them and then be changed. Comment was the
+   * fifth and was missing — it is a free-text box at the foot of
+   * the form with no column in the export, so nothing here knew
+   * about it until the owner pointed at it.
+   */
+  const five = await saveRule({
+    owner: ERIC, vendor: "FIVEFIELD", category: "C1", purpose: "P1",
+    location: "L1", department: "D1", comment: "M1", by: ERIC,
+  });
+  check("all five are stored",
+    [five.category, five.purpose, five.location, five.department, five.comment]
+      .join("|") === "C1|P1|L1|D1|M1",
+    [five.category, five.purpose, five.location, five.department, five.comment].join("|"));
+  const edited = await saveRule({
+    id: five.id, owner: ERIC, vendor: "FIVEFIELD", category: "C2", purpose: "P2",
+    location: "L2", department: "D2", comment: "M2", by: ERIC,
+  });
+  check("EDITING CHANGES EVERY ONE, and keeps the same rule",
+    edited.id === five.id
+    && [edited.category, edited.purpose, edited.location, edited.department, edited.comment]
+      .join("|") === "C2|P2|L2|D2|M2",
+    `${edited.id} vs ${five.id}: `
+    + [edited.category, edited.purpose, edited.location, edited.department, edited.comment]
+      .join("|"));
+  const cleared = await saveRule({
+    id: five.id, owner: ERIC, vendor: "FIVEFIELD", category: "C2", by: ERIC,
+  });
+  check("…and emptying a field means the rule stops touching that box",
+    cleared.comment === "" && cleared.purpose === "",
+    JSON.stringify(setsOf(cleared)));
+  check("…which setsOf reports as the fields it still sets",
+    JSON.stringify(setsOf(cleared)) === JSON.stringify({ category: "C2" }),
+    JSON.stringify(setsOf(cleared)));
+  await deleteRule(ERIC, five.id);
+
   console.log("\n5. A MATCHED RECEIPT CARRIES THE RULE'S FIELDS — and sends nothing");
   await saveRule({
     owner: ERIC, vendor: "REPLIT",
     category: "Technology/Software, Licenses, and Subscriptions",
     purpose: "AI Development and Use", location: "Corporate-Pure Magic",
-    department: "IT & Compliance", by: ERIC,
+    department: "IT & Compliance", comment: "Monthly AI subscription", by: ERIC,
   });
   // An expense that already has the department right: the rule
   // must not propose a change to something already correct.
@@ -147,6 +185,7 @@ try {
   check("the category is proposed", kinds.includes("category"), kinds.join(", "));
   check("…and the business purpose", kinds.includes("purpose"));
   check("…and the location", kinds.includes("location"));
+  check("…and the comment", kinds.includes("comment"), kinds.join(", "));
   check("A FIELD ALREADY RIGHT IS NOT PROPOSED", !kinds.includes("department"),
     kinds.join(", "));
   check("the receipt is still in there too", kinds.includes("receipt"));

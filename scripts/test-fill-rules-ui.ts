@@ -155,7 +155,28 @@ try {
   check("…and no longer offered as a suggestion",
     !text.includes("Make this a rule"));
 
-  console.log("\n5. No console errors");
+  console.log("\n5. EDITING IT — every field, Comment included");
+  await page.getByRole("button", { name: "Edit" }).first().click();
+  await page.waitForTimeout(500);
+  text = await page.locator("body").innerText();
+  check("the form opens on the existing rule", /Editing the .* rule/.test(text),
+    text.replace(/\n/g, " | ").slice(0, 300));
+  check("…with all five of Emburse's boxes", text.includes("Comment"),
+    text.replace(/\n/g, " | ").slice(0, 400));
+  // The Comment box is the fifth, and the one with no history
+  // behind it: it is not in the export, so a person types it.
+  const comment = page.getByText("Comment", { exact: true }).locator("xpath=./following::input[1]");
+  await comment.fill("Monthly AI subscription");
+  await page.getByRole("button", { name: "Save the rule" }).click();
+  await page.waitForTimeout(1500);
+  const { rows: after } = await db().query<{ comment: string; n: string }>(
+    `SELECT comment, count(*) OVER ()::text AS n FROM expense_fill_rules
+      WHERE lower(owner) = lower($1)`, [APP]);
+  check("THE EDIT SAVED THE COMMENT", after[0]?.comment === "Monthly AI subscription",
+    JSON.stringify(after[0] ?? {}));
+  check("…and did not make a second rule", after[0]?.n === "1",
+    `${after.length} row(s)`);
+  console.log("\n6. No console errors");
   check("the page produced none", errors.length === 0, errors.slice(0, 3).join(" · "));
 } finally {
   await browser.close();

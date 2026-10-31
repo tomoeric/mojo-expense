@@ -55,8 +55,25 @@ export function ReceiptFrame({ src, alt, height = "h-80", loading }: {
         }
         const blob = await res.blob();
         if (dropped) return;
+        /*
+         * WHAT IT ACTUALLY IS, not what the header claimed.
+         *
+         * A receipt arrives as an attachment whose declared type is
+         * whatever the sending client felt like — Navan's came
+         * through in a way that left the <object> below showing
+         * "This plug-in isn't supported" and nothing else. The first
+         * five bytes of a PDF are %PDF- and the first eight of a PNG
+         * are fixed, so the file is asked rather than its label.
+         */
+        const head = new Uint8Array(await blob.slice(0, 8).arrayBuffer());
+        const text = (n: number) => String.fromCharCode(...head.slice(0, n));
+        const sniffed =
+          text(5) === "%PDF-" ? "application/pdf"
+            : text(8) === "\x89PNG\r\n\x1a\n" ? "image/png"
+              : head[0] === 0xff && head[1] === 0xd8 ? "image/jpeg"
+                : blob.type;
         made = URL.createObjectURL(blob);
-        setState({ kind: "ok", url: made, type: blob.type });
+        setState({ kind: "ok", url: made, type: sniffed || "application/pdf" });
       } catch (e) {
         if (!dropped) setState({ kind: "error", why: (e as Error).message });
       }
@@ -90,12 +107,22 @@ export function ReceiptFrame({ src, alt, height = "h-80", loading }: {
   }
   return (
     <div data-receipt="ok" className="space-y-1">
+      {/*
+        * AN IFRAME FOR A PDF, NOT AN OBJECT.
+        *
+        * `<object type="application/pdf">` is how you get Chrome's
+        * grey jigsaw and **"This plug-in isn't supported"** — it
+        * asks for a plug-in by that MIME type and the built-in
+        * viewer is not one. An iframe pointed at the same blob
+        * opens the viewer, which is what every other PDF on the
+        * web does. The lesson is narrow and worth keeping: object
+        * is for plug-ins, iframe is for documents.
+        */}
       {state.type.startsWith("image/") ? (
         <img src={state.url} alt={alt}
              className={`w-full rounded-md border border-border object-contain ${height}`} />
       ) : (
-        <object data={state.url} type={state.type || "application/pdf"}
-                aria-label={alt}
+        <iframe src={state.url} title={alt}
                 className={`w-full rounded-md border border-border bg-muted/30 ${height}`} />
       )}
       <a href={state.url} target="_blank" rel="noreferrer"

@@ -777,12 +777,44 @@ const DAY = 86_400_000;
 const normalise = (s: string): string =>
   s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
-/** Does either name contain the other's distinctive word? */
+/**
+ * Words that describe a KIND of business, not a business.
+ *
+ * "DALLAS PARK CENTRAL WESTIAWH DALLAS PC HOTEL, LLC" and a Navan
+ * subject reading "Your Aug 25 stay at … Hotel" share the word
+ * **hotel**, and that was enough to call them the same merchant —
+ * so one $34.81 charge was offered six receipts, none of them for
+ * $34.81. A shared word only means something if it is a NAME.
+ *
+ * The same lesson as `NOT_A_MERCHANT`, in the other direction:
+ * there, a noun was read as a company; here, a noun was read as
+ * proof that two companies are one.
+ */
+const GENERIC_WORD = new Set([
+  "hotel", "hotels", "motel", "inn", "inns", "resort", "resorts", "suites", "lodge",
+  "lodging", "restaurant", "cafe", "bistro", "grill", "kitchen", "bakery", "store",
+  "stores", "shop", "shops", "market", "supply", "supplies", "service", "services",
+  "company", "holdings", "group", "partners", "llc", "inc", "incorporated", "corp",
+  "corporation", "limited", "center", "centre", "central", "plaza", "park", "parking",
+  "rental", "rentals", "travel", "airlines", "airways", "airport", "station", "online",
+  "payment", "payments", "invoice", "receipt", "order", "booking", "reservation",
+  "north", "south", "east", "west", "american", "national", "international", "united",
+]);
+
+/**
+ * Does either name contain the other's distinctive word?
+ *
+ * One name inside the other still settles it — "Replit" in
+ * "REPLIT.COM" — because that is containment, not coincidence.
+ * The word test below is the loose one, and it now needs a word
+ * that NAMES something.
+ */
 function merchantAgrees(a: string, b: string): boolean {
   const x = normalise(a), y = normalise(b);
   if (!x || !y) return false;
   if (x.includes(y) || y.includes(x)) return true;
-  const words = (s: string) => s.split(" ").filter((w) => w.length >= 4);
+  const words = (s: string) =>
+    s.split(" ").filter((w) => w.length >= 4 && !GENERIC_WORD.has(w));
   return words(x).some((w) => words(y).includes(w));
 }
 

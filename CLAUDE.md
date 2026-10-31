@@ -3059,6 +3059,18 @@ The four fields are the ones on that form and nothing else:
 | Business Purpose | AI Development and Use |
 | Location / Site | Corporate-Pure Magic |
 | Department | IT & Compliance |
+| Comment | free text |
+
+**Comment was the fifth and was missed**, because it is at the foot of
+the form with no column in the export — nothing here knew it existed
+until the owner pointed at it. Adding a field means all of:
+`FILL_FIELDS` + `FIELD_LABEL`, an `ALTER TABLE … ADD COLUMN IF NOT EXISTS`
+(the `CREATE TABLE IF NOT EXISTS` above it will not reach a table that
+already exists), the INSERT/UPDATE/RETURNING column lists, `WriteKind`
+AND `KINDS`, the `have` map in `proposeWrites`, a selector plus its
+`DECISION_SELECTOR_HELP` line, the `where` map in `attachAndAnnotate`, the
+worker's field list, `WRITE_LABEL` on the matching page, and the form and
+table on the rules page. Twelve places; the typecheck catches about half.
 
 - **Merchant and Date are NOT settable.** They come off the receipt and the
   charge. A rule that could rewrite the merchant is a rule that can make an
@@ -3125,6 +3137,34 @@ question the person pressing should have to hold.
   the receipt has got to.
 - `scripts/test-receipt-mail-ui.ts` asserts there is exactly ONE Send
   button, so the two cannot come back by accident.
+
+## A PDF goes in an IFRAME, and a shared word is not a shared merchant
+
+Two from one screenshot of a $34.81 hotel incidental.
+
+**"This plug-in isn't supported."** `<object type="application/pdf">` asks
+the browser for a PLUG-IN by that MIME type, and Chrome's built-in viewer
+is not one — so the receipt frame showed a grey jigsaw. An `<iframe>`
+pointed at the same blob opens the viewer, which is what every other PDF
+on the web does. **Object is for plug-ins, iframe is for documents.**
+`ReceiptFrame` also sniffs the first bytes now (`%PDF-`, the PNG
+signature, `FF D8`) rather than trusting the declared type, because an
+attachment's content type is whatever the sending client felt like.
+
+**Six receipts offered for one $34.81 charge, none of them for $34.81.**
+"DALLAS PARK CENTRAL WESTIAWH DALLAS PC HOTEL, LLC" and a Navan subject
+reading "Your Aug 25 stay at … Hotel" share the word **hotel**, and the
+word-overlap branch of `merchantAgrees` took that as the same merchant —
+which satisfied the "something must identify the purchase" guard, so they
+all came through. `GENERIC_WORD` now excludes words that describe a KIND
+of business or a legal suffix (hotel, inn, resort, restaurant, store,
+services, company, llc, inc, center, central, park, travel, airlines, the
+compass points…) from that test. Containment is untouched: "Replit" in
+"REPLIT.COM" is not a coincidence.
+
+Same lesson as `NOT_A_MERCHANT`, pointing the other way: there a noun was
+read as a company; here a noun was read as proof that two companies are
+one. `scripts/test-receipt-mail.ts` §21.
 
 ## Date proximity is not evidence, and a noun is not a merchant
 

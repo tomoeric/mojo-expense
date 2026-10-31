@@ -51,7 +51,7 @@ import {
  */
 export type WriteKind =
   | "receipt" | "note"
-  | "category" | "purpose" | "location" | "department";
+  | "category" | "purpose" | "location" | "department" | "comment";
 
 export type WriteState =
   /** Proposed, waiting on a person. */
@@ -154,7 +154,7 @@ const STATES: WriteState[] =
 
 /** Every kind, so a new one is not silently read back as a receipt. */
 const KINDS: WriteKind[] =
-  ["receipt", "note", "category", "purpose", "location", "department"];
+  ["receipt", "note", "category", "purpose", "location", "department", "comment"];
 
 const shape = (r: Row): Write => ({
   dedupeKey: r.dedupe_key,
@@ -395,6 +395,9 @@ export async function proposeWrites(opts: {
       purpose: "",
       location: (expense.location ?? "").trim(),
       department: (expense.department ?? "").trim(),
+      // Nor is Comment: it is an Emburse-side box with no column
+      // in the export, so the browser step reads it before typing.
+      comment: "",
     };
     const sets = setsOf(rule);
     for (const field of FILL_FIELDS) {

@@ -81,7 +81,7 @@ const RAIL: RailItem[] = [
        * They are rules. They live under Rules.
        */
       { key: "vendor-rules", label: "Flagging rules", Icon: Scale, description: "What an expense has to look like — and what happens to the ones that do not." },
-      { key: "fill-rules", label: "Vendor rules", Icon: Tag, description: "What an expense from a vendor should say — category, business purpose, location and department — filled in when a receipt is matched to it." },
+      { key: "fill-rules", label: "Vendor rules", Icon: Tag, description: "What an expense from a vendor should say — category, business purpose, location, department and comment — filled in when a receipt is matched to it." },
     ],
   },
   { key: "import", label: "Import", Icon: Upload, description: "What the daily export brought in, and a way to load one by hand." },

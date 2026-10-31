@@ -39,13 +39,15 @@ export type FillRule = {
   purpose: string;
   location: string;
   department: string;
+  comment: string;
   enabled: boolean;
   updatedAt: string;
   updatedBy: string;
 };
 
 /** The four fields a rule can set, in the order the form shows them. */
-export const FILL_FIELDS = ["category", "purpose", "location", "department"] as const;
+export const FILL_FIELDS =
+  ["category", "purpose", "location", "department", "comment"] as const;
 export type FillField = (typeof FILL_FIELDS)[number];
 
 /** What each one is called on Emburse's form, for anything user-facing. */
@@ -54,6 +56,7 @@ export const FIELD_LABEL: Record<FillField, string> = {
   purpose: "Business Purpose",
   location: "Location / Site",
   department: "Department",
+  comment: "Comment",
 };
 
 const SCHEMA = `
@@ -66,6 +69,7 @@ CREATE TABLE IF NOT EXISTS expense_fill_rules (
   purpose     text        NOT NULL DEFAULT '',
   location    text        NOT NULL DEFAULT '',
   department  text        NOT NULL DEFAULT '',
+  comment     text        NOT NULL DEFAULT '',
   enabled     boolean     NOT NULL DEFAULT true,
   created_at  timestamptz NOT NULL DEFAULT now(),
   updated_at  timestamptz NOT NULL DEFAULT now(),
@@ -75,6 +79,10 @@ CREATE TABLE IF NOT EXISTS expense_fill_rules (
 -- tab is not a configuration, it is a question nobody can answer.
 CREATE UNIQUE INDEX IF NOT EXISTS expense_fill_rules_one
   ON expense_fill_rules (owner, lane, lower(vendor));
+-- Added after the table shipped, so CREATE TABLE IF NOT EXISTS above
+-- will not reach an existing one. Idempotent, like every other
+-- schema statement here.
+ALTER TABLE expense_fill_rules ADD COLUMN IF NOT EXISTS comment text NOT NULL DEFAULT '';
 `;
 
 let ready: Promise<void> | null = null;
@@ -137,8 +145,8 @@ export function pick(rules: FillRule[], merchant: string, lane: string): FillRul
 
 const row = (r: {
   id: string | number; owner: string; lane: string; vendor: string; category: string;
-  purpose: string; location: string; department: string; enabled: boolean;
-  updated_at: Date; updated_by: string;
+  purpose: string; location: string; department: string; comment: string;
+  enabled: boolean; updated_at: Date; updated_by: string;
 }): FillRule => ({
   id: Number(r.id),
   owner: r.owner,
@@ -148,6 +156,7 @@ const row = (r: {
   purpose: r.purpose,
   location: r.location,
   department: r.department,
+  comment: r.comment ?? "",
   enabled: r.enabled,
   updatedAt: r.updated_at.toISOString(),
   updatedBy: r.updated_by,
@@ -156,8 +165,8 @@ const row = (r: {
 export async function rulesFor(owner: string): Promise<FillRule[]> {
   await ensure();
   const { rows } = await db().query(
-    `SELECT id, owner, lane, vendor, category, purpose, location, department, enabled,
-            updated_at, updated_by
+    `SELECT id, owner, lane, vendor, category, purpose, location, department, comment,
+            enabled, updated_at, updated_by
        FROM expense_fill_rules
       WHERE lower(owner) = lower($1)
       ORDER BY lower(vendor)`,
@@ -168,7 +177,7 @@ export async function rulesFor(owner: string): Promise<FillRule[]> {
 export async function saveRule(input: {
   id?: number; owner: string; lane?: string; vendor: string;
   category?: string; purpose?: string; location?: string; department?: string;
-  enabled?: boolean; by: string;
+  comment?: string; enabled?: boolean; by: string;
 }): Promise<FillRule> {
   await ensure();
   const vendor = input.vendor.trim();
@@ -177,16 +186,17 @@ export async function saveRule(input: {
     input.owner, (input.lane ?? "").trim(), vendor,
     (input.category ?? "").trim(), (input.purpose ?? "").trim(),
     (input.location ?? "").trim(), (input.department ?? "").trim(),
-    input.enabled ?? true, input.by,
+    (input.comment ?? "").trim(), input.enabled ?? true, input.by,
   ];
   if (input.id) {
     const { rows } = await db().query(
       `UPDATE expense_fill_rules
           SET lane = $2, vendor = $3, category = $4, purpose = $5, location = $6,
-              department = $7, enabled = $8, updated_by = $9, updated_at = now()
-        WHERE id = $10 AND lower(owner) = lower($1)
+              department = $7, comment = $8, enabled = $9, updated_by = $10,
+              updated_at = now()
+        WHERE id = $11 AND lower(owner) = lower($1)
         RETURNING id, owner, lane, vendor, category, purpose, location, department,
-                  enabled, updated_at, updated_by`,
+                  comment, enabled, updated_at, updated_by`,
       [...values, input.id]);
     const found = rows[0];
     if (!found) throw new Error("That rule is not yours, or no longer exists.");
@@ -197,15 +207,16 @@ export async function saveRule(input: {
   // twice must not be a dead end.
   const { rows } = await db().query(
     `INSERT INTO expense_fill_rules
-       (owner, lane, vendor, category, purpose, location, department, enabled, updated_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       (owner, lane, vendor, category, purpose, location, department, comment,
+        enabled, updated_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
      ON CONFLICT (owner, lane, lower(vendor)) DO UPDATE
        SET category = excluded.category, purpose = excluded.purpose,
            location = excluded.location, department = excluded.department,
-           enabled = excluded.enabled, updated_by = excluded.updated_by,
-           updated_at = now()
+           comment = excluded.comment, enabled = excluded.enabled,
+           updated_by = excluded.updated_by, updated_at = now()
      RETURNING id, owner, lane, vendor, category, purpose, location, department,
-               enabled, updated_at, updated_by`,
+               comment, enabled, updated_at, updated_by`,
     values);
   return row(rows[0]);
 }
