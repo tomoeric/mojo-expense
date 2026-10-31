@@ -101,6 +101,16 @@ export function ReceiptMailPage() {
   const settings = q.data?.settings;
   const accounts = q.data?.accounts ?? [];
   const chosen = lane || accounts[0]?.lane || "";
+  /*
+   * "all" is every personal account, not a lane called "all".
+   *
+   * The filter was `m.lane === chosen`, so picking Both accounts asked
+   * for rows whose lane is the string "all" — of which there are none,
+   * and the page went blank the moment the thing meant to show more was
+   * chosen.
+   */
+  const inLane = (laneOf: string, want: string): boolean =>
+    !want || want === "all" || laneOf === want;
 
   const post = async <T,>(url: string, body: unknown): Promise<T> => {
     const res = await fetch(url, {
@@ -154,10 +164,26 @@ export function ReceiptMailPage() {
     return <Loader2 className="mx-auto mt-10 h-6 w-6 animate-spin text-muted-foreground" />;
   }
 
-  const matches = (scan?.matches ?? q.data?.matches ?? [])
-    .filter((m) => !chosen || m.lane === chosen);
+  /*
+   * THE LIVE LIST, not the snapshot the scan returned.
+   *
+   * `scan` is frozen at the moment Search was pressed and this read it
+   * FIRST, so choosing a receipt — which invalidates the query and
+   * updates `q.data` — changed nothing on screen. The chosen one stayed
+   * in "candidates waiting on you" and the count never moved, while the
+   * "Ready to send" block above it, which reads `q.data.writes`, updated
+   * correctly. Half the page live and half of it frozen, which reads as
+   * the button having done nothing.
+   *
+   * The snapshot is still the fallback: it covers the moment between the
+   * scan returning and its refetch landing. The scan's own summary —
+   * folders searched, messages seen — still comes from it, because that
+   * is a report about one press and not a live figure.
+   */
+  const matches = (q.data?.matches ?? scan?.matches ?? [])
+    .filter((m) => inLane(m.lane, chosen));
   const waiting = matches.filter((m) => m.state === "candidate");
-  const writes = (q.data?.writes ?? []).filter((w) => !chosen || w.lane === chosen);
+  const writes = (q.data?.writes ?? []).filter((w) => inLane(w.lane, chosen));
   /** Grouped by expense: a receipt and a description are one edit. */
   const byKey = new Map<string, Write[]>();
   for (const w of writes) byKey.set(w.dedupeKey, [...(byKey.get(w.dedupeKey) ?? []), w]);

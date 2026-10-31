@@ -157,6 +157,34 @@ const shape = (r: Row): Write => ({
  * description to "Receipt" tells nobody anything and overwrites
  * something that may have.
  */
+/**
+ * The receipt's line ADDED to what the description already says.
+ *
+ * Idempotent, which is the whole difficulty. A proposal is recomputed
+ * every time the page is read and improves once the AI reader has been
+ * over the image, so the same expense is offered a note more than once —
+ * and an append that simply concatenated would stack
+ * "… · Receipt: X · Receipt: X" on the second pass and again on the
+ * third. So: already carries this exact line, leave it; carries an
+ * EARLIER receipt line, replace from there; otherwise append.
+ *
+ * "Receipt: " is the marker, which is the one thing `noteFrom` and
+ * `noteFromReading` both always start with.
+ */
+export function mergeNote(existing: string, line: string): string {
+  const had = existing.trim();
+  const add = line.trim();
+  if (!add) return had;
+  if (!had) return add;
+  if (had.includes(add)) return had;
+  const prior = had.indexOf("Receipt: ");
+  if (prior >= 0) {
+    const before = had.slice(0, prior).replace(/[\s·]+$/u, "");
+    return before ? `${before} · ${add}` : add;
+  }
+  return `${had} · ${add}`;
+}
+
 export function noteFrom(e: Evidence): string {
   const bits: string[] = [];
   if (e.merchant) bits.push(e.merchant);
@@ -283,11 +311,20 @@ export async function proposeWrites(opts: {
     },
   ];
   const { note } = noteFromReading(reading, e);
-  // Only when it says more than the box already does. Overwriting
-  // somebody's own description with a duller one is a change
-  // nobody asked for.
-  if (note && note.trim() !== (expense.note ?? "").trim()) {
-    writes.push({ kind: "note", proposed: note, was: expense.note ?? "", attachment: "" });
+  /*
+   * KEPT, NOT REPLACED. The owner's call, 2026-10-31.
+   *
+   * The proposal used to BE the description, so sending it would have
+   * wiped "IT & Compliance Department Spend" off an expense and put
+   * "Receipt: Replit · 2026-08-11 · ref 1359-4607" in its place —
+   * across 272 expenses, with no copy of the old text anywhere but the
+   * `was` column of this table.
+   */
+  const had = (expense.note ?? "").trim();
+  const merged = mergeNote(had, note);
+  // Only when it says more than the box already does.
+  if (merged && merged !== had) {
+    writes.push({ kind: "note", proposed: merged, was: had, attachment: "" });
   }
 
   for (const w of writes) {

@@ -25,6 +25,7 @@ import { db, ensureSchema } from "../server/db.js";
 import {
   noteFrom, noteFromReading, proposeWrites, queueWrite, queuedWrites, settleWrite,
   writesFor,
+  mergeNote,
 } from "../server/emburse/receipt-writeback.js";
 import { recordCandidates, decideMatch } from "../server/emburse/receipt-mail.js";
 import { ensureDecisionsSchema } from "../server/emburse/decisions.js";
@@ -236,6 +237,46 @@ try {
   const unknown = await selectorsForLane(ERIC, "personal-invented", team);
   check("an unconfigured tab still does NOT get the team grid",
     unknown.gridPath === PERSONAL_GRID, String(unknown.gridPath));
+
+  /*
+   * 11. THE DESCRIPTION IS ADDED TO, NOT REPLACED. Owner's call,
+   * 2026-10-31.
+   *
+   * The proposal used to BE the description, so sending it wiped
+   * "IT & Compliance Department Spend" off an expense and put the
+   * receipt line in its place — across 272 expenses at once, with no
+   * copy of the old text anywhere but the `was` column here.
+   *
+   * Idempotence is the hard half: a proposal is recomputed on every
+   * read and improves once the reader has been over the image, so the
+   * same expense is offered a note repeatedly. A plain append would
+   * stack "… · Receipt: X · Receipt: X" on the second pass.
+   */
+  console.log("\n11. The receipt line is added to the description, not put in its place");
+  const LINE = "Receipt: Replit · 2026-08-11 · ref 1359-4607";
+  check("an existing note is kept, with the receipt after it",
+    mergeNote("IT & Compliance Department Spend", LINE)
+      === `IT & Compliance Department Spend · ${LINE}`,
+    mergeNote("IT & Compliance Department Spend", LINE));
+  check("an empty description just gets the line", mergeNote("", LINE) === LINE);
+  check("…and whitespace counts as empty", mergeNote("   ", LINE) === LINE);
+  check("NOTHING IS STACKED when it is already there",
+    mergeNote(`IT & Compliance Department Spend · ${LINE}`, LINE)
+      === `IT & Compliance Department Spend · ${LINE}`,
+    mergeNote(`IT & Compliance Department Spend · ${LINE}`, LINE));
+  // The line improves once the AI reader has read the image, and the
+  // better one must take the worse one's place rather than sit beside it.
+  const BETTER = "Receipt: REPLIT · 2026-08-11 · $84.23 · Core plan";
+  check("a better line replaces an earlier receipt line",
+    mergeNote(`IT & Compliance Department Spend · ${LINE}`, BETTER)
+      === `IT & Compliance Department Spend · ${BETTER}`,
+    mergeNote(`IT & Compliance Department Spend · ${LINE}`, BETTER));
+  check("…and with no note of their own, it is just the better line",
+    mergeNote(LINE, BETTER) === BETTER, mergeNote(LINE, BETTER));
+  // Nothing to add is not a reason to touch the description at all.
+  check("an empty line leaves the description alone",
+    mergeNote("IT & Compliance Department Spend", "")
+      === "IT & Compliance Department Spend");
 
 } finally {
   await db().query("DELETE FROM expenses WHERE dedupe_key LIKE $1", [`${TAG}%`])
