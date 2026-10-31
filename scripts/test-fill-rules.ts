@@ -42,7 +42,8 @@ const LANE = "personal-mojo";
 const OTHER = "personal-mammoth";
 
 const rule = (over: Partial<FillRule> = {}): FillRule => ({
-  id: 1, owner: ERIC, lane: "", vendor: "REPLIT", category: "Software",
+  id: 1, owner: ERIC, lane: "", matchOn: "merchant" as const, vendor: "REPLIT",
+  category: "Software",
   purpose: "", location: "", department: "", comment: "", enabled: true,
   updatedAt: "", updatedBy: "", ...over,
 });
@@ -155,6 +156,46 @@ try {
     JSON.stringify(setsOf(cleared)) === JSON.stringify({ category: "C2" }),
     JSON.stringify(setsOf(cleared)));
   await deleteRule(ERIC, five.id);
+
+  console.log("\n4c. A RULE THAT IS NOT ABOUT A VENDOR");
+  /*
+   * "Want to create airfare, lodging and food rules that are
+   * independent of the vendor names." Every airline on the
+   * account already carries Travel - Airfare, so one rule on the
+   * CATEGORY does what four vendor rules would — and covers the
+   * airline nobody has flown yet.
+   */
+  const airfare = rule({
+    id: 10, matchOn: "category", vendor: "Travel - Airfare",
+    category: "", purpose: "Client travel",
+  });
+  const southwest = rule({ id: 11, matchOn: "merchant", vendor: "Southwest", purpose: "SW" });
+  const flight = { merchant: "UNITED AIRLINES", category: "Travel - Airfare" };
+  check("an airline nobody wrote a rule for is covered",
+    pick([airfare], flight, LANE)?.purpose === "Client travel");
+  check("…and partial matching works: “Travel” catches airfare",
+    pick([rule({ matchOn: "category", vendor: "Travel" })], flight, LANE) !== null);
+  check("a software charge is NOT caught by the airfare rule",
+    pick([airfare], { merchant: "REPLIT", category: "Software, Licenses" }, LANE) === null);
+  check("THE MERCHANT RULE BEATS THE CATEGORY RULE",
+    pick([airfare, southwest],
+      { merchant: "SOUTHWEST AIRLINES", category: "Travel - Airfare" }, LANE)?.purpose
+      === "SW",
+    pick([airfare, southwest],
+      { merchant: "SOUTHWEST AIRLINES", category: "Travel - Airfare" }, LANE)?.purpose);
+  check("…and the category rule still covers the others",
+    pick([airfare, southwest], flight, LANE)?.purpose === "Client travel");
+  check("a bare merchant string still works, as every old caller passes",
+    pick([rule()], "REPLIT", LANE) !== null);
+
+  const stored = await saveRule({
+    owner: ERIC, matchOn: "category", vendor: "Travel - Lodging",
+    purpose: "Overnight stay", department: "IT & Compliance", by: ERIC,
+  });
+  check("a category rule round-trips through the database",
+    stored.matchOn === "category" && stored.vendor === "Travel - Lodging",
+    `${stored.matchOn} / ${stored.vendor}`);
+  await deleteRule(ERIC, stored.id);
 
   console.log("\n5. A MATCHED RECEIPT CARRIES THE RULE'S FIELDS — and sends nothing");
   await saveRule({

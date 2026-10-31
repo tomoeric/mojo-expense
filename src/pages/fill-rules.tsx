@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Pencil, Plus, Sparkles, Tag, Trash2 } from "lucide-react";
+import { Copy, Loader2, Pencil, Plus, Sparkles, Tag, Trash2 } from "lucide-react";
 
 /**
  * VENDOR RULES: what an expense from this merchant should say.
@@ -31,7 +31,9 @@ import { Loader2, Pencil, Plus, Sparkles, Tag, Trash2 } from "lucide-react";
  */
 
 type Rule = {
-  id: number; owner: string; lane: string; vendor: string;
+  id: number; owner: string; lane: string;
+  matchOn: "merchant" | "category";
+  vendor: string;
   category: string; purpose: string; location: string; department: string;
   comment: string;
   enabled: boolean; updatedAt: string; updatedBy: string;
@@ -53,14 +55,14 @@ type Answer = {
 type FieldKey = "category" | "purpose" | "location" | "department" | "comment";
 
 type Draft = {
-  id?: number; lane: string; vendor: string;
+  id?: number; lane: string; matchOn: "merchant" | "category"; vendor: string;
   category: string; purpose: string; location: string; department: string;
   comment: string;
 };
 
 const EMPTY: Draft = {
-  lane: "", vendor: "", category: "", purpose: "", location: "", department: "",
-  comment: "",
+  lane: "", matchOn: "merchant", vendor: "", category: "", purpose: "",
+  location: "", department: "", comment: "",
 };
 
 export function FillRulesPage() {
@@ -134,7 +136,7 @@ export function FillRulesPage() {
 
       <div className="flex items-center gap-2">
         <h3 className="text-sm font-semibold">
-          {rules.length} vendor rule{rules.length === 1 ? "" : "s"}
+          {rules.length} rule{rules.length === 1 ? "" : "s"}
         </h3>
         <button
           type="button"
@@ -151,6 +153,7 @@ export function FillRulesPage() {
         <RuleForm
           draft={draft}
           accounts={accounts}
+          others={rules}
           busy={save.isPending}
           onChange={setDraft}
           onCancel={() => { setDraft(null); setError(""); }}
@@ -172,7 +175,7 @@ export function FillRulesPage() {
           <table className="w-full text-xs">
             <thead className="bg-muted text-left text-[11px] text-muted-foreground">
               <tr>
-                <th className="px-2 py-2 font-semibold">Vendor</th>
+                <th className="px-2 py-2 font-semibold">Matches</th>
                 <th className="px-2 py-2 font-semibold">Category</th>
                 <th className="px-2 py-2 font-semibold">Business Purpose</th>
                 <th className="px-2 py-2 font-semibold">Location / Site</th>
@@ -185,7 +188,12 @@ export function FillRulesPage() {
             <tbody>
               {rules.map((r) => (
                 <tr key={r.id} className="border-t border-border align-top">
-                  <td className="px-2 py-2 font-semibold">{r.vendor}</td>
+                  <td className="px-2 py-2">
+                    <span className="font-semibold">{r.vendor}</span>
+                    <span className="block text-[11px] font-normal text-muted-foreground">
+                      {r.matchOn === "category" ? "any expense in this category" : "merchant"}
+                    </span>
+                  </td>
                   <td className="px-2 py-2">{r.category || <Unset />}</td>
                   <td className="px-2 py-2">{r.purpose || <Unset />}</td>
                   <td className="px-2 py-2">{r.location || <Unset />}</td>
@@ -197,7 +205,8 @@ export function FillRulesPage() {
                       <button
                         type="button"
                         onClick={() => setDraft({
-                          id: r.id, lane: r.lane, vendor: r.vendor, category: r.category,
+                          id: r.id, lane: r.lane, matchOn: r.matchOn,
+                          vendor: r.vendor, category: r.category,
                           purpose: r.purpose, location: r.location, department: r.department,
                           comment: r.comment,
                         })}
@@ -259,7 +268,8 @@ export function FillRulesPage() {
                   type="button"
                   disabled={save.isPending}
                   onClick={() => setDraft({
-                    lane: "", vendor: s.vendor, category: s.category.value,
+                    lane: "", matchOn: "merchant", vendor: s.vendor,
+                    category: s.category.value,
                     purpose: "", location: s.location.value, department: s.department.value,
                     comment: "",
                   })}
@@ -304,9 +314,11 @@ function Chip({ label, value, of, seen }: {
  * suggested rule, typing the Business Purpose it cannot know,
  * and saving.
  */
-function RuleForm({ draft, accounts, busy, onChange, onCancel, onSave }: {
+function RuleForm({ draft, accounts, others, busy, onChange, onCancel, onSave }: {
   draft: Draft;
   accounts: { lane: string; label: string }[];
+  /** The rules already saved, to copy values from. */
+  others: Rule[];
   busy: boolean;
   onChange: (d: Draft) => void;
   onCancel: () => void;
@@ -330,15 +342,91 @@ function RuleForm({ draft, accounts, busy, onChange, onCancel, onSave }: {
 
   return (
     <div className="space-y-3 rounded-xl border border-sky-500/40 bg-sky-500/5 p-3.5">
-      <p className="text-sm font-semibold">
-        {draft.id ? `Editing the ${draft.vendor} rule` : "A new vendor rule"}
-      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-sm font-semibold">
+          {draft.id ? `Editing the ${draft.vendor} rule` : "A new vendor rule"}
+        </p>
+        {/*
+          * COPY ANOTHER RULE'S VALUES, because most of them are the
+          * same rule with a different name on it: every AI and
+          * software vendor on this account wants the same category,
+          * the same site and the same department, and typing that
+          * five times is how the fifth one ends up subtly different
+          * from the other four.
+          *
+          * A COPY, not a link: the fields are filled in and then
+          * they are yours. Nothing stays tied to the rule it came
+          * from, so editing that one later does not reach back into
+          * this one — which is the right default, and the wrong one
+          * if what you actually want is "these six are always the
+          * same". Say which you meant and the other is a small
+          * change.
+          */}
+        {others.filter((r) => r.id !== draft.id).length > 0 && (
+          <label className="ml-auto flex items-center gap-1.5 text-xs">
+            <Copy className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="text-muted-foreground">Copy values from</span>
+            <select
+              value=""
+              onChange={(e) => {
+                const from = others.find((r) => String(r.id) === e.target.value);
+                if (!from) return;
+                onChange({
+                  ...draft,
+                  category: from.category,
+                  purpose: from.purpose,
+                  location: from.location,
+                  department: from.department,
+                  comment: from.comment,
+                });
+              }}
+              className="rounded-lg border border-border bg-transparent px-2 py-1 text-xs
+                         outline-none focus:border-sky-500"
+            >
+              <option value="">another rule…</option>
+              {others.filter((r) => r.id !== draft.id).map((r) => (
+                <option key={r.id} value={r.id}>{r.vendor}</option>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
       <div className="grid gap-3 sm:grid-cols-2">
-        {field("vendor", "Vendor",
-          "Matched against the expense's merchant, ignoring case and punctuation. "
-          + "“REPLIT” covers “Replit.com” and “REPLIT #4417”.")}
-        {field("category", "Category",
-          "Exactly as Emburse's Category list spells it, or the save will say what it offers.")}
+        {/* WHAT IT MATCHES ON, before what it matches.
+            Airfare, lodging and meals are not about a vendor:
+            every airline already carries "Travel - Airfare", so
+            one rule on the category does what four vendor rules
+            would and covers the airline nobody has flown yet. */}
+        <label className="block">
+          <span className="text-xs font-semibold">This rule is about</span>
+          <select
+            value={draft.matchOn}
+            onChange={(e) => onChange({
+              ...draft, matchOn: e.target.value === "category" ? "category" : "merchant",
+            })}
+            className="mt-1 w-full rounded-lg border border-border bg-transparent px-2 py-1.5
+                       text-sm outline-none focus:border-sky-500"
+          >
+            <option value="merchant">One vendor</option>
+            <option value="category">A kind of expense (its category)</option>
+          </select>
+          <span className="mt-0.5 block text-[11px] text-muted-foreground">
+            A rule naming the merchant beats one about its kind, so “Southwest” still
+            wins over “Travel - Airfare”.
+          </span>
+        </label>
+        {draft.matchOn === "category"
+          ? field("vendor", "Category it applies to",
+            "The category Emburse already puts on the expense — “Travel - Airfare”, "
+            + "“Travel - Lodging”, “Meals”. Partial is fine: “Travel” catches all of them.")
+          : field("vendor", "Vendor",
+            "Matched against the expense's merchant, ignoring case and punctuation. "
+            + "“REPLIT” covers “Replit.com” and “REPLIT #4417”.")}
+        {field("category", "Category to set",
+          draft.matchOn === "category"
+            ? "Leave this empty on a category rule unless you mean to CHANGE the category."
+            : "Exactly as Emburse's Category list spells it, or the save will say what "
+              + "it offers.")}
         {field("purpose", "Business Purpose",
           "The sentence about why — “AI Development and Use”.")}
         {field("location", "Location / Site")}
@@ -367,7 +455,9 @@ function RuleForm({ draft, accounts, busy, onChange, onCancel, onSave }: {
         Leave a field empty and the rule says nothing about it — it is left exactly as
         Emburse has it, and emptying one later is how you stop a rule touching that box.
         Nothing here is written on its own: a rule only ever adds lines to what a matched
-        receipt proposes, behind the same press.
+        receipt proposes, behind the same press. <strong>Copy values from</strong> fills
+        these boxes from another rule and then leaves them yours — the two are not tied
+        together afterwards.
         {!draft.id && " Once saved, this rule gets its own Edit button in the table above."}
       </p>
       <div className="flex items-center gap-2">

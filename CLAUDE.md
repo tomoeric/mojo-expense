@@ -2996,6 +2996,49 @@ whole problem.
   picture.
 - `scripts/test-photo-receipts.ts`.
 
+## A rule can be about a KIND of expense, not a vendor
+
+*"Want to create airfare, lodging and food rules that are independent of
+the vendor names."* Every airline on the account already carries
+**Travel - Airfare** from Emburse, so one rule on the CATEGORY does what
+four vendor rules would — and covers the airline nobody has flown yet.
+
+- **`matchOn: "merchant" | "category"`** on every rule, defaulting to
+  `merchant` so everything written before this stays what it was. The
+  pattern lives in the same `vendor` column either way; renaming the
+  column would be a migration for a word, and the field's doc comment
+  says so.
+- **Matching is the same containment test**, so a category rule reading
+  "Travel" catches Airfare, Lodging and Ground Transportation, and one
+  reading "Travel - Airfare" catches only airfare.
+- **A merchant rule BEATS a category rule.** "Travel - Airfare" says what
+  an airline ticket generally is; a rule naming Southwest says what this
+  airline's tickets are, and somebody who wrote both meant the second to
+  win. Then the tab, then the longer pattern, then the older rule — four
+  stated tie-breaks, none of them "whatever the database returned first".
+- **A vendor covered by a CATEGORY rule is still suggested.** Only a
+  merchant rule takes a vendor off the suggestion list: a category rule
+  says what that kind of expense is, and naming the vendor is still worth
+  offering.
+- `pick()` takes `{merchant, category}` or a bare merchant string, so
+  every caller written before this keeps working.
+
+**Copy values from another rule.** Most rules are the same rule with a
+different name on it — every AI and software vendor on this account wants
+the same category, site and department — and typing that five times is
+how the fifth ends up subtly different from the other four. The form has
+a picker that fills the five fields from an existing rule. It is a COPY:
+nothing stays tied to the rule it came from. A live link ("these six are
+always the same") is a different feature and a small change if it is
+wanted.
+
+**"Don't see a edit button."** Edit lives on a saved rule's row, so with
+zero rules there is no table and no Edit. The empty state says that now,
+and the suggestion button reads **"Edit and save"** rather than "Make
+this a rule" — which read as *save it now*, so somebody looking for a way
+to change the values before saving did not press the one thing that opens
+them.
+
 ## Where a rule LIVES, and what happens after "queued"
 
 Two follow-ups on the vendor rules, both of them the interface being

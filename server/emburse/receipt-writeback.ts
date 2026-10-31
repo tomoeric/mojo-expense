@@ -384,7 +384,10 @@ export async function proposeWrites(opts: {
    * all: there is nothing to change, and a list of no-ops is how
    * a person stops reading the list.
    */
-  const rule = pickRule(await rulesFor(expense.reviewer), expense.merchant ?? "", lane);
+  const rule = pickRule(
+    await rulesFor(expense.reviewer),
+    { merchant: expense.merchant ?? "", category: expense.category ?? "" },
+    lane);
   if (rule) {
     const have: Record<FillField, string> = {
       category: (expense.category ?? "").trim(),

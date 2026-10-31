@@ -135,7 +135,7 @@ async function expenseFacts(keys: string[], owner: string): Promise<ExpenseFact[
       WHERE e.dedupe_key = ANY($1::text[])`,
     [keys]);
   return rows.map((r) => {
-    const rule = pickRule(rules, r.merchant || "", r.lane);
+    const rule = pickRule(rules, { merchant: r.merchant || "", category: r.category }, r.lane);
     return {
       dedupeKey: r.dedupe_key,
       lane: r.lane,
@@ -632,6 +632,7 @@ receiptMailRouter.post("/fill-rules", requireAuth, async (req: Request, res: Res
       location: str("location"),
       department: str("department"),
       comment: str("comment"),
+      matchOn: b.matchOn === "category" ? "category" : "merchant",
       enabled: b.enabled === undefined ? true : b.enabled === true,
       by: me,
     });

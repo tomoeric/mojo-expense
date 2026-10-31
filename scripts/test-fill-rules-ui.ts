@@ -150,7 +150,9 @@ try {
     saved[0]?.category === "Technology/Software, Licenses, and Subscriptions",
     saved[0]?.category);
   text = await page.locator("body").innerText();
-  check("…and it is in the table now", /1 vendor rule/.test(text),
+  // "1 rule", not "1 vendor rule": a rule can be about a kind of
+  // expense now, so the heading stopped saying vendor.
+  check("…and it is in the table now", /\b1 rule\b/.test(text),
     text.replace(/\n/g, " | ").slice(0, 300));
   check("…and no longer offered as a suggestion",
     !text.includes("Edit and save"));

@@ -33,7 +33,26 @@ export type FillRule = {
   owner: string;
   /** "" means every personal tab this person has; else one lane. */
   lane: string;
-  /** Matched against the expense's merchant, case and punctuation blind. */
+  /**
+   * WHAT THIS RULE IS ABOUT.
+   *
+   * `merchant` is the original: REPLIT, Anthropic, Home Depot.
+   * `category` is for the ones that are not about a vendor at
+   * all — *"airfare, lodging and food rules that are independent
+   * of the vendor names"*. Every airline on the account already
+   * carries **Travel - Airfare**, so one rule on the category
+   * does what four vendor rules would, and covers the airline
+   * nobody has flown yet.
+   */
+  matchOn: "merchant" | "category";
+  /**
+   * The text matched, case and punctuation blind.
+   *
+   * Against the expense's merchant, or against its category —
+   * whichever `matchOn` names. The column is still called
+   * `vendor` because that is what it held first and a rename
+   * would be a migration for a word.
+   */
   vendor: string;
   category: string;
   purpose: string;
@@ -83,6 +102,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS expense_fill_rules_one
 -- will not reach an existing one. Idempotent, like every other
 -- schema statement here.
 ALTER TABLE expense_fill_rules ADD COLUMN IF NOT EXISTS comment text NOT NULL DEFAULT '';
+-- Rules that are not about a vendor: airfare, lodging, meals. The
+-- default keeps every rule written before this one a merchant rule,
+-- which is what it was.
+ALTER TABLE expense_fill_rules
+  ADD COLUMN IF NOT EXISTS match_on text NOT NULL DEFAULT 'merchant';
 `;
 
 let ready: Promise<void> | null = null;
@@ -133,12 +157,35 @@ export function setsOf(rule: FillRule): Partial<Record<FillField, string>> {
  * wins — "REPLIT PRO" is a narrower statement than "REPLIT" and
  * whoever wrote it meant it to be.
  */
-export function pick(rules: FillRule[], merchant: string, lane: string): FillRule | null {
+/** The expense, as a rule sees it. */
+export type Subject = { merchant: string; category: string };
+
+export function pick(
+  rules: FillRule[], subject: Subject | string, lane: string,
+): FillRule | null {
+  // A bare string is a merchant, which is what every caller
+  // passed before category rules existed.
+  const s: Subject = typeof subject === "string"
+    ? { merchant: subject, category: "" }
+    : subject;
   const fits = rules.filter((r) =>
-    r.enabled && (r.lane === "" || r.lane === lane) && vendorMatches(r.vendor, merchant));
+    r.enabled
+    && (r.lane === "" || r.lane === lane)
+    && vendorMatches(r.vendor, r.matchOn === "category" ? s.category : s.merchant));
   if (fits.length === 0) return null;
   return fits.sort((a, b) =>
-    (b.lane === "" ? 0 : 1) - (a.lane === "" ? 0 : 1)
+    /*
+     * A RULE ABOUT THIS MERCHANT BEATS A RULE ABOUT ITS KIND.
+     *
+     * "Travel - Airfare" says what an airline ticket generally
+     * is; a rule naming Southwest says what THIS airline's
+     * tickets are, and somebody who wrote both meant the second
+     * to win. Then the tab, then the longer pattern, then the
+     * older rule — each a stated tie-break rather than whatever
+     * the database returned first.
+     */
+    (a.matchOn === "merchant" ? 0 : 1) - (b.matchOn === "merchant" ? 0 : 1)
+    || (b.lane === "" ? 0 : 1) - (a.lane === "" ? 0 : 1)
     || b.vendor.length - a.vendor.length
     || a.id - b.id)[0]!;
 }
@@ -146,11 +193,12 @@ export function pick(rules: FillRule[], merchant: string, lane: string): FillRul
 const row = (r: {
   id: string | number; owner: string; lane: string; vendor: string; category: string;
   purpose: string; location: string; department: string; comment: string;
-  enabled: boolean; updated_at: Date; updated_by: string;
+  match_on: string; enabled: boolean; updated_at: Date; updated_by: string;
 }): FillRule => ({
   id: Number(r.id),
   owner: r.owner,
   lane: r.lane,
+  matchOn: r.match_on === "category" ? "category" : "merchant",
   vendor: r.vendor,
   category: r.category,
   purpose: r.purpose,
@@ -166,7 +214,7 @@ export async function rulesFor(owner: string): Promise<FillRule[]> {
   await ensure();
   const { rows } = await db().query(
     `SELECT id, owner, lane, vendor, category, purpose, location, department, comment,
-            enabled, updated_at, updated_by
+            match_on, enabled, updated_at, updated_by
        FROM expense_fill_rules
       WHERE lower(owner) = lower($1)
       ORDER BY lower(vendor)`,
@@ -177,7 +225,8 @@ export async function rulesFor(owner: string): Promise<FillRule[]> {
 export async function saveRule(input: {
   id?: number; owner: string; lane?: string; vendor: string;
   category?: string; purpose?: string; location?: string; department?: string;
-  comment?: string; enabled?: boolean; by: string;
+  comment?: string; matchOn?: "merchant" | "category";
+  enabled?: boolean; by: string;
 }): Promise<FillRule> {
   await ensure();
   const vendor = input.vendor.trim();
@@ -186,17 +235,19 @@ export async function saveRule(input: {
     input.owner, (input.lane ?? "").trim(), vendor,
     (input.category ?? "").trim(), (input.purpose ?? "").trim(),
     (input.location ?? "").trim(), (input.department ?? "").trim(),
-    (input.comment ?? "").trim(), input.enabled ?? true, input.by,
+    (input.comment ?? "").trim(),
+    input.matchOn === "category" ? "category" : "merchant",
+    input.enabled ?? true, input.by,
   ];
   if (input.id) {
     const { rows } = await db().query(
       `UPDATE expense_fill_rules
           SET lane = $2, vendor = $3, category = $4, purpose = $5, location = $6,
-              department = $7, comment = $8, enabled = $9, updated_by = $10,
-              updated_at = now()
-        WHERE id = $11 AND lower(owner) = lower($1)
+              department = $7, comment = $8, match_on = $9, enabled = $10,
+              updated_by = $11, updated_at = now()
+        WHERE id = $12 AND lower(owner) = lower($1)
         RETURNING id, owner, lane, vendor, category, purpose, location, department,
-                  comment, enabled, updated_at, updated_by`,
+                  comment, match_on, enabled, updated_at, updated_by`,
       [...values, input.id]);
     const found = rows[0];
     if (!found) throw new Error("That rule is not yours, or no longer exists.");
@@ -208,15 +259,16 @@ export async function saveRule(input: {
   const { rows } = await db().query(
     `INSERT INTO expense_fill_rules
        (owner, lane, vendor, category, purpose, location, department, comment,
-        enabled, updated_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        match_on, enabled, updated_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
      ON CONFLICT (owner, lane, lower(vendor)) DO UPDATE
        SET category = excluded.category, purpose = excluded.purpose,
            location = excluded.location, department = excluded.department,
-           comment = excluded.comment, enabled = excluded.enabled,
+           comment = excluded.comment, match_on = excluded.match_on,
+           enabled = excluded.enabled,
            updated_by = excluded.updated_by, updated_at = now()
      RETURNING id, owner, lane, vendor, category, purpose, location, department,
-               comment, enabled, updated_at, updated_by`,
+               comment, match_on, enabled, updated_at, updated_by`,
     values);
   return row(rows[0]);
 }
@@ -316,5 +368,10 @@ export async function suggestions(owner: string, lane: string | null): Promise<S
     // A vendor with nothing filled in anywhere teaches nothing,
     // and a vendor that already has a rule is not a suggestion.
     .filter((s) => s.category.value || s.location.value || s.department.value)
-    .filter((s) => !already.some((r) => vendorMatches(r.vendor, s.vendor)));
+    // A vendor already covered by a MERCHANT rule is not a
+    // suggestion. A category rule covering it is not the same
+    // thing: it says what that kind of expense is, and naming
+    // the vendor is still worth offering.
+    .filter((s) => !already.some(
+      (r) => r.matchOn === "merchant" && vendorMatches(r.vendor, s.vendor)));
 }
