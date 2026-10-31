@@ -3049,6 +3049,67 @@ this a rule" — which read as *save it now*, so somebody looking for a way
 to change the values before saving did not press the one thing that opens
 them.
 
+## A submitted expense leaves the queue the moment it is pressed
+
+Pressing Approve queues the decision for the worker, which signs into
+Emburse and applies it minutes later. The row used to stay exactly where
+it was in All and Unflagged with a small "sending" beside it — so a queue
+of 26 still read 26 after ten had been decided, and the only way to see
+what you had done was to read every row.
+
+Three stages, three places, and `pending` is now its own:
+
+| decision state | where it is |
+| --- | --- |
+| (none) | All · Flagged · Unflagged · Receipts |
+| `pending` | **Queued** |
+| `applied` | Approved / Denied |
+| `failed` | stays in the undecided lists — it needs a person |
+
+`isQueued(r)` is `decision?.state === "pending"`. It is excluded from
+`waiting` alongside `isDone`, so a press empties the row out of every
+undecided list at once. The tab sits **between the work and the finished
+work**, which is where it is in life, and only appears while there are
+any. `scripts/test-queued-tab.ts` seeds one of each stage and asserts
+which list each lands in.
+
+## One vocabulary for the receipt states
+
+The Receipt column said "queued", "needs review", "candidate"; the card
+beside it said "waiting to be sent", "the send failed", "waiting on you".
+Three vocabularies for one set of states, two of them on one screen —
+*"confusing. says queued here."*
+
+`RECEIPT_WORD` in `expense-table.tsx` holds the words and both read from
+it. They say what is true of the RECEIPT rather than naming a row in a
+table: `queued` is a state name, **sending** is what is happening.
+
+| state | word |
+| --- | --- |
+| candidate | waiting on you |
+| matched | ready to send |
+| queued | sending |
+| sent | sent |
+| already | already there |
+| failed | needs a look |
+
+## There is ONE way to start a browser: `launchChromium()`
+
+A bare `chromium.launch()` takes Playwright's bundled browser, which this
+deployment does not download — the postinstall finds the host's Chromium
+and skips the download on purpose. So a bare launch dies with
+*"Executable doesn't exist at …/chrome-headless-shell … run `pnpm exec
+playwright install`"*, which reads like a missing dependency and is not
+one: the browser is there, the call just did not ask for it. It also
+needs `--no-sandbox` and `--disable-dev-shm-usage` in a container.
+
+That exact bug shipped **twice** — once in the write-back's PDF renderer,
+and again unnoticed in the receipt linker's copy of the same twenty
+lines, where it broke the preview of every body-only receipt in the
+review queue. Hence one function in `auto-export.ts`: a third copy cannot
+get it wrong because there is nothing left to copy. Never call
+`chromium.launch` directly.
+
 ## "Waiting to be sent" with no receipt anywhere: the pull that failed
 
 Five expenses in the Receipt matched tab read **waiting to be sent** above

@@ -561,13 +561,8 @@ export async function receiptBytes(opts: {
    * is most of them — died here, showing a broken frame with no reason
    * beside it.
    */
-  const { chromium } = await import("playwright");
-  const { systemChromium } = await import("./auto-export.js");
-  const executablePath = (await systemChromium()) ?? undefined;
-  const browser = await chromium.launch({
-    ...(executablePath ? { executablePath } : {}),
-    args: ["--no-sandbox", "--disable-dev-shm-usage"],
-  });
+  const { launchChromium } = await import("./auto-export.js");
+  const browser = await launchChromium();
   try {
     const page = await browser.newPage();
     // No network: a receipt email is full of tracking pixels and

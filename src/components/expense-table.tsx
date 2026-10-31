@@ -99,6 +99,45 @@ type Column = {
   render?: (r: Row) => React.ReactNode;
 };
 
+/**
+ * ONE SET OF WORDS FOR THE SIX RECEIPT STATES.
+ *
+ * The column said "queued", "needs review", "candidate"; the
+ * card beside it said "waiting to be sent", "the send failed",
+ * "waiting on you". Three vocabularies for one set of states,
+ * two of them on the same screen — "confusing. says queued
+ * here."
+ *
+ * So the words live here and both read them. They are also
+ * chosen to say what is TRUE OF THE RECEIPT rather than to name
+ * a row in a table: `queued` is a state name, "sending" is what
+ * is happening.
+ */
+export const RECEIPT_WORD: Record<string, { text: string; tone: string; pill: string }> = {
+  candidate: {
+    text: "waiting on you",
+    tone: "text-amber-600",
+    pill: "bg-amber-500/15 text-amber-700",
+  },
+  matched: {
+    text: "ready to send",
+    tone: "text-amber-600",
+    pill: "bg-amber-500/15 text-amber-700",
+  },
+  queued: { text: "sending", tone: "text-sky-600", pill: "bg-sky-600/15 text-sky-700" },
+  sent: {
+    text: "sent",
+    tone: "text-emerald-600",
+    pill: "bg-emerald-600/15 text-emerald-700",
+  },
+  already: {
+    text: "already there",
+    tone: "text-emerald-600",
+    pill: "bg-emerald-600/15 text-emerald-700",
+  },
+  failed: { text: "needs a look", tone: "text-red-600", pill: "bg-red-500/15 text-red-700" },
+};
+
 const COLUMNS: Column[] = [
   { key: "date", label: "Date", pct: 6,
     value: (r) => r.line.date ?? "",
@@ -194,14 +233,10 @@ const COLUMNS: Column[] = [
     render: (r) => {
       const m = r.line.matchState ?? null;
       if (m && m !== "candidate") {
-        const [text, tone] = m === "sent" ? ["sent", "text-emerald-600"]
-          : m === "already" ? ["already there", "text-emerald-600"]
-            : m === "queued" ? ["queued", "text-sky-600"]
-              : m === "failed" ? ["needs review", "text-red-600"]
-                : ["matched", "text-amber-600"];
+        const w = RECEIPT_WORD[m] ?? RECEIPT_WORD.matched!;
         return (
-          <span className={`inline-flex items-center gap-1 text-xs ${tone}`}>
-            <Receipt className="h-3.5 w-3.5" /> {text}
+          <span className={`inline-flex items-center gap-1 text-xs ${w.tone}`}>
+            <Receipt className="h-3.5 w-3.5" /> {w.text}
           </span>
         );
       }
@@ -212,12 +247,17 @@ const COLUMNS: Column[] = [
           </span>
         );
       }
-      // A candidate is not a receipt yet — nobody has said it is the
-      // right one — so it reads as what it is rather than as progress.
-      return (
-        <span className="text-xs text-muted-foreground">
-          {m === "candidate" ? "candidate" : "none"}
+      // A candidate is not a receipt yet — nobody has said it is
+      // the right one — so it reads as what it is rather than as
+      // progress. The same words as everywhere else, though:
+      // "candidate" here against "waiting on you" on the card was
+      // two names for one state on one screen.
+      return m === "candidate" ? (
+        <span className={`text-xs ${RECEIPT_WORD.candidate!.tone}`}>
+          {RECEIPT_WORD.candidate!.text}
         </span>
+      ) : (
+        <span className="text-xs text-muted-foreground">none</span>
       );
     } },
   { key: "changed", label: "Updated", pct: 9,
@@ -593,7 +633,25 @@ const hasMatchedReceipt = (r: Row): boolean => {
     || m === "candidate";
 };
 
-export type Tab = "all" | "reading" | "matched" | "flagged" | "clean" | "sent" | "approved" | "denied";
+export type Tab =
+  | "all" | "reading" | "matched" | "flagged" | "clean" | "sent"
+  | "queued" | "approved" | "denied";
+
+/**
+ * SUBMITTED, AND NOT YET LANDED IN EMBURSE.
+ *
+ * Pressing Approve queues the decision for the worker, which
+ * signs into Emburse and applies it minutes later. Until this,
+ * the row stayed exactly where it was in All and Unflagged with
+ * a small "sending" beside it — so a queue of 26 still read 26
+ * after you had decided ten of them, and the only way to see
+ * what you had done was to read every row.
+ *
+ * It is its own stage and now its own tab: out of the undecided
+ * lists the moment you press, into Approved or Denied when
+ * Emburse confirms.
+ */
+const isQueued = (r: Row): boolean => r.decision?.state === "pending";
 
 /**
  * Still waiting for its receipt to be read.
@@ -670,7 +728,11 @@ function FlagTabs({
   // Decided expenses are not part of the work any more, so they are not
   // part of the counts either. A queue of 212 where 200 are already
   // approved reads as 212 things to do.
-  const waiting = rows.filter((r) => !isDone(r));
+  // Decided AND submitted are both out of the undecided lists: a
+  // row you have already pressed Approve on is not work any more,
+  // whatever Emburse has got round to.
+  const queued = rows.filter(isQueued);
+  const waiting = rows.filter((r) => !isDone(r) && !isQueued(r));
   const approved = rows.filter((r) => r.decision?.state === "applied" && r.decision.decision !== "deny");
   const denied = rows.filter((r) => r.decision?.state === "applied" && r.decision.decision === "deny");
   const flagged = waiting.filter((r) => r.flags.length > 0);
@@ -735,6 +797,15 @@ function FlagTabs({
      */
     ...(sent.length > 0
       ? [{ key: "sent" as const, label: "Category sent", n: sent.length }]
+      : []),
+    /*
+     * Between the work and the finished work, which is where it
+     * is in life: submitted, waiting on Emburse. Only while
+     * there are any — it empties itself as the worker gets
+     * through them, and an always-empty tab is furniture.
+     */
+    ...(queued.length > 0
+      ? [{ key: "queued" as const, label: "Queued", n: queued.length }]
       : []),
     { key: "approved" as const, label: "Approved", n: approved.length },
     // Only when there are any. An always-empty tab is a permanent
@@ -1092,8 +1163,12 @@ export function ExpenseTable({
       base = base.filter((r) => isDone(r) && r.decision?.decision !== "deny");
     } else if (tab === "denied") {
       base = base.filter((r) => isDone(r) && r.decision?.decision === "deny");
+    } else if (tab === "queued") {
+      base = base.filter(isQueued);
     } else {
-      base = base.filter((r) => !isDone(r));
+      // Submitted rows leave the undecided lists the moment they
+      // are pressed, rather than sitting there reading "sending".
+      base = base.filter((r) => !isDone(r) && !isQueued(r));
       if (tab === "reading") base = base.filter(beingRead);
       if (tab === "matched") base = base.filter(hasMatchedReceipt);
       if (tab === "flagged") base = base.filter((r) => r.flags.length > 0);
@@ -1591,14 +1666,12 @@ function MatchedReceipts({ rows, onOpen }: { rows: Row[]; onOpen: (r: Row) => vo
     <div className="space-y-3">
       {shown.map((r) => {
         const state = r.line.matchState;
-        const [label, tone] =
-          state === "sent" ? ["sent to Emburse", "bg-emerald-600/15 text-emerald-700"]
-            : state === "already" ? ["already on the expense", "bg-emerald-600/15 text-emerald-700"]
-              : state === "queued" ? ["waiting to be sent", "bg-sky-600/15 text-sky-700"]
-                : state === "failed" ? ["the send failed", "bg-red-500/15 text-red-700"]
-                  : state === "candidate"
-                    ? ["waiting on you", "bg-amber-500/15 text-amber-700"]
-                    : ["matched, not sent yet", "bg-amber-500/15 text-amber-700"];
+        // The same words the Receipt column uses, from the same
+        // place: two names for one state on one screen is what
+        // made this confusing.
+        const w = RECEIPT_WORD[state ?? ""] ?? RECEIPT_WORD.matched!;
+        const label = w.text;
+        const tone = w.pill;
         return (
           <div key={r.line.id} className="grid gap-3 rounded-xl border border-border p-3
                                           md:grid-cols-[minmax(0,1fr)_22rem]">

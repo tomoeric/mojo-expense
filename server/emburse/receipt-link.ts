@@ -100,8 +100,13 @@ export async function bytesFromMessage(opts: {
     ? (m.body.content ?? "")
     : `<pre>${escapeHtml(textOf(m.body?.content ?? ""))}</pre>`;
 
-  const { chromium } = await import("playwright");
-  const browser = await chromium.launch();
+  // Through the one helper. This was a bare `chromium.launch()`
+  // — the same fault already fixed in the write-back's copy of
+  // these lines, left here because the code was duplicated. A
+  // body-only receipt therefore died with Playwright's "run
+  // `pnpm exec playwright install`", which is not the problem.
+  const { launchChromium } = await import("./auto-export.js");
+  const browser = await launchChromium();
   try {
     const page = await browser.newPage();
     /*

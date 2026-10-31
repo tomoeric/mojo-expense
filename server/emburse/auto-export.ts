@@ -380,6 +380,34 @@ export function envLogin(): Login | null {
  * out to `which`, and a host where that is unavailable should fall back to
  * Playwright's own browser rather than failing the run before it starts.
  */
+/**
+ * THE ONLY WAY A BROWSER IS STARTED IN THIS APP.
+ *
+ * A bare `chromium.launch()` takes Playwright's bundled browser,
+ * which this deployment does not download — the postinstall
+ * script finds the host's Chromium and skips the download on
+ * purpose. So a bare launch dies with "Executable doesn't exist
+ * at …/chrome-headless-shell … run `pnpm exec playwright
+ * install`", which reads like a missing dependency and is not
+ * one: the browser is there, the call just did not ask for it.
+ *
+ * It also needs `--no-sandbox` and `--disable-dev-shm-usage` in
+ * a container.
+ *
+ * That exact bug shipped twice — once in the write-back's PDF
+ * renderer and again, unnoticed, in the receipt linker's copy of
+ * the same twenty lines. Hence one function: a third copy cannot
+ * get it wrong, because there is nothing left to copy.
+ */
+export async function launchChromium(): Promise<import("playwright").Browser> {
+  const { chromium } = await import("playwright");
+  const executablePath = (await systemChromium()) ?? undefined;
+  return chromium.launch({
+    ...(executablePath ? { executablePath } : {}),
+    args: ["--no-sandbox", "--disable-dev-shm-usage"],
+  });
+}
+
 export async function systemChromium(): Promise<string | null> {
   if (env.emburseLogin.chromiumPath) return env.emburseLogin.chromiumPath;
   try {
