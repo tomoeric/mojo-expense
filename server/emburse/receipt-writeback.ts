@@ -153,8 +153,12 @@ const STATES: WriteState[] =
   ["proposed", "queued", "applied", "already", "stale", "failed"];
 
 /** Every kind, so a new one is not silently read back as a receipt. */
-const KINDS: WriteKind[] =
-  ["receipt", "note", "category", "purpose", "location", "department", "comment"];
+/** Every kind there is. Exported so a route can CHECK rather than coerce. */
+export const WRITE_KINDS = [
+  "receipt", "note", "category", "purpose", "location", "department", "comment",
+] as const;
+
+const KINDS: WriteKind[] = [...WRITE_KINDS];
 
 const shape = (r: Row): Write => ({
   dedupeKey: r.dedupe_key,

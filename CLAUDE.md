@@ -3118,6 +3118,38 @@ refreshes back to manager queue tab":
   Invalidate `["reports"]` instead; the cache clear above is what makes
   that enough.
 
+## Three ways the write-back forgot there are seven kinds
+
+A write-back was an image and a description. Vendor rules added Category,
+Business Purpose, Location / Site, Department and Comment, and three
+places went on assuming two — each one a conditional standing in for a
+check, which is the same mistake as the reader's cast and `shape()`'s.
+
+- **The send route coerced.** `b.kind === "note" ? "note" : "receipt"`,
+  so every other kind BECAME "receipt". Sending a card's five changes
+  queued the receipt five times: the first press worked, the rest came
+  back *"That change is queued, so there is nothing to send"*, and the
+  four field changes were never queued at all. `WRITE_KINDS` is exported
+  for the route to check against, and an unknown kind is refused.
+- **The queue read one kind.** `AND w.kind = 'receipt'` in `neon.ts`, so
+  a row reported one of seven — and left the Sending tab while most of
+  it was still unsent. It orders across the whole set now: a failure
+  first (needs a person), then anything proposed (needs a press), then
+  queued, and only then done.
+- **The client aborted on the first failure**, skipping the remaining
+  lines AND the refresh, so the card kept showing its pre-press state.
+  Every line is attempted, failures are collected and named, and the
+  card refreshes either way — and polls itself while anything is queued,
+  so nobody has to press Refresh.
+
+**"Already queued" is not a failure.** `queueWrite` refuses anything not
+still proposed, which is right, but a caller sending five at once — or a
+second press on a slow connection — wants the end state and has it. Only
+a change that cannot get there is an error.
+
+**And `/receipt-mail/send` calls `reportsChanged()`.** Same rule as the
+other mutations: it moves what the queue reports, so it clears the cache.
+
 ## Receipts sent to Emburse have their own tab
 
 *"I asked for a Sending button (queue, tab) for all receipts submitted to

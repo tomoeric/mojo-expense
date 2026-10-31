@@ -109,9 +109,32 @@ export class NeonProvider implements EmburseProvider {
               -- where both exist. Ordered worst-last within each so a row
               -- that needs a person shows that rather than an older
               -- success.
+              -- ACROSS EVERY KIND, not just the receipt.
+              --
+              -- This read: AND w.kind = 'receipt' -- which was the whole set
+              -- when a write-back was an image and a description. A vendor
+              -- rule adds Category, Business Purpose, Location, Department
+              -- and Comment, and the queue went on reporting one of seven:
+              -- an expense whose five field changes were still waiting on a
+              -- press read as whatever the receipt row happened to say, and
+              -- a row could leave the Sending tab while most of it had not
+              -- been sent.
+              --
+              -- Ordered by what the SET still wants: a failure needs a
+              -- person, then anything still needing a press, then anything
+              -- in flight, and only when none of those are left does it read
+              -- as done.
               (SELECT w.state FROM receipt_writebacks w
-                WHERE w.dedupe_key = e.dedupe_key AND w.kind = 'receipt'
-                ORDER BY (w.state IN ('failed','stale')) DESC, w.proposed_at DESC
+                WHERE w.dedupe_key = e.dedupe_key
+                ORDER BY CASE w.state
+                           WHEN 'failed'   THEN 0
+                           WHEN 'stale'    THEN 0
+                           WHEN 'proposed' THEN 1
+                           WHEN 'queued'   THEN 2
+                           WHEN 'already'  THEN 3
+                           WHEN 'applied'  THEN 4
+                           ELSE 5
+                         END, w.proposed_at DESC
                 LIMIT 1) AS writeback_state,
               (SELECT m.state FROM receipt_mail_matches m
                 WHERE m.dedupe_key = e.dedupe_key

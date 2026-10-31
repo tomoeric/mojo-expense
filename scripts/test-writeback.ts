@@ -23,6 +23,7 @@
  */
 import { db, ensureSchema } from "../server/db.js";
 import {
+  WRITE_KINDS,
   noteFrom, noteFromReading, proposeWrites, queueWrite, queuedWrites, settleWrite,
   writesFor,
   mergeNote,
@@ -277,6 +278,35 @@ try {
   check("an empty line leaves the description alone",
     mergeNote("IT & Compliance Department Spend", "")
       === "IT & Compliance Department Spend");
+
+  console.log("\n12. EVERY KIND CAN BE QUEUED, not just the receipt");
+  /*
+   * The send route read `b.kind === "note" ? "note" : "receipt"`
+   * — a conditional standing in for a check — so every kind that
+   * was not "note" became "receipt". Sending a card's five
+   * changes queued the receipt five times: the first worked, the
+   * rest came back "That change is queued, so there is nothing
+   * to send", and Category, Business Purpose, Location and
+   * Comment were never queued at all.
+   */
+  check("the full list is exported so a route can CHECK rather than coerce",
+    WRITE_KINDS.length === 7 && WRITE_KINDS.includes("comment"),
+    WRITE_KINDS.join(", "));
+  await db().query("DELETE FROM receipt_writebacks WHERE dedupe_key = $1", [KEY]);
+  for (const kind of WRITE_KINDS) {
+    await db().query(
+      `INSERT INTO receipt_writebacks (dedupe_key, kind, lane, proposed, state)
+       VALUES ($1,$2,'personal-mojo','x','proposed')`, [KEY, kind]);
+  }
+  for (const kind of WRITE_KINDS) {
+    const out = await queueWrite(KEY, kind);
+    check(`${kind} queues`, out.ok, out.problem ?? "");
+  }
+  const states = (await writesFor(KEY)).map((w) => `${w.kind}:${w.state}`).sort();
+  check("…and ALL SEVEN are queued, not one of them seven times",
+    (await writesFor(KEY)).every((w) => w.state === "queued")
+    && (await writesFor(KEY)).length === 7,
+    states.join(", "));
 
 } finally {
   await db().query("DELETE FROM expenses WHERE dedupe_key LIKE $1", [`${TAG}%`])

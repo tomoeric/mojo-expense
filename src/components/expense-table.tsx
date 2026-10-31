@@ -2044,15 +2044,30 @@ function SendDetail({ id }: { id: string }) {
 
   useEffect(() => {
     let dropped = false;
-    void (async () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const read = async () => {
       try {
         const res = await fetch(
           `/api/receipt-mail/for-expense?dedupeKey=${encodeURIComponent(id)}`);
         const out = await res.json() as { writes?: W[] };
-        if (!dropped && res.ok) setWrites(out.writes ?? []);
+        if (dropped || !res.ok) return;
+        setWrites(out.writes ?? []);
+        /*
+         * WATCH IT WHILE IT IS IN FLIGHT.
+         *
+         * Sending hands the change to a worker that signs into
+         * Emburse in its own time, and the card then sat on
+         * "sending" until somebody pressed Refresh. Polled only
+         * while something IS queued, so a settled card costs
+         * nothing.
+         */
+        if ((out.writes ?? []).some((w) => w.state === "queued")) {
+          timer = setTimeout(() => void read(), 15_000);
+        }
       } catch { /* the card is still useful without it */ }
-    })();
-    return () => { dropped = true; };
+    };
+    void read();
+    return () => { dropped = true; if (timer) clearTimeout(timer); };
   }, [id]);
 
   if (!writes || writes.length === 0) return null;
@@ -2069,28 +2084,42 @@ function SendDetail({ id }: { id: string }) {
   const unsent = writes.filter((w) => w.state === "proposed").map((w) => w.kind);
   const broken = writes.filter((w) => w.state === "failed" || w.state === "stale");
 
+  const refresh = async () => {
+    await qc.invalidateQueries({ queryKey: ["reports"] });
+    const again = await fetch(
+      `/api/receipt-mail/for-expense?dedupeKey=${encodeURIComponent(id)}`);
+    if (again.ok) setWrites(((await again.json()) as { writes?: W[] }).writes ?? []);
+  };
+
+  /*
+   * EVERY LINE IS TRIED, AND THE SCREEN IS REFRESHED EITHER WAY.
+   *
+   * This threw on the first failure, which skipped both the
+   * remaining lines and the refresh — so one refusal left four
+   * changes unsent AND the card showing the state it had before
+   * the press. Whatever happened, what is on screen afterwards
+   * is what the server now holds.
+   */
   const send = async (kinds: string[]) => {
     setBusy(true);
     setError("");
-    try {
-      for (const kind of kinds) {
+    const failed: string[] = [];
+    for (const kind of kinds) {
+      try {
         const res = await fetch("/api/receipt-mail/send", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ dedupeKey: id, kind }),
         });
         const out = await res.json() as { error?: string };
-        if (!res.ok) throw new Error(out.error ?? "That did not work.");
+        if (!res.ok) failed.push(`${kind}: ${out.error ?? "that did not work"}`);
+      } catch (e) {
+        failed.push(`${kind}: ${(e as Error).message}`);
       }
-      await qc.invalidateQueries({ queryKey: ["reports"] });
-      const again = await fetch(
-        `/api/receipt-mail/for-expense?dedupeKey=${encodeURIComponent(id)}`);
-      if (again.ok) setWrites(((await again.json()) as { writes?: W[] }).writes ?? []);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
     }
+    setError(failed.join(" · "));
+    await refresh().catch(() => undefined);
+    setBusy(false);
   };
 
   const LABEL: Record<string, string> = {

@@ -9,7 +9,9 @@ import {
   searchMailbox, conflicts,
   type Candidate, type Target,
 } from "./receipt-mail.js";
-import { proposeWrites, queueWrite, receiptBytes, writesFor } from "./receipt-writeback.js";
+import {
+  WRITE_KINDS, proposeWrites, queueWrite, receiptBytes, writesFor, type WriteKind,
+} from "./receipt-writeback.js";
 import {
   deleteRule, FIELD_LABEL, FILL_FIELDS, pick as pickRule, rulesFor, saveRule,
   suggestions,
@@ -522,10 +524,49 @@ receiptMailRouter.post("/receipt-mail/send", requireAuth,
     const me = owner(req, res);
     if (!me) return;
     const b = (req.body ?? {}) as Record<string, unknown>;
-    const kind = b.kind === "note" ? "note" : "receipt";
-    const out = await queueWrite(String(b.dedupeKey ?? ""), kind);
-    if (!out.ok) { res.status(400).json({ error: out.problem }); return; }
-    res.json({ writes: await writesFor(String(b.dedupeKey ?? "")) });
+    /*
+     * NARROWED, NOT COERCED.
+     *
+     * This read `b.kind === "note" ? "note" : "receipt"`, so
+     * every kind that is not "note" became "receipt" — which was
+     * fine when those were the only two and silently wrong the
+     * moment a vendor rule added four more. Sending a card's five
+     * changes queued the receipt five times: the first press
+     * worked, the next four came back "That change is queued, so
+     * there is nothing to send", and Category, Business Purpose,
+     * Location and Comment were never queued at all.
+     *
+     * The same shape of mistake as the cast in the reader and
+     * the one in `shape()`: a conditional standing in for a
+     * check. Unknown is refused now rather than rounded to
+     * whichever name was first in the file.
+     */
+    const kind = String(b.kind ?? "");
+    if (!(WRITE_KINDS as readonly string[]).includes(kind)) {
+      res.status(400).json({
+        error: `There is no change of kind “${kind}” to send. It is one of `
+          + `${WRITE_KINDS.join(", ")}.`,
+      });
+      return;
+    }
+    const dedupeKey = String(b.dedupeKey ?? "");
+    const out = await queueWrite(dedupeKey, kind as WriteKind);
+    /*
+     * ALREADY ON ITS WAY IS NOT A FAILURE.
+     *
+     * `queueWrite` refuses anything not still proposed, which is
+     * right — but a caller sending five changes at once, or a
+     * second press on a slow connection, wants the end state and
+     * has it. Only a change that cannot get there is an error.
+     */
+    const now = (await writesFor(dedupeKey)).find((w) => w.kind === kind);
+    const arrived = now
+      && ["queued", "applied", "already"].includes(now.state);
+    if (!out.ok && !arrived) { res.status(400).json({ error: out.problem }); return; }
+    // The queue shows how far each change has got, and this just
+    // moved it.
+    reportsChanged();
+    res.json({ writes: await writesFor(dedupeKey) });
   });
 
 /** A person chooses one candidate, or rejects it. Nothing is attached here. */
