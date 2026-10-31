@@ -2943,6 +2943,32 @@ real ambiguity visible — and on its own it is a pile, not an answer.
   look identical from a shorter list.
 - `scripts/test-receipt-mail.ts` §14–17, `scripts/test-match-prune.ts`.
 
+## One expense, one press — the write-back is not two submits
+
+Asked twice: *"Why two sends?"* and then *"still don't understand the two
+submits"*. The panel had a **Send to Emburse** button on the Description
+row and another on the Receipt image row, so one expense showed two
+buttons with the same words on them, and the obvious reading is that it
+submits the expense twice.
+
+The plumbing reason for two rows is real — attaching the image and editing
+the description are separate edits with separate failure modes, and a
+blanket retry would redo the half that already landed. It is also not a
+question the person pressing should have to hold.
+
+- **One button per expense.** It sends every outstanding write for that
+  expense in order. The rows underneath are a statement of *what will
+  change*, not two controls: "Attach <file>" and "Description <was> →
+  <proposed>", each with its own state pill.
+- **The split surfaces only when half of it fails.** Then, and only then, a
+  line says which half did not land and offers "Try that part again" for
+  exactly that half.
+- "not sent yet" rather than "proposed" on the pill: `proposed` is this
+  codebase's word for the row's state, not an English description of where
+  the receipt has got to.
+- `scripts/test-receipt-mail-ui.ts` asserts there is exactly ONE Send
+  button, so the two cannot come back by accident.
+
 ## Date proximity is not evidence, and a noun is not a merchant
 
 Found by LOOKING at one card: a U-Haul **"Your Transaction Receipt"** with
@@ -2963,7 +2989,13 @@ stacked in the same row.
   unless something that IDENTIFIES the purchase agrees: **the merchant, the
   exact total, or an order number**. Date and currency can only ever
   strengthen one of those; they can never carry a candidate by themselves.
-- `scripts/test-receipt-mail.ts` §18–19.
+- **And "Download" is not an order number.** "Your receipt can be viewed
+  here: Download" matched the reference pattern, so the card read "ref
+  Download" and that string went into the description that would have been
+  written to Emburse. `referenceIn()` now takes the first match that
+  CONTAINS A DIGIT — first qualifying match, not first match, so a real
+  number later in the text is not lost to a word earlier in it.
+- `scripts/test-receipt-mail.ts` §18–20.
 
 ## The matching page is a LIST AND A PANEL, not a column of cards
 

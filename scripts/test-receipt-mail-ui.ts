@@ -245,7 +245,7 @@ try {
    * see what their press did.
    */
   check("the panel stays on the expense that was just decided",
-    text.includes("Ready to send to Emburse"),
+    text.includes("will change on the expense in Emburse"),
     text.replace(/\n/g, " | ").slice(-300));
   check("…and the other one is still in the list to decide",
     /To decide 1/.test(text), text.replace(/\n/g, " | ").slice(0, 400));
@@ -274,11 +274,22 @@ try {
   await page.locator("aside button").last().click();
   await page.waitForTimeout(1200);
   text = await page.locator("body").innerText();
-  check("the proposal appears", text.includes("Ready to send to Emburse"),
+  check("the proposal appears", text.includes("will change on the expense in Emburse"),
     text.slice(-300).replace(/\n/g, " | "));
-  check("…naming the receipt it would attach", text.includes("Receipt image"));
-  check("…and offering a Send button that nothing has pressed",
-    (await page.getByRole("button", { name: "Send to Emburse" }).count()) > 0);
+  check("…naming the receipt it would attach",
+    text.includes("Attach") && text.includes(".pdf"),
+    text.slice(-300).replace(/\n/g, " | "));
+  check("…and the description it would set", text.includes("Description"));
+  /*
+   * ONE BUTTON, not one per write. The image and the description
+   * are separate edits that fail separately — true, and not a
+   * question the person pressing should have to hold. Two buttons
+   * both reading "Send to Emburse" on one expense were asked
+   * about twice, as "why two submits?".
+   */
+  check("…behind ONE Send button for the whole expense",
+    (await page.getByRole("button", { name: "Send to Emburse" }).count()) === 1,
+    `${await page.getByRole("button", { name: "Send to Emburse" }).count()} buttons`);
   const { rows: wb } = await db().query<{ state: string; n: string }>(
     `SELECT state, count(*)::text AS n FROM receipt_writebacks
       WHERE dedupe_key LIKE 'zz-rm-%' GROUP BY state`);

@@ -409,7 +409,25 @@ const DUE_LINE =
 const TOTAL_LINE =
   /\btotal\b\s*[:\-]?\s*(?:US)?\$?\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?|\d+\.\d{2})/gi;
 const REFERENCE =
-  /(?:order|transaction|confirmation|receipt|invoice)\s*(?:#|no\.?|number|id)?\s*[:\-#]?\s*([A-Z0-9][A-Z0-9-]{4,24})/i;
+  /(?:order|transaction|confirmation|receipt|invoice)\s*(?:#|no\.?|number|id)?\s*[:\-#]?\s*([A-Z0-9][A-Z0-9-]{4,24})/gi;
+
+/**
+ * An order number, and never the word after "Receipt".
+ *
+ * "Your receipt can be viewed here: Download" gave a reference of
+ * **Download**, which then appeared on the card as "ref Download"
+ * and went into the description that would be written to Emburse.
+ * A reference has a digit in it; a word does not. The first match
+ * that qualifies wins, rather than the first match, so a real
+ * number later in the text is not lost to a word earlier in it.
+ */
+export function referenceIn(text: string): string {
+  for (const m of text.matchAll(REFERENCE)) {
+    const found = (m[1] ?? "").trim();
+    if (/\d/.test(found)) return found;
+  }
+  return "";
+}
 const DATE_ISO = /\b(20\d{2})-(\d{2})-(\d{2})\b/;
 const DATE_US = /\b(\d{1,2})\/(\d{1,2})\/(20\d{2})\b/;
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun",
@@ -549,7 +567,7 @@ async function evidenceOf(
     date: dateIn(text) ?? (m.receivedDateTime ? m.receivedDateTime.slice(0, 10) : null),
     totalCents: total.cents,
     currency: /\bEUR\b|€/.test(text) ? "EUR" : /\bGBP\b|£/.test(text) ? "GBP" : "USD",
-    reference: REFERENCE.exec(text)?.[1]?.trim() ?? "",
+    reference: referenceIn(text),
     hasAttachment: attachments.length > 0,
     attachments,
     excerpt: text.slice(0, 600),

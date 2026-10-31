@@ -212,9 +212,29 @@ export function ReceiptMailPage() {
     onSuccess: () => { setWhich(0); void qc.invalidateQueries({ queryKey: ["receipt-mail"] }); },
     onError: (e) => setError((e as Error).message),
   });
+  /*
+   * ONE PRESS, BECAUSE IT IS ONE EXPENSE.
+   *
+   * There were two Send buttons, one per write, and the owner
+   * asked twice what the second one was for. The answer — "the
+   * image and the description are separate edits that fail
+   * separately" — is true about the plumbing and is not a
+   * question the person pressing should have to hold. Two buttons
+   * labelled "Send to Emburse" on one expense read as sending it
+   * twice.
+   *
+   * So: one press sends everything outstanding on that expense,
+   * in order, and the lines underneath say what it will change. A
+   * per-line "Try again" comes back only when one half FAILS,
+   * which is the one moment the split matters.
+   */
   const send = useMutation({
-    mutationFn: (v: { dedupeKey: string; kind: "receipt" | "note" }) =>
-      post<{ writes: Write[] }>("/api/receipt-mail/send", v),
+    mutationFn: async (v: { dedupeKey: string; kinds: ("receipt" | "note")[] }) => {
+      for (const kind of v.kinds) {
+        await post<{ writes: Write[] }>("/api/receipt-mail/send",
+          { dedupeKey: v.dedupeKey, kind });
+      }
+    },
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["receipt-mail"] }),
     onError: (e) => setError((e as Error).message),
   });
@@ -623,9 +643,9 @@ export function ReceiptMailPage() {
                   decide.mutate({ dedupeKey: current.key, messageId, choose });
                 }}
                 sending={send.isPending}
-                onSend={(kind) => {
+                onSend={(kinds) => {
                   setPicked(current.key);
-                  send.mutate({ dedupeKey: current.key, kind });
+                  send.mutate({ dedupeKey: current.key, kinds });
                 }}
                 onNext={next ? () => { setPicked(next.key); setWhich(0); } : null}
                 nextLabel={next?.fact?.merchant ?? ""}
@@ -670,7 +690,7 @@ function ExpensePanel({
   deciding: boolean;
   onDecide: (messageId: string, choose: boolean) => void;
   sending: boolean;
-  onSend: (kind: "receipt" | "note") => void;
+  onSend: (kinds: ("receipt" | "note")[]) => void;
   onNext: (() => void) | null;
   nextLabel: string;
 }) {
@@ -872,59 +892,109 @@ function ExpensePanel({
         * the thing being sent and the thing it is being sent about
         * were two different screens.
         */}
-      {group.writes.length > 0 && (
-        <div className="space-y-2 rounded-lg border border-border bg-muted/20 p-3 text-sm">
-          <p className="text-xs font-semibold">Ready to send to Emburse</p>
-          {group.writes.map((w) => (
-            <div key={w.kind} className="flex flex-wrap items-center gap-2 border-t
-                                         border-border pt-2 first:border-0 first:pt-0">
-              <span className="font-semibold">
-                {w.kind === "receipt" ? "Receipt image" : "Description"}
-              </span>
-              <span className="min-w-40 flex-1 text-xs break-words text-muted-foreground">
-                {w.kind === "note" ? (
-                  <>
-                    now <span className="font-mono">{w.was || "(empty)"}</span> →{" "}
-                    <span className="font-mono">{w.proposed}</span>
-                  </>
-                ) : (
-                  <>attach <span className="font-mono">{w.proposed}</span>
-                    {!w.attachmentId && " — rendered from the message body"}</>
-                )}
-              </span>
-              <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                w.state === "applied" || w.state === "already"
-                  ? "bg-emerald-600/15 text-emerald-700 dark:text-emerald-400"
-                  : w.state === "failed" || w.state === "stale"
-                    ? "bg-red-500/15 text-red-700 dark:text-red-400"
-                    : "bg-muted text-muted-foreground"}`}
-              >
-                {w.state === "already" ? "already there" : w.state}
-              </span>
-              {(w.state === "proposed" || w.state === "failed" || w.state === "stale") && (
+      {group.writes.length > 0 && (() => {
+        const unsent = group.writes
+          .filter((w) => w.state === "proposed")
+          .map((w) => w.kind);
+        const broken = group.writes.filter(
+          (w) => w.state === "failed" || w.state === "stale");
+        const done = group.writes.every(
+          (w) => w.state === "applied" || w.state === "already");
+        return (
+          <div className="space-y-2 rounded-lg border border-border bg-muted/20 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm font-semibold">
+                {done
+                  ? "Sent to Emburse"
+                  : "This is what will change on the expense in Emburse"}
+              </p>
+              {/* ONE button for the whole expense. */}
+              {unsent.length > 0 && (
                 <button
                   type="button"
                   disabled={sending}
-                  onClick={() => onSend(w.kind)}
-                  className="rounded-lg border border-sky-600/50 px-3 py-1 text-xs
-                             font-semibold disabled:opacity-50"
+                  onClick={() => onSend(unsent)}
+                  className="ml-auto inline-flex items-center gap-1.5 rounded-lg
+                             bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white
+                             disabled:opacity-50"
                 >
-                  {w.state === "proposed" ? "Send to Emburse" : "Try again"}
+                  {sending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  Send to Emburse
                 </button>
               )}
-              {w.error && (
-                <span className="w-full text-xs text-red-700 dark:text-red-400">
-                  {w.error}
-                </span>
-              )}
             </div>
-          ))}
-          <p className="text-[11px] text-muted-foreground">
-            Sent under {group.writes[0]!.lane.replace(/^personal-/, "")}&rsquo;s own Emburse
-            login. It attaches and edits; it never submits, approves or denies.
-          </p>
-        </div>
-      )}
+
+            <ul className="space-y-1.5 text-xs">
+              {group.writes.map((w) => (
+                <li key={w.kind} className="flex flex-wrap items-start gap-x-2 gap-y-1">
+                  <span className="font-semibold">
+                    {w.kind === "receipt" ? "Attach" : "Description"}
+                  </span>
+                  <span className="min-w-40 flex-1 break-words text-muted-foreground">
+                    {w.kind === "note" ? (
+                      <>
+                        <span className="font-mono">{w.was || "(empty)"}</span>
+                        {" → "}
+                        <span className="font-mono">{w.proposed}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="font-mono">{w.proposed}</span>
+                        {!w.attachmentId && " — rendered from the message body"}
+                      </>
+                    )}
+                  </span>
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                    w.state === "applied" || w.state === "already"
+                      ? "bg-emerald-600/15 text-emerald-700 dark:text-emerald-400"
+                      : w.state === "failed" || w.state === "stale"
+                        ? "bg-red-500/15 text-red-700 dark:text-red-400"
+                        : "bg-muted text-muted-foreground"}`}
+                  >
+                    {w.state === "already" ? "already there"
+                      : w.state === "proposed" ? "not sent yet" : w.state}
+                  </span>
+                  {w.error && (
+                    <span className="w-full text-red-700 dark:text-red-400">{w.error}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+
+            {/* The split only matters when half of it fails: the
+                attach can land while the field edit hits a changed
+                form, and a blanket retry would redo the half that
+                already worked. */}
+            {broken.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 border-t border-border
+                              pt-2 text-xs">
+                <span className="text-red-700 dark:text-red-400">
+                  {broken.length === group.writes.length
+                    ? "Neither of those reached Emburse."
+                    : `The ${broken[0]!.kind === "receipt" ? "attachment" : "description"}`
+                      + " did not reach Emburse; the other half did."}
+                </span>
+                <button
+                  type="button"
+                  disabled={sending}
+                  onClick={() => onSend(broken.map((w) => w.kind))}
+                  className="rounded-lg border border-sky-600/50 px-3 py-1 font-semibold
+                             disabled:opacity-50"
+                >
+                  Try that part again
+                </button>
+              </div>
+            )}
+
+            <p className="text-[11px] text-muted-foreground">
+              Sent under {group.writes[0]!.lane.replace(/^personal-/, "")}&rsquo;s own
+              Emburse login. It attaches the image and edits the description — those are
+              two edits to the one expense, done by the one press. It never submits,
+              approves or denies.
+            </p>
+          </div>
+        );
+      })()}
     </div>
   );
 }

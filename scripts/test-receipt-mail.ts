@@ -31,8 +31,8 @@
  * that every call in that file is a GET.
  */
 import {
-  conflicts, dateIn, matchAll, merchantOf, resolveOneToOne, scoreMatch, textOf,
-  totalIn,
+  conflicts, dateIn, matchAll, merchantOf, referenceIn, resolveOneToOne, scoreMatch,
+  textOf, totalIn,
   type Evidence, type Target,
   graphWhy,
 } from "../server/emburse/receipt-mail.js";
@@ -349,6 +349,19 @@ try {
   check("…but a matching currency and a near date are not evidence",
     scoreMatch(expense({ merchant: "SOME OTHER SHOP", amountCents: 9999 }),
       message()) === null);
+
+  console.log("\n20. An order number has a digit in it; a word does not");
+  // "Your receipt can be viewed here: Download" gave a reference of
+  // "Download", which reached the card AND the description that
+  // would have been written to Emburse.
+  check("a word after “receipt” is not an order number",
+    referenceIn("Your receipt can be viewed here: Download") === "",
+    referenceIn("Your receipt can be viewed here: Download"));
+  check("…and a real one is still found", referenceIn("Invoice #2113-3206") === "2113-3206",
+    referenceIn("Invoice #2113-3206"));
+  check("…even when a word got there first",
+    referenceIn("Receipt Download\nOrder #A1B2C3D4") === "A1B2C3D4",
+    referenceIn("Receipt Download\nOrder #A1B2C3D4"));
 
 } finally {
   console.log(failures === 0 ? "\nPASS" : `\n${failures} FAILED`);
