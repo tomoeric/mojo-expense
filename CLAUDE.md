@@ -2861,6 +2861,28 @@ list and then filtered out the only rows worth having.
   on, each get a line saying what it will do. Somebody may mean it.
 - Section 2 of `scripts/test-lanes.ts`.
 
+## A match can be looked at before it is believed
+
+`GET /api/receipt-mail/preview?message=<id>` shows the receipt on a
+candidate card, behind a "Show the receipt" press.
+
+- **The same bytes the upload would send** (`receiptBytes`, the write-
+  back's own function), so the preview is not a representation of the
+  file, it IS the file — previewing and sending cannot disagree about
+  which one. A body-only receipt is rendered the same way, with all
+  network aborted so a tracking pixel cannot report the message opened.
+- **On press, not with the list.** The `<object>` is what fetches, and it
+  does not exist until the toggle is open: 272 candidates would otherwise
+  be 272 Graph calls and, for every body-only one, a server-side Chromium
+  render.
+- **Scoped to messages THIS PERSON'S scan recorded**, joined through
+  `expenses.reviewer`. The id comes from the page; without that join it
+  is a route for reading any message in any mailbox the app can reach, by
+  id.
+- An `<object>` with an `<img>` inside it: most of these are PDFs, for
+  which an `<img>` shows a broken icon, and an image attachment falls
+  through to the `<img>` and displays properly.
+
 ## The mailbox is one tenant's, and one mailbox feeds both tabs
 
 - **A 403 CAN BE AN HOUR OUT OF DATE.** The app-only token carries the

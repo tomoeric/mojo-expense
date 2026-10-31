@@ -8,7 +8,7 @@ import {
   recordCandidates, saveMailSettings, searchMailbox, conflicts,
   type Target,
 } from "./receipt-mail.js";
-import { proposeWrites, queueWrite, writesFor } from "./receipt-writeback.js";
+import { proposeWrites, queueWrite, receiptBytes, writesFor } from "./receipt-writeback.js";
 import { bytesFromMessage, linkReceipt, readingOf } from "./receipt-link.js";
 
 /**
@@ -269,6 +269,86 @@ function explainGraph(err: unknown, mailbox: string, me: string): string {
   }
   return text;
 }
+
+/**
+ * THE RECEIPT ITSELF, so a match can be looked at before it is believed.
+ *
+ * A candidate card said merchant, total and date and showed none of the
+ * thing it was talking about. "The total matches exactly" is a good
+ * reason and it is not the same as seeing the receipt, and on 272 of
+ * them nobody should be asked to take the app's word for it.
+ *
+ * These are the SAME BYTES the upload would send — `receiptBytes`, the
+ * one the write-back uses — so the preview is not a representation of
+ * the file, it is the file. A body-only receipt is rendered the same way
+ * too, with all network aborted so a tracking pixel cannot report the
+ * message opened.
+ *
+ * Fetched per press rather than with the list: 272 previews at once is
+ * 272 Graph calls and, for the body-only ones, 272 browsers.
+ *
+ * Scoped to messages THIS PERSON'S OWN SCAN RECORDED. The id comes from
+ * the page, and without that check it would be a route for reading any
+ * message in any mailbox the app can reach, by id.
+ */
+receiptMailRouter.get("/receipt-mail/preview", requireAuth,
+  async (req: Request, res: Response) => {
+    if (!guard(res)) return;
+    const me = owner(req, res);
+    if (!me) return;
+    const messageId = String((req.query as { message?: string }).message ?? "").trim();
+    if (!messageId) {
+      res.status(400).json({ error: "Name the message to show." });
+      return;
+    }
+    try {
+      const { rows } = await db().query<{ evidence: unknown }>(
+        `SELECT m.evidence
+           FROM receipt_mail_matches m
+           JOIN expenses e ON e.dedupe_key = m.dedupe_key
+          WHERE m.message_id = $1 AND lower(e.reviewer) = lower($2)
+          LIMIT 1`,
+        [messageId, me]);
+      if (rows.length === 0) {
+        res.status(404).json({
+          error: "That message is not one of your matches, so there is nothing to show.",
+        });
+        return;
+      }
+      const ev = (rows[0]!.evidence ?? {}) as {
+        subject?: string;
+        attachments?: { id: string; name: string; contentType: string }[];
+      };
+      // The same rule the proposal uses to pick what to attach, so the
+      // preview cannot be of a different file from the one that goes.
+      const file = (ev.attachments ?? []).find(
+        (a) => /pdf|image\//i.test(a.contentType)
+          || /\.(pdf|png|jpe?g|gif|webp)$/i.test(a.name));
+      const settings = await mailSettings(me);
+      if (!settings.mailbox) {
+        res.status(400).json({ error: "No mailbox is configured." });
+        return;
+      }
+      const got = await receiptBytes({
+        mailbox: settings.mailbox,
+        messageId,
+        attachmentId: file?.id ?? "",
+        subject: ev.subject ?? "receipt",
+      });
+      res.setHeader("content-type", got.contentType);
+      // Inline, and named, so a browser shows it rather than saving it.
+      res.setHeader("content-disposition",
+        `inline; filename="${got.name.replace(/[^\w.\- ]+/g, "_")}"`);
+      // A receipt is somebody's own spending. Private, and short, because
+      // the message can be deleted or moved out from under this.
+      res.setHeader("cache-control", "private, max-age=300");
+      res.send(got.bytes);
+    } catch (err) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : "That receipt could not be fetched.",
+      });
+    }
+  });
 
 /* ------------------------------------------------------------------ *
  * Sending it back

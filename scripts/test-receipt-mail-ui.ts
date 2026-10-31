@@ -152,6 +152,22 @@ try {
     text.includes("never because it arrived in this mailbox"));
 
   console.log("\n3. The candidate, its reasons, and the conflict");
+  /*
+   * THE RECEIPT IS LOOKABLE-AT BEFORE IT IS BELIEVED. "The total matches
+   * exactly" is a good reason and not the same as seeing the thing, and
+   * on 272 candidates nobody should have to take the app's word for it.
+   *
+   * Behind a press on purpose: the frame is what fetches, so a list of
+   * 272 costs nothing until one is opened — and a body-only receipt is
+   * rendered to PDF by a real browser on the server, so an eager preview
+   * would start 272 of them.
+   */
+  check("THE RECEIPT CAN BE LOOKED AT, without choosing it first",
+    (await page.getByRole("button", { name: /Show the receipt/ }).count()) > 0,
+    (await page.locator("body").innerText()).replace(/\n/g, " | ").slice(-240));
+  check("…and nothing is fetched until it is pressed",
+    (await page.locator("object[data*='receipt-mail/preview']").count()) === 0);
+
   check("the candidate is shown", text.includes("Your Starbucks receipt"));
   check("…with its confidence", text.includes("strong"));
   check("…and its reasons", text.includes("The total matches exactly: $12.99."));

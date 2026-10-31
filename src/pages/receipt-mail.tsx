@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  AlertTriangle, Check, Inbox, Loader2, Mail, Search, ShieldAlert, X,
+  AlertTriangle, Check, Image as ImageIcon, Inbox, Loader2, Mail, Search, ShieldAlert, X,
 } from "lucide-react";
 
 /**
@@ -506,6 +506,17 @@ export function ReceiptMailPage() {
                 {m.reasons.map((r) => <li key={r}>· {r}</li>)}
               </ul>
 
+              {/* THE RECEIPT ITSELF. "The total matches exactly" is a good
+                  reason and it is not the same as seeing the thing, and on
+                  272 of these nobody should have to take the app's word for
+                  it. These are the same bytes the upload would send, so
+                  what is on screen is the file that would be attached.
+
+                  Behind a press, and `open` is what loads it: 272 previews
+                  with the list would be 272 Graph calls and, for the
+                  body-only ones, 272 browsers rendering a PDF. */}
+              <ReceiptPeek messageId={m.messageId} />
+
               <details className="text-xs">
                 <summary className="cursor-pointer text-muted-foreground">
                   What the message says
@@ -547,6 +558,56 @@ export function ReceiptMailPage() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The receipt, on request.
+ *
+ * `open` is what triggers the fetch, not a render — the browser only
+ * asks for the bytes once the frame exists, so a list of 272 cards costs
+ * nothing until one is pressed. That matters more than it looks: a
+ * body-only receipt is rendered to PDF by a real browser on the server,
+ * so an eager preview would start 272 of them.
+ *
+ * An <object> rather than an <img>, because most of these are PDFs —
+ * either the merchant's own attachment or the message body rendered —
+ * and an <img> shows a broken icon for those. A direct link sits under
+ * it for the cases a browser will not display inline at all.
+ */
+function ReceiptPeek({ messageId }: { messageId: string }) {
+  const [open, setOpen] = useState(false);
+  const src = `/api/receipt-mail/preview?message=${encodeURIComponent(messageId)}`;
+  return (
+    <div className="text-xs">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-1.5 text-muted-foreground hover:text-foreground"
+      >
+        <ImageIcon className="h-3.5 w-3.5" aria-hidden />
+        {open ? "Hide the receipt" : "Show the receipt"}
+      </button>
+      {open && (
+        <div className="mt-1.5 space-y-1">
+          <object
+            data={src}
+            type="application/pdf"
+            className="h-80 w-full rounded-md border border-border bg-muted/30"
+            aria-label="The receipt this match is about"
+          >
+            {/* Reached when the browser will not display the type inline.
+                An image attachment lands here and shows properly. */}
+            <img src={src} alt="The receipt this match is about"
+                 className="max-h-80 rounded-md border border-border" />
+          </object>
+          <a href={src} target="_blank" rel="noreferrer"
+             className="text-muted-foreground underline underline-offset-2">
+            Open it in a new tab
+          </a>
         </div>
       )}
     </div>
