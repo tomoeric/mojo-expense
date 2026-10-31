@@ -485,6 +485,24 @@ export function totalIn(text: string): { cents: number | null; labelled: boolean
   return { cents: Math.max(...all), labelled: false };
 }
 
+/**
+ * Words that are not a merchant, however the subject capitalises them.
+ *
+ * "Your Transaction Receipt" from noreply@uhaul.com was read as a
+ * merchant called **Transaction**, and the card then offered a
+ * U-Haul receipt against a GitHub expense with "Transaction" as
+ * the name on it. The subject rule is still right — "Your
+ * Starbucks receipt" from mail.sbux-e.com is why it exists — but
+ * it has to know when it has caught a noun rather than a company.
+ */
+const NOT_A_MERCHANT = new Set([
+  "transaction", "invoice", "payment", "purchase", "order", "receipt",
+  "statement", "subscription", "renewal", "membership", "booking",
+  "reservation", "account", "billing", "charge", "refund", "monthly",
+  "annual", "yearly", "latest", "recent", "new", "online", "digital",
+  "electronic", "email", "copy", "official", "final", "paid",
+]);
+
 /** The merchant, from the sender's display name or domain. */
 export function merchantOf(from: string, subject: string): string {
   const domain = from.split("@")[1] ?? "";
@@ -495,7 +513,12 @@ export function merchantOf(from: string, subject: string): string {
   // case this exists for.
   const fromSubject = /(?:from|at|your)\s+([A-Z][\w&'. -]{2,28}?)\s+(?:receipt|order|purchase)/i
     .exec(subject);
-  return (fromSubject?.[1] ?? stem).trim();
+  const named = (fromSubject?.[1] ?? "").trim();
+  // Every word of it generic means the subject named no company,
+  // and the sending domain is the better answer.
+  const generic = named !== "" && named.split(/[\s.&'-]+/).filter(Boolean)
+    .every((w) => NOT_A_MERCHANT.has(w.toLowerCase()));
+  return (generic || named === "" ? stem : named).trim();
 }
 
 async function evidenceOf(
@@ -671,6 +694,23 @@ export function scoreMatch(expense: Target, e: Evidence): Candidate | null {
   }
 
   if (score <= 0) return null;
+
+  /*
+   * BEING NEAR IN TIME IS NOT EVIDENCE OF ANYTHING.
+   *
+   * A U-Haul receipt with no readable total was offered against an
+   * $8.28 GitHub charge, on eight points of "2 days apart — a card
+   * posts a day or two after the purchase" and nothing else. In a
+   * 90-day window every expense is two days from something, so
+   * date proximity on its own matches everything, which is the
+   * same as matching nothing — and it costs a person a real look
+   * to throw away.
+   *
+   * At least one thing that IDENTIFIES the purchase has to agree:
+   * the merchant, the exact total, or an order number. Date and
+   * currency only ever strengthen one of those.
+   */
+  if (!signals.merchant && !signals.total && !signals.reference) return null;
 
   /*
    * STRONG still means "a person says yes".

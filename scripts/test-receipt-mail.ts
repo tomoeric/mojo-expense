@@ -315,6 +315,41 @@ try {
   check("both halves keep their candidate", split.length === 2,
     split.map((c) => c.dedupeKey).join(", "));
 
+  console.log("\n18. BEING NEAR IN TIME IS NOT A MATCH");
+  /*
+   * The real one: a U-Haul "Your Transaction Receipt" with no
+   * readable total, offered against an $8.28 GitHub charge two
+   * days away. Eight points of date proximity and nothing else.
+   * In a 90-day window every expense is two days from something.
+   */
+  const uhaul = message({
+    messageId: "uhaul", subject: "Your Transaction Receipt",
+    from: "noreply@uhaul.com", merchant: merchantOf("noreply@uhaul.com",
+      "Your Transaction Receipt"),
+    date: "2026-09-26", totalCents: null,
+  });
+  check("a receipt that agrees on NOTHING but the week is not offered",
+    scoreMatch(expense({ merchant: "GITHUB", amountCents: 828, date: "2026-09-24" }),
+      uhaul) === null,
+    JSON.stringify(scoreMatch(
+      expense({ merchant: "GITHUB", amountCents: 828, date: "2026-09-24" }), uhaul)));
+  check("…and a generic subject word is not read as the merchant",
+    merchantOf("noreply@uhaul.com", "Your Transaction Receipt") === "uhaul",
+    merchantOf("noreply@uhaul.com", "Your Transaction Receipt"));
+  check("…while a subject that DOES name one still wins over the domain",
+    merchantOf("receipts@sbux-e.com", "Your Starbucks receipt") === "Starbucks",
+    merchantOf("receipts@sbux-e.com", "Your Starbucks receipt"));
+
+  console.log("\n19. One identifying signal is enough, and is required");
+  check("the merchant alone keeps a candidate alive",
+    scoreMatch(expense({ amountCents: 9999, date: "2026-08-01" }), message()) !== null);
+  check("…and so does an exact total on its own",
+    scoreMatch(expense({ merchant: "SOME OTHER SHOP", date: "2026-08-01" }),
+      message()) !== null);
+  check("…but a matching currency and a near date are not evidence",
+    scoreMatch(expense({ merchant: "SOME OTHER SHOP", amountCents: 9999 }),
+      message()) === null);
+
 } finally {
   console.log(failures === 0 ? "\nPASS" : `\n${failures} FAILED`);
   process.exit(failures === 0 ? 0 : 1);

@@ -2943,6 +2943,28 @@ real ambiguity visible — and on its own it is a pile, not an answer.
   look identical from a shorter list.
 - `scripts/test-receipt-mail.ts` §14–17, `scripts/test-match-prune.ts`.
 
+## Date proximity is not evidence, and a noun is not a merchant
+
+Found by LOOKING at one card: a U-Haul **"Your Transaction Receipt"** with
+no readable total, offered against an **$8.28 GitHub** charge. Two faults
+stacked in the same row.
+
+- **`merchantOf` read "Transaction" as the company name.** The subject rule
+  (`your <Name> receipt`) is right — "Your Starbucks receipt" from
+  mail.sbux-e.com is why it exists — but it has to know when it has caught
+  a noun. `NOT_A_MERCHANT` holds the generic words; a captured name whose
+  every word is in it falls back to the sending domain, so that receipt now
+  reads **uhaul**. Only when EVERY word is generic: "Transaction Capital
+  Receipt" would still be a company.
+- **The pair scored 8 points, all of them "2 days apart".** In a 90-day
+  window every expense is two days from something, so date proximity on its
+  own matches everything, which is the same as matching nothing — and it
+  costs a person a real look to throw away. `scoreMatch` now returns null
+  unless something that IDENTIFIES the purchase agrees: **the merchant, the
+  exact total, or an order number**. Date and currency can only ever
+  strengthen one of those; they can never carry a candidate by themselves.
+- `scripts/test-receipt-mail.ts` §18–19.
+
 ## The matching page is a LIST AND A PANEL, not a column of cards
 
 *"So confusing to use. Need a better layout."* / *"This page is hard to
