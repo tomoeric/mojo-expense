@@ -1541,7 +1541,41 @@ function ChangeDialog({ row, onClose }: { row: Row; onClose: () => void }) {
  */
 function MatchedReceipts({ rows, onOpen }: { rows: Row[]; onOpen: (r: Row) => void }) {
   const [limit, setLimit] = useState(12);
+  const [pulling, setPulling] = useState("");
+  const [pullNote, setPullNote] = useState<Record<string, string>>({});
   const shown = rows.slice(0, limit);
+
+  /*
+   * PULL THE IMAGE IN AGAIN.
+   *
+   * Choosing a receipt fetches it out of the mailbox and stores
+   * it here. When that fetch fails the decision still stands —
+   * the match is right, only the download went wrong — so this
+   * is one press rather than rejecting the match and starting
+   * over. Graph refuses an attachment for ordinary reasons: the
+   * message was moved, the token had expired, the mailbox was
+   * briefly unreachable.
+   */
+  const relink = async (id: string) => {
+    setPulling(id);
+    setPullNote((n) => ({ ...n, [id]: "" }));
+    try {
+      const res = await fetch("/api/receipt-mail/relink", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ dedupeKey: id }),
+      });
+      const out = await res.json() as { error?: string };
+      if (!res.ok) throw new Error(out.error ?? "That did not work.");
+      // The frame reads the image by URL, so a reload is the
+      // honest way to show one that has only just arrived.
+      window.location.reload();
+    } catch (e) {
+      setPullNote((n) => ({ ...n, [id]: (e as Error).message }));
+    } finally {
+      setPulling("");
+    }
+  };
 
   return (
     <div className="space-y-3">
@@ -1610,12 +1644,45 @@ function MatchedReceipts({ rows, onOpen }: { rows: Row[]; onOpen: (r: Row) => vo
                 Open the expense
               </button>
             </div>
-            <ReceiptFrame
-              src={`/api/receipts/${encodeURIComponent(r.line.id)}`}
-              alt={`The receipt matched to ${r.line.merchant}`}
-              height="h-72"
-              loading="Loading the receipt that was matched to this expense."
-            />
+            {/* THE REASON, NOT THE SYMPTOM.
+                A failed pull wrote why on the match row and the
+                queue read none of it — so five of these said
+                "waiting to be sent" above "No receipt was
+                imported for this expense", which is true and
+                says nothing about the cause. */}
+            {r.line.linkError ? (
+              <div className="space-y-2 rounded-md border border-amber-500/40
+                              bg-amber-500/10 p-3 text-xs">
+                <p className="font-semibold">
+                  The receipt was matched, but pulling the image in failed.
+                </p>
+                <p className="break-words text-muted-foreground">{r.line.linkError}</p>
+                <p className="text-muted-foreground">
+                  The match itself is fine — only the download went wrong, so nothing
+                  can be sent to Emburse until the image is here.
+                </p>
+                {pullNote[r.line.id] && (
+                  <p className="text-red-700 dark:text-red-400">{pullNote[r.line.id]}</p>
+                )}
+                <button
+                  type="button"
+                  disabled={pulling === r.line.id}
+                  onClick={() => void relink(r.line.id)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border
+                             border-sky-600/50 px-3 py-1 font-semibold disabled:opacity-50"
+                >
+                  {pulling === r.line.id && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  Pull the receipt in again
+                </button>
+              </div>
+            ) : (
+              <ReceiptFrame
+                src={`/api/receipts/${encodeURIComponent(r.line.id)}`}
+                alt={`The receipt matched to ${r.line.merchant}`}
+                height="h-72"
+                loading="Loading the receipt that was matched to this expense."
+              />
+            )}
           </div>
         );
       })}

@@ -223,16 +223,24 @@ export function ReceiptMailPage() {
   });
   const decide = useMutation({
     mutationFn: async (v: { dedupeKey: string; messageId: string; choose: boolean }) => {
-      await post<{ matches: Match[] }>("/api/receipt-mail/decide", v);
-      // Choosing proposes what WOULD be sent. It writes nothing
-      // to Emburse — the person still has to press Send — and
-      // showing the proposal straight away is what makes "always
-      // ask" an informed question rather than a yes/no on trust.
-      if (v.choose) {
-        await post<{ writes: Write[] }>("/api/receipt-mail/propose", {
-          dedupeKey: v.dedupeKey, messageId: v.messageId,
-        }).catch(() => undefined);
-      }
+      /*
+       * DECIDE PROPOSES, AND ONLY WHEN THE IMAGE IS IN.
+       *
+       * This used to fire /propose straight afterwards as well,
+       * unconditionally. The decide route pulls the receipt into
+       * the app first and proposes only if that worked — on
+       * purpose, because there is nothing to send until there is
+       * an image — and this second call went behind its back.
+       *
+       * Five expenses ended up reading "waiting to be sent" with
+       * no receipt held anywhere and the reason for the failed
+       * pull recorded on the match row, unread. The decision was
+       * right; the send was proposed for a file that does not
+       * exist.
+       */
+      const out = await post<{ linked: string | null; linkError: string }>(
+        "/api/receipt-mail/decide", v);
+      if (v.choose && !out.linked && out.linkError) throw new Error(out.linkError);
     },
     onSuccess: () => { setWhich(0); void qc.invalidateQueries({ queryKey: ["receipt-mail"] }); },
     onError: (e) => setError((e as Error).message),

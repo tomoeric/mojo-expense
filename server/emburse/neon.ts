@@ -40,6 +40,7 @@ type Row = {
   receipt_unread: boolean;
   writeback_state: string | null;
   match_state: string | null;
+  link_error: string | null;
   changes: { field: string; before_value: string | null; after_value: string | null }[] | null;
 };
 
@@ -116,6 +117,18 @@ export class NeonProvider implements EmburseProvider {
                 WHERE m.dedupe_key = e.dedupe_key
                 ORDER BY (m.state = 'chosen') DESC, (m.state = 'candidate') DESC
                 LIMIT 1) AS match_state,
+              -- WHY THE IMAGE IS NOT HERE, when it is not.
+              --
+              -- Choosing a match pulls the receipt into the app, and when
+              -- that fails the reason is written on the match row and was
+              -- then read by nothing: the queue showed "waiting to be sent"
+              -- beside "No receipt was imported for this expense", which is
+              -- the symptom, not the cause. The cause was in this column.
+              (SELECT m.link_error FROM receipt_mail_matches m
+                WHERE m.dedupe_key = e.dedupe_key AND m.state = 'chosen'
+                  AND m.link_error <> '' AND m.linked_sha256 IS NULL
+                ORDER BY m.decided_at DESC NULLS LAST
+                LIMIT 1) AS link_error,
               -- One receipt divided across expenses, and whether the shares
               -- add up to it. Identified by content hash, so this is proven
               -- rather than inferred from a matching merchant and date.
@@ -280,6 +293,7 @@ function toReport(key: string, group: Row[], hits: Map<string, Hit[]>): ExpenseR
      * "none", which is the one thing it was not.
      */
     matchState: matchState(r.writeback_state, r.match_state),
+    linkError: r.link_error ?? "",
     receiptCount: Number(r.receipt_count),
     firstSeenAt: r.first_seen_at instanceof Date ? r.first_seen_at.toISOString() : null,
     sharedWith: Number(r.share_peers ?? 1),

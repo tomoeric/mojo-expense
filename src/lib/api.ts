@@ -45,6 +45,8 @@ export type ExpenseLine = {
   receiptLabel?: string;
   /** Where an email-matched receipt has got to; null if none was matched. */
   matchState?: "sent" | "already" | "queued" | "failed" | "matched" | "candidate" | null;
+  /** Why the matched receipt could not be pulled into the app, if it could not. */
+  linkError?: string;
   /** How many receipt images we actually hold for it. */
   receiptCount?: number;
   /** When this expense first appeared in an import. */

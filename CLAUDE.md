@@ -3039,6 +3039,42 @@ this a rule" — which read as *save it now*, so somebody looking for a way
 to change the values before saving did not press the one thing that opens
 them.
 
+## "Waiting to be sent" with no receipt anywhere: the pull that failed
+
+Five expenses in the Receipt matched tab read **waiting to be sent** above
+a red **"No receipt was imported for this expense."** Both statements
+true, neither the cause, and the cause was already in the database.
+
+Choosing a match does two things: it records the choice, and it PULLS THE
+IMAGE into the app (`linkReceipt`), because a linked receipt is read by
+the reader that already exists and that reading is what the field fill is
+made of. `/receipt-mail/decide` proposes a write-back **only if the pull
+worked** — deliberately, because there is nothing to send until there is
+an image — and writes the failure to `receipt_mail_matches.link_error`.
+
+Two faults on top of that, both now fixed:
+
+- **The page fired `/propose` itself, right after `/decide`,
+  unconditionally.** So a failed pull still produced a proposal, and the
+  queue said "waiting to be sent" for a file that does not exist. The
+  decide route already proposes; the client call is gone, and a decide
+  whose pull failed now surfaces the error instead of quietly succeeding.
+- **`link_error` was written and read by nothing** — the third column in
+  this codebase to be recorded faithfully and never displayed, after
+  `steps` and the write-back's own log. The queue carries it now: the
+  card says the match is fine and only the download failed, prints the
+  reason, and offers **Pull the receipt in again**
+  (`POST /receipt-mail/relink`), which refetches, links and proposes.
+  The decision is not touched — Graph refuses an attachment for ordinary
+  reasons (message moved, token expired, mailbox briefly unreachable) and
+  every one of those is worth one press rather than rejecting the match.
+
+**A test must seed this state BEFORE the first page load.** The queue is
+cached server-side, so a suite that loads the page, pokes the database
+and reloads sees the old answer and fails for the wrong reason — which it
+did. `test-matched-tab-ui.ts` seeds one expense whose pull worked and one
+whose pull failed, then checks both in one pass.
+
 ## Where a rule LIVES, and what happens after "queued"
 
 Two follow-ups on the vendor rules, both of them the interface being

@@ -239,14 +239,40 @@ try {
     (byState.get("attached") ?? 0) === 0);
   text = await page.locator("body").innerText();
   /*
-   * THE PANEL STAYS ON WHAT WAS JUST DECIDED. It leaves the "to
-   * decide" list in the same breath, and following it would answer
-   * the press with a blank column — exactly when somebody wants to
-   * see what their press did.
+   * NO MAILBOX HERE, SO THE IMAGE PULL FAILS — AND THAT IS SAID.
+   *
+   * Choosing records the choice and then fetches the receipt into
+   * the app. There is no Graph in this container, so the fetch
+   * cannot work, and the right behaviour is to say so: the match
+   * stands, and NOTHING is proposed, because there is nothing to
+   * send until there is an image. The page used to fire /propose
+   * itself regardless, which is how five expenses ended up
+   * reading "waiting to be sent" for a file that did not exist.
    */
-  check("the panel stays on the expense that was just decided",
-    text.includes("will change on the expense in Emburse"),
-    text.replace(/\n/g, " | ").slice(-300));
+  check("THE FAILED PULL IS REPORTED, not swallowed",
+    /could not|Graph|mailbox|attachment/i.test(text),
+    text.replace(/\n/g, " | ").slice(0, 400));
+  const { rows: noWrites } = await db().query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM receipt_writebacks WHERE dedupe_key = 'zz-rm-1'`);
+  check("…and NOTHING was proposed for a receipt that is not here",
+    noWrites[0]!.n === "0", noWrites[0]!.n);
+
+  console.log("\n4b. With the image in, the proposal appears");
+  /*
+   * Standing in for the pull, which needs a mailbox. From here on
+   * the expense is in the state a successful choice leaves it in.
+   */
+  const { linkReceipt } = await import("../server/emburse/receipt-link.js");
+  const { proposeWrites } = await import("../server/emburse/receipt-writeback.js");
+  await linkReceipt({
+    dedupeKey: "zz-rm-1",
+    bytes: Buffer.from("%PDF-1.4 starbucks"),
+    contentType: "application/pdf",
+  });
+  await proposeWrites({ dedupeKey: "zz-rm-1", messageId: "msg-1", by: APP });
+  await page.reload({ waitUntil: "networkidle" });
+  await page.waitForTimeout(2500);
+  text = await page.locator("body").innerText();
   check("…and the other one is still in the list to decide",
     /To decide 1/.test(text), text.replace(/\n/g, " | ").slice(0, 400));
   await page.getByRole("button", { name: /To decide 1/ }).click();
@@ -309,6 +335,9 @@ try {
     .catch(() => undefined);
   await db().query("DELETE FROM receipt_writebacks WHERE dedupe_key LIKE 'zz-rm-%'")
     .catch(() => undefined);
+  await db().query(
+    `DELETE FROM expense_receipts er USING receipt_blobs b
+      WHERE er.sha256 = b.sha256 AND er.dedupe_key LIKE 'zz-rm-%'`).catch(() => undefined);
   server.kill("SIGTERM");
   console.log(failures === 0 ? "\nPASS" : `\n${failures} FAILED`);
   setTimeout(() => process.exit(failures === 0 ? 0 : 1), 300);

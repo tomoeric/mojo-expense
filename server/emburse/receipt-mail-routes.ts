@@ -584,6 +584,59 @@ receiptMailRouter.post("/receipt-mail/decide", requireAuth,
     });
   });
 
+/**
+ * Pull a chosen receipt's image in again, after a failed pull.
+ *
+ * The decision stands; only the fetch failed. Graph refuses an
+ * attachment for ordinary reasons — the message was moved, the
+ * token had expired, the mailbox was briefly unreachable — and
+ * every one of those is worth one more press rather than
+ * rejecting the match and starting over.
+ */
+receiptMailRouter.post("/receipt-mail/relink", requireAuth,
+  async (req: Request, res: Response) => {
+    if (!guard(res)) return;
+    const me = owner(req, res);
+    if (!me) return;
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const dedupeKey = String(b.dedupeKey ?? "");
+    try {
+      const chosen = (await matchesFor(null, "chosen"))
+        .find((m) => m.dedupeKey === dedupeKey);
+      if (!chosen) {
+        res.status(404).json({
+          error: "No receipt has been chosen for that expense, so there is nothing to "
+            + "pull in.",
+        });
+        return;
+      }
+      const box = await mailSettings(me);
+      if (!box.mailbox) {
+        res.status(400).json({ error: "No mailbox is configured to fetch it from." });
+        return;
+      }
+      const file = await bytesFromMessage({
+        mailbox: box.mailbox,
+        messageId: chosen.messageId,
+        attachmentId: chosen.evidence.attachments.find(
+          (a) => /pdf|image\//i.test(a.contentType))?.id ?? "",
+        subject: chosen.evidence.subject,
+      });
+      const got = await linkReceipt({
+        dedupeKey, bytes: file.bytes, contentType: file.contentType,
+      });
+      await noteLink(dedupeKey, chosen.messageId, got.sha256, "").catch(() => undefined);
+      // Now there is something to send, so the proposal can be made.
+      await proposeWrites({ dedupeKey, messageId: chosen.messageId, by: me })
+        .catch(() => undefined);
+      res.json({ linked: got.sha256, writes: await writesFor(dedupeKey) });
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err);
+      await noteLink(dedupeKey, "", null, why).catch(() => undefined);
+      res.status(400).json({ error: why });
+    }
+  });
+
 /* ------------------------------------------------------------------ *
  * Vendor rules: what an expense from this merchant should say
  * ------------------------------------------------------------------ */

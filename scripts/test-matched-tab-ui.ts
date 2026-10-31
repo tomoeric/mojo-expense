@@ -102,6 +102,41 @@ try {
   await decideMatch({ dedupeKey: KEY, messageId: "mt-msg-1", choose: true, by: APP });
   await linkReceipt({ dedupeKey: KEY, bytes: PNG, contentType: "image/png" });
 
+  /*
+   * AND ONE WHOSE IMAGE PULL FAILED.
+   *
+   * Five expenses read "waiting to be sent" above "No receipt was
+   * imported for this expense" — both true, neither the cause.
+   * The cause was written on the match row when the pull failed
+   * and read by nothing. Seeded before the first load rather than
+   * poked in afterwards, because the queue is cached server-side
+   * and a mid-run edit is simply not visible yet.
+   */
+  await db().query(
+    `INSERT INTO expenses (dedupe_key, employee, expense_date, merchant, amount_cents,
+                           category, department, location, note, method, in_inbox,
+                           reviewer, source, lane)
+     VALUES ($1,'Eric S','2026-10-20','REPLIT',5944,'Software, Licenses','IT & Compliance',
+             '','','Card',true,$2,'','personal-mojo')
+     ON CONFLICT (dedupe_key) DO NOTHING`,
+    ["zz-mt-2", APP]);
+  await recordCandidates([{
+    dedupeKey: "zz-mt-2", lane: "personal-mojo", messageId: "mt-msg-2",
+    confidence: "strong", score: 80, reasons: ["Same date."],
+    evidence: {
+      messageId: "mt-msg-2", subject: "Your Replit receipt", from: "invoice@mail.replit.com",
+      receivedAt: "2026-10-20T12:00:00Z", folder: "Receipts", merchant: "Replit",
+      date: "2026-10-20", totalCents: 5944, currency: "USD", reference: "",
+      hasAttachment: false, attachments: [], excerpt: "Amount due $59.44",
+    },
+  }]);
+  await decideMatch({ dedupeKey: "zz-mt-2", messageId: "mt-msg-2", choose: true, by: APP });
+  await db().query(
+    `UPDATE receipt_mail_matches
+        SET link_error = 'Graph would not hand over the attachment (404).',
+            linked_sha256 = NULL
+      WHERE dedupe_key = 'zz-mt-2'`);
+
   check("the server comes up", await up());
   const ctx = await browser.newContext();
   await ctx.addCookies([{
@@ -136,7 +171,20 @@ try {
   check("…and it is NOT the ordinary table", await page.locator("table").count() === 0,
     `${await page.locator("table").count()} tables`);
 
-  console.log("\n3. No console errors");
+  console.log("\n3. A FAILED PULL SHOWS ITS REASON, not just an empty frame");
+  const why = await page.locator("body").innerText();
+  check("THE REASON IS ON SCREEN",
+    why.includes("Graph would not hand over the attachment"),
+    why.replace(/\n/g, " | ").slice(-500));
+  check("…said as a failed download rather than a failed match",
+    why.includes("only the download went wrong"));
+  check("…with a way to try the pull again",
+    (await page.getByRole("button", { name: /Pull the receipt in again/ }).count()) > 0);
+  check("…while the one that worked still shows its picture",
+    (await page.locator("img[alt*='receipt matched to']").count()) > 0,
+    `${await page.locator("img[alt*='receipt matched to']").count()} images`);
+
+  console.log("\n4. No console errors");
   check("the page produced none", errors.length === 0, errors.slice(0, 3).join(" · "));
 } finally {
   await browser.close();
