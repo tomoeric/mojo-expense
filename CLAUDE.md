@@ -2894,7 +2894,17 @@ nobody had touched.
 - **A bare candidate is not a match.** Nobody has said it is the right
   one, so it does not count toward the tab and the column says
   "candidate".
-- **The "Receipt matched" tab holds every settled match** — matched,
+- **The tab is "Receipts" and holds candidates too.** *"Want all the
+  receipt image and detail done on the review queue."* A bare candidate is
+  still not a match and the Receipt COLUMN still says `candidate` — but
+  bouncing to another page to press one of two buttons is half a job. A
+  candidate's card fetches its own candidates
+  (`GET /receipt-mail/for-expense`, scoped by joining back to
+  `expenses.reviewer`) and shows the picture out of the message, who sent
+  it, the total it states, why the matcher offered it, and **This is the
+  receipt / Not this one**. Per card, not with the queue: every candidate
+  for every row is the 417-card page again.
+- **It holds every settled match** — matched,
   queued, failed, sent, already attached. The finished ones were dropped
   at first, on the reasoning that the tab is a worklist; they are back,
   because a tab that loses a row the moment it succeeds is a tab you

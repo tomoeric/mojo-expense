@@ -585,6 +585,47 @@ receiptMailRouter.post("/receipt-mail/decide", requireAuth,
   });
 
 /**
+ * The receipts found for ONE expense, for the review queue.
+ *
+ * The queue is where the work is: it already shows the matched
+ * ones with their picture, and the owner asked for the whole
+ * thing there — *"want all the receipt image and detail done on
+ * the review queue"*. Deciding needs the candidates, and loading
+ * every candidate for every row would be the 417-card page all
+ * over again, so a card asks for its own when it renders.
+ *
+ * Scoped by joining back to `expenses.reviewer`: one person's
+ * receipts are not another's, and a dedupe key is guessable.
+ */
+receiptMailRouter.get("/receipt-mail/for-expense", requireAuth,
+  async (req: Request, res: Response) => {
+    if (!guard(res)) return;
+    const me = req.user?.email ?? "";
+    const dedupeKey = String((req.query as { dedupeKey?: string }).dedupeKey ?? "").trim();
+    if (!dedupeKey) { res.status(400).json({ error: "Name the expense." }); return; }
+    try {
+      const { rows } = await db().query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM expenses
+          WHERE dedupe_key = $1 AND lower(reviewer) = lower($2)`,
+        [dedupeKey, me]);
+      if (rows[0]?.n !== "1") {
+        res.status(404).json({ error: "That expense is not one of yours." });
+        return;
+      }
+      const mine = (await matchesFor(null)).filter((m) => m.dedupeKey === dedupeKey);
+      res.json({
+        candidates: mine.filter((m) => m.state === "candidate")
+          .sort((a, b) => b.score - a.score),
+        chosen: mine.find((m) => m.state === "chosen" || m.state === "attached") ?? null,
+      });
+    } catch (err) {
+      res.status(500).json({
+        error: err instanceof Error ? err.message : "Could not read it.",
+      });
+    }
+  });
+
+/**
  * Pull a chosen receipt's image in again, after a failed pull.
  *
  * The decision stands; only the fetch failed. Graph refuses an

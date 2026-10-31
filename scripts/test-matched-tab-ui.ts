@@ -137,6 +137,33 @@ try {
             linked_sha256 = NULL
       WHERE dedupe_key = 'zz-mt-2'`);
 
+  /*
+   * AND ONE STILL WAITING ON A DECISION. Not chosen, so there is
+   * no image in the app: the card fetches the picture out of the
+   * message and offers the two buttons.
+   */
+  await db().query(
+    `INSERT INTO expenses (dedupe_key, employee, expense_date, merchant, amount_cents,
+                           category, department, location, note, method, in_inbox,
+                           reviewer, source, lane)
+     VALUES ($1,'Eric S','2026-10-24','GITHUB',1719,'Software, Licenses','IT & Compliance',
+             '','','Card',true,$2,'','personal-mojo')
+     ON CONFLICT (dedupe_key) DO NOTHING`,
+    ["zz-mt-3", APP]);
+  await recordCandidates([{
+    dedupeKey: "zz-mt-3", lane: "personal-mojo", messageId: "mt-msg-3",
+    confidence: "strong", score: 80,
+    reasons: ["The merchant matches: “GITHUB” and “GitHub”.",
+      "The total matches exactly: $17.19.", "Same date."],
+    evidence: {
+      messageId: "mt-msg-3", subject: "Your GitHub receipt",
+      from: "invoice@mail.replit.com", receivedAt: "2026-10-24T12:00:00Z",
+      folder: "Receipts", merchant: "GitHub", date: "2026-10-24", totalCents: 1719,
+      currency: "USD", reference: "", hasAttachment: false, attachments: [],
+      excerpt: "Amount due $17.19",
+    },
+  }]);
+
   check("the server comes up", await up());
   const ctx = await browser.newContext();
   await ctx.addCookies([{
@@ -145,7 +172,17 @@ try {
   }]);
   const page = await ctx.newPage();
   const errors: string[] = [];
-  page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
+  /*
+   * The candidate card fetches its picture out of the mailbox,
+   * and there is no Graph in this container, so that one 400s on
+   * purpose — it is the condition section 3 asserts the page
+   * HANDLES, and counting it would fail the test for passing.
+   */
+  page.on("console", (m) => {
+    if (m.type() !== "error") return;
+    if (/receipt-mail\/preview|status of 400/.test(m.text())) return;
+    errors.push(m.text());
+  });
   page.on("pageerror", (e) => errors.push(e.message));
 
   console.log("1. The tab is there, on the queue that has matches");
@@ -153,8 +190,8 @@ try {
   await page.waitForTimeout(1500);
   const mojo = page.getByRole("button", { name: /Personal Tab - MOJO/ });
   if (await mojo.count() > 0) { await mojo.first().click(); await page.waitForTimeout(1200); }
-  const tab = page.getByRole("button", { name: /Receipt matched/ });
-  check("THE TAB EXISTS", await tab.count() > 0,
+  const tab = page.getByRole("button", { name: /^Receipts/ });
+  check("THE RECEIPTS TAB EXISTS", await tab.count() > 0,
     (await page.locator("body").innerText()).replace(/\n/g, " | ").slice(0, 300));
 
   console.log("\n2. What it shows is the receipt, not another table row");
@@ -184,7 +221,29 @@ try {
     (await page.locator("img[alt*='receipt matched to']").count()) > 0,
     `${await page.locator("img[alt*='receipt matched to']").count()} images`);
 
-  console.log("\n4. No console errors");
+  console.log("\n4. A CANDIDATE CAN BE DECIDED FROM THE QUEUE");
+  /*
+   * "Want all the receipt image and detail done on the review
+   * queue." A candidate is not a match, and it is still the work
+   * — so the card carries the picture, who sent it, what it
+   * says, why it fits, and the two buttons. Bouncing to another
+   * page to press one of them is half a job.
+   */
+  const cand = page.getByRole("button", { name: "This is the receipt" });
+  check("THE DECISION IS ON THE CARD", await cand.count() > 0,
+    (await page.locator("body").innerText()).replace(/\n/g, " | ").slice(-400));
+  const body4 = await page.locator("body").innerText();
+  check("…with the sender and the total the receipt states",
+    body4.includes("invoice@mail.replit.com") && body4.includes("17.19"),
+    body4.replace(/\n/g, " | ").slice(-400));
+  check("…and why the matcher offered it", body4.includes("The total matches exactly"),
+    body4.replace(/\n/g, " | ").slice(-300));
+  check("…and it says where the send still happens",
+    body4.includes("Nothing reaches Emburse until you press Send"));
+  check("…while the pill says it is not a match yet",
+    body4.includes("waiting on you"), body4.replace(/\n/g, " | ").slice(-300));
+
+  console.log("\n5. No console errors");
   check("the page produced none", errors.length === 0, errors.slice(0, 3).join(" · "));
 } finally {
   await browser.close();

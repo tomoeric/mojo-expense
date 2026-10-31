@@ -580,7 +580,17 @@ function BandRows({
 const hasMatchedReceipt = (r: Row): boolean => {
   const m = r.line.matchState;
   return m === "matched" || m === "queued" || m === "failed"
-    || m === "sent" || m === "already";
+    || m === "sent" || m === "already"
+    /*
+     * CANDIDATES BELONG HERE TOO, now that the card can decide.
+     *
+     * A bare candidate is not a match and the Receipt COLUMN
+     * still says so — but the owner asked for the whole job in
+     * the queue, and half a job is bouncing between two pages to
+     * do one thing. The card shows the picture, the reasons and
+     * the two buttons; the state pill says which it is.
+     */
+    || m === "candidate";
 };
 
 export type Tab = "all" | "reading" | "matched" | "flagged" | "clean" | "sent" | "approved" | "denied";
@@ -703,7 +713,7 @@ function FlagTabs({
      * appears.
      */
     ...(matched.length > 0
-      ? [{ key: "matched" as const, label: "Receipt matched", n: matched.length }]
+      ? [{ key: "matched" as const, label: "Receipts", n: matched.length }]
       : []),
     { key: "flagged" as const, label: "Flagged", n: flagged.length },
     // Unflagged means judged and clean. An expense nobody has read the
@@ -1586,7 +1596,9 @@ function MatchedReceipts({ rows, onOpen }: { rows: Row[]; onOpen: (r: Row) => vo
             : state === "already" ? ["already on the expense", "bg-emerald-600/15 text-emerald-700"]
               : state === "queued" ? ["waiting to be sent", "bg-sky-600/15 text-sky-700"]
                 : state === "failed" ? ["the send failed", "bg-red-500/15 text-red-700"]
-                  : ["matched, not sent yet", "bg-amber-500/15 text-amber-700"];
+                  : state === "candidate"
+                    ? ["waiting on you", "bg-amber-500/15 text-amber-700"]
+                    : ["matched, not sent yet", "bg-amber-500/15 text-amber-700"];
         return (
           <div key={r.line.id} className="grid gap-3 rounded-xl border border-border p-3
                                           md:grid-cols-[minmax(0,1fr)_22rem]">
@@ -1650,7 +1662,13 @@ function MatchedReceipts({ rows, onOpen }: { rows: Row[]; onOpen: (r: Row) => vo
                 "waiting to be sent" above "No receipt was
                 imported for this expense", which is true and
                 says nothing about the cause. */}
-            {r.line.linkError ? (
+            {state === "candidate" ? (
+              /* Not chosen yet, so there is no image in the app to
+                 show — the picture comes from the message, and the
+                 two buttons are the same decision the matching page
+                 offers, in the place the work is actually done. */
+              <Candidates id={r.line.id} merchant={r.line.merchant} />
+            ) : r.line.linkError ? (
               <div className="space-y-2 rounded-md border border-amber-500/40
                               bg-amber-500/10 p-3 text-xs">
                 <p className="font-semibold">
@@ -1699,6 +1717,169 @@ function MatchedReceipts({ rows, onOpen }: { rows: Row[]; onOpen: (r: Row) => vo
           </span>
         </button>
       )}
+    </div>
+  );
+}
+
+/**
+ * The receipts found for one expense, and the decision, in the queue.
+ *
+ * Asked for directly: *"want all the receipt image and detail
+ * done on the review queue"*. Everything needed to answer "is
+ * this the right receipt" is here — the picture, who sent it,
+ * the total it states, and why the matcher thinks it fits —
+ * next to the expense's own merchant, date and amount.
+ *
+ * Fetched per card rather than loaded with the queue. Every
+ * candidate for every row is the 417-card page again; one
+ * expense's candidates is one small request, made when its card
+ * is on screen.
+ */
+function Candidates({ id, merchant }: { id: string; merchant: string }) {
+  type Cand = {
+    dedupeKey: string; messageId: string; confidence: string; score: number;
+    reasons: string[];
+    evidence: {
+      subject: string; from: string; merchant: string; date: string | null;
+      totalCents: number | null; currency: string; reference: string;
+    };
+  };
+  const [state, setState] = useState<
+    { kind: "loading" } | { kind: "error"; why: string } | { kind: "ok"; list: Cand[] }>(
+    { kind: "loading" });
+  const [which, setWhich] = useState(0);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let dropped = false;
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/receipt-mail/for-expense?dedupeKey=${encodeURIComponent(id)}`);
+        const out = await res.json() as { candidates?: Cand[]; error?: string };
+        if (dropped) return;
+        if (!res.ok) { setState({ kind: "error", why: out.error ?? "Could not read it." }); return; }
+        setState({ kind: "ok", list: out.candidates ?? [] });
+      } catch (e) {
+        if (!dropped) setState({ kind: "error", why: (e as Error).message });
+      }
+    })();
+    return () => { dropped = true; };
+  }, [id]);
+
+  const decide = async (messageId: string, choose: boolean) => {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/receipt-mail/decide", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ dedupeKey: id, messageId, choose }),
+      });
+      const out = await res.json() as { linked?: string | null; linkError?: string; error?: string };
+      if (!res.ok) throw new Error(out.error ?? "That did not work.");
+      // Choosing pulls the image in; if that failed the decision
+      // still stands and the reason is worth seeing rather than a
+      // silent success.
+      if (choose && !out.linked && out.linkError) throw new Error(out.linkError);
+      window.location.reload();
+    } catch (e) {
+      setState({ kind: "error", why: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (state.kind === "loading") {
+    return (
+      <p className="flex h-72 items-center justify-center gap-1.5 rounded-md border
+                    border-border bg-muted/30 text-xs text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        Looking up the receipts found for this one.
+      </p>
+    );
+  }
+  if (state.kind === "error") {
+    return (
+      <p className="rounded-md border border-red-500/40 bg-red-500/10 p-2 text-xs
+                    text-red-700 dark:text-red-300">{state.why}</p>
+    );
+  }
+  if (state.list.length === 0) {
+    return (
+      <p className="rounded-md border border-border bg-muted/30 p-3 text-xs
+                    text-muted-foreground">
+        No receipt is waiting on a decision for this one any more.
+      </p>
+    );
+  }
+
+  const m = state.list[Math.min(which, state.list.length - 1)]!;
+  const money = (c: number | null) => (c === null ? "—" : `$${(c / 100).toFixed(2)}`);
+
+  return (
+    <div className="space-y-2">
+      {state.list.length > 1 && (
+        <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+          <span className="text-muted-foreground">{state.list.length} possible:</span>
+          {state.list.map((c, i) => (
+            <button
+              key={c.messageId}
+              type="button"
+              onClick={() => setWhich(i)}
+              className={`rounded-full border px-2 py-0.5 font-semibold ${
+                i === Math.min(which, state.list.length - 1)
+                  ? "border-foreground bg-foreground text-background"
+                  : "border-border text-muted-foreground hover:text-foreground"}`}
+            >
+              {c.evidence.merchant || "receipt"} · {money(c.evidence.totalCents)}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <ReceiptFrame
+        src={`/api/receipt-mail/preview?message=${encodeURIComponent(m.messageId)}`}
+        alt={`A receipt offered for ${merchant}`}
+        height="h-64"
+        loading="Fetching the receipt out of the mailbox."
+      />
+
+      <p className="text-[11px] break-words text-muted-foreground">
+        {m.evidence.from} · {m.evidence.date ?? "no date"} ·{" "}
+        {money(m.evidence.totalCents)} {m.evidence.currency}
+        {m.evidence.reference && ` · ref ${m.evidence.reference}`}
+      </p>
+      <ul className="space-y-0.5 text-[11px] text-muted-foreground">
+        {m.reasons.slice(0, 4).map((x) => <li key={x}>· {x}</li>)}
+      </ul>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void decide(m.messageId, true)}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-600/50
+                     px-3 py-1 text-xs font-semibold disabled:opacity-50"
+        >
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            : <Check className="h-3.5 w-3.5" />}
+          This is the receipt
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void decide(m.messageId, false)}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-border
+                     px-3 py-1 text-xs disabled:opacity-50"
+        >
+          <X className="h-3.5 w-3.5" />
+          Not this one
+        </button>
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        Choosing pulls the image into the app. Nothing reaches Emburse until you press
+        Send, on Receipts in email.
+      </p>
     </div>
   );
 }
