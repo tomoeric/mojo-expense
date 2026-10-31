@@ -3,6 +3,9 @@ import { GRAPH, graphToken } from "../mail.js";
 import { laneTag } from "./connections.js";
 import { matchesFor, textOf, type Evidence } from "./receipt-mail.js";
 import { readingOf } from "./receipt-link.js";
+import {
+  FIELD_LABEL, FILL_FIELDS, pick as pickRule, rulesFor, setsOf, type FillField,
+} from "./fill-rules.js";
 
 /**
  * Sending a matched receipt back to the account it came from.
@@ -38,7 +41,17 @@ import { readingOf } from "./receipt-link.js";
  *   the ordinary case, not the rare one.
  */
 
-export type WriteKind = "receipt" | "note";
+/**
+ * The kinds of change that can be proposed.
+ *
+ * `receipt` and `note` come from the matched email. The four
+ * field kinds come from a VENDOR RULE and are named for the
+ * boxes on Emburse's own Edit Expense Details form, because that
+ * is what somebody checking the proposal is looking at.
+ */
+export type WriteKind =
+  | "receipt" | "note"
+  | "category" | "purpose" | "location" | "department";
 
 export type WriteState =
   /** Proposed, waiting on a person. */
@@ -126,9 +139,17 @@ const W_COLS = `dedupe_key, kind, lane, proposed, was, message_id, attachment_id
 const STATES: WriteState[] =
   ["proposed", "queued", "applied", "already", "stale", "failed"];
 
+/** Every kind, so a new one is not silently read back as a receipt. */
+const KINDS: WriteKind[] =
+  ["receipt", "note", "category", "purpose", "location", "department"];
+
 const shape = (r: Row): Write => ({
   dedupeKey: r.dedupe_key,
-  kind: r.kind === "note" ? "note" : "receipt",
+  // Narrowed against the full list. This was
+  // `r.kind === "note" ? "note" : "receipt"`, which turned every
+  // field write back into a receipt the moment it was read out of
+  // the table — five rows came back as four receipts and a note.
+  kind: (KINDS as string[]).includes(r.kind) ? (r.kind as WriteKind) : "receipt",
   lane: r.lane,
   proposed: r.proposed,
   was: r.was,
@@ -267,8 +288,12 @@ export async function proposeWrites(opts: {
     };
   }
 
-  const { rows } = await db().query<{ note: string | null; lane: string }>(
-    "SELECT note, lane FROM expenses WHERE dedupe_key = $1", [opts.dedupeKey]);
+  const { rows } = await db().query<{
+    note: string | null; lane: string; merchant: string; reviewer: string;
+    category: string | null; location: string | null; department: string | null;
+  }>(
+    `SELECT note, lane, merchant, reviewer, category, location, department
+       FROM expenses WHERE dedupe_key = $1`, [opts.dedupeKey]);
   const expense = rows[0];
   if (!expense) return { ok: false, problem: "That expense is no longer here." };
   const lane = laneTag(expense.lane);
@@ -325,6 +350,39 @@ export async function proposeWrites(opts: {
   // Only when it says more than the box already does.
   if (merged && merged !== had) {
     writes.push({ kind: "note", proposed: merged, was: had, attachment: "" });
+  }
+
+  /*
+   * WHAT THE VENDOR RULE SAYS THIS EXPENSE SHOULD BE.
+   *
+   * The rule proposes; it never sends. Its fields join the same
+   * list the receipt and the description are in and wait for the
+   * same press, which is the standing instruction — always ask —
+   * rather than something a rule is allowed around.
+   *
+   * A field already holding the rule's value is not proposed at
+   * all: there is nothing to change, and a list of no-ops is how
+   * a person stops reading the list.
+   */
+  const rule = pickRule(await rulesFor(expense.reviewer), expense.merchant ?? "", lane);
+  if (rule) {
+    const have: Record<FillField, string> = {
+      category: (expense.category ?? "").trim(),
+      // Business Purpose is not in the export, so nothing here
+      // knows what the form currently holds. The browser step
+      // reads the box before it types, and reports `already`
+      // when it is the same.
+      purpose: "",
+      location: (expense.location ?? "").trim(),
+      department: (expense.department ?? "").trim(),
+    };
+    const sets = setsOf(rule);
+    for (const field of FILL_FIELDS) {
+      const want = sets[field];
+      if (!want) continue;
+      if (have[field].toLowerCase() === want.toLowerCase()) continue;
+      writes.push({ kind: field, proposed: want, was: have[field], attachment: "" });
+    }
   }
 
   for (const w of writes) {

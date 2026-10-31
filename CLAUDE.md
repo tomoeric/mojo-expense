@@ -103,7 +103,7 @@ were added; "it compiles" is not "the button works".
 `corrections`, `decision-trace`, `auto-approve`, `rules`, `bulk-approve`,
 `lanes`, `two-accounts`, `rule-scope`, `receipt-mail`, `signin-errors`, `writeback`, `receipt-link`,
 `personal-grid`, `cookie-jars`, `device-trust`, `match-prune`,
-`matched-tab-ui` (needs a build). For a change to "Your Emburse login", Export
+`matched-tab-ui`, `fill-rules`, `fill-rules-ui` (needs a build). For a change to "Your Emburse login", Export
 settings or the review queue, also
 `test-accounts-ui.ts` and `test-lanes-ui.ts` after a build.
 
@@ -2942,6 +2942,62 @@ real ambiguity visible — and on its own it is a pile, not an answer.
   say why the list got shorter. "It found fewer" and "it found nothing"
   look identical from a shorter list.
 - `scripts/test-receipt-mail.ts` §14–17, `scripts/test-match-prune.ts`.
+
+## Vendor rules: what an expense from this merchant should say
+
+The owner's ask, 2026-10-31, with a photograph of Emburse's **Edit Expense
+Details** form: *"Want rules for match receipts that fill out data. Example
+AI receipt would. Would like an interface where vendors can be marked as
+categories and then the rules applied."*
+
+The four fields are the ones on that form and nothing else:
+
+| field | the AI example |
+| --- | --- |
+| Category | Technology/Software, Licenses, and Subscriptions |
+| Business Purpose | AI Development and Use |
+| Location / Site | Corporate-Pure Magic |
+| Department | IT & Compliance |
+
+- **Merchant and Date are NOT settable.** They come off the receipt and the
+  charge. A rule that could rewrite the merchant is a rule that can make an
+  expense look like a different purchase.
+- **A RULE PROPOSES AND NEVER SENDS.** `proposeWrites` adds a write per
+  field the rule sets, into the same `receipt_writebacks` table and the
+  same "what will change" list as the receipt, behind the same single
+  press. Always-ask is the standing instruction, and a configuration screen
+  is not a way around it. `test-fill-rules.ts` §5 asserts every row comes
+  out `proposed`.
+- **A field already holding the rule's value is not proposed.** A list of
+  no-ops is how somebody stops reading the list. Business Purpose is the
+  exception: it is not in the export, so nothing here knows what the form
+  holds, and the browser step reads the box before it types.
+- **`vendorMatches` is CONTAINS, not the receipt matcher's word overlap.**
+  Deliberately stricter: a loose match there costs a person one look at a
+  card they reject; here it silently writes a category onto the wrong
+  expense.
+- **Most specific wins, by a stated rule:** a rule naming one tab beats one
+  covering every tab, then the longer vendor string, then the older rule.
+- **The history writes most of them.** `suggestions()` reads back this
+  person's own expenses, grouped by merchant, and offers the commonest
+  value per field WITH THE COUNT ("3 of 3") so a habit can be told from a
+  one-off. Vendors that already have a rule are not suggested. Business
+  Purpose is never suggested — it is not in the export, and it is the one
+  field only a person can write.
+- **The browser side**: `setFormField` in `decide.ts` handles a `<select>`,
+  a combobox and a plain text box behind one call, told apart by what
+  happens rather than guessed — after typing, no option list means it IS a
+  text box. Each field has a selector guessed from the photograph AND a
+  fallback that finds the control **by its label**, which is what the form
+  shows and what a person would look for. All four are set in one visit and
+  saved by one press.
+- **`shape()` must narrow `kind` against the whole list.** It read
+  `r.kind === "note" ? "note" : "receipt"`, so the first field writes came
+  back out of the table as four receipts and a note. Any new kind added to
+  `WriteKind` has to go in `KINDS` too.
+- Page: `src/pages/fill-rules.tsx`, reached from the user menu beside
+  "Receipts in email". Suites: `scripts/test-fill-rules.ts` and
+  `scripts/test-fill-rules-ui.ts` (needs a build).
 
 ## One expense, one press — the write-back is not two submits
 

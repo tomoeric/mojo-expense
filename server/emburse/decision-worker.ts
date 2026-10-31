@@ -576,12 +576,24 @@ async function runWritebacks(): Promise<void> {
         }
       }
 
+      /*
+       * The vendor rule's fields, in the order the form shows
+       * them. Same visit, same save: a trip per field would be
+       * four sign-ins for one expense.
+       */
+      const fields = (["category", "purpose", "location", "department"] as const)
+        .flatMap((k) => {
+          const w = writes.find((x) => x.kind === k);
+          return w ? [{ field: k, value: w.proposed }] : [];
+        });
+
       console.log(`write-back: ${dedupeKey} as ${got.email} (${lane})`);
       const run = await attachAndAnnotate(
         target,
         {
           ...(file ? { receipt: file } : {}),
           ...(note ? { note: note.proposed, noteWas: note.was } : {}),
+          ...(fields.length > 0 ? { fields } : {}),
         },
         await selectorsForLane(who, lane, settings.selectors),
         settings.emburseUrl,

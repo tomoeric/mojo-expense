@@ -28,6 +28,7 @@ import { ImportPage } from "@/pages/import";
 import { ExportSettingsPage } from "@/pages/export-settings";
 import { MyEmburseLoginPage } from "@/pages/my-emburse-login";
 import { ReceiptMailPage } from "@/pages/receipt-mail";
+import { FillRulesPage } from "@/pages/fill-rules";
 import { TaxonomyPage } from "@/pages/taxonomy";
 import { RulesPage } from "@/pages/rules";
 import { ConfigurationPage } from "@/pages/configuration";
@@ -110,6 +111,13 @@ const MENU_PAGES = [
     label: "Receipts in email",
     description: "Search a mailbox for receipts and match them to your personal expenses.",
   },
+  {
+    key: "fill-rules",
+    label: "Vendor rules",
+    description:
+      "What an expense from a vendor should say — category, business purpose, location "
+      + "and department — filled in when a receipt is matched to it.",
+  },
 ] as const;
 
 type RailKey = PageKey | (typeof MENU_PAGES)[number]["key"];
@@ -131,7 +139,7 @@ const isStandalone = (k: RailKey) =>
    * how to use them.
    */
   || k === "emburse-login"
-  || k === "receipt-mail" || k in LISTS;
+  || k === "receipt-mail" || k === "fill-rules" || k in LISTS;
 
 /**
  * How far back to load, with no selector to change it.
@@ -571,6 +579,7 @@ export function App() {
           {route === "settings" && <ExportSettingsPage isAdmin={auth.data?.isAdmin ?? false} />}
           {route === "emburse-login" && <MyEmburseLoginPage />}
           {route === "receipt-mail" && <ReceiptMailPage />}
+          {route === "fill-rules" && <FillRulesPage />}
         </main>
       </div>
 

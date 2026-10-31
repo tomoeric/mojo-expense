@@ -72,7 +72,10 @@ type Match = {
 };
 type Write = {
   dedupeKey: string;
-  kind: "receipt" | "note";
+  /* "receipt" and "note" come from the matched email; the four
+     field kinds come from a vendor rule and are named for the
+     boxes on Emburse's own edit form. */
+  kind: "receipt" | "note" | "category" | "purpose" | "location" | "department";
   lane: string;
   proposed: string;
   was: string;
@@ -229,7 +232,7 @@ export function ReceiptMailPage() {
    * which is the one moment the split matters.
    */
   const send = useMutation({
-    mutationFn: async (v: { dedupeKey: string; kinds: ("receipt" | "note")[] }) => {
+    mutationFn: async (v: { dedupeKey: string; kinds: Write["kind"][] }) => {
       for (const kind of v.kinds) {
         await post<{ writes: Write[] }>("/api/receipt-mail/send",
           { dedupeKey: v.dedupeKey, kind });
@@ -658,6 +661,22 @@ export function ReceiptMailPage() {
   );
 }
 
+/**
+ * What each kind of change is called where a person reads it.
+ *
+ * Named for the boxes on Emburse's Edit Expense Details form, so
+ * the list reads as the form somebody is about to check it
+ * against rather than as this codebase's internal words.
+ */
+const WRITE_LABEL: Record<Write["kind"], string> = {
+  receipt: "Attach",
+  note: "Description",
+  category: "Category",
+  purpose: "Business Purpose",
+  location: "Location / Site",
+  department: "Department",
+};
+
 /** Where a row has got to, in four words and a colour. */
 function StageDot({ g }: { g: Group }) {
   const [label, tone] =
@@ -690,7 +709,7 @@ function ExpensePanel({
   deciding: boolean;
   onDecide: (messageId: string, choose: boolean) => void;
   sending: boolean;
-  onSend: (kinds: ("receipt" | "note")[]) => void;
+  onSend: (kinds: Write["kind"][]) => void;
   onNext: (() => void) | null;
   nextLabel: string;
 }) {
@@ -927,11 +946,9 @@ function ExpensePanel({
             <ul className="space-y-1.5 text-xs">
               {group.writes.map((w) => (
                 <li key={w.kind} className="flex flex-wrap items-start gap-x-2 gap-y-1">
-                  <span className="font-semibold">
-                    {w.kind === "receipt" ? "Attach" : "Description"}
-                  </span>
+                  <span className="font-semibold">{WRITE_LABEL[w.kind]}</span>
                   <span className="min-w-40 flex-1 break-words text-muted-foreground">
-                    {w.kind === "note" ? (
+                    {w.kind !== "receipt" ? (
                       <>
                         <span className="font-mono">{w.was || "(empty)"}</span>
                         {" → "}
@@ -970,9 +987,9 @@ function ExpensePanel({
                               pt-2 text-xs">
                 <span className="text-red-700 dark:text-red-400">
                   {broken.length === group.writes.length
-                    ? "Neither of those reached Emburse."
-                    : `The ${broken[0]!.kind === "receipt" ? "attachment" : "description"}`
-                      + " did not reach Emburse; the other half did."}
+                    ? "None of those reached Emburse."
+                    : `${broken.map((w) => WRITE_LABEL[w.kind]).join(" and ")} did not `
+                      + "reach Emburse; the rest did."}
                 </span>
                 <button
                   type="button"
@@ -988,8 +1005,8 @@ function ExpensePanel({
 
             <p className="text-[11px] text-muted-foreground">
               Sent under {group.writes[0]!.lane.replace(/^personal-/, "")}&rsquo;s own
-              Emburse login. It attaches the image and edits the description — those are
-              two edits to the one expense, done by the one press. It never submits,
+              Emburse login — every line above is one edit to this one expense, done in
+              one visit by the one press. It attaches and edits; it never submits,
               approves or denies.
             </p>
           </div>

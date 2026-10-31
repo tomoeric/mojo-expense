@@ -68,7 +68,8 @@ export type DecisionSelectorKey =
   | "denyButton" | "denyReason" | "denyConfirm" | "decisionApplied"
   | "userFilter" | "userFilterInput" | "userFilterOption" | "nextPage"
   | "editMenuItem" | "editCategory" | "editCategoryOption" | "editSave"
-  | "editNote" | "editReceipt" | "editReceiptPresent";
+  | "editNote" | "editReceipt" | "editReceiptPresent"
+  | "editPurpose" | "editLocation" | "editDepartment";
 
 export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
   // Both grid shapes, because Emburse uses the second one.
@@ -205,10 +206,36 @@ export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
   editReceipt: 'input[type="file"]',
   editReceiptPresent: '[data-testid*="receipt" i], img[alt*="receipt" i], '
     + 'a[href*="receipt" i], [class*="receipt" i]',
+  /*
+   * The other three boxes a vendor rule fills.
+   *
+   * Written from a photograph of this tenant's Edit Expense
+   * Details form, which is better than the guess `editNote` was
+   * made from and is still not the DOM. Each is a first attempt
+   * by attribute; when it matches nothing the step falls back to
+   * finding the control BY ITS LABEL — "Business Purpose",
+   * "Location / Site", "Department" — which is what the form
+   * actually shows and what a person would look for.
+   */
+  editPurpose:
+    'input[aria-label*="purpose" i], input[name*="purpose" i], '
+    + 'input[id*="purpose" i], textarea[aria-label*="purpose" i], '
+    + '[data-testid*="purpose" i]',
+  editLocation:
+    '[role="combobox"][aria-label*="location" i], input[aria-label*="location" i], '
+    + 'select[name*="location" i], input[name*="location" i], '
+    + 'input[name*="site" i], [data-testid*="location" i]',
+  editDepartment:
+    '[role="combobox"][aria-label*="department" i], input[aria-label*="department" i], '
+    + 'select[name*="department" i], input[name*="department" i], '
+    + '[data-testid*="department" i]',
 };
 
 export const DECISION_SELECTOR_HELP: Record<DecisionSelectorKey, string> = {
   editNote: "The description or memo box on the edit form.",
+  editPurpose: "The Business Purpose box on the edit form.",
+  editLocation: "The Location / Site control on the edit form.",
+  editDepartment: "The Department control on the edit form.",
   editReceipt: "The file input the edit form uploads a receipt through.",
   editReceiptPresent: "Anything shown on the form when a receipt is already attached.",
   resultRow: "One row of the results table.",
@@ -2989,6 +3016,92 @@ async function whatIsOnTheForm(page: Page, tried: string, what: string): Promise
  *   reload and a re-read. "Saved, but the row does not show it"
  *   is a real answer and it is the one given.
  */
+/**
+ * One field on the edit form, set and checked.
+ *
+ * Three shapes behind one call, because the form mixes them and
+ * a rule should not have to know which is which:
+ *
+ *   a <select>        — read its options, choose by label;
+ *   a combobox        — click, type, choose the exact option;
+ *   a plain text box  — type, and verify what the box now reads.
+ *
+ * Told apart by what happens, not by a guess: after typing, if
+ * no option list appears, it IS a text box.
+ *
+ * And it is found by its LABEL when the configured selector
+ * matches nothing. The attribute guesses here were written from
+ * a photograph of the form; its labels were legible in that
+ * photograph and are what a person looks for.
+ */
+async function setFormField(
+  page: Page,
+  sel: string | undefined,
+  optionSel: string,
+  label: string,
+  wanted: string,
+  ms: number,
+): Promise<string> {
+  let field = sel ? await firstVisible(page, sel, Math.min(ms, 4000)) : null;
+  let how = "by selector";
+  if (!field) {
+    const byLabel = page.getByLabel(label, { exact: false }).first();
+    if (await byLabel.isVisible().catch(() => false)) { field = byLabel; how = "by its label"; }
+  }
+  if (!field) throw await asError(whatIsOnTheForm(page, sel ?? "", label));
+
+  const tag = await field.evaluate((el) => el.tagName.toLowerCase()).catch(() => "");
+  if (tag === "select") {
+    const labels = await field.evaluate((el) =>
+      Array.from((el as HTMLSelectElement).options).map((o) => o.text.trim()),
+    ).catch(() => [] as string[]);
+    const match = labels.find((l) => l.toLowerCase() === wanted.toLowerCase());
+    if (!match) {
+      throw new Error(`the ${label} list does not offer \u201c${wanted}\u201d. It offers: `
+        + `${labels.filter(Boolean).slice(0, 12).join(" | ") || "nothing"}.`);
+    }
+    await field.selectOption({ label: match });
+    return `chose \u201c${match}\u201d (${how})`;
+  }
+
+  await field.click().catch(() => undefined);
+  await page.waitForTimeout(200);
+  await field.fill("").catch(() => undefined);
+  await field.pressSequentially(wanted, { delay: 15 }).catch(() => undefined);
+  await page.waitForTimeout(500);
+
+  const options = page.locator(optionSel);
+  const n = Math.min(await options.count().catch(() => 0), 40);
+  const offered: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const o = options.nth(i);
+    if (!(await o.isVisible().catch(() => false))) continue;
+    const text = (await o.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+    if (!text) continue;
+    offered.push(text);
+    // Exact first, so "Meals" cannot take "Meals & Entertainment".
+    if (text.toLowerCase() === wanted.toLowerCase()) {
+      await o.click();
+      return `chose \u201c${text}\u201d from ${offered.length} offered (${how})`;
+    }
+  }
+
+  // No list at all: it is a text box, and the only check that
+  // means anything is what the box now reads.
+  if (offered.length === 0) {
+    const got = (await field.inputValue().catch(() => "")).trim();
+    if (got.toLowerCase() !== wanted.trim().toLowerCase()) {
+      throw new Error(`\u201c${wanted}\u201d did not go into ${label}: the box now reads `
+        + `\u201c${got || "(empty)"}\u201d. Nothing was saved.`);
+    }
+    return `typed \u201c${wanted}\u201d (${how})`;
+  }
+
+  throw new Error(`the ${label} list does not offer \u201c${wanted}\u201d. It offered: `
+    + `${offered.slice(0, 12).join(" | ")}. Pick one of those, or correct the selector `
+    + "in Settings.");
+}
+
 export async function attachAndAnnotate(
   target: Target,
   want: {
@@ -3006,6 +3119,14 @@ export async function attachAndAnnotate(
      * into an empty box.
      */
     noteWas?: string;
+    /**
+     * Fields a VENDOR RULE says this expense should carry.
+     *
+     * Set on the same form, in the same visit, saved by the same
+     * press. A separate trip per field would be four sign-ins
+     * and four saves for one expense.
+     */
+    fields?: { field: "category" | "purpose" | "location" | "department"; value: string }[];
   },
   selectors: Record<string, string>,
   emburseUrl: string,
@@ -3150,6 +3271,18 @@ export async function attachAndAnnotate(
           }
           return `the description now reads “${want.note!.slice(0, 60)}”`;
         }))) return { ok: false, steps, matchedRow: null, screenshot: null };
+      }
+
+      for (const f of want.fields ?? []) {
+        const where = {
+          category: { sel: sel.editCategory, label: "Category" },
+          purpose: { sel: sel.editPurpose, label: "Business Purpose" },
+          location: { sel: sel.editLocation, label: "Location / Site" },
+          department: { sel: sel.editDepartment, label: "Department" },
+        }[f.field];
+        if (!(await step(`set ${where.label}`, () =>
+          setFormField(page!, where.sel, sel.editCategoryOption!, where.label, f.value, ms),
+        ))) return { ok: false, steps, matchedRow: null, screenshot: null };
       }
 
       if (!(await step("save it", async () => {

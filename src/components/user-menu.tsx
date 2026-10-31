@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {
   Crown, KeyRound, ListChecks, LogOut, Receipt, ScrollText, Shield, SlidersHorizontal,
-  UserRound, Users,
+  Tag, UserRound, Users,
 } from "lucide-react";
 import { APP_LABEL, type AppKey, type SessionUser } from "@/lib/api";
 
@@ -120,6 +120,17 @@ export function UserMenu({
                 >
                   <Receipt className="h-4 w-4" />
                   Receipts in email
+                </a>
+                {/* Beside it, because it is the other half of the
+                    same job: the receipt proves the purchase, the
+                    rule says what the expense should be called. */}
+                <a
+                  href="#/fill-rules"
+                  onClick={() => setOpen(false)}
+                  className="flex items-center gap-2 border-b border-border px-3 py-2.5 text-sm transition-colors hover:bg-muted"
+                >
+                  <Tag className="h-4 w-4" />
+                  Vendor rules
                 </a>
                 {isAdmin && (
                   <a

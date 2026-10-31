@@ -10,6 +10,9 @@ import {
   type Candidate, type Target,
 } from "./receipt-mail.js";
 import { proposeWrites, queueWrite, receiptBytes, writesFor } from "./receipt-writeback.js";
+import {
+  deleteRule, FIELD_LABEL, FILL_FIELDS, rulesFor, saveRule, suggestions,
+} from "./fill-rules.js";
 import { bytesFromMessage, linkReceipt, readingOf } from "./receipt-link.js";
 
 /**
@@ -533,4 +536,72 @@ receiptMailRouter.post("/receipt-mail/decide", requireAuth,
       linkError,
       reading: linked ? await readingOf(linked) : null,
     });
+  });
+
+/* ------------------------------------------------------------------ *
+ * Vendor rules: what an expense from this merchant should say
+ * ------------------------------------------------------------------ */
+
+/**
+ * The rules, and the ones this person's own history implies.
+ *
+ * Both in one answer because the page shows them together: a
+ * table of what is set, and under it the vendors it has not
+ * covered yet with what they usually are. Nobody should type a
+ * rule for a vendor they have already categorised nine times.
+ */
+receiptMailRouter.get("/fill-rules", requireAuth, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  const me = req.user?.email ?? "";
+  try {
+    const lanes = await linkedLanesOf(me).catch(() => []);
+    res.json({
+      rules: await rulesFor(me),
+      suggestions: await suggestions(me, null),
+      accounts: lanes.filter((l) => l.kind === "personal")
+        .map((l) => ({ lane: laneTag(l.key), label: l.label })),
+      fields: FILL_FIELDS.map((f) => ({ key: f, label: FIELD_LABEL[f] })),
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : "Could not read the rules.",
+    });
+  }
+});
+
+receiptMailRouter.post("/fill-rules", requireAuth, async (req: Request, res: Response) => {
+  if (!guard(res)) return;
+  const me = owner(req, res);
+  if (!me) return;
+  const b = (req.body ?? {}) as Record<string, unknown>;
+  const str = (k: string): string => (typeof b[k] === "string" ? (b[k] as string) : "");
+  try {
+    const saved = await saveRule({
+      ...(typeof b.id === "number" ? { id: b.id } : {}),
+      owner: me,
+      lane: str("lane"),
+      vendor: str("vendor"),
+      category: str("category"),
+      purpose: str("purpose"),
+      location: str("location"),
+      department: str("department"),
+      enabled: b.enabled === undefined ? true : b.enabled === true,
+      by: me,
+    });
+    res.json({ rule: saved, rules: await rulesFor(me), suggestions: await suggestions(me, null) });
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : "Could not save that rule.",
+    });
+  }
+});
+
+receiptMailRouter.delete("/fill-rules/:id", requireAuth,
+  async (req: Request, res: Response) => {
+    if (!guard(res)) return;
+    const me = owner(req, res);
+    if (!me) return;
+    const gone = await deleteRule(me, Number(req.params.id));
+    if (!gone) { res.status(404).json({ error: "No such rule of yours." }); return; }
+    res.json({ rules: await rulesFor(me), suggestions: await suggestions(me, null) });
   });
