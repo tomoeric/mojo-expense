@@ -1932,6 +1932,31 @@ function Candidates({ id, merchant }: { id: string; merchant: string }) {
       // Refetch rather than reload: a reload loses the tab and
       // the queue you were working in.
       await qc.invalidateQueries({ queryKey: ["reports"] });
+      /*
+       * AND REFETCH THIS CARD'S OWN LIST.
+       *
+       * "Not this one" did nothing on screen. It worked — the server
+       * rejected the match — but the only thing refreshed was the
+       * QUEUE, and a rejection does not change the queue's own idea of
+       * the row: it is still an expense waiting on a decision. The
+       * candidates are held here, in this component, and nothing ever
+       * asked for them again, so the receipt that had just been thrown
+       * out sat there offering the same two buttons.
+       *
+       * Choosing LOOKED like it worked only because the row's state
+       * changes with it and the whole card re-renders into a different
+       * branch.
+       */
+      const again = await fetch(
+        `/api/receipt-mail/for-expense?dedupeKey=${encodeURIComponent(id)}`);
+      if (again.ok) {
+        const now = await again.json() as { candidates?: Cand[]; writes?: Write[] };
+        const list = now.candidates ?? [];
+        setState({ kind: "ok", list, writes: now.writes ?? [] });
+        // Stay on a real card: rejecting the one being looked at
+        // should move to the next, not off the end of the list.
+        setWhich((i) => Math.min(i, Math.max(list.length - 1, 0)));
+      }
     } catch (e) {
       setState({ kind: "error", why: (e as Error).message });
     } finally {
@@ -2153,12 +2178,19 @@ function SendDetail({ id }: { id: string }) {
             under your own login" over a line reading "failed",
             which is the same mistake as the pill that said
             "sending" over "not sent yet". */}
+        {/* QUEUED IS NOT SENT EITHER.
+            With everything handed to the worker this read "Sent to
+            Emburse under your own login" while not one line had
+            reached Emburse — the same mistake as the pill that said
+            "sending" over "not sent yet", one state further along. */}
         <p className="font-semibold">
           {unsent.length > 0
             ? "This is what will change on the expense in Emburse"
             : broken.length > 0
               ? "Emburse refused part of this"
-              : "Sent to Emburse under your own login"}
+              : writes.some((w) => w.state === "queued")
+                ? "On its way to Emburse — signing in to apply it"
+                : "Sent to Emburse under your own login"}
         </p>
         {unsent.length > 0 && (
           <button

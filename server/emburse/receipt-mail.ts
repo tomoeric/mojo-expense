@@ -837,13 +837,21 @@ const GENERIC_WORD = new Set([
  * The word test below is the loose one, and it now needs a word
  * that NAMES something.
  */
-function merchantAgrees(a: string, b: string): boolean {
+function merchantAgrees(a: string, b: string): { ok: boolean; how: string } {
   const x = normalise(a), y = normalise(b);
-  if (!x || !y) return false;
-  if (x.includes(y) || y.includes(x)) return true;
+  if (!x || !y) return { ok: false, how: "" };
+  if (x.includes(y) || y.includes(x)) return { ok: true, how: "one name contains the other" };
   const words = (s: string) =>
     s.split(" ").filter((w) => w.length >= 4 && !GENERIC_WORD.has(w));
-  return words(x).some((w) => words(y).includes(w));
+  const shared = words(x).find((w) => words(y).includes(w));
+  // SAY WHICH WORD. "The merchant matches" about two names with no
+  // visible resemblance — "HOME2 SUITES ALCOASPRING BROOK FARMS 2 HP
+  // LLC" and "hiedallas" — is unarguable and uncheckable, and the word
+  // that did it is the only thing that would settle whether the rule or
+  // the data is wrong.
+  return shared
+    ? { ok: true, how: `both say “${shared}”` }
+    : { ok: false, how: "" };
 }
 
 /**
@@ -871,12 +879,44 @@ export function scoreMatch(expense: Target, e: Evidence): Candidate | null {
     reasons.push(`The order number ${e.reference} is in the expense's merchant field.`);
   }
 
-  const sameMerchant = merchantAgrees(expense.merchant, e.merchant)
-    || merchantAgrees(expense.merchant, e.subject);
-  if (sameMerchant) {
+  /*
+   * THE SENDER'S NAME AND THE SUBJECT LINE ARE NOT THE SAME EVIDENCE.
+   *
+   * They were treated as one. A hotel folio from frontdesk@hiedallas.com
+   * was offered against HOME2 SUITES ALCOASPRING BROOK FARMS 2 HP LLC
+   * with the line "The merchant matches" — two names with no
+   * resemblance — because a word in the SUBJECT matched, and the reason
+   * then printed the merchant pair as though that were what agreed.
+   *
+   * So the merchant field is the identifying signal, and a subject-line
+   * hit is a hint: it helps, it does not identify, and it cannot carry
+   * a match on its own. A subject says "Your receipt" and the merchant's
+   * own name is what distinguishes one receipt from another.
+   */
+  const byMerchant = merchantAgrees(expense.merchant, e.merchant);
+  const bySubject = byMerchant.ok
+    ? { ok: false, how: "" }
+    : merchantAgrees(expense.merchant, e.subject);
+  if (byMerchant.ok) {
     score += 30;
     signals.merchant = true;
-    reasons.push(`The merchant matches: “${expense.merchant}” and “${e.merchant}”.`);
+    reasons.push(`The merchant matches: “${expense.merchant}” and “${e.merchant}” `
+      + `— ${byMerchant.how}.`);
+  } else if (bySubject.ok) {
+    /*
+     * A subject hit still identifies — a hotel booked through Navan
+     * arrives from navan.com with the hotel's name in the subject, and
+     * refusing that would throw away every booking made through an
+     * agent. It is worth less, and it is no longer DESCRIBED as the
+     * merchant matching, which is what made the hotel folio
+     * unarguable: two names that look nothing alike under the words
+     * "The merchant matches".
+     */
+    score += 15;
+    signals.merchant = true;
+    reasons.push(`The SUBJECT LINE matches, not the sender: “${expense.merchant}” `
+      + `against “${e.subject}” — ${bySubject.how}. The message itself is from `
+      + `“${e.merchant}”.`);
   }
 
   if (e.totalCents !== null) {
@@ -907,8 +947,9 @@ export function scoreMatch(expense: Target, e: Evidence): Candidate | null {
       + `is in ${expense.currency}.`);
   }
 
+  let apart: number | null = null;
   if (expense.date && e.date) {
-    const apart = Math.round(
+    apart = Math.round(
       Math.abs(Date.parse(e.date) - Date.parse(expense.date)) / DAY);
     if (apart === 0) { score += 20; signals.date = true; reasons.push("Same date."); }
     else if (apart <= 3) {
@@ -926,21 +967,41 @@ export function scoreMatch(expense: Target, e: Evidence): Candidate | null {
   if (score <= 0) return null;
 
   /*
-   * BEING NEAR IN TIME IS NOT EVIDENCE OF ANYTHING.
+   * SAME NAME, SAME AMOUNT, SAME DAY — AND ONE OF THEM IS NOT ENOUGH.
    *
-   * A U-Haul receipt with no readable total was offered against an
-   * $8.28 GitHub charge, on eight points of "2 days apart — a card
-   * posts a day or two after the purchase" and nothing else. In a
-   * 90-day window every expense is two days from something, so
-   * date proximity on its own matches everything, which is the
-   * same as matching nothing — and it costs a person a real look
-   * to throw away.
+   * Asked for in those words, twice. The first pass required ONE of
+   * merchant / total / reference, which still offered a September hotel
+   * folio against an October hotel charge on a shared word and nothing
+   * else: no readable total, forty-five days apart, two names that look
+   * nothing alike. A card like that costs a real look to throw away,
+   * and there were several.
    *
-   * At least one thing that IDENTIFIES the purchase has to agree:
-   * the merchant, the exact total, or an order number. Date and
-   * currency only ever strengthen one of those.
+   * So TWO of the three identifying facts must agree, or an order
+   * number must (which is worth more than all of them together,
+   * because it names this purchase and no other):
+   *
+   *   · the merchant — the sender's own name, not the subject line
+   *   · the exact total
+   *   · the date
+   *
+   * The date counts here when it is the same day or the next one. A
+   * card posts a day late routinely, and refusing that would throw
+   * away ordinary matches; two days of slack is not what let the
+   * forty-five-day pair through. `signals.date` stays EXACT, because
+   * the one-to-one rule that lets a settled match claim its receipt
+   * must not be loosened — only this gate uses the slack.
    */
-  if (!signals.merchant && !signals.total && !signals.reference) return null;
+  const nearDate = apart !== null && apart <= 1;
+  const identifying = [signals.merchant, signals.total, nearDate].filter(Boolean).length;
+  if (!signals.reference && identifying < 2) return null;
+
+  /*
+   * AND NOTHING FROM A DIFFERENT MONTH, unless the money or an order
+   * number says otherwise. A name that agrees and a date six weeks out
+   * is two different visits to the same chain, which is exactly what
+   * the hotel folio was.
+   */
+  if (!signals.reference && !signals.total && apart !== null && apart > 7) return null;
 
   /*
    * STRONG still means "a person says yes".

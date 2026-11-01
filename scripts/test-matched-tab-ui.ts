@@ -266,6 +266,33 @@ try {
   check("…while the pill says it is not a match yet",
     body4.includes("waiting on you"), body4.replace(/\n/g, " | ").slice(-300));
 
+  console.log("\n4b. “Not this one” actually takes it off the card");
+  /*
+   * It did nothing on screen. The server rejected the match
+   * perfectly well; the only thing refreshed afterwards was the
+   * QUEUE, and a rejection does not change the queue's idea of the
+   * row — it is still an expense waiting on a decision. The
+   * candidates live in the card's own state, nothing asked for them
+   * again, and the receipt that had just been thrown out sat there
+   * offering the same two buttons. "This is the receipt" LOOKED like
+   * it worked only because the row's state changes with it.
+   */
+  {
+    const no = page.getByRole("button", { name: "Not this one" }).first();
+    check("the button is there", await no.count() > 0);
+    await no.click();
+    await page.waitForTimeout(2500);
+    const after = await page.locator("body").innerText();
+    check("the rejected receipt is gone from the card",
+      !after.includes("invoice@mail.replit.com")
+      || !/This is the receipt/.test(after),
+      after.replace(/\n/g, " | ").slice(-400));
+    const { rows: said } = await db().query<{ state: string }>(
+      "SELECT state FROM receipt_mail_matches WHERE message_id = $1", ["mt-msg-3"]);
+    check("…and the server has it recorded as rejected",
+      said[0]?.state === "rejected", said[0]?.state ?? "no row");
+  }
+
   console.log("\n5. No console errors");
   check("the page produced none", errors.length === 0, errors.slice(0, 3).join(" · "));
 } finally {

@@ -3625,6 +3625,47 @@ candidate card, behind a "Show the receipt" press.
   which an `<img>` shows a broken icon, and an image attachment falls
   through to the `<img>` and displays properly.
 
+## Matching: two of {name, amount, day}, or nothing
+
+- **The owner's rule, in their words: "same name, same amount, same
+  day."** One identifying signal used to be enough, and one signal is
+  how a September hotel folio from `frontdesk@hiedallas.com` came to be
+  offered against an October **HOME2 SUITES ALCOASPRING BROOK FARMS 2 HP
+  LLC** charge: a shared word, no readable total, 45 days apart. Now
+  **two of {merchant, exact total, date}** must agree — or a reference
+  number, which outweighs all of them because it names this purchase and
+  no other.
+- **The date counts in the gate when it is the same day or the next
+  one.** A card posts a day late routinely. `signals.date` stays EXACT,
+  because the one-to-one rule (a settled match claiming its receipt and
+  dropping every other pairing) must not be loosened — only the gate
+  uses the slack.
+- **Nothing more than 7 days out** unless the exact total or a reference
+  agrees. A name that matches and a date six weeks away is two visits to
+  the same chain.
+- **The subject line is not the sender.** They were scored as one thing
+  and both printed "The merchant matches", which is how two names with
+  no resemblance appeared under that sentence. A subject hit still
+  identifies — a hotel booked through Navan arrives from `navan.com`
+  with the hotel in the subject — but it is worth half, and it says so:
+  *"The SUBJECT LINE matches, not the sender … both say 'westiawh'"*.
+- **`merchantAgrees` returns HOW it matched** and the reason names the
+  shared word. "The merchant matches" with no further detail is
+  unarguable and uncheckable, and the word that did it is the only thing
+  that settles whether the rule or the data is wrong.
+
+## A card's own data must be refetched after a decision on that card
+
+- **"Not this one" did nothing on screen.** The server rejected the
+  match correctly; the only thing refreshed afterwards was the QUEUE,
+  and a rejection does not change the queue's idea of the row — it is
+  still an expense awaiting a decision. The candidates live in the
+  card's own state and nothing asked for them again. "This is the
+  receipt" LOOKED fine only because the row's `matchState` changes with
+  it and the card re-renders into a different branch.
+- Rule: any press that changes what a locally-fetched panel shows must
+  refetch **that panel**, not only `["reports"]`.
+
 ## The write-back pages through the grid, like the decision path does
 
 - **Emburse hands out ten rows at a time.** `findRow` — the write-back's

@@ -340,15 +340,82 @@ try {
     merchantOf("receipts@sbux-e.com", "Your Starbucks receipt") === "Starbucks",
     merchantOf("receipts@sbux-e.com", "Your Starbucks receipt"));
 
-  console.log("\n19. One identifying signal is enough, and is required");
-  check("the merchant alone keeps a candidate alive",
-    scoreMatch(expense({ amountCents: 9999, date: "2026-08-01" }), message()) !== null);
-  check("…and so does an exact total on its own",
+  console.log("\n19. SAME NAME, SAME AMOUNT, SAME DAY — two of the three, or nothing");
+  /*
+   * The rule the owner asked for twice, in those words. One signal
+   * used to be enough, and one signal is how a September hotel folio
+   * came to be offered against an October hotel charge: a shared word,
+   * no readable total, forty-five days apart.
+   */
+  check("the merchant ALONE is no longer enough",
+    scoreMatch(expense({ amountCents: 9999, date: "2026-08-01" }), message()) === null,
+    JSON.stringify(scoreMatch(
+      expense({ amountCents: 9999, date: "2026-08-01" }), message())?.reasons ?? []));
+  check("…nor is an exact total on its own, two months out",
     scoreMatch(expense({ merchant: "SOME OTHER SHOP", date: "2026-08-01" }),
-      message()) !== null);
-  check("…but a matching currency and a near date are not evidence",
+      message()) === null);
+  check("…nor a matching currency and a near date",
     scoreMatch(expense({ merchant: "SOME OTHER SHOP", amountCents: 9999 }),
       message()) === null);
+
+  check("BUT the name and the day together are a candidate",
+    scoreMatch(expense({ amountCents: 9999 }), message()) !== null,
+    JSON.stringify(scoreMatch(expense({ amountCents: 9999 }), message())?.reasons ?? []));
+  check("…and so are the amount and the day, when the name is mangled",
+    scoreMatch(expense({ merchant: "SQ *SOME OTHER SHOP 4417" }), message()) !== null);
+  check("…and the name and the amount, even weeks apart",
+    scoreMatch(expense({ date: "2026-08-01" }), message()) !== null);
+
+  // A card posts a day late routinely; refusing that would throw away
+  // ordinary matches, and two days of slack is not what let the
+  // forty-five-day pair through.
+  check("the next day counts as the day, for a card that posted late",
+    scoreMatch(expense({ amountCents: 9999, date: "2026-09-25" }), message()) !== null);
+  check("…but three days apart, with nothing else, does not",
+    scoreMatch(expense({ amountCents: 9999, date: "2026-09-27" }), message()) === null);
+
+  console.log("\n19b. The hotel folio from the screenshot");
+  /*
+   * HOME2 SUITES ALCOASPRING BROOK FARMS 2 HP LLC, $178.13, Oct 29,
+   * offered a September 14th folio from frontdesk@hiedallas.com with
+   * no readable total — under the words "The merchant matches", about
+   * two names that look nothing alike. Forty-five days apart.
+   */
+  const folio = message({
+    messageId: "folio", subject: "Guest Folio — thank you for staying with us",
+    from: "frontdesk@hiedallas.com", merchant: "hiedallas",
+    date: "2026-09-14", totalCents: null,
+  });
+  const stay = expense({
+    merchant: "HOME2 SUITES ALCOASPRING BROOK FARMS 2 HP LLC",
+    amountCents: 17813, date: "2026-10-29",
+  });
+  check("it is not offered at all", scoreMatch(stay, folio) === null,
+    JSON.stringify(scoreMatch(stay, folio)?.reasons ?? []));
+  // Even if the names DID agree, a month and a half apart with no
+  // amount to check is two different visits to the same chain.
+  check("…nor would it be if the names agreed outright",
+    scoreMatch({ ...stay, merchant: "HIEDALLAS" }, folio) === null,
+    JSON.stringify(scoreMatch({ ...stay, merchant: "HIEDALLAS" }, folio)?.reasons ?? []));
+  check("…but the same folio for the right stay IS offered",
+    scoreMatch({ ...stay, merchant: "HIEDALLAS", date: "2026-09-14" }, folio) !== null);
+
+  console.log("\n19c. A subject-line match says so, instead of claiming the merchant");
+  {
+    const agent = message({
+      subject: "Your stay at WESTIAWH", from: "no-reply@navan.com",
+      merchant: "navan", date: "2026-09-24", totalCents: 17232,
+    });
+    const booked = expense({ merchant: "DALLAS WESTIAWH HOTEL, LLC", amountCents: 17232 });
+    const m = scoreMatch(booked, agent);
+    check("a booking through an agent still matches", m !== null);
+    check("…and the reason does not claim the two NAMES agree",
+      !(m?.reasons ?? []).some((r) => r.startsWith("The merchant matches")),
+      (m?.reasons ?? []).join(" | "));
+    check("…it says it was the subject line, and names the shared word",
+      (m?.reasons ?? []).some((r) => /SUBJECT LINE/.test(r) && /westiawh/i.test(r)),
+      (m?.reasons ?? []).join(" | "));
+  }
 
   console.log("\n20. An order number has a digit in it; a word does not");
   // "Your receipt can be viewed here: Download" gave a reference of
