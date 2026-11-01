@@ -266,6 +266,32 @@ try {
   check("…while the pill says it is not a match yet",
     body4.includes("waiting on you"), body4.replace(/\n/g, " | ").slice(-300));
 
+  console.log("\n4a. The receipt opens full screen");
+  /*
+   * Asked for directly: *"need to be able to click receipt image and
+   * it enlarges to full screen"*. The card's frame is a thumbnail —
+   * enough to tell one receipt from another, nowhere near enough to
+   * read a folio's line items, which is the thing being judged.
+   */
+  {
+    const shot = page.locator('[data-receipt="ok"] img').first();
+    check("the receipt is an image on the card", await shot.count() > 0,
+      `${await page.locator('[data-receipt="ok"]').count()} frame(s)`);
+    check("…and it invites a click",
+      /cursor-zoom-in/.test(await shot.getAttribute("class") ?? ""),
+      await shot.getAttribute("class") ?? "no class");
+    await shot.click();
+    await page.waitForTimeout(400);
+    const full = page.locator('[data-receipt-full="open"]');
+    check("CLICKING IT OPENS FULL SCREEN", await full.count() > 0,
+      (await page.locator("body").innerText()).replace(/\n/g, " | ").slice(-200));
+    check("…with a way out", await page.getByRole("button", { name: "Close" }).count() > 0);
+    // Escape closes it, as it closes everything else on this screen.
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(400);
+    check("…and Escape closes it", await full.count() === 0);
+  }
+
   console.log("\n4b. “Not this one” actually takes it off the card");
   /*
    * It did nothing on screen. The server rejected the match

@@ -305,7 +305,15 @@ try {
   check("…naming the receipt it would attach",
     text.includes("Attach") && text.includes(".pdf"),
     text.slice(-300).replace(/\n/g, " | "));
-  check("…and the description it would set", text.includes("Description"));
+  /*
+   * AND NO DESCRIPTION. That form has no Description box — the
+   * owner's own list of its fields is Category, Business Purpose,
+   * Location/Site, Department, Comment — and proposing one anyway put
+   * a write on every expense that could not land, which, being the
+   * first attempted, took the other four down with it.
+   */
+  check("…and NOT a description, on a form that has no such box",
+    !text.includes("Description"), text.slice(-300).replace(/\n/g, " | "));
   /*
    * ONE BUTTON, not one per write. The image and the description
    * are separate edits that fail separately — true, and not a

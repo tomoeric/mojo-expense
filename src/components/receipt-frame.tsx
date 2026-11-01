@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, Maximize2, X } from "lucide-react";
 
 /**
  * A receipt, fetched and shown — or the reason it could not be.
@@ -35,6 +35,19 @@ export function ReceiptFrame({ src, alt, height = "h-80", loading }: {
     { kind: "loading" }
     | { kind: "ok"; url: string; type: string }
     | { kind: "error"; why: string }>({ kind: "loading" });
+  const [open, setOpen] = useState(false);
+
+  // Escape closes it, as it closes everything else on this screen.
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  // A different receipt is a different picture: never inherit the
+  // last one's open state.
+  useEffect(() => { setOpen(false); }, [src]);
 
   useEffect(() => {
     let dropped = false;
@@ -105,8 +118,62 @@ export function ReceiptFrame({ src, alt, height = "h-80", loading }: {
       </p>
     );
   }
+  /*
+   * FULL SCREEN ON A CLICK.
+   *
+   * Asked for directly: *"need to be able to click receipt image and
+   * it enlarges to full screen"*. The card's frame is a thumbnail —
+   * big enough to tell one receipt from another, nowhere near big
+   * enough to read a folio's line items, which is the thing you are
+   * being asked to judge.
+   *
+   * The same blob, so opening it costs nothing: no second fetch, no
+   * second Graph call, and a PDF keeps the browser's own viewer with
+   * its zoom and its page controls.
+   */
+  const full = open && (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={alt}
+      data-receipt-full="open"
+      onClick={() => setOpen(false)}
+      className="fixed inset-0 z-50 flex flex-col bg-black/80 p-3 backdrop-blur-sm"
+    >
+      <div className="flex items-center gap-2 pb-2 text-xs text-white">
+        <span className="truncate font-semibold">{alt}</span>
+        <a href={state.url} target="_blank" rel="noreferrer"
+           onClick={(e) => e.stopPropagation()}
+           className="ml-auto underline underline-offset-2">
+          Open it in a new tab
+        </a>
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          className="inline-flex items-center gap-1 rounded-lg border border-white/40
+                     px-2 py-1 font-semibold hover:bg-white/10"
+        >
+          <X className="h-3.5 w-3.5" />
+          Close
+        </button>
+      </div>
+      {/* Stops a click on the receipt itself from closing it — the
+          backdrop closes, the document does not. */}
+      <div className="min-h-0 flex-1" onClick={(e) => e.stopPropagation()}>
+        {state.type.startsWith("image/") ? (
+          <img src={state.url} alt={alt}
+               className="h-full w-full rounded-md bg-white object-contain" />
+        ) : (
+          <iframe src={state.url} title={alt}
+                  className="h-full w-full rounded-md border-0 bg-white" />
+        )}
+      </div>
+    </div>
+  );
+
   return (
     <div data-receipt="ok" className="space-y-1">
+      {full}
       {/*
         * AN IFRAME FOR A PDF, NOT AN OBJECT.
         *
@@ -118,17 +185,50 @@ export function ReceiptFrame({ src, alt, height = "h-80", loading }: {
         * web does. The lesson is narrow and worth keeping: object
         * is for plug-ins, iframe is for documents.
         */}
-      {state.type.startsWith("image/") ? (
-        <img src={state.url} alt={alt}
-             className={`w-full rounded-md border border-border object-contain ${height}`} />
-      ) : (
-        <iframe src={state.url} title={alt}
-                className={`w-full rounded-md border border-border bg-muted/30 ${height}`} />
-      )}
-      <a href={state.url} target="_blank" rel="noreferrer"
-         className="text-[11px] text-muted-foreground underline underline-offset-2">
-        Open it in a new tab
-      </a>
+      <div className="group relative">
+        {state.type.startsWith("image/") ? (
+          <img src={state.url} alt={alt}
+               onClick={() => setOpen(true)}
+               className={`w-full cursor-zoom-in rounded-md border border-border
+                           object-contain ${height}`} />
+        ) : (
+          <>
+            <iframe src={state.url} title={alt}
+                    className={`w-full rounded-md border border-border bg-muted/30 ${height}`} />
+            {/*
+              * A PDF's own viewer swallows the click, so the whole
+              * frame cannot be the target — the iframe would eat it
+              * and scroll instead. A corner button is the honest
+              * answer, and it sits over the viewer's own chrome
+              * rather than fighting it.
+              */}
+            <button
+              type="button"
+              onClick={() => setOpen(true)}
+              aria-label="Show the receipt full screen"
+              className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-lg
+                         border border-border bg-background/90 px-2 py-1 text-[11px]
+                         font-semibold shadow-sm hover:bg-muted"
+            >
+              <Maximize2 className="h-3 w-3" />
+              Full screen
+            </button>
+          </>
+        )}
+      </div>
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="text-[11px] text-muted-foreground underline underline-offset-2"
+        >
+          Show it full screen
+        </button>
+        <a href={state.url} target="_blank" rel="noreferrer"
+           className="text-[11px] text-muted-foreground underline underline-offset-2">
+          Open it in a new tab
+        </a>
+      </div>
     </div>
   );
 }
