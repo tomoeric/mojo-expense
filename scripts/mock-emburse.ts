@@ -23,7 +23,21 @@ import fs from "node:fs";
 /** The one code the mock's verification screen accepts. */
 export const GOOD_CODE = "482913";
 
-export type MockHandle = { url: string; state: () => State; reset: () => void; close: () => Promise<void> };
+export type MockHandle = {
+  url: string;
+  state: () => State;
+  /**
+   * Change the tenant's behaviour mid-test.
+   *
+   * `state()` hands back a COPY, so `mock.state().padRows = 12` is a
+   * write to a throwaway object — it reads perfectly and does nothing,
+   * which is the worst kind of test-harness bug: the fixture quietly
+   * refuses to reproduce the thing being tested and the test passes.
+   */
+  set: (patch: Partial<State>) => void;
+  reset: () => void;
+  close: () => Promise<void>;
+};
 
 type State = {
   signedIn: boolean;
@@ -90,6 +104,17 @@ type State = {
    * search returns a month of them and the target is past the read cap.
    */
   padRows: number;
+  /**
+   * Rows per page, with a real next-page arrow. 0 draws them all.
+   *
+   * Emburse's personal list paginates — "1 - 10 of 14", bottom right —
+   * and the mock printed that line while serving every row on one page,
+   * so the page-two case could not be reproduced here at all. It is the
+   * case that matters: the decision path learned to page through and the
+   * write-back never did, and a real run failed with "0 of 13 rows match
+   * this expense" about a row one click away.
+   */
+  pageSize: number;
   /**
    * Whether clicking APPROVE or confirming Deny actually removes the row.
    * Off reproduces a click that lands on nothing — which used to be
@@ -249,6 +274,7 @@ const state: State = {
   showNavLabel: true,
   gridShape: "table",
   padRows: 0,
+  pageSize: 0,
   actionsWork: true,
   ghostButtons: false,
   ghostRows: false,
@@ -351,7 +377,7 @@ const gridIsEmpty = (search: string): boolean => {
     !mine.some((r) => !("shy" in r && r.shy) && rowHits(r.merchant, term));
 };
 
-const grid = (search: string) => {
+const grid = (search: string, pageNo = 1) => {
   const term = search.trim().toLowerCase();
   // The users filter first: it is a FILTER, and it shows everything that
   // person has — including the row the text search refuses to return.
@@ -371,7 +397,19 @@ const grid = (search: string) => {
   // Rows actioned in a stale-grid run are gone from the SERVER's answer,
   // which is the whole point: the page that is already open still shows
   // them, and only a fresh load says otherwise.
-  const shown = [...filler, ...matching].filter((r) => !actioned(r));
+  const all = [...filler, ...matching].filter((r) => !actioned(r));
+  /*
+   * ONE PAGE OF IT, when the test asks for pages.
+   *
+   * Emburse hands out ten rows at a time and draws an arrow for the
+   * rest. A reader that stops at the first page sees a grid that is
+   * complete and is not, which is a worse failure than an empty one:
+   * it reports, with a count, that the expense is not there.
+   */
+  const size = state.pageSize;
+  const pages = size > 0 ? Math.max(Math.ceil(all.length / size), 1) : 1;
+  const here = Math.min(Math.max(pageNo, 1), pages);
+  const shown = size > 0 ? all.slice((here - 1) * size, here * size) : all;
   // What Emburse renders when nothing matches: the grid, the column headings
   // and the words "No rows". NOT an error, and not an absent grid — which is
   // exactly how it was read, because the shipped grid selector is "table" on
@@ -521,6 +559,25 @@ const grid = (search: string) => {
   const twinRows = state.twinRows
     ? shown.map((r) => `<tr><td>${ghostBtn}${cells(r)}</td></tr>`).join("")
     : "";
+  /*
+   * The next-page arrow, drawn only when there IS a next page — as
+   * Emburse does, and as the selector expects: it is matched with
+   * `:not([disabled])` so an arrow at the end of the list must not look
+   * clickable.
+   */
+  const pager = size > 0
+    ? `<nav aria-label="pagination"><span>${(here - 1) * size + 1} - `
+      + `${(here - 1) * size + shown.length} of ${all.length}</span>`
+      + `<button aria-label="next page" class="np"${here >= pages ? " disabled" : ""}`
+      + ` data-page="${here + 1}">&rsaquo;</button></nav>`
+      + `<script>document.addEventListener("click", function (e) {`
+      + ` var b = e.target.closest ? e.target.closest("button.np") : null;`
+      + ` if (!b || b.disabled) return;`
+      + ` var u = new URL(location.href);`
+      + ` u.searchParams.set("gpage", b.dataset.page); location.href = u.toString();`
+      + `});</script>`
+    : "";
+
   const realTable = `<table><thead><tr><th>Date</th><th>Merchant</th><th>Employee</th><th>Amount</th><th></th></tr></thead>
     <tbody>${ghostRows}${twinRows}${shown.map((r) =>
       `<tr data-row="${r.date}|${r.merchant}|${r.who}|${r.amount}"><td>${ghostBtn}${cells(r)}</td></tr>`,
@@ -531,7 +588,7 @@ const grid = (search: string) => {
     // <table>, it comes first, and it is never visible — so a wait on the
     // first match sits on it until it times out, next to a grid that loaded
     // immediately.
-    return `<table style="display:none"><tbody><tr><td>sizing</td></tr></tbody></table>${realTable}${behaviour}`;
+    return `<table style="display:none"><tbody><tr><td>sizing</td></tr></tbody></table>${realTable}${pager}${behaviour}`;
   }
   if (state.gridShape === "pinned") {
     // What spend.emburse.com actually renders: the Action column is PINNED,
@@ -550,7 +607,7 @@ const grid = (search: string) => {
     return `<div role="grid" style="position:relative;height:${shown.length * H}px">
       <div role="rowgroup" style="position:absolute;top:0;left:0;height:${shown.length * H}px;width:600px">${bodyRows}</div>
       <div role="rowgroup" style="position:absolute;top:0;left:600px;height:${shown.length * H}px;width:200px">${pinnedRows}</div>
-    </div>${behaviour}`;
+    </div>${pager}${behaviour}`;
   }
   if (state.gridShape === "divs") {
     // What spend.emburse.com actually serves: a grid of divs with ARIA
@@ -562,9 +619,9 @@ const grid = (search: string) => {
       <div role="rowgroup"><div role="row"></div>${shown
         .map((r) => `<div role="row"><div role="cell">${cells(r).replace(/<\/?td>/g, "")}</div></div>`)
         .join("")}</div>
-    </div>${behaviour}`;
+    </div>${pager}${behaviour}`;
   }
-  return realTable + behaviour;
+  return realTable + pager + behaviour;
 };
 
 const page = (body: string) => `<!doctype html><html><body style="font-family:sans-serif">${body}</body></html>`;
@@ -879,7 +936,7 @@ app.get(["/transactions/team", "/transactions/me"], (req, res) => {
     <form method="post" action="/tick"><button type="submit">Tick a row</button></form>
     <p>rows ticked: ${state.rowsTicked}</p>
     <a href="/dialog"><button>EXPORT</button></a>
-    ${grid(state.search)}`));
+    ${grid(state.search, Number(q.gpage ?? 1) || 1)}`));
 });
 
 // Plain /transactions is a 404 here, as it is on the real tenant.
@@ -1175,7 +1232,7 @@ const reset = () =>
     // the grid to divs left every later test running against divs — and the
     // one that then failed looked like a regression in whatever it was
     // actually testing, rather than leftover state from three tests ago.
-    gridShape: "table", padRows: 0, actionsWork: true, ghostButtons: false, ghostRows: false, twinRows: false, staleGrid: false, actioned: new Set<string>(), categories: new Map<string, string>(), searchMode: "substring",
+    gridShape: "table", padRows: 0, pageSize: 0, actionsWork: true, ghostButtons: false, ghostRows: false, twinRows: false, staleGrid: false, actioned: new Set<string>(), categories: new Map<string, string>(), searchMode: "substring",
     hiddenFromSearch: false, userFilter: "", hangOpens: 0, hangAll: false, oidcHop: false,
     formatControl: "links",
     chipsUnmatchable: false, appPaintMs: 0, showNavLabel: true, menuStyle: "labelled",
@@ -1191,6 +1248,7 @@ return new Promise((resolve) => {
     resolve({
       url: `http://127.0.0.1:${port}`,
       state: () => ({ ...state }),
+      set: (patch: Partial<State>) => { Object.assign(state, patch); },
       reset: () => void reset(),
       close: () => new Promise<void>((done) => server.close(() => done())),
     }),

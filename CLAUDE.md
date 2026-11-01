@@ -3625,6 +3625,34 @@ candidate card, behind a "Show the receipt" press.
   which an `<img>` shows a broken icon, and an image attachment falls
   through to the `<img>` and displays properly.
 
+## The write-back pages through the grid, like the decision path does
+
+- **Emburse hands out ten rows at a time.** `findRow` — the write-back's
+  own hunt, a separate copy from the decision path's — read page one and
+  concluded. A real run failed with *"0 of 13 rows match this expense"*
+  about a row one click away. The decision path learned this after the
+  Facebook Advertising failure; the write-back never did. Both page now,
+  up to 12 pages, stopping the moment a page holds a match — indices are
+  per-page, so **carrying one across pages edits the wrong expense**.
+- **A grid that NAVIGATES, not re-renders.** After clicking next, wait
+  for the first row's text to change AND for `domcontentloaded`: counting
+  rows mid-navigation reads zero and calls that the end of the list.
+- **NONE and TOO MANY are different problems** and one message said both.
+  "0 of 13 … narrow what distinguishes these rows" is advice for the
+  opposite case. Zero now reports what was looked for, the distinct
+  `rowMatches` reasons (which name the field that disagreed) and the
+  first rows as the grid prints them — all of which existed and were
+  thrown away. More than one keeps the old wording, which is correct for
+  it.
+- **The mock grid paginates** (`state.pageSize`, a real `aria-label="next
+  page"` button). It printed "1 - 10 of 14" and served every row on one
+  page, so the fixture agreed with the bug and the case could not be
+  written. `scripts/test-writeback-paging.ts` covers it — and is the
+  first test to drive `attachAndAnnotate` at all.
+- **`mock.state()` hands back a COPY.** `mock.state().padRows = 12` reads
+  perfectly and does nothing. Use **`mock.set({ ... })`**. `padRows` had
+  never been set by any test for exactly this reason.
+
 ## Every Graph READ goes through `graphRead` (`server/graph-read.ts`)
 
 - **Graph rate-limits, and 429 is not an error to show somebody.** It

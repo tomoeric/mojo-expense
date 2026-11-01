@@ -2966,35 +2966,125 @@ async function findRow(
       `It may already have been actioned there.`);
   }
 
-  const hits: number[] = [];
-  for (let i = 0; i < Math.min(count, ROWS_EXAMINED); i++) {
-    if (rowMatches(await rows.nth(i).innerText().catch(() => ""), target).ok) hits.push(i);
-  }
-  const visible = hits.length > 1 ? await visibleOf(rows, hits) : hits;
+  /** One page of the grid: which of its rows are this expense. */
+  const scan = async (): Promise<{ hits: number[]; visible: number[]; only: number[] }> => {
+    const n = await rows.count();
+    const hits: number[] = [];
+    for (let i = 0; i < Math.min(n, ROWS_EXAMINED); i++) {
+      if (rowMatches(await rows.nth(i).innerText().catch(() => ""), target).ok) hits.push(i);
+    }
+    const visible = hits.length > 1 ? await visibleOf(rows, hits) : hits;
 
-  // The vendor score again, for the same reason as everywhere else: three
-  // car washes on one day share a word and are not the same purchase.
-  let only = visible;
-  if (visible.length > 1) {
-    const scores = await Promise.all(visible.map(async (i) =>
-      merchantScore(await rows.nth(i).innerText().catch(() => ""), target.merchant)));
-    const best = Math.max(...scores);
-    const closest = visible.filter((_, k) => scores[k] === best);
-    if (closest.length < visible.length) only = closest;
+    // The vendor score again, for the same reason as everywhere else: three
+    // car washes on one day share a word and are not the same purchase.
+    let only = visible;
+    if (visible.length > 1) {
+      const scores = await Promise.all(visible.map(async (i) =>
+        merchantScore(await rows.nth(i).innerText().catch(() => ""), target.merchant)));
+      const best = Math.max(...scores);
+      const closest = visible.filter((_, k) => scores[k] === best);
+      if (closest.length < visible.length) only = closest;
+    }
+    return { hits, visible, only };
+  };
+
+  let { hits, visible, only } = await scan();
+
+  /*
+   * PAGE THROUGH IT. Emburse shows ten rows at a time.
+   *
+   * The decision path learned this the hard way and the write-back was
+   * never taught it: "none of the 13 rows matched" about a row sitting
+   * on page two. Thirteen is the number in front of me now, on a card
+   * whose expense is three days older than the ten rows on screen.
+   *
+   * Stops the moment a page holds a match, deliberately: everything
+   * downstream addresses the row by its index on the page in front of
+   * it, so the matched row has to still be on screen. Carrying indices
+   * across pages is how a run edits the wrong expense.
+   */
+  let seen = count;
+  const MAX_PAGES = 12;
+  for (let pageNo = 2; only.length === 0 && pageNo <= MAX_PAGES; pageNo++) {
+    const next = page.locator(sel.nextPage!).first();
+    if (!(await next.isVisible().catch(() => false))) break;
+    if (await next.isDisabled().catch(() => false)) break;
+    const before = await rows.first().innerText().catch(() => "");
+    await next.click().catch(() => {});
+    // The grid re-renders in place, so there is no navigation to wait
+    // for — wait for the first row to stop being the old one.
+    await page.waitForFunction(
+      ([selector, was]) => {
+        const first = document.querySelector(selector as string);
+        return !!first && (first as HTMLElement).innerText !== was;
+      },
+      [sel.resultRow!, before] as const,
+      { timeout: 10_000 },
+    ).catch(() => {});
+    // A grid that NAVIGATES rather than re-rendering in place: the wait
+    // above either resolves on the new document or is torn down by the
+    // navigation, and counting rows mid-flight reads zero and calls that
+    // the end of the list.
+    await page.waitForLoadState("domcontentloaded").catch(() => {});
+    const here = await rows.count();
+    if (here === 0) break;
+    seen += here;
+    ({ hits, visible, only } = await scan());
   }
 
-  if (only.length !== 1) {
+  const ignored = hits.length !== visible.length
+    ? ` (${hits.length - visible.length} hidden copies ignored)` : "";
+
+  /*
+   * NONE AND TOO MANY ARE DIFFERENT PROBLEMS, and this said the same
+   * thing about both.
+   *
+   * "0 of 13 rows match this expense … narrow what distinguishes these
+   * rows" is advice for the opposite case — there is nothing to narrow,
+   * and the reader is sent to tidy up an ambiguity that does not exist.
+   * What they need is WHY the thirteen were turned down, and
+   * `rowMatches` worked that out for every one of them and this threw
+   * all thirteen reasons away.
+   *
+   * So: the distinct reasons, which are usually one or two and name the
+   * field that disagreed — "everything matches except the date: this
+   * expense is 2026-10-28 and the row says Oct 30, 2026" is the whole
+   * diagnosis. Plus the first rows as the grid actually prints them,
+   * because a reason about a field is only checkable against the text
+   * it was read from. The decision path has done this since the fourth
+   * round of selector guessing; the write-back never got it.
+   */
+  if (only.length === 0) {
+    const examined = Math.min(await rows.count(), ROWS_EXAMINED);
+    const reasons: string[] = [];
+    const sample: string[] = [];
+    for (let i = 0; i < examined; i++) {
+      const text = (await rows.nth(i).innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+      if (sample.length < 3 && text) sample.push(text.slice(0, 140));
+      if (reasons.length >= 4) continue;
+      const why = rowMatches(text, target).why;
+      if (!reasons.includes(why)) reasons.push(why);
+    }
     throw new Error(
-      `${only.length} of ${count} rows match this expense${
-        hits.length !== visible.length ? ` (${hits.length - visible.length} hidden copies ignored)` : ""
-      }, and a correction changes one record — there is no second correction coming to tidy up ` +
-      `the others. Edit it in Emburse, or narrow what distinguishes these rows.`);
+      `None of the ${seen} rows in ${target.employee}'s Emburse queue match this expense`
+      + `${ignored}. Looking for ${target.merchant} ${money(target.amount)}`
+      + `${target.date ? ` on ${target.date}` : ""}.`
+      + (reasons.length > 0 ? ` Turned down for: ${reasons.join("; ")}.` : "")
+      + (sample.length > 0 ? ` The grid reads: ${sample.map((t) => `“${t}”`).join(" | ")}.` : "")
+      + " If one of those IS this expense, the field named above is what disagrees.");
+  }
+
+  if (only.length > 1) {
+    throw new Error(
+      `${only.length} of ${seen} rows match this expense${ignored}, and a correction `
+      + `changes one record — there is no second correction coming to tidy up the others. `
+      + `Edit it in Emburse, or narrow what distinguishes these rows.`);
   }
   const row = rows.nth(only[0]!);
   return {
     row,
     text: (await row.innerText().catch(() => "")).replace(/\s+/g, " ").trim(),
-    detail: `matched 1 of ${count} rows`,
+    detail: `matched 1 of ${seen} rows`,
   };
 }
 
