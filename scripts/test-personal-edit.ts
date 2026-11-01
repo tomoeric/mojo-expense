@@ -229,6 +229,45 @@ try {
       `\n     ${trace(run.steps)}`);
   }
 
+  console.log("\n3e. One absent field does not take the others down with it");
+  /*
+   * The description was the first write on the form, so a tenant
+   * without a Description box failed all five — five writes, five
+   * sign-ins, every one reporting the same missing box. One attempt
+   * now names every field that is missing.
+   *
+   * And nothing is saved when any of them failed: a form left
+   * part-filled and abandoned is the safe end, because Emburse keeps
+   * what it had and the whole visit can be retried.
+   */
+  mock.reset();
+  mock.set({ menuStyle: "none", rowOpens: true, personalForm: true });
+  {
+    const run = await attachAndAnnotate(LONE, {
+      // The personal form has no Description box; the rest it has.
+      note: "Receipt: stripe - 2026-10-28",
+      fields: [
+        { field: "purpose", value: "AI Development and Use" },
+        { field: "department", value: "IT & Compliance" },
+      ],
+    }, SEL, mock.url, LOGIN, { personalQueue: true });
+    const names = run.steps.map((s) => s.name);
+    check("the description is tried and fails", names.includes("set the description"));
+    check("…and the other fields are STILL tried",
+      names.includes("set Business Purpose") && names.includes("set Department"),
+      names.join(" → "));
+    check("…which worked, so only the one box is the problem",
+      run.steps.find((s) => s.name === "set Business Purpose")?.ok === true
+      && run.steps.find((s) => s.name === "set Department")?.ok === true,
+      `\n     ${trace(run.steps)}`);
+    const stop = run.steps.find((s) => s.name === "stop: nothing was saved");
+    check("it stops without saving", stop !== undefined && !run.ok,
+      stop?.detail?.slice(0, 120) ?? "no stop step");
+    check("…naming the field that is missing",
+      /Description/.test(stop?.detail ?? ""), stop?.detail?.slice(0, 160) ?? "");
+    check("…and nothing was saved", !names.includes("save it"), names.join(" → "));
+  }
+
   console.log("\n4. Two people's identical rows are REFUSED, not guessed between");
   /*
    * The cost of dropping the cardholder check, and the net under it.

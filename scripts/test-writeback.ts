@@ -89,7 +89,21 @@ try {
     !unchosen.ok && unchosen.problem.includes("has not been chosen"),
     unchosen.ok ? "" : unchosen.problem);
 
-  console.log("\n3. A chosen receipt proposes a receipt and a description");
+  console.log("\n3. A chosen receipt proposes the receipt, and no description");
+  /*
+   * NO DESCRIPTION, because that form has no Description box.
+   *
+   * The owner wrote the fields down after opening one: Category,
+   * Business Purpose, Location/Site, Department, Comment. Proposing a
+   * Description anyway put a write on every expense that could not
+   * land — and being the FIRST write attempted it took the other four
+   * down with it, five failures and five sign-ins about a box that is
+   * not there.
+   *
+   * There is no manager-queue case to keep it for: proposeWrites
+   * refuses those outright ("Receipt write-back is for your own
+   * expenses"), so this path is personal-only end to end.
+   */
   await recordCandidates([{
     dedupeKey: KEY, lane: MOJO, messageId: MSG, confidence: "strong", score: 80,
     reasons: ["ok"], evidence: evidence(),
@@ -99,11 +113,11 @@ try {
   check("it is accepted", proposed.ok === true, proposed.ok ? "" : proposed.problem);
   if (!proposed.ok) throw new Error(proposed.problem);
   const kinds = proposed.writes.map((w) => w.kind).sort();
-  check("both are proposed", kinds.join(",") === "note,receipt", kinds.join(","));
+  check("the receipt is proposed", kinds.includes("receipt"), kinds.join(","));
+  check("…and NO description, on a form that has no such box",
+    !kinds.includes("note"), kinds.join(","));
   check("…the receipt names the attachment",
     proposed.writes.find((w) => w.kind === "receipt")?.attachmentId === "att-1");
-  check("…and the description records what the box reads NOW",
-    proposed.writes.find((w) => w.kind === "note")?.was === "");
   check("…tagged with the account the EXPENSE is in",
     proposed.writes.every((w) => w.lane === MOJO));
 

@@ -3733,6 +3733,18 @@ select and nothing else:
   more to type into than a moment ago. That holds without knowing one
   selector of the detail view, which matters because every guess at this
   tenant's markup has cost a deploy.
+- **Every form read and write is scoped to the detail view**, via
+  `formScope` — a dialog, drawer, aside or panel holding two or more
+  controls, else the page. The detail view opens OVER the grid, and
+  selectors run against the document picked up the grid instead: "what
+  IS on the form" listed "Select all rows", and the receipt check
+  reported "a receipt is already attached" — and so SKIPPED the upload,
+  the one thing the visit was for — on an expense whose Receipt column
+  is empty.
+- **One absent field no longer kills the rest.** Every field is tried,
+  the misses are reported together, and nothing is saved if any failed
+  — the form is abandoned, Emburse keeps what it had, and one attempt
+  names every missing field instead of the first.
 - **Inspect edit form runs on the LANE'S list, as the LANE'S account.**
   It read the deployment's shared selectors and the reviewer's primary
   login, so on a personal tab the one tool for ending the guessing was
@@ -3749,6 +3761,14 @@ select and nothing else:
 - **Business Purpose** — a plain text box.
 - **Location / Site** — a dropdown.
 - **Department** — a dropdown that also matches when typed in.
+- **There is NO Description box.** The five above are the whole form.
+  The write-back proposed a Description anyway, it was the FIRST write
+  attempted, and it took the other four down with it — five failures,
+  five sign-ins, every one about a box that is not there. No longer
+  proposed, unconditionally: `proposeWrites` already refuses
+  manager-queue expenses ("Receipt write-back is for your own
+  expenses"), so this path is personal-only end to end and a lane test
+  would read as though there were another form to keep it for.
 - **Comment** — **not on the form until it is asked for.** Press ADD
   DETAIL, then COMMENT, and only then is there a box. Without that the
   write reports a missing selector about a box that does not exist yet,

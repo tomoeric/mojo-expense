@@ -3263,8 +3263,62 @@ async function openEditForm(
  * in enough detail to set it by hand rather than widened until something
  * matches.
  */
+/**
+ * `firstVisible`, but inside a container rather than the whole page.
+ *
+ * Same loop; the only difference is what it searches. Separate because
+ * `firstVisible` takes a Page and the detail view is a Locator, and
+ * widening that signature would touch the export's every caller.
+ */
+async function firstVisibleIn(
+  where: Locator | Page, selector: string, timeoutMs: number,
+): Promise<Locator | null> {
+  const deadline = Date.now() + timeoutMs;
+  const all = where.locator(selector);
+  do {
+    const n = await all.count().catch(() => 0);
+    for (let i = 0; i < n; i++) {
+      const one = all.nth(i);
+      if (await one.isVisible().catch(() => false)) return one;
+    }
+    await new Promise((r) => { setTimeout(r, 250); });
+  } while (Date.now() < deadline);
+  return null;
+}
+
+/**
+ * WHERE THE EXPENSE'S OWN FIELDS ARE, not the whole page.
+ *
+ * The detail view opens OVER the grid, and every selector was run
+ * against the document — so the grid's row checkboxes and its
+ * Accounting Category column were in scope the whole time. Three
+ * symptoms, one cause: "what IS on the form" listed "Select all rows",
+ * the receipt check reported "a receipt is already attached" on an
+ * expense whose Receipt column is empty, and a field could match a
+ * column filter instead of the box next to it.
+ *
+ * Falls back to the page when no container can be identified, which is
+ * what every tenant without a drawer wants anyway.
+ */
+async function formScope(page: Page): Promise<Locator | Page> {
+  const shells = [
+    '[role="dialog"]', '[role="complementary"]', "aside",
+    '[class*="drawer" i]', '[class*="panel" i]', '[class*="modal" i]',
+    '[class*="sidesheet" i]', '[class*="side-sheet" i]',
+  ];
+  for (const one of shells) {
+    const box = page.locator(one).last();
+    if (!(await box.isVisible().catch(() => false))) continue;
+    // Two or more things to type into: one is a search box, not a form.
+    const inside = box.locator("input, select, textarea, [role=combobox]");
+    if (await inside.count().catch(() => 0) >= 2) return box;
+  }
+  return page;
+}
+
 async function whatIsOnTheForm(page: Page, tried: string, what: string): Promise<string> {
-  const controls = page.locator("input, select, textarea, [role=combobox], [role=listbox]");
+  const where = await formScope(page);
+  const controls = where.locator("input, select, textarea, [role=combobox], [role=listbox]");
   const n = Math.min(await controls.count().catch(() => 0), 30);
   const seen: string[] = [];
   for (let i = 0; i < n; i++) {
@@ -3283,8 +3337,8 @@ async function whatIsOnTheForm(page: Page, tried: string, what: string): Promise
   return (
     `no ${what} control on the edit form matched “${tried}”. ` +
     (seen.length > 0
-      ? `What IS on the form: ${seen.slice(0, 10).join(" | ")}. Set the editCategory selector ` +
-        `in Settings to whichever of those is the Category box.`
+      ? `What IS on the form: ${seen.slice(0, 14).join(" | ")}. Set the ${what} selector ` +
+        `in Settings to whichever of those is the ${what} box.`
       : `Nothing form-shaped is visible at all, so the edit form may not have opened — check ` +
         `the editMenuItem selector.`)
   );
@@ -3363,13 +3417,14 @@ async function whatIsOnTheForm(page: Page, tried: string, what: string): Promise
 async function revealComment(
   page: Page, sel: Record<string, string>, ms: number,
 ): Promise<string> {
-  const box = () => page.locator(sel.editComment!).first();
+  const where = await formScope(page);
+  const box = () => where.locator(sel.editComment!).first();
   if (await box().isVisible().catch(() => false)) return "";
 
   const pressed: string[] = [];
   for (const which of [sel.editCommentOpen, sel.editCommentField]) {
     if (!which) continue;
-    const control = await firstVisible(page, which, Math.min(ms, 3000));
+    const control = await firstVisibleIn(where, which, Math.min(ms, 3000));
     if (!control) continue;
     const what = (await control.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
     await control.click().catch(() => undefined);
@@ -3400,10 +3455,16 @@ async function setFormField(
   wanted: string,
   ms: number,
 ): Promise<string> {
-  let field = sel ? await firstVisible(page, sel, Math.min(ms, 4000)) : null;
+  /*
+   * INSIDE THE EXPENSE, not the page. The grid is still behind the
+   * drawer and carries controls of its own — a column filter named
+   * "Category" is not the Category box on the form.
+   */
+  const where = await formScope(page);
+  let field = sel ? await firstVisibleIn(where, sel, Math.min(ms, 4000)) : null;
   let how = "by selector";
   if (!field) {
-    const byLabel = page.getByLabel(label, { exact: false }).first();
+    const byLabel = where.getByLabel(label, { exact: false }).first();
     if (await byLabel.isVisible().catch(() => false)) { field = byLabel; how = "by its label"; }
   }
   if (!field) throw await asError(whatIsOnTheForm(page, sel ?? "", label));
@@ -3585,7 +3646,17 @@ export async function attachAndAnnotate(
        * the change was proposed means somebody edited it since.
        */
       if (!(await step("read what is there now", async () => {
-        const present = page!.locator(sel.editReceiptPresent!);
+        /*
+         * IN THE EXPENSE, not the page behind it.
+         *
+         * This reported "a receipt is already attached" — and so
+         * SKIPPED the upload, which is the one thing the visit was for
+         * — about an expense whose Receipt column is plainly empty.
+         * The check was matching something on the grid behind the
+         * drawer.
+         */
+        const within = await formScope(page!);
+        const present = within.locator(sel.editReceiptPresent!);
         const n = await present.count().catch(() => 0);
         for (let i = 0; i < n; i++) {
           if (await present.nth(i).isVisible().catch(() => false)) {
@@ -3593,7 +3664,7 @@ export async function attachAndAnnotate(
             break;
           }
         }
-        const box = await firstVisible(page!, sel.editNote!, 2000);
+        const box = await firstVisibleIn(within, sel.editNote!, 2000);
         noteBefore = box ? (await box.inputValue().catch(() => "")) : null;
         if (want.noteWas !== undefined && noteBefore !== null
           && noteBefore.trim() !== want.noteWas.trim()) {
@@ -3624,7 +3695,8 @@ export async function attachAndAnnotate(
 
       if (want.receipt && !alreadyAttached) {
         if (!(await step("attach the receipt", async () => {
-          let input = page!.locator(sel.editReceipt!).first();
+          const within = await formScope(page!);
+          let input = within.locator(sel.editReceipt!).first();
           let there = await input.count().catch(() => 0);
           /*
            * NO FILE INPUT YET IS NOT NO FILE INPUT.
@@ -3636,11 +3708,11 @@ export async function attachAndAnnotate(
            * selector for a dialog nobody opened.
            */
           if (there === 0 && sel.editReceiptOpen) {
-            const opener = await firstVisible(page!, sel.editReceiptOpen, 2500);
+            const opener = await firstVisibleIn(within, sel.editReceiptOpen, 2500);
             if (opener) {
               await opener.click().catch(() => undefined);
               await page!.waitForTimeout(1200);
-              input = page!.locator(sel.editReceipt!).first();
+              input = within.locator(sel.editReceipt!).first();
               there = await input.count().catch(() => 0);
             }
           }
@@ -3663,9 +3735,25 @@ export async function attachAndAnnotate(
         });
       }
 
+      /*
+       * EVERY FIELD IS TRIED, AND THE MISSES ARE REPORTED TOGETHER.
+       *
+       * The description is the first write on the form and it stopped
+       * the visit, so one field took the other four down with it —
+       * five writes, five failures, one sign-in each, all saying the
+       * same thing about the same box. Learning that four of five work
+       * costs five more deploys that way.
+       *
+       * Nothing is saved when any of them failed, so this is not a
+       * half-write: the form is abandoned and Emburse keeps what it
+       * had. What changes is that one attempt reports every missing
+       * field instead of only the first.
+       */
+      const missed: string[] = [];
+
       if (want.note !== undefined) {
         if (!(await step("set the description", async () => {
-          const box = await firstVisible(page!, sel.editNote!, ms);
+          const box = await firstVisibleIn(await formScope(page!), sel.editNote!, ms);
           if (!box) throw await asError(whatIsOnTheForm(page!, sel.editNote!, "Description"));
           await box.fill(want.note!);
           const got = (await box.inputValue().catch(() => "")).trim();
@@ -3676,7 +3764,7 @@ export async function attachAndAnnotate(
               + "editNote selector against this tenant's edit form.");
           }
           return `the description now reads “${want.note!.slice(0, 60)}”`;
-        }))) return { ok: false, steps, matchedRow: null, screenshot: null };
+        }))) missed.push("Description");
       }
 
       for (const f of want.fields ?? []) {
@@ -3704,7 +3792,25 @@ export async function attachAndAnnotate(
           const set = await setFormField(
             page!, where.sel, sel.editCategoryOption!, where.label, f.value, ms);
           return opened ? `${opened}, then ${set}` : set;
-        }))) return { ok: false, steps, matchedRow: null, screenshot: null };
+        }))) missed.push(where.label);
+      }
+
+      if (missed.length > 0) {
+        // Out without saving. A form left part-filled and abandoned is
+        // the safe end: Emburse keeps what it had, and the whole visit
+        // is retried rather than patched up.
+        await page.keyboard.press("Escape").catch(() => undefined);
+        steps.push({
+          name: "stop: nothing was saved", ok: false, ms: 0,
+          detail: `${missed.join(" and ")} could not be set, so the form was abandoned `
+            + `rather than part-filled \u2014 Emburse still holds what it had. The step`
+            + `${missed.length > 1 ? "s" : ""} above say what was on the form instead. If `
+            + `this tenant has no such field at all, take it out of the rule.`,
+        });
+        return {
+          ok: false, steps, matchedRow: null,
+          screenshot: (await page.screenshot().catch(() => null))?.toString("base64") ?? null,
+        };
       }
 
       if (!(await step("save it", async () => {

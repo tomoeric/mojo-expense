@@ -371,10 +371,27 @@ export async function proposeWrites(opts: {
    */
   const had = (expense.note ?? "").trim();
   const merged = mergeNote(had, note);
-  // Only when it says more than the box already does.
-  if (merged && merged !== had) {
-    writes.push({ kind: "note", proposed: merged, was: had, attachment: "" });
-  }
+  /*
+   * AND NOT PROPOSED AT ALL: THAT FORM HAS NO DESCRIPTION BOX.
+   *
+   * The owner wrote the fields down after opening one — Category,
+   * Business Purpose, Location/Site, Department, Comment — and there
+   * is no Description among them. Proposing one anyway put a write on
+   * every expense that could not land, and because it is the FIRST
+   * write attempted it took the other four down with it: five
+   * failures, five sign-ins, every one about a box that is not there.
+   *
+   * Unconditional, because this whole path is personal-only. A
+   * manager-queue expense is refused several lines above — "Receipt
+   * write-back is for your own expenses" — so there is no other form
+   * this could be reached from, and a lane test here would read as
+   * though there were.
+   *
+   * `merged` is still computed: `noteFromReading` is what the Receipts
+   * tab shows as the receipt's own summary, and it is worth keeping
+   * even though nothing writes it to Emburse.
+   */
+  void merged;
 
   /*
    * WHAT THE VENDOR RULE SAYS THIS EXPENSE SHOULD BE.
