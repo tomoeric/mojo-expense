@@ -30,7 +30,18 @@ pnpm run build
 The Replit workspace picks up local commits on its own (an edit in the Replit
 editor, an agent run), so `git pull` fails with `divergent branches` often
 enough that making it a troubleshooting step means it is missing exactly when
-it is needed. The `git branch backup-local-…` line runs first on purpose: it
+it is needed.
+
+WHAT CREATES THEM, since "Replit commits on its own" sounds like hand-waving
+until you know which files: **`.replit` and `pnpm-lock.yaml` are both tracked.**
+Replit rewrites `.replit` itself whenever the run config, ports or deployment
+settings change, and `pnpm install` there can rewrite the lockfile when its
+pnpm differs from the one that produced it. Either leaves a diff the
+workspace's Git pane commits. Neither can simply be untracked: `.replit`
+carries load-bearing config (VM deployment target, the host-chromium package,
+port 5000) that a fresh clone would lose, and a lockfile belongs in the repo.
+There is no CI and nothing else pushes, so a commit on `origin/main` that
+nobody here wrote does not happen — a divergence is always the workspace. The `git branch backup-local-…` line runs first on purpose: it
 parks whatever the workspace had on a dated branch, so the `reset --hard` never
 destroys anything — which is what makes it safe to hand over unconditionally.
 
