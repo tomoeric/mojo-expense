@@ -268,6 +268,66 @@ try {
     check("…and nothing was saved", !names.includes("save it"), names.join(" → "));
   }
 
+  console.log("\n3f. SUBMIT is never pressed, and SAVE DRAFT is the save");
+  /*
+   * The real form ends CANCEL · SUBMIT · SAVE DRAFT. The shipped
+   * selector included button[type="submit"], and the fallback was "the
+   * last enabled button that matched" — so the only thing between an
+   * edit and SUBMITTING somebody's expense for approval was which
+   * order those two happened to be in the DOM. The promise on the card
+   * is that it attaches and edits and never submits, approves or
+   * denies; that has to hold for the fallback too.
+   */
+  mock.reset();
+  mock.set({ menuStyle: "none", rowOpens: true, personalForm: true });
+  {
+    const run = await attachAndAnnotate(LONE, {
+      fields: [{ field: "purpose", value: "AI Development and Use" }],
+    }, SEL, mock.url, LOGIN, { personalQueue: true });
+    check("it saves", run.steps.find((s) => s.name === "save it")?.ok === true,
+      run.steps.find((s) => s.name === "save it")?.detail ?? "no save step");
+    check("…AND SUBMIT WAS NEVER PRESSED", mock.state().submitted === 0,
+      `pressed ${mock.state().submitted} time(s)`);
+  }
+  // Even when SAVE DRAFT is the only thing missing, SUBMIT is not a
+  // fallback: better to fail loudly than to submit somebody's expense.
+  mock.reset();
+  mock.set({ menuStyle: "none", rowOpens: true, personalForm: true });
+  {
+    const run = await attachAndAnnotate(LONE, {
+      fields: [{ field: "purpose", value: "AI Development and Use" }],
+    }, { ...SEL, editSave: 'button[type="submit"]' }, mock.url, LOGIN,
+    { personalQueue: true });
+    check("a selector pointing AT submit still does not press it",
+      mock.state().submitted === 0, `pressed ${mock.state().submitted} time(s)`);
+    check("…and it says why rather than going quiet",
+      /submits or decides the expense/.test(
+        run.steps.find((s) => s.name === "save it")?.detail ?? ""),
+      run.steps.find((s) => s.name === "save it")?.detail ?? "no save step");
+  }
+
+  console.log("\n3g. A warning that mentions receipts is not a receipt");
+  /*
+   * "a receipt is already attached" — and so the upload was SKIPPED,
+   * the one thing the visit was for — on an expense whose own dialog
+   * reads "There are no receipts attached to this expense". The
+   * selector was [class*="receipt" i] and the form carries a Warnings
+   * block saying "Expenses must have a receipt".
+   */
+  mock.reset();
+  mock.set({ menuStyle: "none", rowOpens: true, personalForm: true });
+  {
+    const run = await attachAndAnnotate(LONE, {
+      receipt: { name: "r.pdf", contentType: "application/pdf", bytes: Buffer.from("%PDF-1.4") },
+    }, SEL, mock.url, LOGIN, { personalQueue: true });
+    check("the warning is not mistaken for an attachment", !run.alreadyAttached,
+      run.steps.find((s) => s.name === "read what is there now")?.detail ?? "");
+    check("…so the upload is actually attempted",
+      run.steps.some((s) => s.name === "attach the receipt"
+        && !/skipped/.test(s.detail)),
+      run.steps.find((s) => s.name === "attach the receipt")?.detail ?? "no attach step");
+  }
+
   console.log("\n4. Two people's identical rows are REFUSED, not guessed between");
   /*
    * The cost of dropping the cardholder check, and the net under it.

@@ -3709,6 +3709,34 @@ Worth writing down, because three bugs came from guessing at it:
   drops a stored team path on a personal lane and keeps every other one
   — a tenant may hold the personal list somewhere this does not know.
 
+## SUBMIT is never pressed. Not by a selector, not by a fallback
+
+- The form ends **CANCEL · SUBMIT · SAVE DRAFT**. The shipped `editSave`
+  included `button[type="submit"]`, its "named save" test was
+  `/^save$/i` (which SAVE DRAFT fails), and the fallback was *the last
+  enabled button that matched* — so the only thing between an edit and
+  SUBMITTING somebody's expense for approval was DOM order.
+- `pressSave` now refuses any control reading SUBMIT, APPROVE, DENY,
+  SEND BACK or RETURN **whatever the selector says**, accepts SAVE DRAFT
+  as the named save, and fails loudly naming the button it would not
+  press. The default `editSave` no longer contains `button[type=
+  "submit"]`. It also searches the FORM, not the page: pointed at
+  `button[type="submit"]` it found one elsewhere entirely and clicked
+  it, reporting "saved".
+- The card's promise — "it attaches and edits, and never submits,
+  approves or denies" — has to hold for the fallback too.
+
+## Watching the write-back work
+
+- `live-view.ts` has taken frames all along and **only the export was
+  registered with it**, so the write-back — the thing anybody wants to
+  watch — showed "Nothing is running" throughout. It registers its page
+  now, `makeStepper` captions each frame with the step, and the Sending
+  card has a **Watch it work** button that polls
+  `/api/import/export-live.png` every 4s while something is queued.
+  Pull-only and rate-limited server-side: a tab left open costs the run
+  one encode every few seconds, not a video stream.
+
 ## The PERSONAL edit form, as described by somebody who opened it
 
 Written down 2026-11-01 rather than inferred. Four of these five fields
@@ -3761,6 +3789,14 @@ select and nothing else:
 - **Business Purpose** — a plain text box.
 - **Location / Site** — a dropdown.
 - **Department** — a dropdown that also matches when typed in.
+- **A warning that MENTIONS a receipt is not a receipt.** The panel
+  carries "Warnings · Expenses must have a receipt", the selector was
+  `[class*="receipt" i]`, so the run reported "a receipt is already
+  attached" and SKIPPED the upload — the one thing the visit was for —
+  on an expense whose own dialog reads "There are no receipts attached
+  to this expense". `editReceiptPresent` now wants a picture, a file
+  link or a named thumbnail, and that sentence on the page overrides
+  any selector guess outright.
 - **There is NO Description box.** The five above are the whole form.
   The write-back proposed a Description anyway, it was the FIRST write
   attempted, and it took the other four down with it — five failures,

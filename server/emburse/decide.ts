@@ -7,6 +7,7 @@ import {
   type Login, type StepResult,
 } from "./auto-export.js";
 import { withBrowser } from "./browser-lock.js";
+import { nowDoing, watching } from "./live-view.js";
 import { rememberCookies } from "./browser-state.js";
 
 /**
@@ -214,7 +215,15 @@ export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
     'select[name*="categ" i], input[name*="categ" i], input[placeholder*="categ" i], ' +
     '[data-testid*="categ" i]',
   editCategoryOption: '[role="option"], li[role="option"], li',
-  editSave: 'button:has-text("Save"), button:has-text("Update"), button[type="submit"]',
+  /*
+   * SAVE DRAFT on this tenant, and deliberately NOT `button[type=
+   * "submit"]`: the form's buttons are CANCEL, SUBMIT and SAVE DRAFT,
+   * and a selector that can match SUBMIT is one DOM-order change away
+   * from submitting somebody's expense. `pressSave` refuses it too.
+   */
+  editSave:
+    'button:has-text("Save draft"), button:has-text("Save Draft"), '
+    + 'button:has-text("Save"), button:has-text("Update")',
   /*
    * The description box, and the file input behind "add a
    * receipt".
@@ -246,8 +255,20 @@ export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
   editReceiptOpen:
     'button:has-text("UPLOAD A RECEIPT"), button:has-text("Upload a receipt"), '
     + '[aria-label*="upload" i], button:has-text("Add receipt")',
-  editReceiptPresent: '[data-testid*="receipt" i], img[alt*="receipt" i], '
-    + 'a[href*="receipt" i], [class*="receipt" i]',
+  /*
+   * SOMETHING THAT IS A RECEIPT, not something that mentions one.
+   *
+   * `[class*="receipt" i]` matched the form's own Warnings block —
+   * "Expenses must have a receipt" — so the check reported "a receipt
+   * is already attached" and SKIPPED the upload, which is the one
+   * thing the visit was for, on an expense whose own receipt dialog
+   * reads "There are no receipts attached to this expense". A picture,
+   * a link to a file, or a named thumbnail; not a sentence.
+   */
+  editReceiptPresent:
+    'img[alt*="receipt" i], img[src*="receipt" i], a[href*="receipt" i][href*="."], '
+    + '[data-testid*="receipt-thumb" i], [data-testid*="receipt-image" i], '
+    + '[data-testid*="attached-receipt" i]',
   /*
    * The other three boxes a vendor rule fills.
    *
@@ -286,8 +307,8 @@ export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
    * selector and is not one.
    */
   editCommentOpen:
-    'button:has-text("Add detail"), [role="button"]:has-text("Add detail"), '
-    + 'a:has-text("Add detail")',
+    'button:has-text("Add detail"), button:has-text("ADD DETAIL"), '
+    + '[role="button"]:has-text("Add detail"), a:has-text("Add detail")',
   editCommentField:
     'button:has-text("Comment"), [role="button"]:has-text("Comment"), '
     + 'a:has-text("Comment"), label:has-text("Comment")',
@@ -1367,7 +1388,12 @@ async function pressSave(
     await page.locator('[role="listbox"], [role="presentation"] [role="option"]')
       .first().waitFor({ state: "hidden", timeout: 2_000 }).catch(() => {});
 
-    const all = page.locator(selector);
+    /*
+     * IN THE FORM, not the page. Pointed at `button[type="submit"]`
+     * this found one somewhere else entirely and pressed it — a click
+     * on an unrelated control, reported as "saved".
+     */
+    const all = (await formScope(page)).locator(selector);
     const n = await all.count().catch(() => 0);
     const visible: { at: Locator; text: string; enabled: boolean }[] = [];
     for (let i = 0; i < n; i++) {
@@ -1382,14 +1408,35 @@ async function pressSave(
     if (visible.length === 0) {
       last = "nothing matching Save is visible on the form";
     } else {
-      // The one that says SAVE, then any other enabled one. A generic
-      // submit button elsewhere on the page is a worse guess than the
-      // button with the word on it.
-      const named = visible.filter((v) => /^save$/i.test(v.text) && v.enabled);
-      const other = visible.filter((v) => v.enabled);
+      /*
+       * SUBMIT IS NEVER PRESSED. Not by a selector, not by a fallback.
+       *
+       * This tenant's form ends in CANCEL · SUBMIT · SAVE DRAFT, the
+       * shipped selector included `button[type="submit"]`, and the
+       * fallback was "the last enabled button that matched" — so the
+       * only thing standing between an edit and SUBMITTING somebody's
+       * expense for approval was which order those two happened to be
+       * in the DOM. The app's promise is that it attaches and edits and
+       * never submits, approves or denies; that has to be true of the
+       * fallback as well as the happy path.
+       */
+      const forbidden = /^(submit|approve|deny|send back|return)\b/i;
+      const safe = visible.filter((v) => !forbidden.test(v.text));
+      // SAVE DRAFT is this tenant's save. The old test was /^save$/i,
+      // which it fails, so it was never the NAMED pick either.
+      const named = safe.filter((v) => /^save( draft)?$/i.test(v.text) && v.enabled);
+      const other = safe.filter((v) => v.enabled);
       const pick = named[0] ?? other[other.length - 1];
+      const refused = visible.filter((v) => forbidden.test(v.text)).map((v) => v.text);
       if (!pick) {
-        last = `Save is on the form but disabled — it reads "${visible.map((v) => v.text).join(" / ")}"`;
+        // Which of the two it is. "Save is disabled" about a SUBMIT
+        // button sends somebody to look for a greyed-out control that
+        // is not there.
+        last = refused.length > 0 && safe.length === 0
+          ? `the only thing matching Save on this form is "${refused.join(" / ")}", which `
+            + "submits or decides the expense. Nothing here will press that — point "
+            + "editSave at the form's own save button."
+          : `Save is on the form but disabled — it reads "${safe.map((v) => v.text).join(" / ")}"`;
       } else {
         try {
           await pick.at.click({ timeout: 8_000 });
@@ -2810,6 +2857,19 @@ export async function correctCategory(
       close = opened.close;
       page = await opened.context.newPage();
       page.setDefaultTimeout(stepTimeoutMs());
+      /*
+       * WATCHABLE WHILE IT WORKS.
+       *
+       * "How can I see what it is doing?" — the live view existed and
+       * only the export was registered with it, so the write-back,
+       * which is the thing anybody actually wants to watch, showed
+       * "Nothing is running" throughout. One line, and the same
+       * pull-only, rate-limited frame the export hands out.
+       */
+      const stopWatching = watching(page, `sending ${target.merchant}`, login.email);
+      close = (() => { const shut = opened.close; return async () => {
+        stopWatching(); await shut();
+      }; })();
 
       if (!(await signInOnce(page, sel, emburseUrl, login, step, opts.onChallenge))) {
         return { ok: false, steps, matchedRow: null, screenshot: null };
@@ -3664,6 +3724,18 @@ export async function attachAndAnnotate(
             break;
           }
         }
+        /*
+         * AND THE PAGE'S OWN WORDS WIN.
+         *
+         * Emburse says it outright — "There are no receipts attached to
+         * this expense" — and no selector guess should be able to
+         * out-vote a sentence like that. Getting this wrong skips the
+         * upload, which is the one thing the visit is for, and leaves
+         * a warning on the expense saying it needs a receipt.
+         */
+        const says = (await page!.locator("body").innerText().catch(() => ""))
+          .replace(/\s+/g, " ");
+        if (/no receipts? (are )?attached/i.test(says)) alreadyAttached = false;
         const box = await firstVisibleIn(within, sel.editNote!, 2000);
         noteBefore = box ? (await box.inputValue().catch(() => "")) : null;
         if (want.noteWas !== undefined && noteBefore !== null

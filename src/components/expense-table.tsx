@@ -2060,6 +2060,89 @@ function Candidates({ id, merchant }: { id: string; merchant: string }) {
 }
 
 /**
+ * A picture of the browser that is doing it, refreshed while you watch.
+ *
+ * The app has taken these all along and nothing ever showed one. It is
+ * PULL — no frame is captured unless somebody is looking — and the
+ * server rate-limits it, so leaving this open costs the run one encode
+ * every few seconds rather than a video stream.
+ *
+ * Quiet when there is nothing to see: between attempts the worker holds
+ * no browser, and a 404 then is the ordinary case, not a fault.
+ */
+function LiveShot() {
+  const [src, setSrc] = useState("");
+  const [doing, setDoing] = useState("");
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    let dropped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = async () => {
+      try {
+        const res = await fetch(`/api/import/export-live.png?t=${Date.now()}`);
+        if (dropped) return;
+        if (res.ok) {
+          setDoing(res.headers.get("x-doing") ?? "");
+          const blob = await res.blob();
+          if (dropped) return;
+          setSrc((was) => { if (was) URL.revokeObjectURL(was); return URL.createObjectURL(blob); });
+        } else {
+          setDoing("");
+        }
+      } catch { /* a missed frame is not worth saying anything about */ }
+      if (!dropped) timer = setTimeout(() => void tick(), 4000);
+    };
+    void tick();
+    return () => { dropped = true; if (timer) clearTimeout(timer); };
+  }, [open]);
+
+  useEffect(() => () => { if (src) URL.revokeObjectURL(src); }, [src]);
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-border
+                   px-2.5 py-1 text-[11px] font-semibold hover:bg-muted"
+      >
+        Watch it work
+      </button>
+    );
+  }
+  return (
+    <div className="space-y-1 rounded-lg border border-border bg-background p-2">
+      <div className="flex items-center gap-2">
+        <span className="relative flex h-2 w-2">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full
+                           bg-emerald-500 opacity-75" />
+          <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-600" />
+        </span>
+        <span className="text-[11px] font-semibold">
+          {doing || "waiting for the browser to start"}
+        </span>
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          className="ml-auto rounded px-1.5 py-0.5 text-[11px] hover:bg-muted"
+        >
+          Stop watching
+        </button>
+      </div>
+      {src
+        ? <img src={src} alt="What the browser is looking at right now"
+               className="w-full rounded border border-border" />
+        : <p className="py-6 text-center text-[11px] text-muted-foreground">
+            Nothing is on screen yet — the browser starts when the send begins,
+            and between attempts there is nothing to show.
+          </p>}
+    </div>
+  );
+}
+
+/**
  * What is on its way to Emburse for one expense, and how far it got.
  *
  * Asked for as *"how to tell details on sending?"* — the Sending
@@ -2206,6 +2289,12 @@ function SendDetail({ id }: { id: string }) {
         )}
       </div>
       {error && <p className="text-red-700 dark:text-red-400">{error}</p>}
+      {/* WHAT IT IS DOING, WHILE IT DOES IT.
+          Asked directly: "how can I see what it is doing?" The step log
+          below answers it afterwards; this answers it during. The frame
+          is pulled only while something is queued and only while this is
+          open, because taking it costs the run itself CPU. */}
+      {writes.some((w) => w.state === "queued") && <LiveShot />}
       <ul className="space-y-1">
         {writes.map((w) => (
           <li key={w.kind} className="flex flex-wrap items-start gap-x-2 gap-y-0.5">

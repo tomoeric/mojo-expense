@@ -616,6 +616,9 @@ export async function loadPlaywright() {
 export function makeStepper(steps: StepResult[]) {
   return async (name: string, fn: () => Promise<string>): Promise<boolean> => {
     const started = Date.now();
+    // The live picture gets a caption for free: whoever is watching sees
+    // the step it is on, not just a screenshot of a page mid-change.
+    nowDoing(name);
     try {
       steps.push({ name, ok: true, detail: await fn(), ms: Date.now() - started });
       return true;

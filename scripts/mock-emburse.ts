@@ -138,6 +138,8 @@ type State = {
    * test at all.
    */
   personalForm: boolean;
+  /** How many times SUBMIT was pressed. Must stay 0: this never submits. */
+  submitted: number;
   /**
    * A grid that carries form-shaped controls of its own.
    *
@@ -311,6 +313,7 @@ const state: State = {
   pageSize: 0,
   rowOpens: false,
   personalForm: false,
+  submitted: 0,
   gridDecoys: false,
   actionsWork: true,
   ghostButtons: false,
@@ -499,7 +502,15 @@ const grid = (search: string, pageNo = 1) => {
      * option does not. Comment is absent until ADD DETAIL, then
      * COMMENT, are pressed, in that order.
      */
-    ? `<div id="edit" hidden>
+    /*
+     * A DIALOG, because the real one is: "Edit Expense Details" opens
+     * as a side panel OVER the grid, and everything the run does has
+     * to happen inside it. A plain <div> here let the fixture pass
+     * while the live form did not — the page-wide selectors that
+     * picked up the grid's checkboxes had nothing to pick up in a mock
+     * whose grid and form were the same flat page.
+     */
+    ? `<div id="edit" role="dialog" aria-label="Edit Expense Details" hidden>
        <label>Category</label>
        <select name="category" aria-label="Category">
          <option>Meals</option>
@@ -516,12 +527,24 @@ const grid = (search: string, pageNo = 1) => {
        <select name="department" aria-label="Department">
          <option></option><option>IT &amp; Compliance</option><option>Operations</option>
        </select>
-       <button class="ad" type="button">Add detail</button>
+       <button class="ad" type="button">ADD DETAIL</button>
        <div id="detail" hidden><button class="cm" type="button">Comment</button></div>
        <div id="cbox" hidden>
          <label>Comment</label><textarea aria-label="Comment"></textarea>
        </div>
-       <button class="sv" type="button">Save</button>
+       <!-- The form's own warning, which is where "a receipt is already
+            attached" came from: a block with the word "receipt" in it,
+            on an expense that has none. -->
+       <div class="receipt-warning">Warnings: Expenses must have a receipt</div>
+       <p>There are no receipts attached to this expense.</p>
+       <!-- CANCEL / SUBMIT / SAVE DRAFT, in that order, as the real form
+            ends. SUBMIT sends the expense for approval and must never be
+            pressed by anything here — it is a <button type="submit"> and
+            it comes BEFORE the save, so an order-dependent fallback
+            lands on it. -->
+       <button class="cx" type="button">CANCEL</button>
+       <button class="submit-it" type="submit">SUBMIT</button>
+       <button class="sv" type="button">SAVE DRAFT</button>
      </div>`
     : `<div id="edit" hidden>
        <label>Category</label>
@@ -577,6 +600,8 @@ const grid = (search: string, pageNo = 1) => {
         if (b.classList.contains("mn")) { target = row; document.getElementById("menu").hidden = false; return; }
         if (b.classList.contains("sb")) { return; }
         // ADD DETAIL, then COMMENT: the box is built by the second press.
+        // Recorded, so a test can prove nothing ever pressed it.
+        if (b.classList.contains("submit-it")) { state.submitted += 1; return; }
         if (b.classList.contains("ad")) {
           document.getElementById("detail").hidden = false; return;
         }
@@ -1326,7 +1351,7 @@ const reset = () =>
     // the grid to divs left every later test running against divs — and the
     // one that then failed looked like a regression in whatever it was
     // actually testing, rather than leftover state from three tests ago.
-    gridShape: "table", padRows: 0, pageSize: 0, rowOpens: false, personalForm: false, gridDecoys: false, actionsWork: true, ghostButtons: false, ghostRows: false, twinRows: false, staleGrid: false, actioned: new Set<string>(), categories: new Map<string, string>(), searchMode: "substring",
+    gridShape: "table", padRows: 0, pageSize: 0, rowOpens: false, personalForm: false, submitted: 0, gridDecoys: false, actionsWork: true, ghostButtons: false, ghostRows: false, twinRows: false, staleGrid: false, actioned: new Set<string>(), categories: new Map<string, string>(), searchMode: "substring",
     hiddenFromSearch: false, userFilter: "", hangOpens: 0, hangAll: false, oidcHop: false,
     formatControl: "links",
     chipsUnmatchable: false, appPaintMs: 0, showNavLabel: true, menuStyle: "labelled",
