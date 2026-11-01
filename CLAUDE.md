@@ -3709,6 +3709,27 @@ Worth writing down, because three bugs came from guessing at it:
   drops a stored team path on a personal lane and keeps every other one
   — a tenant may hold the personal list somewhere this does not know.
 
+## Sending and Sent are different questions
+
+- **Sending** holds only what is still in flight (`queued`). **Sent**
+  (tab key `landed`, because `sent` was already the CATEGORY
+  corrections tab) holds what reached Emburse: `applied` or `already`.
+  A refusal stays in **Receipts**, where the retry and the step log
+  are.
+- Asked for the moment the first write-back landed: *"worked, when
+  completed with no errors. Move this to a new Sent tab."* One tab
+  holding both answered neither of the questions it exists for — "is
+  anything stuck" and "did it work".
+- `already` counts as landed: a receipt Emburse turned out to have is
+  the same outcome, and only differs in who got there first.
+- Sent counts across EVERY row, not the undecided ones, so a receipt
+  that landed and was then approved stays in the record instead of
+  emptying the tab of its successes.
+- **Tab names have their count glued on** — the accessible name is
+  "Sent2", not "Sent 2" — so `/^Sent\b/` matches nothing (no word
+  boundary between `t` and `2`) and `/^Sent/` also catches "Sending".
+  Match `/^Sent\s*\d/`.
+
 ## SUBMIT is never pressed. Not by a selector, not by a fallback
 
 - The form ends **CANCEL · SUBMIT · SAVE DRAFT**. The shipped `editSave`

@@ -634,7 +634,28 @@ const isSendingReceipt = (r: Row): boolean => {
   const m = r.line.matchState;
   // `matched` is NOT here: that is a receipt chosen and written
   // out, waiting on a press. It is work, so it stays in Receipts.
-  return m === "queued" || m === "sent" || m === "already";
+  //
+  // Nor is a landed one, any more — see `hasLandedReceipt`. While
+  // Sending held both, the tab stopped being a list of things in
+  // flight and became a pile where the one still moving was
+  // indistinguishable from the twenty that had arrived.
+  return m === "queued";
+};
+
+/**
+ * IT LANDED. Every line applied, nothing refused.
+ *
+ * Asked for by name once the first one went through: *"worked, when
+ * completed with no errors. Move this to a new Sent tab."*
+ *
+ * `already` counts as landed: a receipt Emburse turned out to have
+ * already is the same outcome as one this app put there, and the only
+ * difference is who did it first. Anything refused stays in Sending,
+ * where the retry and the step log are.
+ */
+const hasLandedReceipt = (r: Row): boolean => {
+  const m = r.line.matchState;
+  return m === "sent" || m === "already";
 };
 
 /** A receipt that still wants something FROM YOU. */
@@ -655,6 +676,9 @@ const hasMatchedReceipt = (r: Row): boolean => {
 
 export type Tab =
   | "all" | "reading" | "matched" | "sending" | "flagged" | "clean" | "sent"
+  // "sent" was taken, by the CATEGORY corrections tab. "landed" is the
+  // receipts one: every line applied in Emburse, nothing refused.
+  | "landed"
   | "queued" | "approved" | "denied";
 
 /**
@@ -768,6 +792,11 @@ function FlagTabs({
   // Receipts you have pressed Send on. Their own tab, because
   // they are no longer a thing to do.
   const sending = waiting.filter(isSendingReceipt);
+  // Landed, across EVERY row rather than the undecided ones: a receipt
+  // that reached Emburse and was then approved is still something this
+  // app did, and dropping it on approval would empty the tab of its
+  // successes and leave only what has not finished.
+  const landed = rows.filter(hasLandedReceipt);
   const groups = useMemo(() => {
     const counts = new Map<string, number>();
     for (const r of flagged) for (const g of r.flagGroups) counts.set(g, (counts.get(g) ?? 0) + 1);
@@ -807,6 +836,19 @@ function FlagTabs({
      */
     ...(sending.length > 0
       ? [{ key: "sending" as const, label: "Sending", n: sending.length }]
+      : []),
+    /*
+     * AND THE ONES THAT GOT THERE. Every line applied, nothing
+     * refused — the receipt is on the expense in Emburse and the
+     * fields are set.
+     *
+     * Its own tab because "sending" and "sent" are different
+     * questions: one is "is anything stuck", the other is "did it
+     * work". Sharing one tab answered neither once there were more
+     * than a couple.
+     */
+    ...(landed.length > 0
+      ? [{ key: "landed" as const, label: "Sent", n: landed.length }]
       : []),
     { key: "flagged" as const, label: "Flagged", n: flagged.length },
     // Unflagged means judged and clean. An expense nobody has read the
@@ -1196,6 +1238,10 @@ export function ExpenseTable({
       base = base.filter((r) => isDone(r) && r.decision?.decision === "deny");
     } else if (tab === "queued") {
       base = base.filter(isQueued);
+    } else if (tab === "landed") {
+      // Across every row, approved ones included: this tab is the
+      // record of what reached Emburse, not a list of work left.
+      base = base.filter(hasLandedReceipt);
     } else {
       // Submitted rows leave the undecided lists the moment they
       // are pressed, rather than sitting there reading "sending".
@@ -1439,7 +1485,7 @@ export function ExpenseTable({
 
       {sorted.length === 0 ? (
         <Empty>{rows.length === 0 ? emptyMessage : `Nothing matches “${query}”.`}</Empty>
-      ) : tab === "matched" || tab === "sending" ? (
+      ) : tab === "matched" || tab === "sending" || tab === "landed" ? (
         /*
          * THE MATCHED TAB IS NOT ANOTHER TABLE.
          *
