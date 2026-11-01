@@ -3822,6 +3822,21 @@ select and nothing else:
   manager-queue expenses ("Receipt write-back is for your own
   expenses"), so this path is personal-only end to end and a lane test
   would read as though there were another form to keep it for.
+- **ADD DETAIL is a DROPDOWN**, so what it offers are MENU ITEMS.
+  `editCommentField` looked for a button, a link or a label, so nothing
+  was ever clicked, no box was ever built, and the failure read "no
+  Comment control on the edit form matched …" while listing the six
+  controls that ARE on the form and are not the point. When the box
+  still cannot be opened, `revealComment` now names what the menu
+  offered instead of leaving the next step to report a mystery.
+- **A TEXT BOX IS NOT A DROPDOWN, even with a menu open beside it.**
+  Comment is a textarea reached THROUGH a menu, so at the moment it is
+  typed into, "Comment | Attendees | Mileage" may still be on screen —
+  read as options those became "the Comment list does not offer 'ESS'",
+  a refusal to write a comment because a menu was open. `setFormField`
+  decides from the control: `role=combobox`/`listbox`/`aria-haspopup`
+  chooses from a list, anything else is typed into and verified by
+  reading the value back.
 - **Comment** — **not on the form until it is asked for.** Press ADD
   DETAIL, then COMMENT, and only then is there a box. Without that the
   write reports a missing selector about a box that does not exist yet,

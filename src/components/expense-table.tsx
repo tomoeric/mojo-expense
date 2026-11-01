@@ -2073,6 +2073,7 @@ function Candidates({ id, merchant }: { id: string; merchant: string }) {
 function LiveShot() {
   const [src, setSrc] = useState("");
   const [doing, setDoing] = useState("");
+  const [held, setHeld] = useState("");
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -2092,6 +2093,25 @@ function LiveShot() {
           setDoing("");
         }
       } catch { /* a missed frame is not worth saying anything about */ }
+      /*
+       * AND WHAT HAS THE BROWSER, when the answer is not "us".
+       *
+       * There is ONE Chromium, process-wide, because the profile it
+       * keeps is what stops Emburse asking for a code every time. A
+       * sign-in parked on a code prompt holds it for as long as it
+       * waits — so every send queues behind it, and this panel said
+       * "waiting for the browser to start", which sounds like a slow
+       * start and is actually a block that will never clear itself.
+       */
+      try {
+        const q = await fetch("/api/decisions");
+        if (!dropped && q.ok) {
+          const out = await q.json() as {
+            browser?: { holder?: { label: string } | null; waiting?: string[] };
+          };
+          setHeld(out.browser?.holder?.label ?? "");
+        }
+      } catch { /* the picture is still worth showing without it */ }
       if (!dropped) timer = setTimeout(() => void tick(), 4000);
     };
     void tick();
@@ -2121,7 +2141,8 @@ function LiveShot() {
           <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-600" />
         </span>
         <span className="text-[11px] font-semibold">
-          {doing || "waiting for the browser to start"}
+          {doing || (held ? `waiting — the browser is busy with “${held}”`
+            : "waiting for the browser to start")}
         </span>
         <button
           type="button"
@@ -2135,8 +2156,12 @@ function LiveShot() {
         ? <img src={src} alt="What the browser is looking at right now"
                className="w-full rounded border border-border" />
         : <p className="py-6 text-center text-[11px] text-muted-foreground">
-            Nothing is on screen yet — the browser starts when the send begins,
-            and between attempts there is nothing to show.
+            {held
+              ? `There is one browser, and “${held}” has it. This send runs when that `
+                + "finishes — a sign-in parked on a verification code holds it until "
+                + "somebody answers the code or gives up on it."
+              : "Nothing is on screen yet — the browser starts when the send begins, "
+                + "and between attempts there is nothing to show."}
           </p>}
     </div>
   );

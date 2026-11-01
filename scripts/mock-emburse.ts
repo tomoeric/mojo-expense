@@ -527,8 +527,16 @@ const grid = (search: string, pageNo = 1) => {
        <select name="department" aria-label="Department">
          <option></option><option>IT &amp; Compliance</option><option>Operations</option>
        </select>
-       <button class="ad" type="button">ADD DETAIL</button>
-       <div id="detail" hidden><button class="cm" type="button">Comment</button></div>
+       <!-- ADD DETAIL is a DROPDOWN on the real form, so what it offers
+            are menu items. The fixture had a plain button, which is why
+            the selector that looked for a button passed here and
+            clicked nothing live. -->
+       <button class="ad" type="button" aria-haspopup="menu">ADD DETAIL</button>
+       <div id="detail" role="menu" hidden>
+         <div role="menuitem" class="cm">Comment</div>
+         <div role="menuitem">Attendees</div>
+         <div role="menuitem">Mileage</div>
+       </div>
        <div id="cbox" hidden>
          <label>Comment</label><textarea aria-label="Comment"></textarea>
        </div>
@@ -581,7 +589,7 @@ const grid = (search: string, pageNo = 1) => {
       var ROW_OPENS = ${state.rowOpens ? "true" : "false"};
       var target = null;
       document.addEventListener("click", function (e) {
-        var b = e.target.closest("button, [data-ctl]"); if (!b) return;
+        var b = e.target.closest("button, [data-ctl], [role=menuitem]"); if (!b) return;
         var row = b.closest("tr") || b.closest('[role="row"]');
         if (b.classList.contains("ap")) {
           if (!live) return;
@@ -614,6 +622,8 @@ const grid = (search: string, pageNo = 1) => {
           document.getElementById("detail").hidden = false; return;
         }
         if (b.classList.contains("cm")) {
+          // The menu closes behind the choice, as a menu does.
+          document.getElementById("detail").hidden = true;
           document.getElementById("cbox").hidden = false; return;
         }
         if (b.classList.contains("ed")) {

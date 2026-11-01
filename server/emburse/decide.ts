@@ -324,8 +324,19 @@ export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
   editCommentOpen:
     'button:has-text("Add detail"), button:has-text("ADD DETAIL"), '
     + '[role="button"]:has-text("Add detail"), a:has-text("Add detail")',
+  /*
+   * ADD DETAIL IS A DROPDOWN, so what it offers are MENU ITEMS.
+   *
+   * This looked for a button, a link or a label, and the form's own
+   * control is "ADD DETAIL ▾" — press it and a menu opens. So nothing
+   * was ever clicked, no box was ever built, and the failure read "no
+   * Comment control on the edit form matched …" while listing six
+   * controls that are the rest of the form.
+   */
   editCommentField:
-    'button:has-text("Comment"), [role="button"]:has-text("Comment"), '
+    '[role="menuitem"]:has-text("Comment"), [role="option"]:has-text("Comment"), '
+    + '[role="menu"] li:has-text("Comment"), [role="listbox"] li:has-text("Comment"), '
+    + 'button:has-text("Comment"), [role="button"]:has-text("Comment"), '
     + 'a:has-text("Comment"), label:has-text("Comment")',
 };
 
@@ -3507,8 +3518,40 @@ async function revealComment(
     await page.waitForTimeout(600);
     if (await box().isVisible().catch(() => false)) break;
   }
-  if (pressed.length === 0) return "";
-  return `pressed ${pressed.map((p) => `\u201c${p}\u201d`).join(" then ")}`;
+  if (await box().isVisible().catch(() => false)) {
+    return `pressed ${pressed.map((p) => `\u201c${p}\u201d`).join(" then ")}`;
+  }
+
+  /*
+   * STILL NO BOX. Say what the menu offered, rather than letting the
+   * next step report a missing control and list the rest of the form.
+   *
+   * "no Comment control matched … What IS on the form: input
+   * role=combobox | input role=combobox | input | input name=note | …"
+   * is six controls that are not the point and no word about the one
+   * press that would have built the seventh.
+   */
+  const items: string[] = [];
+  const menu = where.locator(
+    '[role="menuitem"], [role="option"], [role="menu"] li, [role="menu"] button');
+  const n = Math.min(await menu.count().catch(() => 0), 20);
+  for (let i = 0; i < n; i++) {
+    const one = menu.nth(i);
+    if (!(await one.isVisible().catch(() => false))) continue;
+    const text = (await one.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+    if (text) items.push(text);
+  }
+  if (pressed.length === 0 && items.length === 0) return "";
+  throw new Error(
+    `the Comment box is not on the form and could not be opened. `
+    + `${pressed.length > 0
+      ? `Pressed ${pressed.map((p) => `\u201c${p}\u201d`).join(" then ")}. `
+      : `Nothing matching "${sel.editCommentOpen ?? ""}" was on the form to press. `}`
+    + `${items.length > 0
+      ? `What the menu offers: ${items.join(" | ")}. Point editCommentField at whichever `
+        + "of those adds a comment."
+      : "No menu opened. ADD DETAIL on this tenant is a dropdown — editCommentOpen has to "
+        + "match it, and editCommentField the item it offers."}`);
 }
 
 export function closest(options: string[], wanted: string): string | undefined {
@@ -3601,6 +3644,33 @@ async function setFormField(
   await field.fill("").catch(() => undefined);
   await field.pressSequentially(wanted, { delay: 15 }).catch(() => undefined);
   await page.waitForTimeout(500);
+
+  /*
+   * A TEXT BOX IS NOT A DROPDOWN, even when a menu is open beside it.
+   *
+   * Comment is a plain textarea, and it is reached by opening the ADD
+   * DETAIL menu — so at the moment it is typed into, a menu offering
+   * "Comment | Attendees | Mileage" may still be on screen. Read as
+   * options, those became "the Comment list does not offer 'ESS'. It
+   * offered: Comment | Attendees | Mileage", which is a refusal to
+   * write a comment because a menu was open.
+   *
+   * What the control IS settles it: a combobox or a select chooses
+   * from a list; an input or a textarea without that role is typed
+   * into, and the only check that means anything is what it now reads.
+   */
+  const role = (await field.getAttribute("role").catch(() => null)) ?? "";
+  const popup = (await field.getAttribute("aria-haspopup").catch(() => null)) ?? "";
+  const choosesFromAList =
+    role === "combobox" || role === "listbox" || popup === "listbox" || popup === "menu";
+  if (!choosesFromAList) {
+    const got = (await field.inputValue().catch(() => "")).trim();
+    if (got.toLowerCase() !== wanted.trim().toLowerCase()) {
+      throw new Error(`\u201c${wanted}\u201d did not go into ${label}: the box now reads `
+        + `\u201c${got || "(empty)"}\u201d. Nothing was saved.`);
+    }
+    return `typed \u201c${wanted}\u201d (${how})`;
+  }
 
   const options = page.locator(optionSel);
   const n = Math.min(await options.count().catch(() => 0), 40);

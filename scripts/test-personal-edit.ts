@@ -160,7 +160,7 @@ try {
     check("Department chose from the dropdown",
       said("set Department")?.ok === true,
       said("set Department")?.detail ?? "no such step");
-    check("Comment pressed ADD DETAIL then COMMENT to get its box",
+    check("Comment opened the ADD DETAIL menu and picked its item",
       /Add detail/i.test(said("set Comment")?.detail ?? "")
       && /Comment/.test(said("set Comment")?.detail ?? ""),
       said("set Comment")?.detail ?? "no such step");
@@ -350,6 +350,32 @@ try {
     check("…not treated as a list offering the warning",
       !/Expenses must have a receipt/.test(said?.detail ?? ""), said?.detail ?? "");
     check("…and the visit saves", run.ok, `\n     ${trace(run.steps)}`);
+  }
+
+  console.log("\n3i. When the comment box cannot be opened, say what the menu offered");
+  /*
+   * ADD DETAIL is a DROPDOWN, and the selector looked for a button, a
+   * link or a label — so nothing was clicked, no box was built, and
+   * the failure read "no Comment control on the edit form matched …"
+   * followed by the six controls that ARE on the form and are not the
+   * point. The one press that would have built the seventh went
+   * unmentioned.
+   */
+  mock.reset();
+  mock.set({ menuStyle: "none", rowOpens: true, personalForm: true });
+  {
+    const run = await attachAndAnnotate(LONE, {
+      fields: [{ field: "comment", value: "ESS" }],
+    }, { ...SEL, editCommentField: 'button:has-text("NoSuchThing")' },
+    mock.url, LOGIN, { personalQueue: true });
+    const said = run.steps.find((s) => s.name === "set Comment");
+    check("it fails on the box, not on a mystery selector", said?.ok === false,
+      said?.detail?.slice(0, 90) ?? "no such step");
+    check("…saying the box could not be opened",
+      /could not be opened/.test(said?.detail ?? ""), said?.detail?.slice(0, 160) ?? "");
+    check("…and listing what the ADD DETAIL menu offers",
+      /Attendees/.test(said?.detail ?? "") && /Mileage/.test(said?.detail ?? ""),
+      said?.detail?.slice(-200) ?? "");
   }
 
   console.log("\n4. Two people's identical rows are REFUSED, not guessed between");
