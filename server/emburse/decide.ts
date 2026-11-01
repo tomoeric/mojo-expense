@@ -70,6 +70,7 @@ export type DecisionSelectorKey =
   | "editMenuItem" | "editCategory" | "editCategoryOption" | "editSave"
   | "editNote" | "editReceipt" | "editReceiptPresent"
   | "editPurpose" | "editLocation" | "editDepartment" | "editComment"
+  | "editCommentOpen" | "editCommentField"
   | "editReceiptOpen";
 
 /**
@@ -274,6 +275,22 @@ export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
     'textarea[aria-label*="comment" i], input[aria-label*="comment" i], '
     + 'textarea[name*="comment" i], input[name*="comment" i], '
     + 'input[id*="comment" i], [data-testid*="comment" i]',
+  /*
+   * THE COMMENT BOX IS NOT ON THE FORM UNTIL IT IS ASKED FOR.
+   *
+   * "Comment requires Add detail to be clicked — click comment to add
+   * box", in the owner's description of this tenant's form. Two
+   * presses, in that order, and only then is there anything to type
+   * into. Without them the comment write reports a missing selector
+   * about a box that does not exist yet — which reads as a wrong
+   * selector and is not one.
+   */
+  editCommentOpen:
+    'button:has-text("Add detail"), [role="button"]:has-text("Add detail"), '
+    + 'a:has-text("Add detail")',
+  editCommentField:
+    'button:has-text("Comment"), [role="button"]:has-text("Comment"), '
+    + 'a:has-text("Comment"), label:has-text("Comment")',
 };
 
 export const DECISION_SELECTOR_HELP: Record<DecisionSelectorKey, string> = {
@@ -282,6 +299,12 @@ export const DECISION_SELECTOR_HELP: Record<DecisionSelectorKey, string> = {
   editLocation: "The Location / Site control on the edit form.",
   editDepartment: "The Department control on the edit form.",
   editComment: "The Comment box on the edit form.",
+  editCommentOpen:
+    "The control that reveals the detail fields — ADD DETAIL on this tenant. The comment "
+    + "box does not exist on the form until it is pressed.",
+  editCommentField:
+    "What is pressed after ADD DETAIL to put the comment box on screen — COMMENT on this "
+    + "tenant.",
   editReceiptOpen:
     "The button that opens the upload — UPLOAD A RECEIPT on this tenant. Only needed "
     + "when the form has no file input until it is pressed.",
@@ -3106,6 +3129,116 @@ async function findRow(
 }
 
 /**
+ * Get to the expense's editable form, by whichever route this list has.
+ *
+ * THE ⋮ MENU IS THE APPROVER'S ROUTE, NOT THE ONLY ONE. On the
+ * team-wide queue every row carries one, and the write-back was written
+ * against that. The PERSONAL list does not: its Action column holds
+ * SUBMIT (or QUEUE while a transaction is still pending), and the way
+ * to the fields is to open the expense itself. A run there found eleven
+ * ⋮-shaped matches, every one of them a hidden copy the grid renders to
+ * measure itself, and stopped with "none of them is visible" — true,
+ * and about a control that is not on that page at all.
+ *
+ * So: the menu if there is a real one, otherwise the expense. Both end
+ * at the same place, and the step says which was used, because "the
+ * edit form is open" tells nobody which of the two tenants' layouts
+ * they are looking at when the next step fails.
+ */
+async function openEditForm(
+  page: Page, row: Locator, sel: Record<string, string>, target: Target, ms: number,
+  /**
+   * A personal list, where the row IS the way in.
+   *
+   * "Click the row anywhere to open details", in the owner's own
+   * description of this form — there is no ⋮ on it at all. Trying the
+   * menu first there spends most of a step's budget proving a control
+   * absent before doing the thing that works, so on a personal list
+   * the order is reversed. The menu is still tried after, because
+   * being wrong about which list this is should cost a retry, not the
+   * write.
+   */
+  opts: { rowOpensIt?: boolean } = {},
+): Promise<string> {
+  /** Has something editable appeared? */
+  const formIsUp = async (within: number): Promise<boolean> => {
+    const parts = [sel.editNote, sel.editCategory, sel.editReceipt, '[role="dialog"]']
+      .filter(Boolean) as string[];
+    const until = Date.now() + within;
+    do {
+      for (const one of parts) {
+        if (await page.locator(one).first().isVisible().catch(() => false)) return true;
+      }
+      await page.waitForTimeout(200);
+    } while (Date.now() < until);
+    return false;
+  };
+
+  let menuWhy = "not tried";
+
+  const byMenu = async (): Promise<string | null> => {
+    try {
+      await (await rowMenuFor(page, row, sel, Math.min(ms, 8000))).click();
+      await page.waitForTimeout(400);
+      await clickFirstVisible(
+        page, sel.editMenuItem!, "Edit in the row menu", Math.min(ms, 8000));
+      await page.waitForTimeout(1200);
+      if (await formIsUp(2000)) return "opened from the row's \u22ee menu";
+      menuWhy = "the \u22ee menu opened but no edit form came up after it";
+    } catch (err) {
+      menuWhy = err instanceof Error ? err.message : String(err);
+    }
+    return null;
+  };
+
+  /*
+   * OPEN THE EXPENSE. Clicking the merchant cell rather than the row's
+   * centre: the centre of a row lands on whatever column happens to be
+   * in the middle, which on this grid is a Business Purpose that may
+   * itself be editable in place.
+   */
+  const byRow = async (): Promise<string | null> => {
+    const cell = row.locator('td, [role="cell"]')
+      .filter({ hasText: target.merchant.split(/\s+/)[0] ?? target.merchant }).first();
+    const where = (await cell.count().catch(() => 0)) > 0 ? cell : row;
+    await where.click({ timeout: Math.min(ms, 8000) }).catch(() => undefined);
+    await page.waitForTimeout(1200);
+    if (await formIsUp(Math.min(ms, 6000))) {
+      return opts.rowOpensIt
+        ? "opened the expense itself, as this list is meant to be used"
+        : "opened the expense itself — this list has no \u22ee menu on its rows";
+    }
+    return null;
+  };
+
+  const order = opts.rowOpensIt ? [byRow, byMenu] : [byMenu, byRow];
+  for (const route of order) {
+    const how = await route();
+    if (how) return how;
+  }
+
+  /*
+   * Neither route. Say what IS in the row, in enough detail to set a
+   * selector by hand, rather than widening one until something matches.
+   */
+  const bits: string[] = [];
+  const controls = row.locator('button, a, [role="button"]');
+  const n = Math.min(await controls.count().catch(() => 0), 12);
+  for (let i = 0; i < n; i++) {
+    const c = controls.nth(i);
+    if (!(await c.isVisible().catch(() => false))) continue;
+    const text = (await c.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+    const label = await c.getAttribute("aria-label").catch(() => null);
+    bits.push(`${text || label || "(no text)"}`);
+  }
+  throw new Error(
+    `Could not get to this expense's fields. The ${"\u22ee"} menu: ${menuWhy} `
+    + `Clicking the expense did not bring up an edit form either. `
+    + `What is clickable on that row: ${bits.length > 0 ? bits.join(", ") : "nothing visible"}. `
+    + `If one of those opens it, that is the control to name in Settings.`);
+}
+
+/**
  * What the form actually contains, when the control we wanted is not on it.
  *
  * The same reasoning as `whyNoGrid`: this sits one step from writing
@@ -3190,6 +3323,58 @@ async function whatIsOnTheForm(page: Page, tried: string, what: string): Promise
  * a photograph of the form; its labels were legible in that
  * photograph and are what a person looks for.
  */
+/**
+ * The one option that is plainly the same thing, or nothing.
+ *
+ * Punctuation and spacing dropped, then containment either way — a list
+ * that truncates its own entries ("Software, Licenses, and Subscr…")
+ * still answers to the full name, and a name with an ampersand still
+ * answers to one written with "and".
+ *
+ * Returns nothing when TWO options fit. A near-match is a convenience;
+ * guessing between two of them is a write to somebody's finance record
+ * on a coin toss.
+ */
+/**
+ * Put the comment box on the form, if it is not there yet.
+ *
+ * ADD DETAIL, then COMMENT. Returns what it pressed, for the step log,
+ * or "" when the box was already there — which is the ordinary case on
+ * a tenant whose form shows it outright, and must not be reported as
+ * work done.
+ */
+async function revealComment(
+  page: Page, sel: Record<string, string>, ms: number,
+): Promise<string> {
+  const box = () => page.locator(sel.editComment!).first();
+  if (await box().isVisible().catch(() => false)) return "";
+
+  const pressed: string[] = [];
+  for (const which of [sel.editCommentOpen, sel.editCommentField]) {
+    if (!which) continue;
+    const control = await firstVisible(page, which, Math.min(ms, 3000));
+    if (!control) continue;
+    const what = (await control.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+    await control.click().catch(() => undefined);
+    pressed.push(what || "a control");
+    await page.waitForTimeout(600);
+    if (await box().isVisible().catch(() => false)) break;
+  }
+  if (pressed.length === 0) return "";
+  return `pressed ${pressed.map((p) => `\u201c${p}\u201d`).join(" then ")}`;
+}
+
+export function closest(options: string[], wanted: string): string | undefined {
+  const flat = (t: string) => t.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const w = flat(wanted);
+  if (w.length < 4) return undefined;
+  const fits = options.filter((o) => {
+    const f = flat(o);
+    return f.length >= 4 && (f.includes(w) || w.includes(f));
+  });
+  return fits.length === 1 ? fits[0] : undefined;
+}
+
 async function setFormField(
   page: Page,
   sel: string | undefined,
@@ -3211,13 +3396,19 @@ async function setFormField(
     const labels = await field.evaluate((el) =>
       Array.from((el as HTMLSelectElement).options).map((o) => o.text.trim()),
     ).catch(() => [] as string[]);
-    const match = labels.find((l) => l.toLowerCase() === wanted.toLowerCase());
+    const exact = labels.find((l) => l.toLowerCase() === wanted.toLowerCase());
+    const match = exact ?? closest(labels, wanted);
     if (!match) {
       throw new Error(`the ${label} list does not offer \u201c${wanted}\u201d. It offers: `
         + `${labels.filter(Boolean).slice(0, 12).join(" | ") || "nothing"}.`);
     }
     await field.selectOption({ label: match });
-    return `chose \u201c${match}\u201d (${how})`;
+    // Said, not silent. A loose match is a judgement call about
+    // somebody's finance record, and "chose X" reads as though the list
+    // offered exactly that.
+    return exact
+      ? `chose \u201c${match}\u201d (${how})`
+      : `chose \u201c${match}\u201d, matched loosely against \u201c${wanted}\u201d (${how})`;
   }
 
   await field.click().catch(() => undefined);
@@ -3239,6 +3430,30 @@ async function setFormField(
     if (text.toLowerCase() === wanted.toLowerCase()) {
       await o.click();
       return `chose \u201c${text}\u201d from ${offered.length} offered (${how})`;
+    }
+  }
+
+  /*
+   * FUZZY, SECOND — "Category is a drop down list, fuzzy match if
+   * necessary", in the owner's own description of the form.
+   *
+   * Only after every visible option has been tried for an exact hit, so
+   * a loose rule can never take a list that holds the real answer. The
+   * rule itself is narrow: punctuation and spacing ignored, and one
+   * name wholly inside the other. "Software, Licenses, and
+   * Subscriptions" against a list reading "Software, Licenses, and
+   * Subscr…" is the case this exists for.
+   */
+  if (offered.length > 0) {
+    const near = closest(offered, wanted);
+    if (near) {
+      const pick = options.filter({ hasText: near }).first();
+      const one = (await pick.count().catch(() => 0)) > 0 ? pick : null;
+      if (one) {
+        await one.click();
+        return `chose \u201c${near}\u201d from ${offered.length} offered, matched loosely `
+          + `against \u201c${wanted}\u201d (${how})`;
+      }
     }
   }
 
@@ -3339,13 +3554,10 @@ export async function attachAndAnnotate(
         return found.detail;
       }))) return { ok: false, steps, matchedRow: null, screenshot: null };
 
-      if (!(await step("open the edit form", async () => {
-        await (await rowMenuFor(page!, row!, sel, ms)).click();
-        await page!.waitForTimeout(400);
-        await clickFirstVisible(page!, sel.editMenuItem!, "Edit in the row menu", ms);
-        await page!.waitForTimeout(1200);
-        return "the edit form is open";
-      }))) return { ok: false, steps, matchedRow: null, screenshot: null };
+      if (!(await step("open the edit form", () =>
+        openEditForm(page!, row!, sel, target, ms,
+          { rowOpensIt: Boolean(opts.personalQueue) }),
+      ))) return { ok: false, steps, matchedRow: null, screenshot: null };
 
       /*
        * WHAT IS ALREADY THERE, before anything is changed.
@@ -3458,9 +3670,24 @@ export async function attachAndAnnotate(
           department: { sel: sel.editDepartment, label: "Department" },
           comment: { sel: sel.editComment, label: "Comment" },
         }[f.field];
-        if (!(await step(`set ${where.label}`, () =>
-          setFormField(page!, where.sel, sel.editCategoryOption!, where.label, f.value, ms),
-        ))) return { ok: false, steps, matchedRow: null, screenshot: null };
+        if (!(await step(`set ${where.label}`, async () => {
+          /*
+           * THE COMMENT BOX HAS TO BE ASKED FOR FIRST.
+           *
+           * "Comment requires Add detail to be clicked — click comment
+           * to add box." Two presses, in that order, and only then is
+           * there anything to type into. Skipped when the box is
+           * already on screen, so a form that shows it outright — or a
+           * second comment in the same visit — does not press them
+           * again.
+           */
+          const opened = f.field === "comment"
+            ? await revealComment(page!, sel, ms)
+            : "";
+          const set = await setFormField(
+            page!, where.sel, sel.editCategoryOption!, where.label, f.value, ms);
+          return opened ? `${opened}, then ${set}` : set;
+        }))) return { ok: false, steps, matchedRow: null, screenshot: null };
       }
 
       if (!(await step("save it", async () => {

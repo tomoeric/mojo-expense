@@ -116,6 +116,29 @@ type State = {
    */
   pageSize: number;
   /**
+   * Clicking a row opens the expense, as the PERSONAL list does.
+   *
+   * That list has no ⋮ on its rows at all — its Action column holds
+   * SUBMIT, or QUEUE while a transaction is still pending — so the way
+   * to an expense's fields is to open the expense. The write-back was
+   * written against the approver's queue, where every row has a menu,
+   * and on the personal list it found eleven ⋮-shaped matches that were
+   * all hidden measuring copies and stopped there.
+   */
+  rowOpens: boolean;
+  /**
+   * The edit form as the PERSONAL tab actually builds it.
+   *
+   * Written down by the owner after opening one: Category is a
+   * dropdown that may need a fuzzy match, Business Purpose a text box,
+   * Location/Site a dropdown, Department a dropdown that also accepts
+   * typing, and Comment is NOT ON THE FORM until ADD DETAIL is pressed
+   * and then COMMENT. The old fixture had a Category select and
+   * nothing else, so four of the five fields were never driven by a
+   * test at all.
+   */
+  personalForm: boolean;
+  /**
    * Whether clicking APPROVE or confirming Deny actually removes the row.
    * Off reproduces a click that lands on nothing — which used to be
    * reported as "approved in Emburse" all the same.
@@ -275,6 +298,8 @@ const state: State = {
   gridShape: "table",
   padRows: 0,
   pageSize: 0,
+  rowOpens: false,
+  personalForm: false,
   actionsWork: true,
   ghostButtons: false,
   ghostRows: false,
@@ -448,8 +473,41 @@ const grid = (search: string, pageNo = 1) => {
   // real to drive. The categories are the ones the rows carry plus the two
   // a fuel purchase gets mis-coded between, which is the case this exists
   // for: an Exxon filed under Travel.
-  const EDIT_FORM =
-    `<div id="edit" hidden>
+  const EDIT_FORM = state.personalForm
+    /*
+     * The personal tab's form, as described by somebody who opened it.
+     *
+     * The Category list TRUNCATES its own entries — "Software,
+     * Licenses, and Subscr…" — which is the whole reason that list
+     * needs a fuzzy match: the expense carries the full name and the
+     * option does not. Comment is absent until ADD DETAIL, then
+     * COMMENT, are pressed, in that order.
+     */
+    ? `<div id="edit" hidden>
+       <label>Category</label>
+       <select name="category" aria-label="Category">
+         <option>Meals</option>
+         <option>Software, Licenses, and Subscr…</option>
+         <option>Auto Fee &amp; Fuel</option>
+       </select>
+       <label>Business Purpose</label>
+       <input name="purpose" aria-label="Business Purpose" />
+       <label>Location / Site</label>
+       <select name="location" aria-label="Location / Site">
+         <option></option><option>Corporate-Pure Magic</option><option>Kendall</option>
+       </select>
+       <label>Department</label>
+       <select name="department" aria-label="Department">
+         <option></option><option>IT &amp; Compliance</option><option>Operations</option>
+       </select>
+       <button class="ad" type="button">Add detail</button>
+       <div id="detail" hidden><button class="cm" type="button">Comment</button></div>
+       <div id="cbox" hidden>
+         <label>Comment</label><textarea aria-label="Comment"></textarea>
+       </div>
+       <button class="sv" type="button">Save</button>
+     </div>`
+    : `<div id="edit" hidden>
        <label>Category</label>
        <select name="category" aria-label="Category">
          <option>Meals</option>
@@ -473,6 +531,7 @@ const grid = (search: string, pageNo = 1) => {
     <script>
       var live = ${state.actionsWork ? "true" : "false"};
       var stale = ${state.staleGrid ? "true" : "false"};
+      var ROW_OPENS = ${state.rowOpens ? "true" : "false"};
       var target = null;
       document.addEventListener("click", function (e) {
         var b = e.target.closest("button, [data-ctl]"); if (!b) return;
@@ -500,6 +559,14 @@ const grid = (search: string, pageNo = 1) => {
           return;
         }
         if (b.classList.contains("mn")) { target = row; document.getElementById("menu").hidden = false; return; }
+        if (b.classList.contains("sb")) { return; }
+        // ADD DETAIL, then COMMENT: the box is built by the second press.
+        if (b.classList.contains("ad")) {
+          document.getElementById("detail").hidden = false; return;
+        }
+        if (b.classList.contains("cm")) {
+          document.getElementById("cbox").hidden = false; return;
+        }
         if (b.classList.contains("ed")) {
           document.getElementById("menu").hidden = true;
           document.getElementById("edit").hidden = false;
@@ -538,6 +605,17 @@ const grid = (search: string, pageNo = 1) => {
       document.addEventListener("keydown", function (e) {
         if (e.key === "Escape") { document.getElementById("menu").hidden = true; }
       });
+      if (ROW_OPENS) {
+        // The personal list: the row IS the way in. A click anywhere on
+        // it that is not one of its own controls opens the expense.
+        document.addEventListener("click", function (e) {
+          if (e.target.closest("button, a, [data-ctl]")) return;
+          var r = e.target.closest("tbody tr, [role=row]");
+          if (!r) return;
+          target = r;
+          document.getElementById("edit").hidden = false;
+        });
+      }
     </script>`;
 
   // A hidden APPROVE ahead of the real one, which is what a virtualised
@@ -1232,7 +1310,7 @@ const reset = () =>
     // the grid to divs left every later test running against divs — and the
     // one that then failed looked like a regression in whatever it was
     // actually testing, rather than leftover state from three tests ago.
-    gridShape: "table", padRows: 0, pageSize: 0, actionsWork: true, ghostButtons: false, ghostRows: false, twinRows: false, staleGrid: false, actioned: new Set<string>(), categories: new Map<string, string>(), searchMode: "substring",
+    gridShape: "table", padRows: 0, pageSize: 0, rowOpens: false, personalForm: false, actionsWork: true, ghostButtons: false, ghostRows: false, twinRows: false, staleGrid: false, actioned: new Set<string>(), categories: new Map<string, string>(), searchMode: "substring",
     hiddenFromSearch: false, userFilter: "", hangOpens: 0, hangAll: false, oidcHop: false,
     formatControl: "links",
     chipsUnmatchable: false, appPaintMs: 0, showNavLabel: true, menuStyle: "labelled",

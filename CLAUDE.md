@@ -3709,6 +3709,35 @@ Worth writing down, because three bugs came from guessing at it:
   drops a stored team path on a personal lane and keeps every other one
   — a tenant may hold the personal list somewhere this does not know.
 
+## The PERSONAL edit form, as described by somebody who opened it
+
+Written down 2026-11-01 rather than inferred. Four of these five fields
+had never been driven by a test, because the fixture had a Category
+select and nothing else:
+
+- **Find it:** *click the row anywhere to open details.* There is no ⋮
+  on that list at all — the Action column holds SUBMIT, or QUEUE while a
+  transaction is pending. A run there found eleven ⋮-shaped matches,
+  every one a hidden measuring copy, and stopped on "none of them is
+  visible" — true, about a control that is not on the page.
+  `openEditForm` tries the row FIRST on a personal lane and the menu
+  first elsewhere, and the step says which route it took.
+- **Category** — a dropdown, *fuzzy match if necessary*. The list
+  TRUNCATES its own entries ("Software, Licenses, and Subscr…") while
+  the expense carries the full name, so an exact match can never fire.
+  `closest()` ignores punctuation and spacing and takes containment
+  either way — and returns nothing when two options fit, because
+  guessing between them is a coin toss on somebody's finance record.
+  A loose match SAYS it was loose, in the step log.
+- **Business Purpose** — a plain text box.
+- **Location / Site** — a dropdown.
+- **Department** — a dropdown that also matches when typed in.
+- **Comment** — **not on the form until it is asked for.** Press ADD
+  DETAIL, then COMMENT, and only then is there a box. Without that the
+  write reports a missing selector about a box that does not exist yet,
+  which reads as a wrong selector and is not one. `revealComment` does
+  it, skips when the box is already up, and reports what it pressed.
+
 ## The write-back pages through the grid, like the decision path does
 
 - **Emburse hands out ten rows at a time.** `findRow` — the write-back's
