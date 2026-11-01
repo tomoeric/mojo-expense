@@ -214,7 +214,22 @@ export const DECISION_SELECTORS: Record<DecisionSelectorKey, string> = {
     '[role="combobox"][aria-label*="categ" i], input[aria-label*="categ" i], ' +
     'select[name*="categ" i], input[name*="categ" i], input[placeholder*="categ" i], ' +
     '[data-testid*="categ" i]',
-  editCategoryOption: '[role="option"], li[role="option"], li',
+  /*
+   * AN OPTION IN AN OPEN LIST, not any list item on the page.
+   *
+   * This ended in a bare `li`, and the form's Warnings block is a
+   * list — so "Expenses must have a receipt" was offered as a choice.
+   * Business Purpose is a TEXT BOX, and the only reason it failed is
+   * that this made it look like a dropdown whose list did not contain
+   * what we wanted: "the Business Purpose list does not offer 'AI
+   * Development and Use'; it offered: Expenses must have a receipt."
+   *
+   * A real option is inside something that is a list: a listbox, a
+   * menu, or a popup. An `li` sitting in a warning is not.
+   */
+  editCategoryOption:
+    '[role="option"], [role="listbox"] li, [role="menu"] [role="menuitem"], '
+    + '[role="menu"] li, [role="presentation"] [role="option"], ul[role] li',
   /*
    * SAVE DRAFT on this tenant, and deliberately NOT `button[type=
    * "submit"]`: the form's buttons are CANCEL, SUBMIT and SAVE DRAFT,
@@ -3526,6 +3541,38 @@ async function setFormField(
   if (!field) {
     const byLabel = where.getByLabel(label, { exact: false }).first();
     if (await byLabel.isVisible().catch(() => false)) { field = byLabel; how = "by its label"; }
+  }
+  /*
+   * AND BY ITS NAME, as a last resort.
+   *
+   * A selector saved in Settings OVERRIDES the default, so a guess
+   * stored weeks ago keeps winning over a default that has since been
+   * corrected — and the failure reads as a missing control while
+   * `whatIsOnTheForm` lists the very box in the same breath:
+   * "no Comment control matched … What IS on the form: input
+   * aria-label=comment". Rather than make somebody go and clear a
+   * setting, match on the words the page itself uses.
+   */
+  if (!field) {
+    const word = label.split("/")[0]!.trim().toLowerCase().split(/\s+/)[0]!;
+    const all = where.locator("input, textarea, select, [role=combobox], [role=textbox]");
+    const n = Math.min(await all.count().catch(() => 0), 40);
+    for (let i = 0; i < n; i++) {
+      const one = all.nth(i);
+      if (!(await one.isVisible().catch(() => false))) continue;
+      const [aria, name, id, ph] = await Promise.all([
+        one.getAttribute("aria-label").catch(() => null),
+        one.getAttribute("name").catch(() => null),
+        one.getAttribute("id").catch(() => null),
+        one.getAttribute("placeholder").catch(() => null),
+      ]);
+      const says = `${aria ?? ""} ${name ?? ""} ${id ?? ""} ${ph ?? ""}`.toLowerCase();
+      if (says.includes(word)) {
+        field = one;
+        how = `by the name the page gives it (${(aria ?? name ?? id ?? ph ?? "").slice(0, 40)})`;
+        break;
+      }
+    }
   }
   if (!field) throw await asError(whatIsOnTheForm(page, sel ?? "", label));
 

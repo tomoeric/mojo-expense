@@ -535,7 +535,15 @@ const grid = (search: string, pageNo = 1) => {
        <!-- The form's own warning, which is where "a receipt is already
             attached" came from: a block with the word "receipt" in it,
             on an expense that has none. -->
-       <div class="receipt-warning">Warnings: Expenses must have a receipt</div>
+       <!-- The Warnings block as the real form builds it: a LIST. The
+            option selector ended in a bare list-item tag, so "Expenses
+            must have a receipt" was offered as a choice — and Business
+            Purpose, a text box, failed with "the list does not offer
+            'AI Development and Use'; it offered: Expenses must have a
+            receipt". -->
+       <div class="receipt-warning">Warnings
+         <ul><li>Expenses must have a receipt</li></ul>
+       </div>
        <p>There are no receipts attached to this expense.</p>
        <!-- CANCEL / SUBMIT / SAVE DRAFT, in that order, as the real form
             ends. SUBMIT sends the expense for approval and must never be

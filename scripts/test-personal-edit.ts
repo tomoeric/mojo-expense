@@ -328,6 +328,30 @@ try {
       run.steps.find((s) => s.name === "attach the receipt")?.detail ?? "no attach step");
   }
 
+  console.log("\n3h. A warning in a list is not a dropdown option");
+  /*
+   * The option selector ended in a bare `li`, and the form's Warnings
+   * block is a list — so "Expenses must have a receipt" was offered as
+   * a choice. Business Purpose is a TEXT BOX, and that is the only
+   * reason it failed: it looked like a dropdown whose list did not
+   * hold what we wanted.
+   *
+   *   the Business Purpose list does not offer "AI Development and
+   *   Use"; it offered: Expenses must have a receipt
+   */
+  mock.reset();
+  mock.set({ menuStyle: "none", rowOpens: true, personalForm: true });
+  {
+    const run = await attachAndAnnotate(LONE, {
+      fields: [{ field: "purpose", value: "AI Development and Use" }],
+    }, SEL, mock.url, LOGIN, { personalQueue: true });
+    const said = run.steps.find((s) => s.name === "set Business Purpose");
+    check("the text box is typed into", said?.ok === true, said?.detail ?? "no such step");
+    check("…not treated as a list offering the warning",
+      !/Expenses must have a receipt/.test(said?.detail ?? ""), said?.detail ?? "");
+    check("…and the visit saves", run.ok, `\n     ${trace(run.steps)}`);
+  }
+
   console.log("\n4. Two people's identical rows are REFUSED, not guessed between");
   /*
    * The cost of dropping the cardholder check, and the net under it.

@@ -120,6 +120,25 @@ CREATE TABLE IF NOT EXISTS receipt_writebacks (
 );
 CREATE INDEX IF NOT EXISTS receipt_writebacks_state
   ON receipt_writebacks (state, lane);
+
+/**
+ * The Description writes that were proposed before anyone had looked
+ * at the form.
+ *
+ * That form has no Description box — the owner wrote its fields down
+ * after opening one — and proposeWrites no longer makes these. The
+ * ones ALREADY stored kept being retried, and being the first write
+ * attempted they took the other four down with them on every pass. A
+ * fix that only stops new ones leaves the live queue exactly as
+ * broken as it was.
+ *
+ * Only the unsent ones. An applied row is history and stays: it says
+ * what this app did, and that is worth keeping even once the kind is
+ * retired.
+ */
+DELETE FROM receipt_writebacks
+ WHERE kind = 'note' AND lane <> ''
+   AND state IN ('proposed', 'queued', 'failed', 'stale');
 `;
 
 let ready: Promise<void> | null = null;
