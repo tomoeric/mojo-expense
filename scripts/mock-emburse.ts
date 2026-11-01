@@ -532,11 +532,6 @@ const grid = (search: string, pageNo = 1) => {
             the selector that looked for a button passed here and
             clicked nothing live. -->
        <button class="ad" type="button" aria-haspopup="menu">ADD DETAIL</button>
-       <div id="detail" role="menu" hidden>
-         <div role="menuitem" class="cm">Comment</div>
-         <div role="menuitem">Attendees</div>
-         <div role="menuitem">Mileage</div>
-       </div>
        <div id="cbox" hidden>
          <label>Comment</label><textarea aria-label="Comment"></textarea>
        </div>
@@ -575,6 +570,16 @@ const grid = (search: string, pageNo = 1) => {
 
   const behaviour = `<div id="menu" hidden><button class="dn">Deny</button><button class="ed">Edit</button></div>
     ${EDIT_FORM}
+    <!-- The ADD DETAIL menu, PORTALED out of the panel — which is where
+         every component library puts a dropdown, and why searching the
+         panel for its items found nothing. -->
+    ${state.personalForm
+      ? `<div id="detail" role="menu" hidden>
+           <div role="menuitem" class="cm">Comment</div>
+           <div role="menuitem">Attendees</div>
+           <div role="menuitem">Mileage</div>
+         </div>`
+      : ""}
     <!-- The deny dialog as spend.emburse.com actually builds it: titled
          "Return Transactions", with CANCEL and SEND BACK. The word "Deny"
          appears only on the menu ITEM that opens it. The mock used to put a

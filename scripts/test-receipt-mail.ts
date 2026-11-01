@@ -459,6 +459,79 @@ try {
   check("…and a one-word vendor is untouched",
     scoreMatch(expense(), message()) !== null);
 
+  console.log("\n21. Stored candidates are re-scored against today's rules");
+  /*
+   * A candidate is only as good as the rule that made it, and the only
+   * thing that ever re-examined one was a fresh scan — which somebody
+   * has to run. So a HOME2 SUITES $178.13 of 29 October was still
+   * offering a $116.07 Navan receipt from 13 September: totals that
+   * differ, forty-six days apart, under the old sentence "The merchant
+   * matches". Today's rules reject it outright.
+   *
+   * Checked against a real database, because the point is the stored
+   * rows rather than the scoring, which sections 1-20 cover.
+   */
+  {
+    const { db, ensureSchema } = await import("../server/db.js");
+    const { recordCandidates, rescoreCandidates } =
+      await import("../server/emburse/receipt-mail.js");
+    await ensureSchema().catch(() => undefined);
+    const alive = await db().query("SELECT 1").then(() => true, () => false);
+    if (!alive) {
+      console.log("  --   no database here, so the stored half is not checked");
+    } else {
+      const KEY = "zz-rs-1";
+      await db().query("DELETE FROM receipt_mail_matches WHERE dedupe_key = $1", [KEY]);
+      await db().query("DELETE FROM expenses WHERE dedupe_key = $1", [KEY]);
+      await db().query(
+        `INSERT INTO expenses (dedupe_key, employee, expense_date, merchant, amount_cents,
+                               category, department, location, note, method, in_inbox,
+                               reviewer, source, lane)
+         VALUES ($1,'Eric S','2026-10-29','HOME2 SUITES ALCOASPRING BROOK FARMS 2 HP LLC',
+                 17813,'','','','','Card',true,'eric.s@mojocarwash.com','','personal-mammoth')`,
+        [KEY]);
+      // Recorded as the OLD rules would have: one weak signal, no
+      // agreement on money or date.
+      await db().query(
+        `INSERT INTO receipt_mail_matches
+           (dedupe_key, message_id, lane, confidence, score, reasons, evidence, state)
+         VALUES ($1,'zz-rs-msg','personal-mammoth','weak',20,
+                 '["The merchant matches."]'::jsonb, $2::jsonb, 'candidate')`,
+        [KEY, JSON.stringify({
+          messageId: "zz-rs-msg", subject: "Your stay", from: "no-reply@navan.com",
+          receivedAt: "2026-09-13T12:00:00Z", folder: "Receipts", merchant: "navan",
+          date: "2026-09-13", totalCents: 11607, currency: "USD", reference: "",
+          hasAttachment: false, attachments: [], excerpt: "",
+        })]);
+      const out = await rescoreCandidates();
+      check("the stale candidate is dropped", out.dropped >= 1, JSON.stringify(out));
+      const { rows } = await db().query<{ n: string }>(
+        "SELECT count(*) AS n FROM receipt_mail_matches WHERE dedupe_key = $1", [KEY]);
+      check("…and it is gone from the table", rows[0]!.n === "0", rows[0]!.n);
+
+      // A decision is not re-scored: it is somebody's judgement.
+      await db().query(
+        `INSERT INTO receipt_mail_matches
+           (dedupe_key, message_id, lane, confidence, score, reasons, evidence, state)
+         VALUES ($1,'zz-rs-kept','personal-mammoth','weak',20,
+                 '[]'::jsonb, $2::jsonb, 'chosen')`,
+        [KEY, JSON.stringify({
+          messageId: "zz-rs-kept", subject: "Your stay", from: "no-reply@navan.com",
+          receivedAt: "2026-09-13T12:00:00Z", folder: "Receipts", merchant: "navan",
+          date: "2026-09-13", totalCents: 11607, currency: "USD", reference: "",
+          hasAttachment: false, attachments: [], excerpt: "",
+        })]);
+      await rescoreCandidates();
+      const { rows: kept } = await db().query<{ n: string }>(
+        "SELECT count(*) AS n FROM receipt_mail_matches WHERE dedupe_key = $1", [KEY]);
+      check("a CHOSEN match is left alone — that is somebody's decision",
+        kept[0]!.n === "1", kept[0]!.n);
+
+      await db().query("DELETE FROM receipt_mail_matches WHERE dedupe_key = $1", [KEY]);
+      await db().query("DELETE FROM expenses WHERE dedupe_key = $1", [KEY]);
+    }
+  }
+
 } finally {
   console.log(failures === 0 ? "\nPASS" : `\n${failures} FAILED`);
   process.exit(failures === 0 ? 0 : 1);

@@ -3523,21 +3523,39 @@ async function revealComment(
   page: Page, sel: Record<string, string>, ms: number,
 ): Promise<string> {
   const where = await formScope(page);
+  /*
+   * THE BOX IN THE DRAWER, THE MENU ANYWHERE.
+   *
+   * A dropdown's menu is portaled to the end of the document by every
+   * component library worth the name, so it is NOT inside the panel
+   * the fields live in. Searching the panel for it found nothing, and
+   * the failure then listed what the panel DOES hold — "What can be
+   * PRESSED: Open | ADD DETAIL | SPLIT / ITEMIZE | CANCEL | SUBMIT |
+   * SAVE DRAFT" — with no Comment among them, which is exactly what a
+   * menu rendered somewhere else looks like from in here.
+   *
+   * The box itself is a field, so it belongs to the panel; the menu
+   * item that creates it belongs to the page.
+   */
   const box = () => where.locator(sel.editComment!).first();
-  if (await box().isVisible().catch(() => false)) return "";
+  const anywhereBox = () => page.locator(sel.editComment!).first();
+  const boxIsUp = async (): Promise<boolean> =>
+    (await box().isVisible().catch(() => false))
+    || (await anywhereBox().isVisible().catch(() => false));
+  if (await boxIsUp()) return "";
 
   const pressed: string[] = [];
   for (const which of [sel.editCommentOpen, sel.editCommentField]) {
     if (!which) continue;
-    const control = await firstVisibleIn(where, which, Math.min(ms, 3000));
+    const control = await firstVisible(page, which, Math.min(ms, 3000));
     if (!control) continue;
     const what = (await control.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
     await control.click().catch(() => undefined);
     pressed.push(what || "a control");
     await page.waitForTimeout(600);
-    if (await box().isVisible().catch(() => false)) break;
+    if (await boxIsUp()) break;
   }
-  if (await box().isVisible().catch(() => false)) {
+  if (await boxIsUp()) {
     return `pressed ${pressed.map((p) => `\u201c${p}\u201d`).join(" then ")}`;
   }
 
@@ -3551,7 +3569,8 @@ async function revealComment(
    * press that would have built the seventh.
    */
   const items: string[] = [];
-  const menu = where.locator(
+  // Page-wide, for the same reason: a portaled menu is not in the panel.
+  const menu = page.locator(
     '[role="menuitem"], [role="option"], [role="menu"] li, [role="menu"] button');
   const n = Math.min(await menu.count().catch(() => 0), 20);
   for (let i = 0; i < n; i++) {
@@ -3604,6 +3623,17 @@ async function setFormField(
    */
   const where = await formScope(page);
   let field = sel ? await firstVisibleIn(where, sel, Math.min(ms, 4000)) : null;
+  /*
+   * A control the panel does not contain is still the control.
+   *
+   * The scope exists to keep the GRID out, and it does — but a field
+   * added by a portaled menu can land outside the panel too, and
+   * refusing it on those grounds is refusing the thing we just asked
+   * for. Tried second, so the grid never wins over the panel.
+   */
+  if (!field && sel && where !== page) {
+    field = await firstVisible(page, sel, 1500);
+  }
   let how = "by selector";
   if (!field) {
     const byLabel = where.getByLabel(label, { exact: false }).first();

@@ -1168,6 +1168,80 @@ export async function recordCandidates(found: Candidate[]): Promise<number> {
  * failed row is somebody's decision or an attempt that happened,
  * and a re-scan is not an argument against either.
  */
+/**
+ * RE-SCORE WHAT IS ALREADY STORED, against today's rules.
+ *
+ * A candidate is only as good as the rule that made it, and the rules
+ * have changed several times — one identifying signal used to be
+ * enough, the subject line used to count as the merchant, nothing
+ * capped how far apart the dates could be. Rows scored under those
+ * rules sat in the queue unexamined, because the only thing that ever
+ * re-examined a candidate was a fresh scan, and a scan is something
+ * somebody has to run.
+ *
+ * So a HOME2 SUITES $178.13 of 29 October was still offering a $116.07
+ * Navan receipt from 13 September — totals that differ, forty-six days
+ * apart, under the old sentence "The merchant matches". Today's rules
+ * reject that outright; it survived only because nothing asked them
+ * about it again.
+ *
+ * Deletes what would no longer be offered, and REFRESHES the rest:
+ * score, confidence and the reasons, so a card that survives explains
+ * itself in the words the current rule would use rather than the words
+ * of a rule that is gone.
+ *
+ * Only `candidate` rows. A chosen, rejected or attached match is a
+ * decision somebody made, and re-scoring is not entitled to revisit it.
+ */
+export async function rescoreCandidates(): Promise<{ dropped: number; refreshed: number }> {
+  await ensure();
+  const { rows } = await db().query<{
+    dedupe_key: string; message_id: string; evidence: unknown; lane: string;
+    merchant: string; amount_cents: string; expense_date: string | null;
+    currency: string | null;
+  }>(
+    `SELECT m.dedupe_key, m.message_id, m.evidence, m.lane,
+            e.merchant, e.amount_cents,
+            to_char(e.expense_date, 'YYYY-MM-DD') AS expense_date, e.currency
+       FROM receipt_mail_matches m
+       JOIN expenses e ON e.dedupe_key = m.dedupe_key
+      WHERE m.state = 'candidate'`);
+
+  let dropped = 0;
+  let refreshed = 0;
+  for (const r of rows) {
+    const evidence = r.evidence as Evidence | null;
+    if (!evidence || typeof evidence !== "object") continue;
+    const target: Target = {
+      dedupeKey: r.dedupe_key,
+      lane: r.lane,
+      merchant: r.merchant ?? "",
+      date: r.expense_date,
+      amountCents: Number(r.amount_cents),
+      currency: r.currency || "USD",
+    };
+    const now = scoreMatch(target, evidence);
+    if (!now) {
+      await db().query(
+        "DELETE FROM receipt_mail_matches WHERE dedupe_key = $1 AND message_id = $2",
+        [r.dedupe_key, r.message_id]);
+      dropped += 1;
+      continue;
+    }
+    await db().query(
+      `UPDATE receipt_mail_matches
+          SET score = $3, confidence = $4, reasons = $5::jsonb
+        WHERE dedupe_key = $1 AND message_id = $2
+          AND (score <> $3 OR confidence <> $4 OR reasons::text <> $5)`,
+      [r.dedupe_key, r.message_id, now.score, now.confidence, JSON.stringify(now.reasons)]);
+    refreshed += 1;
+  }
+  if (dropped > 0) {
+    console.log(`receipt-mail: dropped ${dropped} candidate(s) today's rules would not offer`);
+  }
+  return { dropped, refreshed };
+}
+
 export async function pruneCandidates(
   lanes: string[], keep: Candidate[],
 ): Promise<number> {

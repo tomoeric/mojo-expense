@@ -3709,6 +3709,37 @@ Worth writing down, because three bugs came from guessing at it:
   drops a stored team path on a personal lane and keeps every other one
   — a tenant may hold the personal list somewhere this does not know.
 
+## A candidate is only as good as the rule that made it
+
+- **Stored candidates are re-scored on boot** (`rescoreCandidates`).
+  The only thing that ever re-examined one was a fresh SCAN, which
+  somebody has to run — so rows scored under rules that have since
+  been tightened kept being offered, with the old reasons printed
+  under them. A HOME2 SUITES $178.13 of 29 Oct was still offering a
+  $116.07 Navan receipt of 13 Sep: totals that differ, 46 days apart,
+  under the old sentence "The merchant matches".
+- It DELETES what today's rules would not offer and REFRESHES the
+  rest — score, confidence, reasons — so a surviving card explains
+  itself in the words of the rule that now applies.
+- Only `candidate` rows. A chosen, rejected or attached match is
+  somebody's decision, and re-scoring is not entitled to revisit it.
+
+## A dropdown's menu is NOT inside the panel
+
+- Every component library portals a menu to the end of the document,
+  so `formScope` — which exists to keep the GRID out — also keeps the
+  ADD DETAIL menu out. Searching the panel for its items found
+  nothing, and the failure listed what the panel does hold: "What can
+  be PRESSED: Open | ADD DETAIL | SPLIT / ITEMIZE | CANCEL | SUBMIT |
+  SAVE DRAFT", with no Comment among them. That is what a portaled
+  menu looks like from inside the panel.
+- So: the BOX belongs to the panel, the MENU ITEM belongs to the page.
+  `revealComment` presses page-wide and accepts a box found either
+  way; `setFormField` falls back to a page-wide field lookup AFTER the
+  panel, so the grid still never wins.
+- The mock renders that menu outside the dialog for the same reason —
+  a fixture that puts it inside passes while the live form does not.
+
 ## Sending and Sent are different questions
 
 - **Sending** holds only what is still in flight (`queued`). **Sent**

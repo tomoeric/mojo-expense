@@ -169,6 +169,17 @@ app.listen(env.port, "0.0.0.0", () => {
         // one of them.
         startAutoApprove();
         recheckRulesOnBoot();
+        /*
+         * And re-score the stored receipt candidates, because a
+         * candidate is only as good as the rule that made it. The only
+         * thing that ever re-examined one was a fresh scan, which
+         * somebody has to run — so rows scored under rules that have
+         * since been tightened kept being offered, with the old
+         * reasons printed underneath them.
+         */
+        void import("./emburse/receipt-mail.js")
+          .then((m) => m.rescoreCandidates())
+          .catch((err: unknown) => console.error("rescoring candidates failed:", err));
         // Dutch Miller's own clock: the reminder about signups nobody
         // at MOJO has finished with.
         startReminders();
