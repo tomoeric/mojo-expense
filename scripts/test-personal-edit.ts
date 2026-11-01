@@ -189,6 +189,46 @@ try {
       both.map((s) => s.detail).join(" | "));
   }
 
+  console.log("\n3d. The GRID cannot pass for the edit form");
+  /*
+   * It did. The grid carries controls of its own — row checkboxes and
+   * an Accounting Category column — so "is one of the form's controls
+   * visible" was already true before anything was clicked. The run
+   * called the form open, went looking for a Description box, and
+   * reported what was on "the form":
+   *
+   *   input aria-label=Select all rows | input aria-label=Select row |
+   *   input aria-label=Select row | …
+   *
+   * which is the grid, and was the whole diagnosis. The test now is
+   * that the page CHANGED — more to type into than there was a moment
+   * ago — which holds without knowing one selector of the detail view.
+   */
+  mock.reset();
+  mock.set({ menuStyle: "none", rowOpens: false, gridDecoys: true });
+  {
+    const run = await attachAndAnnotate(LONE, { note: "x" }, SEL, mock.url, LOGIN, {
+      personalQueue: true,
+    });
+    const step = opened(run.steps);
+    check("the decoys do not count as an open form", step?.ok === false,
+      step?.detail?.slice(0, 140) ?? "no such step");
+    check("…so it stops here instead of hunting a Description box on the grid",
+      !run.steps.some((s) => s.name === "set the description"),
+      run.steps.map((s) => s.name).join(" → "));
+  }
+  // And with the decoys still there, a row that DOES open still works:
+  // the rule is "the page changed", not "the grid has no controls".
+  mock.reset();
+  mock.set({ menuStyle: "none", rowOpens: true, gridDecoys: true, personalForm: true });
+  {
+    const run = await attachAndAnnotate(LONE, {
+      fields: [{ field: "purpose", value: "AI Development and Use" }],
+    }, SEL, mock.url, LOGIN, { personalQueue: true });
+    check("a real open is still recognised past the decoys", run.ok,
+      `\n     ${trace(run.steps)}`);
+  }
+
   console.log("\n4. Two people's identical rows are REFUSED, not guessed between");
   /*
    * The cost of dropping the cardholder check, and the net under it.

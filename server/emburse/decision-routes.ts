@@ -694,6 +694,15 @@ async function targetForExpense(dedupeKey: string): Promise<Target | null> {
     : null;
 }
 
+/** Which Emburse account an expense belongs to. "" is the manager queue. */
+async function laneOfExpense(dedupeKey: string): Promise<string> {
+  if (!dedupeKey) return "";
+  const { db } = await import("../db.js");
+  const { rows } = await db().query<{ lane: string }>(
+    "SELECT lane FROM expenses WHERE dedupe_key = $1", [dedupeKey]).catch(() => ({ rows: [] }));
+  return rows[0]?.lane ?? "";
+}
+
 decisionRouter.post("/decisions/:id/edit-form", requireAuth, async (req: Request, res: Response) => {
   if (!guard(res)) return;
   // Any EXPENSE, not only one with a decision already queued.
@@ -716,14 +725,51 @@ decisionRouter.post("/decisions/:id/edit-form", requireAuth, async (req: Request
   // signed-in reviewer otherwise — it is their Emburse account either way,
   // and this reads a form rather than writing anything.
   const owner = queued?.decidedBy ?? req.user?.email ?? "";
-  const login = await credentialForUser(owner);
+  /*
+   * AND SIGNED IN AS THE TAB'S OWN ACCOUNT.
+   *
+   * A personal tab is a SEPARATE Emburse login. Signing in with the
+   * reviewer's primary one and then looking for their personal
+   * expense is a hunt through the wrong tenant's data — it would
+   * report "none of the rows match" about a row that is sitting there
+   * under the other account.
+   */
+  const lane = queued?.target ? "" : await laneOfExpense(raw);
+  const { credentialForLaneOf } = await import("./connections.js");
+  let login: { userId: string | null; email: string; password: string } | null = null;
+  if (lane) {
+    const got = await credentialForLaneOf(owner, lane);
+    login = got.ok ? { userId: null, email: got.email, password: got.password } : null;
+    if (!login) {
+      res.status(400).json({ error: got.ok ? "" : got.problem });
+      return;
+    }
+  } else {
+    login = await credentialForUser(owner);
+  }
   if (!login) {
     res.status(400).json({ error: `${owner || "you"} has no Emburse login stored.` });
     return;
   }
   try {
     const settings = await readSettings();
-    const run = await inspectEditForm(target, settings.selectors, settings.emburseUrl, login);
+    /*
+     * ON THE LANE'S OWN LIST, like the write-back.
+     *
+     * This read the deployment's shared selectors, so on a personal tab
+     * it looked at the approver's grid — the very mix-up it is meant to
+     * help diagnose. The lane decides the path, and a non-empty lane IS
+     * a personal account, so there is no cardholder filter to apply and
+     * no team tab to press.
+     */
+    const { selectorsForLane } = await import("./decision-worker.js");
+    const run = await inspectEditForm(
+      target,
+      await selectorsForLane(owner, lane, settings.selectors),
+      settings.emburseUrl,
+      login,
+      { personalQueue: Boolean(lane) },
+    );
     res.json({ ok: run.ok, steps: run.steps, fields: run.fields, screenshot: run.screenshot });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Could not look at the form." });

@@ -139,6 +139,17 @@ type State = {
    */
   personalForm: boolean;
   /**
+   * A grid that carries form-shaped controls of its own.
+   *
+   * The real one does: row checkboxes ("Select all rows", "Select
+   * row"), and an Accounting Category column with a control in it. The
+   * write-back took one of those as proof that the edit form had
+   * opened, then hunted for a Description box on a page that was still
+   * the grid — and reported, accurately and uselessly, that what was on
+   * "the form" was a row of checkboxes.
+   */
+  gridDecoys: boolean;
+  /**
    * Whether clicking APPROVE or confirming Deny actually removes the row.
    * Off reproduces a click that lands on nothing — which used to be
    * reported as "approved in Emburse" all the same.
@@ -300,6 +311,7 @@ const state: State = {
   pageSize: 0,
   rowOpens: false,
   personalForm: false,
+  gridDecoys: false,
   actionsWork: true,
   ghostButtons: false,
   ghostRows: false,
@@ -447,8 +459,12 @@ const grid = (search: string, pageNo = 1) => {
       `<div role="columnheader">Transaction Date</div><div role="columnheader">Merchant</div>` +
       `</div></div><p>No rows</p></div>`;
   }
+  const decoy = state.gridDecoys
+    ? `<input type="checkbox" aria-label="Select row" />`
+      + `<select aria-label="Accounting Category"><option>Meals</option></select>`
+    : "";
   const cells = (r: (typeof ROWS)[number]) =>
-    `${r.date}</td><td>${r.merchant}</td><td>${r.who}</td><td>$${r.amount}</td>
+    `${decoy}${r.date}</td><td>${r.merchant}</td><td>${r.who}</td><td>$${r.amount}</td>
      <td>${state.categories.get(`${r.date}|${r.merchant}|${r.who}|${r.amount}`) ?? ""}</td>
      <td>${"site" in r && r.site ? r.site : ""}</td>
      <td><button class="ap" data-k="${r.date}|${r.merchant}|${r.who}|${r.amount}">APPROVE</button> ` +
@@ -1310,7 +1326,7 @@ const reset = () =>
     // the grid to divs left every later test running against divs — and the
     // one that then failed looked like a regression in whatever it was
     // actually testing, rather than leftover state from three tests ago.
-    gridShape: "table", padRows: 0, pageSize: 0, rowOpens: false, personalForm: false, actionsWork: true, ghostButtons: false, ghostRows: false, twinRows: false, staleGrid: false, actioned: new Set<string>(), categories: new Map<string, string>(), searchMode: "substring",
+    gridShape: "table", padRows: 0, pageSize: 0, rowOpens: false, personalForm: false, gridDecoys: false, actionsWork: true, ghostButtons: false, ghostRows: false, twinRows: false, staleGrid: false, actioned: new Set<string>(), categories: new Map<string, string>(), searchMode: "substring",
     hiddenFromSearch: false, userFilter: "", hangOpens: 0, hangAll: false, oidcHop: false,
     formatControl: "links",
     chipsUnmatchable: false, appPaintMs: 0, showNavLabel: true, menuStyle: "labelled",

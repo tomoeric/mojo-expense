@@ -3722,6 +3722,23 @@ select and nothing else:
   visible" — true, about a control that is not on the page.
   `openEditForm` tries the row FIRST on a personal lane and the menu
   first elsewhere, and the step says which route it took.
+- **"A form control is visible" does NOT mean the form is open.** The
+  grid has controls of its own — row checkboxes ("Select all rows",
+  "Select row") and an Accounting Category column — so that test was
+  already true before anything was clicked. The run called the form
+  open, hunted for a Description box on the grid, and reported "what IS
+  on the form: input aria-label=Select all rows, input aria-label=Select
+  row, …", which is the grid and was the whole diagnosis. The test is
+  now that the page CHANGED: a dialog or drawer appeared, or there is
+  more to type into than a moment ago. That holds without knowing one
+  selector of the detail view, which matters because every guess at this
+  tenant's markup has cost a deploy.
+- **Inspect edit form runs on the LANE'S list, as the LANE'S account.**
+  It read the deployment's shared selectors and the reviewer's primary
+  login, so on a personal tab the one tool for ending the guessing was
+  looking at the approver's grid under the wrong account — and it had
+  its own copy of the row hunt, without paging or the one-person rule.
+  It uses `findRow` and `openEditForm` now, like the write-back.
 - **Category** — a dropdown, *fuzzy match if necessary*. The list
   TRUNCATES its own entries ("Software, Licenses, and Subscr…") while
   the expense carries the full name, so an exact match can never fire.

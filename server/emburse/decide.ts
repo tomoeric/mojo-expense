@@ -1695,7 +1695,7 @@ export async function inspectEditForm(
   selectors: Record<string, string>,
   emburseUrl: string,
   login: Login,
-  opts: { onChallenge?: ChallengeHook } = {},
+  opts: { onChallenge?: ChallengeHook; personalQueue?: boolean } = {},
 ): Promise<DecisionRun & { fields: string[] }> {
   const steps: StepResult[] = [];
   const step = makeStepper(steps);
@@ -1719,52 +1719,38 @@ export async function inspectEditForm(
       let row: Locator | null = null;
       const ms = stepTimeoutMs();
 
+      /*
+       * THE SAME HUNT THE WRITE-BACK USES, not a second copy of it.
+       *
+       * This had its own: a text search, no paging, and the cardholder
+       * check always on. Every fault the write-back's copy has had — a
+       * row on page two, an employee field holding a location, the
+       * approver's queue instead of the person's — this one still had,
+       * so the tool for diagnosing those failures failed the same way
+       * and reported less about it.
+       */
       if (!(await step("find the expense", async () => {
-        // The same ladder as the decision path: one term is not enough on a
-        // tenant whose merchant strings carry the card descriptor.
-        const term = searchTerms(target.merchant, target.employee)[0] ?? target.merchant;
-        await page!.goto(gridUrl(emburseUrl, { query: term, path: sel.gridPath }), {
-          waitUntil: "domcontentloaded",
-        });
-        if (!(await gridLoaded(page!, sel as never))) throw await asError(whyNoGrid(page!, sel, login.email));
-        const rows = page!.locator(sel.resultRow!);
-        const count = await rows.count();
-        if (count === 0) throw await asError(whyNoRows(page!, sel, term));
-        const hits: number[] = [];
-        for (let i = 0; i < Math.min(count, ROWS_EXAMINED); i++) {
-          if (rowMatches(await rows.nth(i).innerText().catch(() => ""), target).ok) hits.push(i);
-        }
-        const only = hits.length > 1 ? await visibleOf(rows, hits) : hits;
-        if (only.length !== 1) {
-          throw new Error(
-            `${only.length} of ${count} rows match this expense${
-              hits.length !== only.length ? ` (${hits.length - only.length} hidden copies ignored)` : ""
-            }; need exactly one to look at its edit form.`);
-        }
-        row = rows.nth(only[0]!);
-        return `matched 1 of ${count} rows`;
+        const found = await findRow(page!, sel, target, emburseUrl, login,
+          { personalQueue: opts.personalQueue });
+        row = found.row;
+        return found.detail;
       }))) return { ok: false, steps, matchedRow: null, screenshot: null };
 
-      if (!(await step("open the \u22ee menu", async () => {
-        await (await rowMenuFor(page!, row!, sel, ms)).click();
-        await page!.waitForTimeout(400);
-        const items = await countAll(page!, ['[role="menuitem"]', "[role=menu] button", "li button", "li"]);
-        const seen = items.filter((i) => i.n > 0).map((i) => `${i.sel} \u00d7${i.n}`).join(", ");
-        return `menu open \u2014 ${seen || "nothing menu-shaped found"}`;
-      }))) return { ok: false, steps, matchedRow: null, screenshot: null };
-
-      if (!(await step("click Edit", async () => {
-        const edit = page!.locator('text=/^\\s*Edit\\s*$/i');
-        const n = await edit.count();
-        for (let i = 0; i < n; i++) {
-          if (await edit.nth(i).isVisible().catch(() => false)) {
-            await edit.nth(i).click();
-            await page!.waitForTimeout(1200);
-            return "the edit form is open";
-          }
-        }
-        throw new Error(`nothing visible in the \u22ee menu matched Edit (${n} candidate(s)).`);
-      }))) return { ok: false, steps, matchedRow: null, screenshot: null };
+      /*
+       * BY WHATEVER ROUTE THIS LIST HAS.
+       *
+       * This button exists to report what is really on the form, and it
+       * could only reach one through the ⋮ menu — which the PERSONAL
+       * list does not have. So the one tool for ending the guessing was
+       * itself unusable on the list the guessing was about, and said
+       * "nothing visible in the ⋮ menu matched Edit" instead of
+       * reporting anything. It takes the same two routes the write-back
+       * takes, and the step names which one worked.
+       */
+      if (!(await step("open the expense", () =>
+        openEditForm(page!, row!, sel, target, ms,
+          { rowOpensIt: Boolean(opts.personalQueue) }),
+      ))) return { ok: false, steps, matchedRow: null, screenshot: null };
 
       await step("read the form", async () => {
         // Everything a person could type into or choose from, with whatever
@@ -3160,16 +3146,47 @@ async function openEditForm(
    */
   opts: { rowOpensIt?: boolean } = {},
 ): Promise<string> {
-  /** Has something editable appeared? */
+  /*
+   * HAS THE EXPENSE ACTUALLY OPENED?
+   *
+   * "Is one of the form's controls visible" was not that test. The grid
+   * carries an Accounting Category column with a control of its own, so
+   * the category selector matched something that was on screen BEFORE
+   * anything was clicked — and the run went on to hunt for a
+   * Description box on a page that was still the grid, reporting "what
+   * IS on the form: input aria-label=Select all rows, input
+   * aria-label=Select row, …". Those are the grid's row checkboxes, and
+   * they were the whole diagnosis: the form never opened.
+   *
+   * So the test is that the page CHANGED. Whatever the detail view is
+   * built from — a dialog, a drawer, a route of its own — opening it
+   * puts controls on screen that were not there a moment ago. That
+   * holds without knowing a single one of its selectors, which is the
+   * point: every guess at this tenant's markup so far has cost a
+   * deploy.
+   */
+  const CONTROLS = 'input, select, textarea, [role="combobox"], [role="textbox"]';
+  const visibleControls = async (): Promise<number> => {
+    const all = page.locator(CONTROLS);
+    const n = Math.min(await all.count().catch(() => 0), 80);
+    let seen = 0;
+    for (let i = 0; i < n; i++) {
+      if (await all.nth(i).isVisible().catch(() => false)) seen += 1;
+    }
+    return seen;
+  };
+  const before = await visibleControls();
+
   const formIsUp = async (within: number): Promise<boolean> => {
-    const parts = [sel.editNote, sel.editCategory, sel.editReceipt, '[role="dialog"]']
-      .filter(Boolean) as string[];
     const until = Date.now() + within;
     do {
-      for (const one of parts) {
+      // A dialog or drawer is unambiguous when there is one.
+      for (const one of ['[role="dialog"]', '[role="complementary"]']) {
         if (await page.locator(one).first().isVisible().catch(() => false)) return true;
       }
-      await page.waitForTimeout(200);
+      // Otherwise: more to type into than the grid had.
+      if (await visibleControls() > before) return true;
+      await page.waitForTimeout(250);
     } while (Date.now() < until);
     return false;
   };
