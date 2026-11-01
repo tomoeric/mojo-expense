@@ -372,10 +372,21 @@ try {
     check("it fails on the box, not on a mystery selector", said?.ok === false,
       said?.detail?.slice(0, 90) ?? "no such step");
     check("…saying the box could not be opened",
-      /could not be opened/.test(said?.detail ?? ""), said?.detail?.slice(0, 160) ?? "");
+      /could not open the Comment box/.test(said?.detail ?? ""),
+      said?.detail?.slice(0, 160) ?? "");
     check("…and listing what the ADD DETAIL menu offers",
       /Attendees/.test(said?.detail ?? "") && /Mileage/.test(said?.detail ?? ""),
-      said?.detail?.slice(-200) ?? "");
+      said?.detail?.slice(0, 260) ?? "");
+    /*
+     * AND THE FIELD LOOKUP STILL RAN. Throwing from the reveal skipped
+     * setFormField entirely — selector, label AND the name-word
+     * fallback — so a box sitting on the form under a name nobody
+     * guessed could never be found, and the failure blamed the press.
+     */
+    check("…AND the form itself is still described",
+      /What IS on the form/.test(said?.detail ?? ""), said?.detail?.slice(-260) ?? "");
+    check("…including what could be pressed to build it",
+      /What can be PRESSED/.test(said?.detail ?? ""), said?.detail?.slice(-260) ?? "");
   }
 
   console.log("\n4. Two people's identical rows are REFUSED, not guessed between");

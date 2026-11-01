@@ -3420,11 +3420,30 @@ async function whatIsOnTheForm(page: Page, tried: string, what: string): Promise
     seen.push([tag, role && `role=${role}`, name && `name=${name}`,
       label && `aria-label=${label}`, ph && `placeholder=${ph}`].filter(Boolean).join(" "));
   }
+  /*
+   * AND WHAT CAN BE PRESSED. A control that is not there yet is often
+   * one press away, and a list of inputs says nothing about the button
+   * that would have built it.
+   */
+  const buttons: string[] = [];
+  const clickable = where.locator(
+    'button, [role="button"], [role="menuitem"], [role="option"], summary');
+  const bn = Math.min(await clickable.count().catch(() => 0), 24);
+  for (let i = 0; i < bn; i++) {
+    const c = clickable.nth(i);
+    if (!(await c.isVisible().catch(() => false))) continue;
+    const text = (await c.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+    const aria = await c.getAttribute("aria-label").catch(() => null);
+    const name = (text || aria || "").slice(0, 30);
+    if (name && !buttons.includes(name)) buttons.push(name);
+  }
+
   return (
     `no ${what} control on the edit form matched “${tried}”. ` +
     (seen.length > 0
-      ? `What IS on the form: ${seen.slice(0, 14).join(" | ")}. Set the ${what} selector ` +
-        `in Settings to whichever of those is the ${what} box.`
+      ? `What IS on the form: ${seen.slice(0, 14).join(" | ")}.`
+        + (buttons.length > 0 ? ` What can be PRESSED: ${buttons.join(" | ")}.` : "")
+        + ` Set the ${what} selector in Settings to whichever of those is the ${what} box.`
       : `Nothing form-shaped is visible at all, so the edit form may not have opened — check ` +
         `the editMenuItem selector.`)
   );
@@ -3541,18 +3560,23 @@ async function revealComment(
     const text = (await one.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
     if (text) items.push(text);
   }
-  if (pressed.length === 0 && items.length === 0) return "";
-  throw new Error(
-    `the Comment box is not on the form and could not be opened. `
-    + `${pressed.length > 0
-      ? `Pressed ${pressed.map((p) => `\u201c${p}\u201d`).join(" then ")}. `
-      : `Nothing matching "${sel.editCommentOpen ?? ""}" was on the form to press. `}`
-    + `${items.length > 0
-      ? `What the menu offers: ${items.join(" | ")}. Point editCommentField at whichever `
-        + "of those adds a comment."
-      : "No menu opened. ADD DETAIL on this tenant is a dropdown — editCommentOpen has to "
-        + "match it, and editCommentField the item it offers."}`);
+  /*
+   * NOT FATAL. Reported, and the field lookup still gets its turn.
+   *
+   * Throwing here skipped setFormField entirely — selector, label AND
+   * the name-word fallback — so a box sitting on the form under a name
+   * nobody guessed could never be found, and the failure blamed the
+   * two presses instead. ("note" is what this tenant calls Business
+   * Purpose; its Comment may be named just as unhelpfully.) Say what
+   * happened, then let the lookup try.
+   */
+  return "could not open the Comment box. "
+    + (pressed.length > 0
+      ? `Pressed ${pressed.map((x) => `\u201c${x}\u201d`).join(" then ")}, and no box appeared. `
+      : `Nothing matching "${sel.editCommentOpen ?? ""}" was there to press. `)
+    + (items.length > 0 ? `The menu offers: ${items.join(" | ")}. ` : "No menu is open. ");
 }
+
 
 export function closest(options: string[], wanted: string): string | undefined {
   const flat = (t: string) => t.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -3978,9 +4002,22 @@ export async function attachAndAnnotate(
           const opened = f.field === "comment"
             ? await revealComment(page!, sel, ms)
             : "";
-          const set = await setFormField(
-            page!, where.sel, sel.editCategoryOption!, where.label, f.value, ms);
-          return opened ? `${opened}, then ${set}` : set;
+          try {
+            const set = await setFormField(
+              page!, where.sel, sel.editCategoryOption!, where.label, f.value, ms);
+            return opened ? `${opened}then ${set}` : set;
+          } catch (err) {
+            /*
+             * BOTH HALVES OF THE STORY: what the reveal did, and what
+             * the lookup then could not find. Either alone sends
+             * somebody to the wrong setting — "pressed ADD DETAIL then
+             * Comment" with no list of the form, or a list of the form
+             * with no word about the press that should have added to
+             * it.
+             */
+            const why = err instanceof Error ? err.message : String(err);
+            throw new Error(opened ? `${opened}${why}` : why);
+          }
         }))) missed.push(where.label);
       }
 
