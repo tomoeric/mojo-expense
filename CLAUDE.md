@@ -3797,11 +3797,28 @@ select and nothing else:
   to this expense". `editReceiptPresent` now wants a picture, a file
   link or a named thumbnail, and that sentence on the page overrides
   any selector guess outright.
+- **An option is an item in an OPEN LIST, not any list item.**
+  `editCategoryOption` ended in a bare `li`, and the Warnings block is
+  a list — so "Expenses must have a receipt" was offered as a dropdown
+  choice, and **Business Purpose, a text box, failed because of it**:
+  "the Business Purpose list does not offer 'AI Development and Use';
+  it offered: Expenses must have a receipt." An option must sit under a
+  `[role=listbox]`, `[role=menu]`, `[role=option]` or `ul[role]`.
+- **A stored selector OVERRIDES the default**, so a guess saved weeks
+  ago keeps beating a default that has since been corrected — and the
+  failure then reads as a missing control while `whatIsOnTheForm` lists
+  the box in the same breath ("no Comment control matched … What IS on
+  the form: input aria-label=comment"). `setFormField` has a third
+  route after the selector and the label: any visible control whose
+  aria-label, name, id or placeholder carries the field's own word.
 - **There is NO Description box.** The five above are the whole form.
   The write-back proposed a Description anyway, it was the FIRST write
   attempted, and it took the other four down with it — five failures,
   five sign-ins, every one about a box that is not there. No longer
-  proposed, unconditionally: `proposeWrites` already refuses
+  proposed — and the rows ALREADY STORED are deleted by the schema
+  bootstrap, unsent ones only, since an applied row is a record of what
+  this app did. A fix that only stops new ones leaves the live queue
+  exactly as broken as it was. Unconditional: `proposeWrites` already refuses
   manager-queue expenses ("Receipt write-back is for your own
   expenses"), so this path is personal-only end to end and a lane test
   would read as though there were another form to keep it for.
