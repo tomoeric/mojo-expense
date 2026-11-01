@@ -3677,6 +3677,38 @@ candidate card, behind a "Show the receipt" press.
 - Rule: any press that changes what a locally-fetched panel shows must
   refetch **that panel**, not only `["reports"]`.
 
+## The real Emburse PERSONAL grid, as photographed 2026-11-01
+
+Worth writing down, because three bugs came from guessing at it:
+
+- **Columns:** Transaction Date · Merchant · Amount · Business Purpose ·
+  Card Details · Accounting Category · Receipt · Warnings · Status ·
+  Posted Date · Trip · Action. **There is NO employee column** — it is
+  one person's list.
+- **Paginated, 10 per page**, "21–26 of 26" bottom right, with a `‹ ›`
+  pair. Status chips above: Pending Submission · Denied · Submitted ·
+  Completed. The Action column holds SUBMIT (or QUEUE while a
+  transaction is still pending).
+- **Two rows can agree on merchant AND amount** and differ only by date:
+  REPLIT $106.60 on Oct 21 and again on Oct 28. The date check is what
+  keeps them apart, so it is never loosened into a tolerance.
+
+### What that cost
+
+- **The cardholder check can never pass there**, and that account's
+  `employee` field holds **"Texas United States"** — a location, not a
+  person. A row agreeing on merchant, amount AND date was refused with
+  `employee "Texas United States" not in the row`. `rowMatches` now
+  takes `{ onePerson: true }`, which drops ONLY that check; the amount,
+  merchant and date still all have to agree. `findRow` passes it
+  whenever `personalQueue` is set.
+- **A team path saved on a personal tab is leftover, not a preference**
+  (confirmed by the owner: copied over when the manager tab was set up).
+  A stored value beat the personal default, so the write-back clicked
+  the team-wide tab and read 35 of the approver's rows. `storedGridPath`
+  drops a stored team path on a personal lane and keeps every other one
+  — a tenant may hold the personal list somewhere this does not know.
+
 ## The write-back pages through the grid, like the decision path does
 
 - **Emburse hands out ten rows at a time.** `findRow` — the write-back's

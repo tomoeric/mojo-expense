@@ -27,7 +27,9 @@ import os from "node:os";
 import path from "node:path";
 import { startMock } from "./mock-emburse.js";
 import type { ExportSettings } from "../server/import/settings.js";
-import { gridPathFor, MANAGER_GRID, PERSONAL_GRID } from "../server/emburse/export-scheduler.js";
+import {
+  gridPathFor, storedGridPath, MANAGER_GRID, PERSONAL_GRID,
+} from "../server/emburse/export-scheduler.js";
 
 let failures = 0;
 const check = (label: string, ok: boolean, detail = "") => {
@@ -58,6 +60,39 @@ check("…and the manager row is NOT what a personal tab would resolve to",
 const { importFor } = await import("../server/emburse/export-scheduler.js");
 check("the lookup the run uses takes a tab, not just a person",
   importFor.length >= 2, `importFor takes ${importFor.length} arguments`);
+
+console.log("\n1b. A TEAM PATH SAVED ON A PERSONAL TAB IS LEFTOVER, not a preference");
+/*
+ * The default above only applies when the tab has stored NOTHING. This
+ * tab had stored the manager queue's path — confirmed by the owner as
+ * left over from when the manager tab was set up — and a stored value
+ * beat the default. So the write-back signed in, clicked the team-wide
+ * tab, read 35 of the approver's rows, and reported "none of the 35
+ * rows match this expense" about a row on page 3 of the person's own
+ * list of 26.
+ */
+check("the team grid saved on a personal tab is dropped",
+  storedGridPath("personal", MANAGER_GRID) === PERSONAL_GRID,
+  String(storedGridPath("personal", MANAGER_GRID)));
+check("…however it is spelt",
+  storedGridPath("personal", "/transactions/team?filters[section]=inbox") === PERSONAL_GRID
+  && storedGridPath("personal", "/TEAM") === PERSONAL_GRID,
+  `${storedGridPath("personal", "/transactions/team?filters[section]=inbox")} / `
+  + `${storedGridPath("personal", "/TEAM")}`);
+check("…and nothing stored still means the person's own list",
+  storedGridPath("personal", null) === PERSONAL_GRID);
+// Not a licence to ignore the setting: a tenant may keep the personal
+// list somewhere this does not know the name of.
+check("ANY OTHER stored path is still obeyed",
+  storedGridPath("personal", "/expenses/mine") === "/expenses/mine",
+  String(storedGridPath("personal", "/expenses/mine")));
+check("…and a word merely containing “team” is not a team path",
+  storedGridPath("personal", "/transactions/teamster-expenses") === "/transactions/teamster-expenses",
+  String(storedGridPath("personal", "/transactions/teamster-expenses")));
+// The manager tab is untouched: the team queue is exactly what it wants.
+check("the manager tab keeps whatever it stored",
+  storedGridPath("manager", MANAGER_GRID) === MANAGER_GRID
+  && storedGridPath("manager", null) === null);
 
 // ------------------------------------------------------- and the browser
 console.log("\n2. The run itself does not go looking for the team view");

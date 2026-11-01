@@ -406,7 +406,22 @@ export function merchantScore(rowText: string, merchant: string): number {
   return merchantWords(merchant).filter((w) => flat.includes(w)).length;
 }
 
-export function rowMatches(rowText: string, t: Target): { ok: boolean; why: string } {
+export function rowMatches(
+  rowText: string, t: Target,
+  /**
+   * A list that is already one person's.
+   *
+   * `/transactions/me` and a personal Emburse account hold nobody
+   * else's rows, so there is no cardholder to tell apart — and
+   * demanding one is how a REPLIT $106.60 row that agreed on merchant
+   * AND amount was refused: that account's expenses carry
+   * "Texas United States" in the employee field, which is a location
+   * and appears in no row on earth. The amount, the date and the
+   * merchant still have to agree; this only drops the check that has
+   * nothing to disambiguate.
+   */
+  opts: { onePerson?: boolean } = {},
+): { ok: boolean; why: string } {
   const text = rowText.replace(/\s+/g, " ").trim();
   const lower = text.toLowerCase();
 
@@ -478,7 +493,7 @@ export function rowMatches(rowText: string, t: Target): { ok: boolean; why: stri
   // immediately followed by an ellipsis, and a genuine prefix of the
   // surname. Guessing at prefixes without that marker would let "Smith"
   // match "Smithson".
-  const surname = t.employee.trim().split(/\s+/).pop() ?? "";
+  const surname = opts.onePerson ? "" : (t.employee.trim().split(/\s+/).pop() ?? "");
   if (surname) {
     const want = surname.toLowerCase();
     let found = lower.includes(want);
@@ -2966,12 +2981,14 @@ async function findRow(
       `It may already have been actioned there.`);
   }
 
+  const one = { onePerson: Boolean(opts.personalQueue) };
+
   /** One page of the grid: which of its rows are this expense. */
   const scan = async (): Promise<{ hits: number[]; visible: number[]; only: number[] }> => {
     const n = await rows.count();
     const hits: number[] = [];
     for (let i = 0; i < Math.min(n, ROWS_EXAMINED); i++) {
-      if (rowMatches(await rows.nth(i).innerText().catch(() => ""), target).ok) hits.push(i);
+      if (rowMatches(await rows.nth(i).innerText().catch(() => ""), target, one).ok) hits.push(i);
     }
     const visible = hits.length > 1 ? await visibleOf(rows, hits) : hits;
 
@@ -3060,9 +3077,9 @@ async function findRow(
     const sample: string[] = [];
     for (let i = 0; i < examined; i++) {
       const text = (await rows.nth(i).innerText().catch(() => "")).replace(/\s+/g, " ").trim();
-      if (sample.length < 3 && text) sample.push(text.slice(0, 140));
+      if (sample.length < 3 && text) sample.push(text.slice(0, 260));
       if (reasons.length >= 4) continue;
-      const why = rowMatches(text, target).why;
+      const why = rowMatches(text, target, one).why;
       if (!reasons.includes(why)) reasons.push(why);
     }
     throw new Error(

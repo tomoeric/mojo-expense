@@ -248,6 +248,43 @@ console.log("\n3d. A single-digit day, and a chopped cardholder");
     !rowMatches("Sep 07, 2026 Publix $78.61 x JAMES LENIHAN", craig("2026-09-07")).ok);
 }
 
+console.log("\n3e. A list that is already one person's has no cardholder to check");
+/*
+ * The real Emburse PERSONAL grid has NO employee column at all —
+ * Transaction Date, Merchant, Amount, Business Purpose, Card Details,
+ * Accounting Category, Receipt, Warnings, Status, Posted Date, Trip.
+ * So the cardholder check can never pass there, and on that account the
+ * employee field holds "Texas United States", which is a location and
+ * appears in no row on earth. A REPLIT $106.60 row agreeing on merchant
+ * AND amount AND date was refused for it.
+ */
+{
+  const row = "Oct 28, 2026 REPLIT $106.60 IT & Compliance Department Spend "
+    + "Virtual - 80278 Software, Licenses, and Subscriptions Incomplete Oct 29, 2026";
+  const mine: Target = {
+    employee: "Texas United States", merchant: "REPLIT",
+    amount: 106.6, date: "2026-10-28",
+  };
+  check("it is refused while a cardholder is demanded",
+    !rowMatches(row, mine).ok, rowMatches(row, mine).why);
+  check("…and accepted on the person's own list",
+    rowMatches(row, mine, { onePerson: true }).ok,
+    rowMatches(row, mine, { onePerson: true }).why);
+  // The slack is ONLY the cardholder. Everything that identifies the
+  // purchase still has to agree — and it matters here, because that
+  // same personal list holds TWO REPLIT $106.60 rows, Oct 21 and
+  // Oct 28, and attaching to the wrong one is not a near miss.
+  const older = "Oct 21, 2026 REPLIT $106.60 IT & Compliance Department Spend "
+    + "Virtual - 80278 Software, Licenses, and Subscriptions Incomplete Oct 22, 2026";
+  check("the TWIN row a week earlier is still refused",
+    !rowMatches(older, mine, { onePerson: true }).ok,
+    rowMatches(older, mine, { onePerson: true }).why);
+  check("…and so is a different amount",
+    !rowMatches(row, { ...mine, amount: 10.66 }, { onePerson: true }).ok);
+  check("…and a different merchant",
+    !rowMatches(row, { ...mine, merchant: "GITHUB" }, { onePerson: true }).ok);
+}
+
 console.log("\n4. Missing fields do not silently pass");
 refuses("no amount at all", "9/13/2026 DOORDASH INC. Brianna Ruth Meals");
 refuses("amount present but nothing else", "$26.40");

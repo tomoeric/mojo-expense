@@ -1124,6 +1124,32 @@ export async function importFor(
     && r.lane === (lane || MANAGER_LANE));
 }
 
+/**
+ * The path a tab's own Scope setting amounts to.
+ *
+ * Null meaning "inherit the shared default" was fixed by defaulting a
+ * personal tab to its own list. What was left is a path SAVED on the
+ * lane — copied over from the manager settings, or set before the tab
+ * knew what it was — and a saved value beat the default.
+ *
+ * That is how the write-back signed in, clicked the team-wide tab, read
+ * 35 of the approver's rows and reported "none of the 35 rows match
+ * this expense" about a row sitting on page 3 of the person's OWN list
+ * of 26. Confirmed as leftover manager-queue config by the owner.
+ *
+ * A personal tab reading somebody else's queue is never what was meant,
+ * whoever saved it, so the team path is dropped rather than obeyed. Any
+ * other stored path is still honoured — a tenant may keep the personal
+ * list somewhere this does not know about.
+ */
+export function storedGridPath(
+  kind: "manager" | "personal", stored: string | null,
+): string | null {
+  if (kind !== "personal") return stored;
+  if (stored && !/(^|[/_-])team($|[/_?-])/i.test(stored)) return stored;
+  return PERSONAL_GRID;
+}
+
 export function gridPathFor(
   source: string | undefined,
   list: { path: string } | undefined,
@@ -1287,7 +1313,22 @@ export async function reviewerImports(): Promise<ReviewerImport[]> {
        * arrived pointing at the approver's queue. The lane
        * already knows what it is; it should not need telling.
        */
-      gridPath: r?.grid_path ?? (lane.kind === "personal" ? PERSONAL_GRID : null),
+      /*
+       * AND A STORED TEAM PATH ON A PERSONAL TAB IS A MISTAKE, not a
+       * preference.
+       *
+       * Null meaning "inherit the shared default" was fixed above. What
+       * was left is a path SAVED on the lane — copied from the manager
+       * settings, or set before the tab knew what it was — and a saved
+       * value beat the default. So the write-back signed in, clicked
+       * the team-wide tab, read 35 of the approver's rows and reported
+       * "none of the 35 rows match this expense" about a row sitting on
+       * page 3 of the person's own list of 26.
+       *
+       * A personal tab reading somebody else's queue is never what was
+       * meant, whoever saved it.
+       */
+      gridPath: storedGridPath(lane.kind, r?.grid_path ?? null),
       /*
        * AND NO SECTION FILTER.
        *
