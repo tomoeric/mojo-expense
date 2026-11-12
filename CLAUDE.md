@@ -3740,6 +3740,27 @@ Worth writing down, because three bugs came from guessing at it:
 - The mock renders that menu outside the dialog for the same reason —
   a fixture that puts it inside passes while the live form does not.
 
+## Turning the automation off, temporarily
+
+Three separate switches, because they are three separate machines:
+
+- **The scheduled import** — Import settings, per tab: **Pause this
+  import**. The `enabled` field and the API have always accepted this
+  and NOTHING on the page ever set it, so the only way to stop an
+  import was to untick its stages, lists and schedule — a dismantling,
+  not a pause, and putting it back afterwards was from memory. Pausing
+  keeps every setting and only takes the row out of the scheduler's
+  list (`if (!who.enabled) continue`). Running it by hand still works:
+  pausing stops the clock, not the button.
+- **Auto-approve** — Admin → Configuration, the auto-approve card. In a
+  "view as" it switches THAT person's (`reviewer_imports.auto_approve`);
+  otherwise the global flag. Two settings behind one control,
+  deliberately: the card always means "the automation for the person
+  this page is about".
+- **The receipt write-back** sends nothing without a press, so there is
+  nothing to pause. Queued sends do keep retrying — clear the queue
+  instead of looking for a switch.
+
 ## Sending and Sent are different questions
 
 - **Sending** holds only what is still in flight (`queued`). **Sent**

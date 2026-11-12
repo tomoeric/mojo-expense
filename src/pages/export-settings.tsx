@@ -413,6 +413,45 @@ function ReviewerPanel({
         )}
       </div>
 
+      {/*
+        * PAUSE, WITHOUT TAKING ANYTHING APART.
+        *
+        * The field has always existed and the API has always accepted
+        * it; nothing on this page ever set it. So the only ways to stop
+        * a scheduled import were to empty its settings — unticking its
+        * stages, its lists, its schedule — which is not a pause, it is
+        * a dismantling, and putting it back afterwards is from memory.
+        *
+        * Asked for as *"how to temporary turn off the auto and import
+        * functions"*, and temporary is the whole point: everything
+        * below is kept exactly as it is and simply does not run.
+        */}
+      <section className={`rounded-xl border p-3 ${
+        row.enabled ? "border-border" : "border-amber-500/50 bg-amber-500/10"
+      }`}>
+        <label className="flex items-start gap-3 text-sm">
+          <input
+            type="checkbox"
+            checked={!row.enabled}
+            disabled={!isAdmin}
+            onChange={() => onPost({ enabled: !row.enabled })}
+            className="mt-0.5 h-4 w-4 shrink-0 accent-amber-600"
+          />
+          <span>
+            <span className="font-semibold">
+              {row.enabled ? "Pause this import" : "This import is PAUSED"}
+            </span>
+            <span className="mt-0.5 block text-xs text-muted-foreground">
+              {row.enabled
+                ? "Nothing is scheduled while it is paused, and every setting below is kept. "
+                  + "Run it by hand whenever you like — pausing stops the clock, not the button."
+                : "Nothing is scheduled. Everything below is as you left it and starts again the "
+                  + "moment you untick this."}
+            </span>
+          </span>
+        </label>
+      </section>
+
       {/* SCOPE. Which Emburse tab, and which stages off it. */}
       <section>
         <h3 className="text-sm font-bold">Scope — what this import pulls</h3>
